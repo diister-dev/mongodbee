@@ -8,7 +8,16 @@ type CollectionOptions = {
 
 type WithId<T> = T extends { _id: infer U } ? T : m.WithId<T>;
 
-export async function collection<const T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>>(db: m.Db, collectionName: string, collectionSchema: T, options?: m.CollectionOptions & CollectionOptions) {
+type TInput<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>> = v.InferInput<v.ObjectSchema<T, undefined>>;
+type TOutput<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>> = WithId<v.InferOutput<v.ObjectSchema<T, undefined>>>;
+
+type CollectionResult<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>> = Omit<m.Collection<TInput<T>>, "findOne" | "find"> & {
+    collection: m.Collection<TInput<T>>,
+    findOne: (filter: m.Filter<TInput<T>>, options?: Omit<m.FindOptions, 'timeoutMode'> & m.Abortable) => Promise<WithId<TOutput<T>> | null>,
+    find: (filter: m.Filter<TInput<T>>, options?: m.FindOptions & m.Abortable) => m.AbstractCursor<TOutput<T>>,
+}
+
+export async function collection<const T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>>(db: m.Db, collectionName: string, collectionSchema: T, options?: m.CollectionOptions & CollectionOptions) : Promise<CollectionResult<T>> {
     type TInput = v.InferInput<v.ObjectSchema<T, undefined>>;
     type TOutput = WithId<v.InferOutput<v.ObjectSchema<T, undefined>>>;
 
@@ -85,60 +94,17 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
 
     const collection = db.collection<TInput>(collectionName, opts);
 
-    async function findOne(filter: m.Filter<TInput>, options?: Omit<m.FindOptions, 'timeoutMode'> & m.Abortable) {
-        const result = await collection.findOne(filter, options);
-        if (result) {
-            const validation = v.safeParse(schema, result);
-            if (validation.success) {
-                return validation.output;
-            } else {
-                throw {
-                    message: "Validation error",
-                    errors: validation,
-                    result,
-                }
-            }
-        }
-        return null;
-    }
-
-    function find(filter: m.Filter<TInput>, options?: m.FindOptions & m.Abortable): m.AbstractCursor<TOutput> {
-        const cursor = collection.find(filter, options);
-        const originalToArray = cursor.toArray;
-        // Override toArray
-        cursor.toArray = async function () {
-            const results = await originalToArray.call(cursor);
-            const valids = [];
-            const invalids = [];
-            for (const doc of results) {
-                const validation = v.safeParse(schema, doc);
-                if (validation.success) {
-                    valids.push(validation.output as m.WithId<TInput>);
-                } else {
-                    invalids.push({
-                        errors: validation,
-                        result: doc,
-                    });
-                }
-            }
-
-            if (invalids.length > 0) {
-                throw {
-                    message: "Validation error",
-                    valids,
-                    invalids,
-                }
-            }
-
-            return valids;
-        };
-
-        return cursor as unknown as m.AbstractCursor<TOutput>;
-    }
-
-    const result = {
+    return {
         collection,
-        ...collection,
+        get bsonOptions() { return collection.bsonOptions },
+        get collectionName() { return collection.collectionName },
+        get dbName() { return collection.dbName },
+        get hint() { return collection.hint },
+        get namespace() { return collection.namespace },
+        get readConcern() { return collection.readConcern },
+        get readPreference() { return collection.readPreference },
+        get timeoutMS() { return collection.timeoutMS },
+        get writeConcern() { return collection.writeConcern },
         // Document creation operations with validation
         insertOne(doc, options?) {
             const safeDoc = v.parse(schema, doc) as typeof doc;
@@ -150,8 +116,55 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
         },
         
         // Document read operations with validation
-        findOne,
-        find,
+        async findOne(filter, options?) {
+            const result = await collection.findOne(filter, options);
+            if (result) {
+                const validation = v.safeParse(schema, result);
+                if (validation.success) {
+                    return validation.output as WithId<TOutput>;
+                } else {
+                    throw {
+                        message: "Validation error",
+                        errors: validation,
+                        result,
+                    }
+                }
+            }
+            return null;
+        },
+        find(filter: m.Filter<TInput>, options?: m.FindOptions & m.Abortable): m.AbstractCursor<TOutput> {
+            const cursor = collection.find(filter, options);
+            const originalToArray = cursor.toArray;
+            // Override toArray
+            cursor.toArray = async function () {
+                const results = await originalToArray.call(cursor);
+                const valids = [];
+                const invalids = [];
+                for (const doc of results) {
+                    const validation = v.safeParse(schema, doc);
+                    if (validation.success) {
+                        valids.push(validation.output as m.WithId<TInput>);
+                    } else {
+                        invalids.push({
+                            errors: validation,
+                            result: doc,
+                        });
+                    }
+                }
+
+                if (invalids.length > 0) {
+                    throw {
+                        message: "Validation error",
+                        valids,
+                        invalids,
+                    }
+                }
+
+                return valids;
+            };
+
+            return cursor as unknown as m.AbstractCursor<TOutput>;
+        },
         countDocuments: collection.countDocuments,
         estimatedDocumentCount: collection.estimatedDocumentCount,
         distinct: collection.distinct,
@@ -235,11 +248,5 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
         options: collection.options,
         rename: collection.rename,
         watch: collection.watch,
-    } as const satisfies Partial<Omit<typeof collection, "findOne" | "find">> & {
-        collection: typeof collection,
-        findOne: typeof findOne,
-        find: typeof find,
-    };
-
-    return result;
+    } as CollectionResult<T>;
 }

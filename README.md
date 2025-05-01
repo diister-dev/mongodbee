@@ -24,31 +24,28 @@ Key features:
 npm install mongodbee
 
 # Using deno
-import { Collection } from "mongodbee";
+import { collection } from "jsr:mongodbee";
 ```
 
 ## Quick Start
 
 ```typescript
-import { Collection } from "mongodbee";
-import { MongoClient } from "mongodb";
-import * as v from 'valibot';
+import { collection, MongoClient } from "mongodbee";
+import * as v from 'mongodbee/schema';
 
-// Define your schema using Valibot
-const userSchema = v.object({
+// Connect to MongoDB
+const client = new MongoClient('mongodb://localhost:27017');
+await client.connect();
+
+const db = client.db('myapp');
+
+// Create a typed collection with validation
+const users = await collection(db, 'users', {
   username: v.pipe(v.string(), v.minLength(3), v.maxLength(20)),
   email: v.pipe(v.string(), v.email()),
   age: v.pipe(v.number(), v.minValue(0), v.maxValue(120)),
   createdAt: v.date()
 });
-
-// Connect to MongoDB
-const client = new MongoClient('mongodb://localhost:27017');
-await client.connect();
-const db = client.db('myapp');
-
-// Create a typed collection with validation
-const users = await Collection(db, 'users', userSchema);
 
 // Insert a document - automatic validation
 await users.insertOne({
@@ -106,20 +103,23 @@ Current development status:
 - **Read**:
   - ✅ findOne
   - ✅ find
+  - ✅ countDocuments
+  - ✅ estimatedDocumentCount
+  - ✅ distinct
 - **Update**:
   - ⚠️ updateOne (in progress)
   - ✅ replaceOne
   - ⚠️ updateMany (in progress)
 - **Delete**:
   - ✅ deleteOne
-  - ✅ deleteMany
+  - ✅ deleteMany (with safe delete protection)
 - **Compound**:
-  - 🔲 findOneAndUpdate
-  - 🔲 findOneAndReplace
-  - 🔲 findOneAndDelete
+  - ✅ findOneAndDelete
+  - ✅ findOneAndReplace
+  - ✅ findOneAndUpdate
 - **Aggregate**:
-  - 🔲 aggregate
-  - 🔲 bulkWrite
+  - ✅ aggregate
+  - ✅ bulkWrite
 
 ### 2. MongoDB JSON Schema Validation
 - ✅ Create a collection with a validator
@@ -135,6 +135,12 @@ Current development status:
 - 🔲 Performance optimization
 - 🔲 Extended validator support for complex data structures
 
+## Library Structure
+
+- **collection.ts**: Core functionality for type-safe MongoDB collections
+- **schema.ts**: Schema definition and validation using Valibot
+- **validator.ts**: Translator between Valibot schemas and MongoDB JSON Schema
+
 ## Project Ideas
 
 - **CLI Tools**: Create tools for schema generation, migration, and database inspection
@@ -144,7 +150,7 @@ Current development status:
 
 ## Contributing
 
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
