@@ -1,0 +1,9 @@
+{
+    "imports": {
+        "valibot": "npm:valibot@^1.0.0",
+        "mongodb": "npm:mongodb@^6.16.0",
+        "@std/ulid": "jsr:@std/ulid@1",
+        "mongodbee": "../library/mod.ts",
+        "mongodbee/": "../library/src/"
+    }
+}

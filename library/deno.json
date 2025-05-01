@@ -1,0 +1,15 @@
+{
+  "name": "@diister/mongodbee",
+  "version": "0.1.0",
+  "license": "MIT",
+  "imports": {
+    "valibot": "npm:valibot@^1.0.0",
+    "mongodb": "npm:mongodb@^6.16.0"
+  },
+  "exports": {
+    ".": "./mod.ts"
+  },
+  "tasks": {
+    "test": "deno test --allow-net --allow-write --allow-read"
+  }
+}
