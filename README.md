@@ -1,0 +1,2 @@
+# mongodbee
+MongoDB validation typesafe
