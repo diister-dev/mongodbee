@@ -165,7 +165,7 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
 
             return cursor as unknown as m.AbstractCursor<TOutput>;
         },
-        countDocuments: collection.countDocuments,
+        get countDocuments() { return collection.countDocuments },
         estimatedDocumentCount: collection.estimatedDocumentCount,
         distinct: collection.distinct,
         
