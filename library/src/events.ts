@@ -2,7 +2,15 @@
  * Utility to create a safe event system
  */
 
-export function EventEmitter<T extends {[key: string] : (...params: any[]) => void }>(){
+export function EventEmitter<T extends {[key: string] : (...params: any[]) => void }>(): {
+  on<E extends keyof T>(event: E, callback: T[E]): () => void;
+  off<E extends keyof T>(event: E, callback: T[E]): void;
+  call<E extends keyof T>(event: E, ...params: Parameters<T[E]>): void;
+  expose(): {
+    on<E extends keyof T>(event: E, callback: T[E]): () => void;
+    off<E extends keyof T>(event: E, callback: T[E]): void;
+  };
+} {
 
   const events: {
     [key in keyof T]?: (T[key])[]
