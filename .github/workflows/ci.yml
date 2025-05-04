@@ -22,3 +22,4 @@ jobs:
           deno-version: v2.x
       - name: Test
         run: deno test
+        working-directory: library

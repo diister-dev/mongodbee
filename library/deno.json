@@ -1,6 +1,6 @@
 {
   "name": "@diister/mongodbee",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "license": "MIT",
   "imports": {
     "valibot": "npm:valibot@^1.0.0",

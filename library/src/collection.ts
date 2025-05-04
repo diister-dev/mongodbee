@@ -7,7 +7,7 @@ type CollectionOptions = {
     safeDelete?: boolean,
 }
 
-type WithId<T> = T extends { _id: infer U } ? T : m.WithId<T>;
+type WithId<T> = T extends { _id: infer U } ? T : m.WithId<T> | { _id: string } & T;
 
 type TInput<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>> = v.InferInput<v.ObjectSchema<T, undefined>>;
 type TOutput<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>> = WithId<v.InferOutput<v.ObjectSchema<T, undefined>>>;
@@ -168,7 +168,7 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
             if(!inserted.acknowledged) {
                 throw new Error("Insert failed");
             }
-            return inserted.insertedId;
+            return inserted.insertedId as WithId<TOutput>["_id"];
         },
         async insertMany(docs, options?) {
             const safeDocs = docs.map(doc => v.parse(schema, doc)) as unknown as typeof docs;
