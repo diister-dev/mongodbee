@@ -1,8 +1,9 @@
 {
   "name": "@diister/mongodbee",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "license": "MIT",
   "imports": {
+    "@std/ulid": "jsr:@std/ulid@^1.0.0",
     "valibot": "npm:valibot@^1.0.0",
     "mongodb": "npm:mongodb@^6.16.0"
   },

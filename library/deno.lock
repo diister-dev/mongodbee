@@ -3,6 +3,7 @@
   "specifiers": {
     "jsr:@std/assert@*": "1.0.10",
     "jsr:@std/internal@^1.0.5": "1.0.5",
+    "jsr:@std/ulid@1": "1.0.0",
     "npm:mongodb@^6.16.0": "6.16.0",
     "npm:valibot@1": "1.0.0"
   },
@@ -15,6 +16,9 @@
     },
     "@std/internal@1.0.5": {
       "integrity": "54a546004f769c1ac9e025abd15a76b6671ddc9687e2313b67376125650dc7ba"
+    },
+    "@std/ulid@1.0.0": {
+      "integrity": "d41c3d27a907714413649fee864b7cde8d42ee68437d22b79d5de4f81d808780"
     }
   },
   "npm": {
@@ -85,6 +89,7 @@
   },
   "workspace": {
     "dependencies": [
+      "jsr:@std/ulid@1",
       "npm:mongodb@^6.16.0",
       "npm:valibot@1"
     ]
