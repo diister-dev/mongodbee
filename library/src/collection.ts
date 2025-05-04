@@ -11,8 +11,9 @@ type WithId<T> = T extends { _id: infer U } ? T : m.WithId<T>;
 type TInput<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>> = v.InferInput<v.ObjectSchema<T, undefined>>;
 type TOutput<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>> = WithId<v.InferOutput<v.ObjectSchema<T, undefined>>>;
 
-type CollectionResult<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>> = Omit<m.Collection<TInput<T>>, "findOne" | "find"> & {
+type CollectionResult<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>> = Omit<m.Collection<TInput<T>>, "findOne" | "find" | "insertOne"> & {
     collection: m.Collection<TInput<T>>,
+    insertOne: (doc: m.OptionalUnlessRequiredId<TInput<T>>, options?: m.InsertOneOptions) => Promise<WithId<TOutput<T>>["_id"]>,
     findOne: (filter: m.Filter<TInput<T>>, options?: Omit<m.FindOptions, 'timeoutMode'> & m.Abortable) => Promise<WithId<TOutput<T>> | null>,
     find: (filter: m.Filter<TInput<T>>, options?: m.FindOptions & m.Abortable) => m.AbstractCursor<TOutput<T>>,
 }
@@ -106,13 +107,21 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
         get timeoutMS() { return collection.timeoutMS },
         get writeConcern() { return collection.writeConcern },
         // Document creation operations with validation
-        insertOne(doc, options?) {
-            const safeDoc = v.parse(schema, doc) as typeof doc;
-            return collection.insertOne(safeDoc, options);
+        async insertOne(doc, options?) {
+            const safeDoc = v.parse(schema, doc) as m.OptionalUnlessRequiredId<TInput>;
+            const inserted = await collection.insertOne(safeDoc, options);
+            if(!inserted.acknowledged) {
+                throw new Error("Insert failed");
+            }
+            return inserted.insertedId;
         },
-        insertMany(docs, options?) {
+        async insertMany(docs, options?) {
             const safeDocs = docs.map(doc => v.parse(schema, doc)) as unknown as typeof docs;
-            return collection.insertMany(safeDocs, options);
+            const inserted = await collection.insertMany(safeDocs, options);
+            if(!inserted.acknowledged) {
+                throw new Error("Insert failed");
+            }
+            return inserted;
         },
         
         // Document read operations with validation
@@ -166,7 +175,7 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
             return cursor as unknown as m.AbstractCursor<TOutput>;
         },
         countDocuments(...params) { return collection.countDocuments(...params) },
-        estimatedDocumentCount: collection.estimatedDocumentCount,
+        estimatedDocumentCount(...params) { return collection.estimatedDocumentCount(...params) },
         distinct: collection.distinct,
         
         // Document update operations
@@ -190,7 +199,7 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
         },
         
         // Document delete operations
-        deleteOne: collection.deleteOne,
+        deleteOne(...params) { return collection.deleteOne(...params) },
         deleteMany(filter, options?) {
             if (opts.safeDelete) {
                 const filterSize = Object.keys(filter ?? {}).length;
@@ -220,33 +229,33 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
         findOneAndUpdate: collection.findOneAndUpdate,
         
         // Bulk operations
-        aggregate: collection.aggregate,
-        bulkWrite: collection.bulkWrite,
-        initializeOrderedBulkOp: collection.initializeOrderedBulkOp,
-        initializeUnorderedBulkOp: collection.initializeUnorderedBulkOp,
+        aggregate(...params) { return collection.aggregate(...params) },
+        bulkWrite(...params) { return collection.bulkWrite(...params) },
+        initializeOrderedBulkOp(...params) { return collection.initializeOrderedBulkOp(...params) },
+        initializeUnorderedBulkOp(...params) { return collection.initializeUnorderedBulkOp(...params) },
         
         // Index operations
-        createIndex: collection.createIndex,
-        createIndexes: collection.createIndexes,
-        dropIndex: collection.dropIndex,
-        dropIndexes: collection.dropIndexes,
-        indexes: collection.indexes,
-        listIndexes: collection.listIndexes,
-        indexExists: collection.indexExists,
+        createIndex(...params) { return collection.createIndex(...params) },
+        createIndexes(...params) { return collection.createIndexes(...params) },
+        dropIndex(...params) { return collection.dropIndex(...params) },
+        dropIndexes(...params) { return collection.dropIndexes(...params) },
+        indexes(...params) { return collection.indexes(...params) },
+        listIndexes(...params) { return collection.listIndexes(...params) },
+        indexExists(...params) { return collection.indexExists(...params) },
         indexInformation: collection.indexInformation,
         
         // Search operations
-        createSearchIndex: collection.createSearchIndex,
-        createSearchIndexes: collection.createSearchIndexes,
-        dropSearchIndex: collection.dropSearchIndex,
+        createSearchIndex(...params) { return collection.createSearchIndex(...params) },
+        createSearchIndexes(...params) { return collection.createSearchIndexes(...params) },
+        dropSearchIndex(...params) { return collection.dropSearchIndex(...params) },
         listSearchIndexes: collection.listSearchIndexes,
-        updateSearchIndex: collection.updateSearchIndex,
+        updateSearchIndex(...params) { return collection.updateSearchIndex(...params) },
         
         // Collection operations
-        drop: collection.drop,
-        isCapped: collection.isCapped,
-        options: collection.options,
-        rename: collection.rename,
-        watch: collection.watch,
+        drop(...params) { return collection.drop(...params) },
+        isCapped(...params) { return collection.isCapped(...params) },
+        options(...params) { return collection.options(...params) },
+        rename(...params) { return collection.rename(...params) },
+        watch(...params) { return collection.watch(...params) },
     } as CollectionResult<T>;
 }
