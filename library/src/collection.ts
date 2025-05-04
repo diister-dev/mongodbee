@@ -14,12 +14,51 @@ type TOutput<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue
 export type CollectionResult<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>> = Omit<m.Collection<TInput<T>>, "findOne" | "find" | "insertOne"> & {
     collection: m.Collection<TInput<T>>,
     insertOne: (doc: m.OptionalUnlessRequiredId<TInput<T>>, options?: m.InsertOneOptions) => Promise<WithId<TOutput<T>>["_id"]>,
-    findOne: (filter: m.Filter<TInput<T>>, options?: Omit<m.FindOptions, 'timeoutMode'> & m.Abortable) => Promise<WithId<TOutput<T>> | null>,
+    findOne: (filter: m.Filter<TInput<T>>, options?: Omit<m.FindOptions, 'timeoutMode'> & m.Abortable) => Promise<WithId<TOutput<T>>>,
     find: (filter: m.Filter<TInput<T>>, options?: m.FindOptions & m.Abortable) => m.AbstractCursor<TOutput<T>>,
 }
 
 export type CollectionSchema<T> = T extends CollectionResult<infer U> ? WithId<v.InferOutput<v.ObjectSchema<U, undefined>>> : never; 
 
+
+// Roadmap
+// 
+// Create a collection with a validator from a valibot schema
+//
+// Objectives:
+// 1. Support CRUD operations with validation
+// 2. Support MongoDB json schema validation
+// 3. Support aggregation strong typing : https://www.mongodb.com/docs/manual/reference/operator/aggregation/
+// 4. Prevent insecure delete operations
+//
+// Details:
+// 1. Support CRUD operations with validation
+//    Create:
+//        - [x] insertOne
+//        - [x] insertMany
+//    Read:
+//        - [x] findOne
+//        - [x] find
+//    Update:
+//        - [-] updateOne
+//        - [x] replaceOne
+//        - [-] updateMany
+//    Delete:
+//        - [x] deleteOne
+//        - [x] deleteMany
+//    Compound:
+//        - [ ] findOneAndUpdate
+//        - [ ] findOneAndReplace
+//        - [ ] findOneAndDelete
+//    Aggregate:
+//        - [ ] aggregate
+//        - [ ] bulkWrite
+// 2. Support MongoDB json schema validation
+//    - [x] Create a collection with a validator
+//    - [x] Update a collection with a validator
+//    - [ ] Validate a collection with a validator
+//    - [ ] Validate a document with a validator
+// 3. Support deep key validation (e.g. "a.b.c")
 export async function collection<const T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>>(db: m.Db, collectionName: string, collectionSchema: T, options?: m.CollectionOptions & CollectionOptions) : Promise<CollectionResult<T>> {
     type TInput = v.InferInput<v.ObjectSchema<T, undefined>>;
     type TOutput = WithId<v.InferOutput<v.ObjectSchema<T, undefined>>>;
@@ -35,45 +74,6 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
         },
         ...options,
     }
-
-    // Roadmap
-    // 
-    // Create a collection with a validator from a valibot schema
-    //
-    // Objectives:
-    // 1. Support CRUD operations with validation
-    // 2. Support MongoDB json schema validation
-    // 3. Support aggregation strong typing : https://www.mongodb.com/docs/manual/reference/operator/aggregation/
-    // 4. Prevent insecure delete operations
-    //
-    // Details:
-    // 1. Support CRUD operations with validation
-    //    Create:
-    //        - [x] insertOne
-    //        - [x] insertMany
-    //    Read:
-    //        - [x] findOne
-    //        - [x] find
-    //    Update:
-    //        - [-] updateOne
-    //        - [x] replaceOne
-    //        - [-] updateMany
-    //    Delete:
-    //        - [x] deleteOne
-    //        - [x] deleteMany
-    //    Compound:
-    //        - [ ] findOneAndUpdate
-    //        - [ ] findOneAndReplace
-    //        - [ ] findOneAndDelete
-    //    Aggregate:
-    //        - [ ] aggregate
-    //        - [ ] bulkWrite
-    // 2. Support MongoDB json schema validation
-    //    - [x] Create a collection with a validator
-    //    - [x] Update a collection with a validator
-    //    - [ ] Validate a collection with a validator
-    //    - [ ] Validate a document with a validator
-    // 3. Support deep key validation (e.g. "a.b.c")
 
     async function applyValidator() {
         const collections = await db.listCollections({ name: collectionName }).toArray();
@@ -129,19 +129,21 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
         // Document read operations with validation
         async findOne(filter, options?) {
             const result = await collection.findOne(filter, options);
-            if (result) {
-                const validation = v.safeParse(schema, result);
-                if (validation.success) {
-                    return validation.output as WithId<TOutput>;
-                } else {
-                    throw {
-                        message: "Validation error",
-                        errors: validation,
-                        result,
-                    }
-                }
+
+            if (!result) {
+                throw new Error("Document not found");
             }
-            return null;
+
+            const validation = v.safeParse(schema, result);
+            if (validation.success) {
+                return validation.output as WithId<TOutput>;
+            }
+
+            throw {
+                message: "Validation error",
+                errors: validation,
+                result,
+            }
         },
         find(filter: m.Filter<TInput>, options?: m.FindOptions & m.Abortable): m.AbstractCursor<TOutput> {
             const cursor = collection.find(filter, options);
