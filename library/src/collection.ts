@@ -1,6 +1,7 @@
 import * as v from './schema.ts';
 import { toMongoValidator } from "./validator.ts";
 import type * as m from "mongodb";
+import { EventEmitter } from "./events.ts";
 
 type CollectionOptions = {
     safeDelete?: boolean,
@@ -11,8 +12,18 @@ type WithId<T> = T extends { _id: infer U } ? T : m.WithId<T>;
 type TInput<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>> = v.InferInput<v.ObjectSchema<T, undefined>>;
 type TOutput<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>> = WithId<v.InferOutput<v.ObjectSchema<T, undefined>>>;
 
+type Events<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>> = {
+    create: (createEvent: m.ChangeStreamCreateDocument) => void,
+    update: (updateEvent: m.ChangeStreamUpdateDocument<TOutput<T>>) => void,
+    replace: (replaceEvent: m.ChangeStreamReplaceDocument<TOutput<T>>) => void,
+    delete: (deleteEvent: m.ChangeStreamDeleteDocument<TOutput<T>>) => void,
+}
+
 export type CollectionResult<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>> = Omit<m.Collection<TInput<T>>, "findOne" | "find" | "insertOne"> & {
     collection: m.Collection<TInput<T>>,
+    schema: v.ObjectSchema<{readonly _id: v.OptionalSchema<v.AnySchema, undefined>} & T, undefined>,
+    on: ReturnType<typeof EventEmitter<Events<T>>>["on"],
+    off: ReturnType<typeof EventEmitter<Events<T>>>["off"],
     insertOne: (doc: m.OptionalUnlessRequiredId<TInput<T>>, options?: m.InsertOneOptions) => Promise<WithId<TOutput<T>>["_id"]>,
     findOne: (filter: m.Filter<TInput<T>>, options?: Omit<m.FindOptions, 'timeoutMode'> & m.Abortable) => Promise<WithId<TOutput<T>>>,
     find: (filter: m.Filter<TInput<T>>, options?: m.FindOptions & m.Abortable) => m.AbstractCursor<TOutput<T>>,
@@ -75,6 +86,8 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
         ...options,
     }
 
+    const events = EventEmitter<Events<T>>();
+
     async function applyValidator() {
         const collections = await db.listCollections({ name: collectionName }).toArray();
         const validator = toMongoValidator(schema);
@@ -93,12 +106,52 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
         }
     }
 
-    await applyValidator();
+    async function startWatching() {
+        collection.watch().on("change", async (change) => {
+            switch (change.operationType) {
+                case "create":
+                    events.call("create", change as m.ChangeStreamCreateDocument);
+                    break;
+                case "update":
+                    events.call("update", change as m.ChangeStreamUpdateDocument<TOutput>);
+                    break;
+                case "replace":
+                    events.call("replace", change as m.ChangeStreamReplaceDocument<TOutput>);
+                    break;
+                case "delete":
+                    events.call("delete", change as m.ChangeStreamDeleteDocument<TOutput>);
+                    break;
+                // Special case, watch will be closed (drop, dropDatabase)
+                case "drop":
+                case "dropDatabase" :
+                    await init();
+                    break;
+                default:
+                    // Not handled yet
+                    break;
+            }
+        });
+    }
+
+    async function init() {
+        await applyValidator();
+        await startWatching();
+    }
 
     const collection = db.collection<TInput>(collectionName, opts);
+    await init();
 
     return {
+        // Raw collection
         collection,
+
+        // Schema
+        schema,
+
+        // Events
+        on: events.on,
+        off: events.off,
+
         get bsonOptions() { return collection.bsonOptions },
         get collectionName() { return collection.collectionName },
         get dbName() { return collection.dbName },
