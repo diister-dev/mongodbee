@@ -78,7 +78,6 @@ function constructorToValidator(schema: UnknownSchema | UnknownValidation) {
             // DEPRECATED: Use object instead
             // https://www.mongodb.com/docs/manual/reference/operator/query/type
             case "undefined": {
-                console.warn(`[WARN] Unsupported schema type: "undefined" use optional instead`);
                 return {
                     bsonType: "undefined",
                     description: `must be undefined`,
