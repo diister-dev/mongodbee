@@ -34,6 +34,9 @@ type StageBuilder<T extends MultiCollectionSchema> = {
     lookup: <E extends keyof T>(key: E, localField: string, foreignField: string) => AggregationStage;
 };
 
+type Input<T extends MultiCollectionSchema> = v.InferInput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>;
+type Output<T extends MultiCollectionSchema> = v.InferOutput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>;
+
 // Objective
 // - Support many aggregation stages (https://www.mongodb.com/docs/manual/reference/operator/aggregation-pipeline)
 export async function multiCollection<const T extends MultiCollectionSchema>(
@@ -41,9 +44,17 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     collectionName: string,
     collectionSchema: T,
     options?: m.CollectionOptions & CollectionOptions
-) {
-    type TInput = v.InferInput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>;
-    type TOutput = v.InferOutput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>;
+): Promise<{
+    insertOne<E extends keyof T>(key: E, doc: v.InferInput<ElementSchema<T, E>>): Promise<string>;
+    insertMany<E extends keyof T>(key: E, docs: v.InferInput<ElementSchema<T, E>>[]): Promise<(string)[]>;
+    findOne<E extends keyof T>(key: E, filter: Partial<Input<T>>): Promise<v.InferOutput<ElementSchema<T, E>>>;
+    find<E extends keyof T>(key: E, filter?: Partial<Input<T>>): Promise<v.InferOutput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>[]>;
+    deleteId<E extends keyof T>(key: E, id: string): Promise<number>;
+    deleteIds<E extends keyof T>(key: E, ids: string[]): Promise<number>;
+    aggregate(stageBuilder: (stage: StageBuilder<T>) => AggregationStage[]): Promise<any[]>;
+}> {
+    type TInput = Input<T>;
+    type TOutput = Output<T>;
 
     const schemaWithId = Object.entries(collectionSchema).reduce((acc, [key, value]) => {
         return {
@@ -112,7 +123,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 throw new Error("Insert failed");
             }
 
-            return result.insertedId;
+            return result.insertedId as unknown as string;
         },
         async insertMany<E extends keyof T>(key: E, docs: v.InferInput<ElementSchema<T, E>>[]) {
             const validation = docs.map((doc) => {
@@ -128,7 +139,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 throw new Error("Insert failed");
             }
 
-            return Object.values(result.insertedIds);
+            return Object.values(result.insertedIds) as unknown as string[];
         },
         async findOne<E extends keyof T>(key: E, filter: Partial<TInput>) {
             const result = await collection.findOne({

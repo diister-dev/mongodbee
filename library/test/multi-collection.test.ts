@@ -321,7 +321,5 @@ Deno.test("RANDOM TEST - TO DELETE", async (t) => {
             stage.unwind("group", "members"),
             stage.lookup("group", "members", "_id"),
         ]);
-
-        console.log("AGGREGATE RESULT", result);
     });
 });
