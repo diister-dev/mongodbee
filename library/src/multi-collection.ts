@@ -22,7 +22,7 @@ type MultiSchema<T extends Record<string, any>> = Elements<T>;
 
 type MultiCollectionSchema = Record<string, Record<string, AnySchema>>;
 
-function dbId(type: string): v.OptionalSchema<v.SchemaWithPipe<readonly [v.StringSchema<undefined>, v.RegexAction<string, undefined>]>, () => string> {
+export function dbId(type: string): v.OptionalSchema<v.SchemaWithPipe<readonly [v.StringSchema<undefined>, v.RegexAction<string, undefined>]>, () => string> {
     return v.optional(v.pipe(v.string(), v.regex(new RegExp(`^${type}:`))), () => `${type}:${ulid()}`);
 }
 
