@@ -378,3 +378,86 @@ Deno.test("Any schema type", () => {
     assert(jsonSchema.properties!.anyField === undefined); // 'any' doesn't add a validator
     assertEquals(jsonSchema.required!.includes("anyField"), true); // still a required field
 });
+
+Deno.test("Literal schema", () => {
+    const schema = v.object({
+        stringLiteral: v.literal("active"),
+        numberLiteral: v.literal(42),
+        booleanLiteral: v.literal(true)
+    });
+
+    const validator = toMongoValidator(schema);
+    const jsonSchema = validator.$jsonSchema!;
+    
+    assertEquals(jsonSchema.properties!.stringLiteral, {
+        bsonType: "string",
+        enum: ["active"],
+        description: "must be active"
+    });
+
+    assertEquals(jsonSchema.properties!.numberLiteral, {
+        bsonType: "number",
+        enum: [42],
+        description: "must be 42"
+    });
+
+    assertEquals(jsonSchema.properties!.booleanLiteral, {
+        bsonType: "bool",
+        enum: [true],
+        description: "must be true"
+    });
+});
+
+Deno.test("Enum schema", () => {
+    enum StringEnum {
+        Option1 = "option1",
+        Option2 = "option2",
+        Option3 = "option3"
+    }
+
+    enum NumericEnum {
+        One = 1,
+        Two = 2,
+        Three = 3
+    }
+    
+    const schema = v.object({
+        stringEnum: v.enum(StringEnum),
+        numberEnum: v.enum(NumericEnum)
+    });
+
+    const validator = toMongoValidator(schema);
+    const jsonSchema = validator.$jsonSchema!;
+    
+    assertEquals(jsonSchema.properties!.stringEnum, {
+        bsonType: "string",
+        enum: ["option1", "option2", "option3"],
+        description: "must be one of the allowed values"
+    });
+
+    assertEquals(jsonSchema.properties!.numberEnum, {
+        bsonType: "number",
+        enum: [1, 2, 3],
+        description: "must be one of the allowed values"
+    });
+});
+
+Deno.test("Literal with pipes", () => {
+    const schema = v.object({
+        status: v.pipe(
+            v.string(),
+            v.literal("active")
+        )
+    });
+
+    const validator = toMongoValidator(schema);
+    const jsonSchema = validator.$jsonSchema!;
+    
+    // For literal with pipes, the first validation in the pipe (v.string()) 
+    // sets the bsonType, and then literal adds the enum constraint
+    assertEquals(jsonSchema.properties!.status, {
+        bsonType: "string",
+        description: "must be a string",
+        enum: ["active"]
+    });
+});

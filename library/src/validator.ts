@@ -4,7 +4,7 @@ type UnknownSchema = v.BaseSchema<any, any, any>;
 type UnknownValidation = v.BaseValidation<any, any, any>;
 
 function buildPipelineResult<T>(pipe: any) {
-    return pipe.filter((v: any) => v.kind == "validation")
+    return pipe.filter((v: any) => v.kind == "validation" || v.type == "literal")
         .map(constructorToValidator)
         .filter(Boolean)
         .reduce((acc: any, value: any) => {
@@ -12,6 +12,9 @@ function buildPipelineResult<T>(pipe: any) {
                 if (key in acc) {
                     if (key == "pattern") {
                         acc[key] = `(?=${acc[key]})(?=${val})`;
+                    } else if (key == "enum") {
+                        // For enum values, we keep them as they are
+                        acc[key] = val;
                     } else {
                         acc[key] = val;
                     }
@@ -171,6 +174,57 @@ function constructorToValidator(schema: UnknownSchema | UnknownValidation) {
 
                 return {
                     allOf,
+                }
+            }
+            case "literal": {
+                const s = schema as v.LiteralSchema<any, any>;
+                let bsonType: string = typeof s.literal;
+
+                if (bsonType == "string") {
+                    bsonType = "string";
+                } else if (bsonType == "number") {
+                    bsonType = "number";
+                } else if (bsonType == "boolean") {
+                    bsonType = "bool";
+                } else if (bsonType == "object") {
+                    bsonType = "object";
+                } else {
+                    bsonType = "string";
+                }
+                
+                return {
+                    bsonType: bsonType,
+                    enum: [s.literal],
+                    description: s.message ?? `must be ${s.literal}`,
+                }
+            }
+            case "enum": {
+                const s = schema as v.EnumSchema<any, any>;
+                
+                // Get all the enum values (filtering out the keys in numeric enums)
+                const enumValues = s.options.filter(value => 
+                    typeof value === "string" || typeof value === "number"
+                );
+                
+                // Determine bsonType based on the actual values
+                const firstValue = enumValues[0];
+                let bsonType: string;
+                
+                switch (typeof firstValue) {
+                    case "string":
+                        bsonType = "string";
+                        break;
+                    case "number":
+                        bsonType = "number";
+                        break;
+                    default:
+                        bsonType = "string";
+                }
+                
+                return {
+                    bsonType,
+                    enum: enumValues,
+                    description: s.message ?? `must be one of the allowed values`,
                 }
             }
             case "any" : {
