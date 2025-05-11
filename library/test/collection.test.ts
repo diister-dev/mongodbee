@@ -2,7 +2,7 @@ import * as v from "../src/schema.ts";
 import { assertEquals, assertExists } from "jsr:@std/assert";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
-import { MongoClient } from "mongodb";
+import { MongoClient, ObjectId } from "mongodb";
 
 Deno.test("Collection watcher events test", async (t) => {
   await withDatabase(t.name, async (db) => {
@@ -39,13 +39,13 @@ Deno.test("Collection watcher events test", async (t) => {
 
     // Update the document - should trigger 'update' event
     await users.updateOne(
-      { _id: userId },
+      { _id: new ObjectId(userId) },
       { $set: { age: 31 } }
     );
 
     // Replace the document - should trigger 'replace' event
     await users.replaceOne(
-      { _id: userId },
+      { _id: new ObjectId(userId) },
       {
         name: "John Doe",
         email: "john.updated@example.com",
@@ -54,7 +54,7 @@ Deno.test("Collection watcher events test", async (t) => {
     );
 
     // Delete the document - should trigger 'delete' event
-    await users.deleteOne({ _id: userId });
+    await users.deleteOne({ _id: new ObjectId(userId) });
 
     // Wait for events to be processed
     // MongoDB change streams might have a slight delay
@@ -108,7 +108,7 @@ Deno.test("Collection watcher event unsubscribe", async (t) => {
     
     // Update the document 
     await users.updateOne(
-      { _id: user2Id },
+      { _id: new ObjectId(user2Id) },
       { $set: { email: "bob.updated@example.com" } }
     );
     
@@ -124,7 +124,7 @@ Deno.test("Collection watcher event unsubscribe", async (t) => {
     
     // Update again, but no listeners should be triggered
     await users.updateOne(
-      { _id: user2Id },
+      { _id: new ObjectId(user2Id) },
       { $set: { email: "bob.final@example.com" } }
     );
     
@@ -282,7 +282,7 @@ Deno.test("Database drop and recreate test", async (t) => {
         
         // Update the document - should trigger 'update' event
         await users.updateOne(
-        { _id: userId },
+        { _id: new ObjectId(userId) },
         { $set: { age: 31 } }
         );
         
@@ -308,8 +308,8 @@ Deno.test("Database drop and recreate test", async (t) => {
         });
         
         await users.updateOne(
-            { _id: newUserId },
-            { $set: { age: 26 } }
+          { _id: new ObjectId(newUserId) },
+          { $set: { age: 26 } }
         );
         
         // Wait for events to be processed
