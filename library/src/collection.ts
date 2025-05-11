@@ -2,6 +2,7 @@ import * as v from './schema.ts';
 import { toMongoValidator } from "./validator.ts";
 import type * as m from "mongodb";
 import { EventEmitter } from "./events.ts";
+import { watchEvent } from "./change-stream.ts";
 
 type CollectionOptions = {
     safeDelete?: boolean,
@@ -13,7 +14,7 @@ type TInput<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<
 type TOutput<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>> = WithId<v.InferOutput<v.ObjectSchema<T, undefined>>>;
 
 type Events<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>> = {
-    create: (createEvent: m.ChangeStreamCreateDocument) => void,
+    insert: (insertEvent: m.ChangeStreamInsertDocument<TOutput<T>>) => void,
     update: (updateEvent: m.ChangeStreamUpdateDocument<TOutput<T>>) => void,
     replace: (replaceEvent: m.ChangeStreamReplaceDocument<TOutput<T>>) => void,
     delete: (deleteEvent: m.ChangeStreamDeleteDocument<TOutput<T>>) => void,
@@ -29,8 +30,7 @@ export type CollectionResult<T extends Record<string, v.BaseSchema<unknown, unkn
     find: (filter: m.Filter<TInput<T>>, options?: m.FindOptions & m.Abortable) => m.AbstractCursor<TOutput<T>>,
 }
 
-export type CollectionSchema<T> = T extends CollectionResult<infer U> ? WithId<v.InferOutput<v.ObjectSchema<U, undefined>>> : never; 
-
+export type CollectionSchema<T> = T extends CollectionResult<infer U> ? WithId<v.InferOutput<v.ObjectSchema<U, undefined>>> : never;
 
 // Roadmap
 // 
@@ -104,13 +104,11 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
                 validator,
             });
         }
-    }
-
-    async function startWatching() {
-        collection.watch().on("change", async (change) => {
+    }    async function startWatching() {
+        watchEvent(db, collection, (change) => {
             switch (change.operationType) {
-                case "create":
-                    events.call("create", change as m.ChangeStreamCreateDocument);
+                case "insert":
+                    events.call("insert", change as m.ChangeStreamInsertDocument<TOutput>);
                     break;
                 case "update":
                     events.call("update", change as m.ChangeStreamUpdateDocument<TOutput>);
@@ -123,14 +121,16 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
                     break;
                 // Special case, watch will be closed (drop, dropDatabase)
                 case "drop":
-                case "dropDatabase" :
-                    await init();
+                case "dropDatabase":
                     break;
                 default:
                     // Not handled yet
                     break;
             }
         });
+
+        // Prevent issue with MongoDB change stream not being ready
+        await new Promise(resolve => setTimeout(resolve, 100));
     }
 
     async function init() {
