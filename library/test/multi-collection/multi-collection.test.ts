@@ -1,7 +1,7 @@
-import * as v from "../src/schema.ts";
+import * as v from "../../src/schema.ts";
 import { assertEquals, assertRejects } from "jsr:@std/assert";
-import { multiCollection } from "../src/multi-collection.ts";
-import { withDatabase } from "./+shared.ts";
+import { multiCollection } from "../../src/multi-collection.ts";
+import { withDatabase } from "../+shared.ts";
 
 Deno.test("Basic test", async (t) => {
     await withDatabase(t.name, async (db) => {

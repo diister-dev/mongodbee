@@ -11,6 +11,6 @@
     ".": "./mod.ts"
   },
   "tasks": {
-    "test": "deno test --allow-net --allow-write --allow-read"
+    "test": "deno test -A"
   }
 }

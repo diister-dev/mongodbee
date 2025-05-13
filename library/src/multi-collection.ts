@@ -2,6 +2,7 @@ import * as v from './schema.ts';
 import type * as m from "mongodb";
 import { ulid } from "@std/ulid";
 import { toMongoValidator } from "./validator.ts";
+import { FlatType } from "../types/flat.ts";
 
 type CollectionOptions = {
     safeDelete?: boolean,
@@ -41,6 +42,17 @@ type StageBuilder<T extends MultiCollectionSchema> = {
 type Input<T extends MultiCollectionSchema> = v.InferInput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>;
 type Output<T extends MultiCollectionSchema> = v.InferOutput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>;
 
+type MultiCollectionResult<T extends MultiCollectionSchema> = {
+    insertOne<E extends keyof T>(key: E, doc: v.InferInput<ElementSchema<T, E>>): Promise<string>;
+    insertMany<E extends keyof T>(key: E, docs: v.InferInput<ElementSchema<T, E>>[]): Promise<(string)[]>;
+    findOne<E extends keyof T>(key: E, filter: Partial<Input<T>>): Promise<v.InferOutput<ElementSchema<T, E>>>;
+    find<E extends keyof T>(key: E, filter?: Partial<Input<T>>): Promise<v.InferOutput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>[]>;
+    deleteId<E extends keyof T>(key: E, id: string): Promise<number>;
+    deleteIds<E extends keyof T>(key: E, ids: string[]): Promise<number>;
+    updateOne<E extends keyof T>(key: E, id: string, doc: Omit<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>, "_id">): Promise<void>;
+    aggregate(stageBuilder: (stage: StageBuilder<T>) => AggregationStage[]): Promise<any[]>;
+}
+
 // Objective
 // - Support many aggregation stages (https://www.mongodb.com/docs/manual/reference/operator/aggregation-pipeline)
 export async function multiCollection<const T extends MultiCollectionSchema>(
@@ -48,15 +60,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     collectionName: string,
     collectionSchema: T,
     options?: m.CollectionOptions & CollectionOptions
-): Promise<{
-    insertOne<E extends keyof T>(key: E, doc: v.InferInput<ElementSchema<T, E>>): Promise<string>;
-    insertMany<E extends keyof T>(key: E, docs: v.InferInput<ElementSchema<T, E>>[]): Promise<(string)[]>;
-    findOne<E extends keyof T>(key: E, filter: Partial<Input<T>>): Promise<v.InferOutput<ElementSchema<T, E>>>;
-    find<E extends keyof T>(key: E, filter?: Partial<Input<T>>): Promise<v.InferOutput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>[]>;
-    deleteId<E extends keyof T>(key: E, id: string): Promise<number>;
-    deleteIds<E extends keyof T>(key: E, ids: string[]): Promise<number>;
-    aggregate(stageBuilder: (stage: StageBuilder<T>) => AggregationStage[]): Promise<any[]>;
-}> {
+): Promise<MultiCollectionResult<T>> {
     type TInput = Input<T>;
     type TOutput = Output<T>;
 
@@ -114,7 +118,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     await init();
 
     return {
-        async insertOne<E extends keyof T>(key: E, doc: v.InferInput<ElementSchema<T, E>>) {
+        async insertOne(key, doc) {
             const _id = doc._id ?? `${key as string}:${ulid()}`;
             const schema = shemaElements[key];
             const validation = v.parse(schema, {
@@ -129,7 +133,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
             return result.insertedId as unknown as string;
         },
-        async insertMany<E extends keyof T>(key: E, docs: v.InferInput<ElementSchema<T, E>>[]) {
+        async insertMany(key, docs) {
             const validation = docs.map((doc) => {
                 const _id = doc._id ?? `${key as string}:${ulid()}`;
                 return v.parse(schema, {
@@ -145,7 +149,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
             return Object.values(result.insertedIds) as unknown as string[];
         },
-        async findOne<E extends keyof T>(key: E, filter: Partial<TInput>) {
+        async findOne(key, filter) {
             const result = await collection.findOne({
                 $and: [
                     { _id: { $regex: new RegExp(`^${key as string}:`) } },
@@ -157,9 +161,9 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 throw new Error("Not found");
             }
             
-            return v.parse(schema, result) as v.InferOutput<ElementSchema<T, E>>;
+            return v.parse(schema, result);
         },
-        async find<E extends keyof T>(key: E, filter: Partial<TInput> = {}) {
+        async find(key, filter) {
             const cursor = collection.find({
                 $and: [
                     { _id: { $regex: new RegExp(`^${key as string}:`) } },
@@ -171,13 +175,13 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
             return result.map((item) => v.parse(schema, item));
         },
-        async deleteId<E extends keyof T>(key: E, id: string) {
+        async deleteId(key, id) {
             const schema = schemaWithId[key];
             v.parse(schema._id, id);
 
             const result = await collection.deleteOne({
                 _id: { $regex: new RegExp(`^${key as string}:`) },
-            } as any, options);
+            } as any);
 
             if(!result.acknowledged) {
                 throw new Error("Delete failed");
@@ -189,7 +193,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
             return result.deletedCount;
         },
-        async deleteIds<E extends keyof T>(key: E, ids: string[]) {
+        async deleteIds(key, ids) {
             const schema = schemaWithId[key];
             ids.forEach((id) => {
                 v.parse(schema._id, id);
@@ -199,7 +203,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 _id: {
                     $in: ids,
                 }
-            } as any, options);
+            } as any);
 
             if(!result.acknowledged) {
                 throw new Error("Delete failed");
@@ -211,7 +215,27 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
             return result.deletedCount;
         },
-        async aggregate(stageBuilder: (stage: StageBuilder<T>) => AggregationStage[]) {
+        async updateOne(key, id, doc) {
+            // @TODO: Implement a validation of flatdoc
+            const result = await collection.updateOne({
+                _id: id,
+            } as any, {
+                $set: doc,
+            } as any);
+
+            if(!result.acknowledged) {
+                throw new Error("Update failed");
+            }
+
+            if (result.matchedCount === 0) {
+                throw new Error("No element that match the filter to update");
+            }
+
+            if (result.modifiedCount === 0) {
+                throw new Error("No element that match the filter to update");
+            }
+        },
+        async aggregate(stageBuilder) {
             const stage: StageBuilder<T> = {
                 match: (key, filter) => ({
                     $match: {
