@@ -3,6 +3,7 @@ import type * as m from "mongodb";
 import { ulid } from "@std/ulid";
 import { toMongoValidator } from "./validator.ts";
 import { FlatType } from "../types/flat.ts";
+import { createDotNotationSchema } from "./dot-notation.ts";
 
 type CollectionOptions = {
     safeDelete?: boolean,
@@ -74,15 +75,22 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         }
     }, {} as { [key in keyof T]: Elements<T> });
 
-    const shemaElements = Object.entries(schemaWithId).reduce((acc, [key, value]) => {
+    const schemaElements = Object.entries(schemaWithId).reduce((acc, [key, value]) => {
         return {
             ...acc,
             [key]: v.object(value),
         }
     }, {} as  { [key in keyof T]: ElementSchema<T, key> });
 
+    const dotSchemaElements = Object.entries(schemaElements).reduce((acc, [key, value]) => {
+        return {
+            ...acc,
+            [key]: createDotNotationSchema(value),
+        }
+    }, {} as Record<keyof T, v.BaseSchema<any, any, any>>);
+
     const schema = v.union([
-        ...Object.values(shemaElements),
+        ...Object.values(schemaElements),
     ]);
     
     const opts: m.CollectionOptions & CollectionOptions = {
@@ -120,7 +128,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     return {
         async insertOne(key, doc) {
             const _id = doc._id ?? `${key as string}:${ulid()}`;
-            const schema = shemaElements[key];
+            const schema = schemaElements[key];
             const validation = v.parse(schema, {
                 ...doc,
                 _id,
@@ -164,11 +172,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             return v.parse(schema, result);
         },
         async find(key, filter) {
+            const idChecker = { _id: { $regex: new RegExp(`^${key as string}:`) } };
+
             const cursor = collection.find({
-                $and: [
-                    { _id: { $regex: new RegExp(`^${key as string}:`) } },
-                    filter,
-                ]
+                $and: filter ? [idChecker, filter] : [idChecker],
             } as any);
             
             const result = await cursor.toArray();
@@ -216,7 +223,13 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             return result.deletedCount;
         },
         async updateOne(key, id, doc) {
-            // @TODO: Implement a validation of flatdoc
+            const dotSchema = dotSchemaElements[key];
+            if(!dotSchema) {
+                throw new Error(`Invalid element type`);
+            }
+
+            v.parse(dotSchema, doc);
+
             const result = await collection.updateOne({
                 _id: id,
             } as any, {

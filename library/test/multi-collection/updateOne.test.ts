@@ -103,7 +103,7 @@ Deno.test("UpdateOne: Array updates test", async (t) => {
 
         // Update array element
         await collection.updateOne("group", groupId, {
-            
+            tags: ["important", "inactive"],
         });
 
         // Update nested object in array
