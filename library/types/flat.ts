@@ -2,7 +2,11 @@
 // // -> Create directly the final object
 export type NodesType<V, K extends string = "", MAX extends keyof DECREMENT = 10> = MAX extends 0 ? never :
     V extends any[] ?
-    { path: K, value: V } | NodesType<V[number], `${K}.$[]`, DECREMENT[MAX]> | NodesType<V[number], `${K}.${number}`, DECREMENT[MAX]>
+        { path: K, value: V }
+        | { path: `${K}.${number}`, value: V[number] }
+        | { path: `${K}.$[]`, value: V[number] }
+        | NodesType<V[number], `${K}.$[]`, DECREMENT[MAX]>
+        | NodesType<V[number], `${K}.${number}`, DECREMENT[MAX]>
     : V extends Record<string, any> ?
     {
         [k in keyof V]: NodesType<V[k], `${K}${K extends "" ? "" : "."}${k & string}`, DECREMENT[MAX]>

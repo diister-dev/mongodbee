@@ -228,3 +228,61 @@ Deno.test("UpdateOne: Multiple updates at once", async (t) => {
         assertEquals(updatedUser.tags[1], "admin"); // unchanged
     });
 });
+
+Deno.test("UpdateOne: Update Complex array", async (t) => {
+    await withDatabase(t.name, async (db) => {
+        const collection = await multiCollection(db, "test", {
+            user: {
+                name: v.string(),
+                email: v.string(),
+                tags: v.array(v.object({
+                    name: v.string(),
+                    value: v.string()
+                }))
+            }
+        });
+
+        // Insert test user with nested structure
+        const userId = await collection.insertOne("user", {
+            name: "John Doe",
+            email: "john@example.com",
+            tags: [
+                { name: "role", value: "admin" },
+                { name: "status", value: "active" }
+            ]
+        });
+
+        // Update multiple fields at different levels in a single call
+        await collection.updateOne("user", userId, {
+            name: "Jane Doe",
+            "tags.0.value": "super-admin",
+            "tags.1.name": "state",
+        });
+
+        // Verify all updates were applied
+        const updatedUser = await collection.findOne("user", { _id: userId });
+        assertEquals(updatedUser.name, "Jane Doe");
+        assertEquals(updatedUser.email, "john@example.com"); // unchanged
+        assertEquals(updatedUser.tags[0].name, "role");
+        assertEquals(updatedUser.tags[0].value, "super-admin");
+        assertEquals(updatedUser.tags[1].name, "state");
+        assertEquals(updatedUser.tags[1].value, "active");
+
+        // Change an entire array element
+        await collection.updateOne("user", userId, {
+            "tags.1": { name: "location", value: "USA" },
+            "tags.2": { name: "extra", value: "new" }
+        });
+
+        // Verify the entire array element was changed
+        const updatedUser2 = await collection.findOne("user", { _id: userId });
+        assertEquals(updatedUser2.tags[0].name, "role");
+        assertEquals(updatedUser2.tags[0].value, "super-admin");
+        assertEquals(updatedUser2.tags[1].name, "location");
+        assertEquals(updatedUser2.tags[1].value, "USA");
+        assertEquals(updatedUser2.tags[2].name, "extra");
+        assertEquals(updatedUser2.tags[2].value, "new");
+        assertEquals(updatedUser2.name, "Jane Doe");
+        assertEquals(updatedUser.email, "john@example.com");
+    });
+});
