@@ -1,24 +1,31 @@
-// // Improve the speed
-// // -> Create directly the final object
+type HandleArray<T, K extends string = "", MAX extends keyof DECREMENT = 10> = MAX extends 0 ? never :
+    T extends any[] ?
+        { path: K, value: T }
+        | { path: `${K}.${number}`, value: T[number] }
+        | { path: `${K}.$[]`, value: T[number] }
+        | NodesType<T[number], `${K}.$[]`, DECREMENT[MAX]>
+        | NodesType<T[number], `${K}.${number}`, DECREMENT[MAX]>
+    : never;
+
+type HandleRecord<T, K extends string = "", MAX extends keyof DECREMENT = 10> = MAX extends 0 ? never :
+    T extends Record<string, any> ?
+        (K extends "" ? never : { path: K, value: T })
+        | {
+            [k in keyof T]: NodesType<T[k], `${K}${K extends "" ? "" : "."}${k & string}`, DECREMENT[MAX]>
+        }[keyof T] extends infer U ? U extends undefined ? never : U : never
+    : never;
+
 export type NodesType<V, K extends string = "", MAX extends keyof DECREMENT = 10> = MAX extends 0 ? never :
-    V extends any[] ?
-        { path: K, value: V }
-        | { path: `${K}.${number}`, value: V[number] }
-        | { path: `${K}.$[]`, value: V[number] }
-        | NodesType<V[number], `${K}.$[]`, DECREMENT[MAX]>
-        | NodesType<V[number], `${K}.${number}`, DECREMENT[MAX]>
-    : V extends Record<string, any> ?
-    {
-        [k in keyof V]: NodesType<V[k], `${K}${K extends "" ? "" : "."}${k & string}`, DECREMENT[MAX]>
-    }[keyof V] extends infer U ? U extends undefined ? never : U : never
+    V extends (infer T)[] ? HandleArray<T[], K, DECREMENT[MAX]>
+    : V extends Record<string, infer T> ? HandleRecord<V, K, DECREMENT[MAX]>
     : { path: K, value: V };
 
 export type FlatKey<T extends Record<string, any>> = NodesType<T> extends infer U ?
     U extends { path: infer P } ? P : never : never;
 
-export type FlatType<T extends Record<string, any>> = {
-    [k in FlatKey<T>]: NodesType<T> extends infer U ? U extends { path: k, value: infer V } ? V : never : never
-}
+export type FlatType<T> = T extends Record<string, any> ? NodesType<T> extends infer U ? {
+    [k in FlatKey<T>]: U extends { path: k, value: infer V } ? V : never
+} : never : never;
 
 // System to prevent infinite recursion
 // DECREMENT is a type that maps numbers to their decremented values

@@ -177,6 +177,42 @@ Deno.test("UpdateOne: Invalid id format test", async (t) => {
     });
 });
 
+Deno.test("UpdateOne: Support optional object entry", async (t) => {
+    await withDatabase(t.name, async (db) => {
+        const collection = await multiCollection(db, "test", {
+            user: {
+                name: v.string(),
+                age: v.number(),
+                address: v.optional(v.object({
+                    city: v.string(),
+                    country: v.string()
+                }))
+            }
+        });
+
+        // Insert test user
+        const userId = await collection.insertOne("user", {
+            name: "John",
+            age: 30,
+        });
+
+        // Update with optional field
+        await collection.updateOne("user", userId, {
+            address: {
+                city: "New York",
+                country: "USA"
+            }
+        });
+
+        // Verify update
+        const updatedUser = await collection.findOne("user", { _id: userId });
+        assertEquals(updatedUser.name, "John");
+        assertEquals(updatedUser.age, 30);
+        assertEquals(updatedUser.address?.city, "New York");
+        assertEquals(updatedUser.address?.country, "USA");
+    });
+});
+
 Deno.test("UpdateOne: Multiple updates at once", async (t) => {
     await withDatabase(t.name, async (db) => {
         const collection = await multiCollection(db, "test", {

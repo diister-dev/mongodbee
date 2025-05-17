@@ -1,28 +1,29 @@
 import * as v from "valibot"
-import { FlatType } from "../library/types/flat.ts";
+import { FlatType, FlatKey, NodesType } from "../library/types/flat.ts";
 
 const schema = v.object({
-    hello: v.string(),
-    world: v.number(),
-    deep: v.object({
-        d: v.array(v.object({
-            f: v.string(),
-        })),
-        key: v.string(),
-        a: v.optional(v.object({
-            b: v.string(),
-            c: v.object({
-                d: v.string(),
-                e: v.array(v.string()),
-            }),
-            d: v.array(v.object({
-                f: v.string(),
-            })),
-        })),
-    }),
+    hello: v.optional(v.object({
+        world: v.string(),
+    })),
+    // world: v.number(),
+    // deep: v.optional(v.object({
+    //     d: v.array(v.object({
+    //         f: v.string(),
+    //     })),
+    // })),
 })
 
+type A<T> = T extends [infer U, ...infer R] ? A<T> : never;
+
 type Output = v.InferOutput<typeof schema>;
+
+type Nodes = NodesType<Output>;
+
+type Keys = FlatKey<Output>;
+
+type FlatTest<T> = T extends Record<string, any> ? NodesType<T> extends infer U ? {
+    [k in FlatKey<T>]: U extends { path: k, value: infer V } ? V : never
+} : never : never
 
 // type OutputNodes = NodesType<Output>['path'];
 type FlatOutput = Partial<FlatType<Output>>;
