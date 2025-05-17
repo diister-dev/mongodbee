@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="../brand/logo.svg" alt="MongoDBee Logo" width="200" />
+  <img src="./brand/logo.svg" alt="MongoDBee Logo" width="200" />
   
   # MongoDBee 🍃🐝
 
