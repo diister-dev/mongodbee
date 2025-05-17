@@ -302,7 +302,7 @@ Deno.test("RANDOM TEST - TO DELETE", async (t) => {
             age: 30,
         }]);
 
-        const groupsId = await collection.insertMany("group", [{
+        await collection.insertMany("group", [{
             name: "John",
             members: [usersId[0], usersId[1], usersId[3]]
         }, {
@@ -316,7 +316,7 @@ Deno.test("RANDOM TEST - TO DELETE", async (t) => {
             members: [usersId[3]]
         }]);
 
-        const result = await collection.aggregate((stage) => [
+        await collection.aggregate((stage) => [
             stage.match("group", {}),
             stage.unwind("group", "members"),
             stage.lookup("group", "members", "_id"),

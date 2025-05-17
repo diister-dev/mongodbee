@@ -3,8 +3,6 @@ import { assertEquals, assertRejects } from "jsr:@std/assert";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { withDatabase } from "./+shared.ts";
-import { getSessionContext } from "../src/session.ts";
-import { ObjectId } from "mongodb";
 
 // Test schemas
 const userSchema = {
@@ -131,7 +129,7 @@ Deno.test("Combined Session: Transaction rollback across collection types", asyn
       async () => {
         await users.withSession(async () => {
           // Create a user
-          const userId = await users.insertOne({
+          await users.insertOne({
             name: "Rollback Test User",
             email: "rollback@example.com",
             age: 40

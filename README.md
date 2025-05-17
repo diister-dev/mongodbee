@@ -1,157 +1,332 @@
 <div align="center">
-  <img src="./brand/logo.svg" alt="MongoDBee Logo" width="200" />
+  <img src="../brand/logo.svg" alt="MongoDBee Logo" width="200" />
+  
+  # MongoDBee 🍃🐝
+
+  <p align="center">
+    <strong>A type-safe MongoDB wrapper with built-in validation powered by Valibot</strong>
+  </p>
+  
+  <p align="center">
+    <a href="#key-features">Features</a> •
+    <a href="#installation">Installation</a> •
+    <a href="#usage">Usage</a> •
+    <a href="#examples">Examples</a> •
+    <a href="#transactions">Transactions</a> •
+    <a href="#project-status">Status</a>
+  </p>
+  
+  <p align="center">
+    <a href="https://jsr.io/@diister/mongodbee">
+      <img src="https://jsr.io/badges/@diister/mongodbee" alt="JSR Score">
+    </a>
+    <a href="https://github.com/diister-dev/mongodbee/blob/main/LICENSE">
+      <img src="https://img.shields.io/github/license/diister-dev/mongodbee" alt="License">
+    </a>
+  </p>
 </div>
 
-# MongoDBee 🍃🐝
+> ⚠️ **Project Under Development**: MongoDBee is in early development. The MultiCollection API is stable, but other features may be incomplete. See the [Project Status](#project-status) section for details.
 
-A lightweight, strongly typed MongoDB wrapper for TypeScript with built-in validation using Valibot.
+## 🌟 Key Features
 
-## Overview
+- **🔒 Type-Safe**: Strong TypeScript support with automatic type inference
+- **✅ Validation**: Define schemas with Valibot for runtime and database-level validation
+- **🏗️ Multi-Collection**: Store different document types in a single MongoDB collection with type-safety
+- **⚡ Transactions**: Built-in transaction support with AsyncLocalStorage
+- **🛡️ Data Protection**: Built-in safeguards against accidental data deletion
+- **🔄 Change Streams**: Type-safe event listeners for collection changes
+- **🔗 Dot Notation**: Support for nested object operations (MultiCollection API)
 
-MongoDBee is a MongoDB wrapper that brings the power of TypeScript and schema validation to your database operations. It combines the flexibility of MongoDB with the safety of static typing and runtime validation.
+## 📦 Installation
 
-Key features:
-- **Schema Validation**: Define your schemas using Valibot and automatically validate documents at runtime
-- **MongoDB Integration**: Translates Valibot schemas into MongoDB JSON Schema validators
-- **Type Safety**: Full TypeScript support for all MongoDB operations
-- **Safe Operations**: Built-in safeguards against accidental data deletion
-- **Simple API**: Maintains the familiar MongoDB API while adding validation
+### Deno
 
-## Installation
-
-```bash
-# Using npm
-npm install mongodbee
-
-# Using deno
-import { collection } from "jsr:mongodbee";
+```ts
+// Import from JSR
+import { collection, multiCollection } from "jsr:@diister/mongodbee";
+import * as v from "jsr:@diister/mongodbee/schema";
 ```
 
-## Quick Start
+### Node.js
+
+```bash
+npm install mongodbee mongodb
+```
+
+```ts
+// Import in Node.js
+import { collection, multiCollection } from "mongodbee";
+import * as v from "mongodbee/schema";
+```
+
+## 🚀 Usage
+
+### Basic Collection
 
 ```typescript
 import { collection, MongoClient } from "mongodbee";
-import * as v from 'mongodbee/schema';
+import * as v from "mongodbee/schema";
 
 // Connect to MongoDB
-const client = new MongoClient('mongodb://localhost:27017');
+const client = new MongoClient("mongodb://localhost:27017");
 await client.connect();
+const db = client.db("myapp");
 
-const db = client.db('myapp');
-
-// Create a typed collection with validation
-const users = await collection(db, 'users', {
-  username: v.pipe(v.string(), v.minLength(3), v.maxLength(20)),
+// Define a schema with validation
+const users = await collection(db, "users", {
+  username: v.pipe(v.string(), v.minLength(3)),
   email: v.pipe(v.string(), v.email()),
-  age: v.pipe(v.number(), v.minValue(0), v.maxValue(120)),
+  age: v.pipe(v.number(), v.minValue(0)),
   createdAt: v.date()
 });
 
-// Insert a document - automatic validation
-await users.insertOne({
-  username: 'johndoe',
-  email: 'john@example.com',
-  age: 30,
+// Insert with automatic validation
+const userId = await users.insertOne({
+  username: "janedoe",
+  email: "jane@example.com",
+  age: 28,
   createdAt: new Date()
 });
 
-// Query with full type safety
-const john = await users.findOne({ username: 'johndoe' });
+// Query with type safety
+const user = await users.findOne({ _id: userId });
+console.log(user.email); // TypeScript knows this is a string
 ```
 
-## Features
+### Multi-Collection API
 
-### Validation
-
-MongoDBee validates your data at two levels:
-1. **Application-level**: Using Valibot to validate data before it reaches MongoDB
-2. **Database-level**: By translating Valibot schemas into MongoDB JSON Schema validators
-
-This dual-layer approach ensures data consistency both in your application and directly in the database.
-
-### Type Safety
-
-All MongoDB operations maintain full TypeScript type safety:
+The MultiCollection API allows you to store different document types in a single MongoDB collection while maintaining strong type safety:
 
 ```typescript
-// TypeScript knows the exact type of the 'user' document
-const user = await users.findOne({ email: 'john@example.com' });
-console.log(user.username); // No type errors
-console.log(user.unknownField); // TypeScript error!
+import { multiCollection } from "mongodbee";
+import * as v from "mongodbee/schema";
+
+// Define a catalog schema with multiple document types in a single collection
+const catalog = await multiCollection(db, "catalog", {
+  product: {  // First document type
+    name: v.string(),
+    price: v.number(),
+    stock: v.number(),
+    category: v.string()
+  },
+  category: { // Second document type in the same collection
+    name: v.string(),
+    parentId: v.optional(v.string())
+  }
+});
+
+// Insert into the collection with type "category"
+const electronicsId = await catalog.insertOne("category", {
+  name: "Electronics"
+});
+
+await catalog.insertOne("product", {
+  name: "Smartphone",
+  price: 499.99,
+  stock: 100,
+  category: electronicsId
+});
+
+// Query by document type
+const electronics = await catalog.findOne("category", { name: "Electronics" });
+const products = await catalog.find("product", { category: electronics._id });
 ```
 
-### Safe Operations
+> ⚠️ **Important Note**: MultiCollection uses a single MongoDB collection to store different document types, not multiple collections. This provides a more efficient storage model while maintaining type safety.
 
-MongoDBee includes safeguards against accidental data loss:
+## 🔄 Change Streams
+
+Listen to real-time database changes:
 
 ```typescript
-// This will throw an error because the filter is empty
-await users.deleteMany({});
+// Subscribe to collection events
+const unsubscribe = users.on("insert", (event) => {
+  console.log("New user created:", event.fullDocument);
+});
 
-// This only allows deletion with specific filters
-await users.deleteMany({ age: { $lt: 18 } });
+// Each .on() call returns an unsubscribe function
+unsubscribe(); // Stop listening to insert events
 ```
 
-## Roadmap
+> ⚠️ **Note**: Change streams require MongoDB to be running as a replica set or sharded cluster.
 
-Current development status:
+## 💼 Transactions
 
-### 1. CRUD Operations with Validation
-- **Create**:
-  - ✅ insertOne
-  - ✅ insertMany
-- **Read**:
-  - ✅ findOne
-  - ✅ find
-  - ✅ countDocuments
-  - ✅ estimatedDocumentCount
-  - ✅ distinct
-- **Update**:
-  - ⚠️ updateOne (in progress)
-  - ✅ replaceOne
-  - ⚠️ updateMany (in progress)
-- **Delete**:
-  - ✅ deleteOne
-  - ✅ deleteMany (with safe delete protection)
-- **Compound**:
-  - ✅ findOneAndDelete
-  - ✅ findOneAndReplace
-  - ✅ findOneAndUpdate
-- **Aggregate**:
-  - ✅ aggregate
-  - ✅ bulkWrite
+MongoDBee makes transactions easier with automatic session management:
 
-### 2. MongoDB JSON Schema Validation
-- ✅ Create a collection with a validator
-- ✅ Update a collection with a validator
-- 🔲 Validate a collection with a validator
-- 🔲 Validate a document with a validator
+```typescript
+// Start a transaction
+await users.withSession(async () => {
+  // All operations within this callback use the same session
+  const userId = await users.insertOne({
+    username: "newuser",
+    email: "new@example.com",
+    age: 25,
+    createdAt: new Date()
+  });
+  
+  await orders.insertOne({
+    userId,
+    items: [{ product: "Item 1", price: 29.99 }],
+    total: 29.99,
+    status: "pending"
+  });
+  
+  // If any operation fails, the entire transaction is rolled back
+  // When the callback completes successfully, the transaction is committed
+});
+```
 
-### 3. Future Features
-- 🔲 Support deep key validation (e.g. "a.b.c")
-- 🔲 Support for aggregation with strong typing
-- 🔲 Integration with popular ORM frameworks
-- 🔲 Migration utilities
-- 🔲 Performance optimization
-- 🔲 Extended validator support for complex data structures
+### Cross-collection transactions
 
-## Library Structure
+Transactions work across regular and multi-collections:
 
-- **collection.ts**: Core functionality for type-safe MongoDB collections
-- **schema.ts**: Schema definition and validation using Valibot
-- **validator.ts**: Translator between Valibot schemas and MongoDB JSON Schema
+```typescript
+await users.withSession(async () => {
+  // Regular collection operation
+  const userId = await users.insertOne({
+    username: "alice",
+    email: "alice@example.com",
+    age: 32
+  });
+  
+  // Multi-collection operation in the same transaction
+  await catalog.insertOne("product", {
+    name: "User's Product",
+    price: 79.99,
+    stock: 1,
+    category: "user-created"
+  });
+  
+  // Both operations succeed or fail together
+});
+```
 
-## Project Ideas
+## 📋 Examples
 
-- **CLI Tools**: Create tools for schema generation, migration, and database inspection
-- **Visualization**: Build a UI for exploring and managing typed collections
-- **Validator Extensions**: Extend Valibot support with custom validators for MongoDB-specific types
-- **Documentation Site**: Build comprehensive documentation with examples and interactive tutorials
+### Dot Notation (MultiCollection API)
 
-## Contributing
+The MultiCollection API has full support for updating nested fields using dot notation:
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+```typescript
+// Define a schema with nested objects
+const posts = await multiCollection(db, "content", {
+  post: {
+    title: v.string(),
+    content: v.string(),
+    metadata: v.object({
+      views: v.number(),
+      tags: v.array(v.string())
+    }),
+    comments: v.array(v.object({
+      user: v.string(),
+      text: v.string(),
+      likes: v.number()
+    }))
+  }
+});
 
-## License
+// Insert a post
+const postId = await posts.insertOne("post", {
+  title: "My First Post",
+  content: "Hello world!",
+  metadata: {
+    views: 0,
+    tags: ["welcome", "first"]
+  },
+  comments: [
+    { user: "user1", text: "Great post!", likes: 0 }
+  ]
+});
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+// Update nested fields using dot notation
+await posts.updateOne("post", postId, {
+  "metadata.views": 42,
+  "comments.0.likes": 5,
+  "metadata.tags.1": "updated"
+});
+```
+
+> ⚠️ **Note**: Dot notation support in regular collections is still in development.
+
+### Aggregation (MultiCollection API)
+
+For multi-collections, the library provides helper functions to simplify working with multiple document types in a single collection:
+
+```typescript
+// Aggregation helpers for working with different document types in the same collection
+const results = await catalog.aggregate((stage) => [
+  stage.match("product", { price: { $gt: 50 } }),
+  stage.lookup("product", "category", "_id")
+]);
+```
+
+### Custom Schema Types
+
+Create reusable schema components for consistency:
+
+```typescript
+// Define a reusable schema
+const addressSchema = {
+  street: v.string(),
+  city: v.string(),
+  state: v.string(),
+  zipCode: v.string(),
+  country: v.string()
+};
+
+// Use it in multiple collections
+const customers = await collection(db, "customers", {
+  name: v.string(),
+  email: v.string(),
+  billingAddress: v.object(addressSchema),
+  shippingAddress: v.object(addressSchema)
+});
+```
+
+## 📊 Project Status
+
+Current implementation status by feature:
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| MultiCollection API | ✅ Complete | Full implementation with multiple document types in a single collection |
+| Transactions | ✅ Complete | Session-based transaction support with AsyncLocalStorage |
+| Change Streams | ✅ Complete | Real-time data change events and listeners |
+| Basic Collection API | ⚠️ Partial | Core functionality works, some operations need improved validation |
+| Type Inference | ⚠️ Partial | Good typing for basic operations, limited for advanced operations |
+| Dot Notation (Collection) | ⚠️ In Development | Full support in MultiCollection, partial in regular Collection |
+
+### Implementation Details
+
+- **Full Support**: 
+  - `insertOne`, `insertMany` - Fully implemented with validation
+  - MultiCollection API - Complete implementation
+  - Transaction support - Complete implementation
+  - Change streams - Complete implementation
+  
+- **Partial Support**:
+  - `updateOne`, `updateMany` (Collection API) - Needs improved type validation
+  - `findOneAndDelete`, `findOneAndReplace`, `findOneAndUpdate` - Basic implementation
+  - `aggregate`, `bulkWrite` - Limited type safety
+
+## 🤝 Contributing
+
+Contributions are welcome! Here's how to get started:
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](../LICENSE) file for details.
+
+---
+
+<div align="center">
+  <sub>Built with ❤️ by <a href="https://github.com/diister-dev">diister-dev</a></sub>
+</div>

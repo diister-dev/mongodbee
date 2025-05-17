@@ -323,6 +323,30 @@ function constructorToValidator(schema: UnknownSchema | UnknownValidation) {
  * // Use with db.createCollection or db.command({ collMod: ... })
  * ```
  */
+/**
+ * Converts a Valibot schema to a MongoDB JSON Schema validator
+ * 
+ * This function transforms a Valibot schema into a MongoDB-compatible 
+ * JSON Schema validator that can be used with MongoDB's schema validation.
+ * 
+ * @param schema - The Valibot schema to convert
+ * @returns A MongoDB validator object with the $jsonSchema property
+ * 
+ * @example
+ * ```typescript
+ * import * as v from 'valibot';
+ * import { toMongoValidator } from './validator.ts';
+ * 
+ * const userSchema = v.object({
+ *   name: v.string(),
+ *   age: v.number([v.minValue(0)]),
+ * });
+ * 
+ * const validator = toMongoValidator(userSchema);
+ * await db.createCollection("users", { validator });
+ * ```
+ * @internal
+ */
 export function toMongoValidator(schema: v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>) {
     return {
         $jsonSchema: constructorToValidator(schema),

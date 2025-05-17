@@ -22,6 +22,10 @@ type Events<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<
     delete: (deleteEvent: m.ChangeStreamDeleteDocument<TOutput<T>>) => void,
 }
 
+/**
+ * Type representing the enhanced MongoDB collection with validation and type safety
+ * @template T - Schema type containing Valibot schemas for document fields
+ */
 export type CollectionResult<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>> =
     Omit<m.Collection<TInput<T>>, "findOne" | "find" | "insertOne" | "distinct" | "findOneAndDelete" | "findOneAndReplace" | "findOneAndUpdate" | "indexInformation" | "listSearchIndexes"> & {
         collection: m.Collection<TInput<T>>,
@@ -43,6 +47,10 @@ export type CollectionResult<T extends Record<string, v.BaseSchema<unknown, unkn
         listSearchIndexes(name: string, options?: m.ListSearchIndexesOptions): m.ListSearchIndexesCursor;
     }
 
+/**
+ * Utility type for extracting the schema type from a collection
+ * @template T - The CollectionResult type to extract the schema from
+ */
 export type CollectionSchema<T> = T extends CollectionResult<infer U> ? WithId<v.InferOutput<v.ObjectSchema<U, undefined>>> : never;
 
 // Roadmap
@@ -83,6 +91,34 @@ export type CollectionSchema<T> = T extends CollectionResult<infer U> ? WithId<v
 //    - [ ] Validate a collection with a validator
 //    - [ ] Validate a document with a validator
 // 3. Support deep key validation (e.g. "a.b.c")
+/**
+ * Creates a type-safe MongoDB collection with schema validation
+ * 
+ * This function creates or updates a MongoDB collection with built-in validation
+ * based on the provided Valibot schema. It adds type safety and validation to 
+ * standard MongoDB operations.
+ * 
+ * @param db - MongoDB database instance
+ * @param collectionName - Name of the collection to create or use
+ * @param collectionSchema - Valibot schema describing the document structure
+ * @param options - Additional options for the collection
+ * @returns A Promise resolving to an enhanced MongoDB collection with validation
+ * 
+ * @example
+ * ```typescript
+ * const users = await collection(db, "users", {
+ *   username: v.string(),
+ *   email: v.pipe(v.string(), v.email()),
+ *   age: v.pipe(v.number(), v.minValue(0))
+ * });
+ * 
+ * const userId = await users.insertOne({
+ *   username: "john",
+ *   email: "john@example.com",
+ *   age: 30
+ * });
+ * ```
+ */
 export async function collection<const T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>>(
     db: Db,
     collectionName: string,

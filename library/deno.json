@@ -1,6 +1,5 @@
-{
-  "name": "@diister/mongodbee",
-  "version": "0.4.0",
+{  "name": "@diister/mongodbee",
+  "version": "0.4.1",
   "license": "MIT",
   "imports": {
     "@std/ulid": "jsr:@std/ulid@^1.0.0",
@@ -8,7 +7,8 @@
     "mongodb": "npm:mongodb@^6.16.0"
   },
   "exports": {
-    ".": "./mod.ts"
+    ".": "./mod.ts",
+    "./schema": "./schema.ts"
   },
   "tasks": {
     "test": "deno test -A"

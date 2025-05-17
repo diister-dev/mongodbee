@@ -98,7 +98,7 @@ Deno.test("UpdateOne: Array updates test", async (t) => {
             nested: {
                 key: "status",
                 value: "active"
-            }
+            },
         });
 
         // Update array element

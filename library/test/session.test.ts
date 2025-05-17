@@ -2,8 +2,6 @@ import * as v from "../src/schema.ts";
 import { assertEquals, assertRejects } from "jsr:@std/assert";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
-import { MongoClient, ObjectId } from "mongodb";
-import { getSessionContext } from "../src/session.ts";
 
 // Simple test schemas
 const userSchema = {

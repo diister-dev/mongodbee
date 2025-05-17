@@ -4,25 +4,46 @@ import { FlatType } from "../types/flat.ts";
 
 /**
  * Represents an element of a key path that can be either a string or a predicate function
+ * 
+ * This type is used to define parts of a document path in MongoDB dot notation.
+ * It can be either a literal string (exact match) or a function that validates a path segment.
  */
 export type KeyFullPathElement = string | ((v: string) => boolean);
 
 /**
  * Represents a full path of keys in dot notation
+ * 
+ * An array of path elements that describes a complete path to a field in MongoDB dot notation.
+ * Example: ["user", "address", "street"] represents "user.address.street"
  */
 export type KeyFullPath = KeyFullPathElement[];
 
 /**
  * Entry used internally to store path and schema information
+ * 
+ * A tuple containing both the path to a field and its validation schema.
  */
 export type SchemaPathEntry = [KeyFullPath, v.BaseSchema<any, any, any>];
 
 /**
  * Checks if a path string matches a key path pattern
  * 
- * @param fullPath - The pattern to match against
- * @param p - The path string to check
+ * This function validates if a dot notation path string matches a given path pattern.
+ * It supports both exact matches with strings and flexible matching with predicate functions.
+ * 
+ * @param fullPath - The pattern to match against, as an array of path elements
+ * @param p - The path string to check (e.g., "user.address.street")
  * @returns True if the path matches the pattern, false otherwise
+ * @example
+ * ```typescript
+ * // Exact match
+ * checkPath(["user", "address", "street"], "user.address.street"); // true
+ * 
+ * // Using a predicate function to match numeric indices
+ * const arrayPattern = ["items", (v) => !isNaN(Number(v))];
+ * checkPath(arrayPattern, "items.0"); // true
+ * checkPath(arrayPattern, "items.abc"); // false
+ * ```
  */
 export function checkPath(fullPath: KeyFullPath, p: unknown): boolean {
     if (typeof p !== 'string') return false;
@@ -46,8 +67,33 @@ export function checkPath(fullPath: KeyFullPath, p: unknown): boolean {
 /**
  * Extracts all possible paths from a valibot schema to support dot notation
  * 
+ * This function analyzes a Valibot schema and extracts all possible paths in dot notation format
+ * along with their corresponding subschemas. It handles nested objects and arrays, including 
+ * support for array indices with both numeric indices and MongoDB's $[] operator.
+ * 
  * @param schema - The valibot schema to extract paths from
  * @returns Array of path entries containing path pattern and schema
+ * @example
+ * ```typescript
+ * const userSchema = v.object({
+ *   name: v.string(),
+ *   address: v.object({
+ *     city: v.string(),
+ *     zipCode: v.number()
+ *   }),
+ *   tags: v.array(v.string())
+ * });
+ * 
+ * // Results will include entries for:
+ * // ["name"] -> string schema
+ * // ["address"] -> address object schema
+ * // ["address", "city"] -> string schema
+ * // ["address", "zipCode"] -> number schema
+ * // ["tags"] -> array schema
+ * // ["tags", "$[]"] -> string schema
+ * // ["tags", (v) => !isNaN(Number(v))] -> string schema
+ * const paths = extractSchemaPaths(userSchema);
+ * ```
  */
 export function extractSchemaPaths(schema: v.BaseSchema<any, any, any>): SchemaPathEntry[] {
     const entries: SchemaPathEntry[] = [];
@@ -92,8 +138,30 @@ export function extractSchemaPaths(schema: v.BaseSchema<any, any, any>): SchemaP
 /**
  * Creates a custom valibot schema that validates objects using dot notation
  * 
+ * This function creates a custom Valibot validator that can validate objects where keys
+ * are in MongoDB dot notation format (e.g., "user.address.street"). It extracts all possible
+ * paths from the provided schema and validates each field against its corresponding subschema.
+ * 
  * @param schema - The original schema to transform
- * @returns A custom valibot schema that supports dot notation
+ * @returns A custom valibot schema that supports dot notation validation
+ * @example
+ * ```typescript
+ * const userSchema = v.object({
+ *   name: v.string(),
+ *   address: v.object({
+ *     city: v.string(),
+ *     zipCode: v.number()
+ *   })
+ * });
+ * 
+ * const dotSchema = createDotNotationSchema(userSchema);
+ * 
+ * // This will validate successfully
+ * v.parse(dotSchema, {
+ *   "name": "John",
+ *   "address.city": "New York"
+ * });
+ * ```
  */
 export function createDotNotationSchema<T extends v.BaseSchema<any, any, any>>(schema: T): v.CustomSchema<any, any> {
     const entries = extractSchemaPaths(schema);
@@ -123,12 +191,22 @@ export function createDotNotationSchema<T extends v.BaseSchema<any, any, any>>(s
 
 /**
  * Type helper for dot notation schema output type
+ * 
+ * Represents the output type of a schema when used with dot notation,
+ * allowing for partial updates using MongoDB's dot notation syntax.
+ * 
+ * @template T - The base schema type
  */
 export type DotNotationSchemaOutput<T extends v.BaseSchema<any, any, any>> = 
     Partial<FlatType<v.InferOutput<T>>>;
 
 /**
  * Type helper for dot notation schema input type
+ * 
+ * Represents the input type of a schema when used with dot notation,
+ * allowing for partial updates using MongoDB's dot notation syntax.
+ * 
+ * @template T - The base schema type
  */
 export type DotNotationSchemaInput<T extends v.BaseSchema<any, any, any>> = 
     Partial<FlatType<v.InferInput<T>>>;

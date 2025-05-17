@@ -1,6 +1,14 @@
 import type { ClientSession, Db, MongoClient } from "../mod.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 
+/**
+ * Checks if MongoDB transactions are enabled on the current database
+ * 
+ * @param mongoClient - MongoDB client instance
+ * @param mongoDb - MongoDB database instance
+ * @returns A promise that resolves to true if transactions are enabled, false otherwise
+ * @internal
+ */
 export async function checkTransactionEnabled(mongoClient: MongoClient, mongoDb: Db) {
     const session = mongoClient.startSession();
     const collectionId = `transaction_test_${crypto.randomUUID()}`;
@@ -21,6 +29,13 @@ export async function checkTransactionEnabled(mongoClient: MongoClient, mongoDb:
 
 const sessionContextMap = new WeakMap<MongoClient, Awaited<ReturnType<typeof createSessionContext>>>();
 
+/**
+ * Gets or creates a session context for a MongoDB client
+ * 
+ * @param mongoClient - MongoDB client instance
+ * @returns A session context that can be used for transaction management
+ * @internal
+ */
 export async function getSessionContext(mongoClient: MongoClient) : ReturnType<typeof createSessionContext> {
     let context = sessionContextMap.get(mongoClient);
     if (!context) {
@@ -30,6 +45,16 @@ export async function getSessionContext(mongoClient: MongoClient) : ReturnType<t
     return context;
 }
 
+/**
+ * Creates a new session context for MongoDB transactions
+ * 
+ * This function creates a context that manages MongoDB sessions using AsyncLocalStorage,
+ * allowing for transparent session propagation across async boundaries.
+ * 
+ * @param mongoClient - MongoDB client instance
+ * @returns An object with functions to manage sessions and transactions
+ * @internal
+ */
 export async function createSessionContext(mongoClient: MongoClient) : Promise<{
     getSession: () => ClientSession | undefined;
     withSession: <T>(fn: (session?: ClientSession) => Promise<T>) => Promise<T>;
