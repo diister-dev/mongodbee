@@ -55,20 +55,21 @@ export async function createSessionContext(mongoClient: MongoClient) : Promise<{
         }
         
         const newSession = mongoClient.startSession();
-        asyncSession.enterWith(newSession);
-        try {
-            newSession.startTransaction();
-            const result = await fn(newSession);
-            await newSession.commitTransaction();
-            return result as T;
-        } catch(e) {
-            if(newSession.inTransaction()) {
-                await newSession.abortTransaction();
+        return asyncSession.run(newSession, async () => {
+            try {
+                newSession.startTransaction();
+                const result = await fn(newSession);
+                await newSession.commitTransaction();
+                return result as T;
+            } catch(e) {
+                if(newSession.inTransaction()) {
+                    await newSession.abortTransaction();
+                }
+                throw e;
+            } finally {
+                await newSession.endSession();
             }
-            throw e;
-        } finally {
-            await newSession.endSession();
-        }
+        });
     }
 
     return {

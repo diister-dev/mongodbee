@@ -77,7 +77,6 @@ Deno.test("Combined Session: Collection and Multi-Collection in same transaction
       // Create a category in multi-collection
       const categoryId = await catalog.insertOne("category", {
         name: "Electronics",
-        parentId: undefined,
       });
       
       // Create an order in the regular collection that references the products

@@ -1,5 +1,8 @@
 import { type Db, MongoClient } from "../src/mongodb.ts";
 
+const MAX_DB_NAME_LENGTH = 63;
+const RANDOM_SIZE = 8;
+
 function computePrefix(prefix: string) {
     // Replace all non-alphanumeric characters with "_"
     const prefixSanitize = prefix.replace(/[^a-zA-Z0-9]/g, "_").toLocaleLowerCase();
@@ -7,11 +10,11 @@ function computePrefix(prefix: string) {
     const prefixFixed = prefixSanitize.replace(/^_+|_+$/g, "");
 
     const finalName = `@TEST_${prefixFixed}@`;
-    return finalName.substring(0, 63);
+    return finalName.substring(0, MAX_DB_NAME_LENGTH - RANDOM_SIZE);
 }
 
 function randomDBName(prefix: string) {
-    return `${computePrefix(prefix)}${crypto.randomUUID().replace(/-/g, "").substring(0, 8)}`;
+    return `${computePrefix(prefix)}${crypto.randomUUID().replace(/-/g, "").substring(0, RANDOM_SIZE)}`;
 }
 
 async function deleteTestDatabase(client: MongoClient, prefix = "UNKNOWN") {
