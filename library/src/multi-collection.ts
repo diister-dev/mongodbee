@@ -50,7 +50,12 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
     find<E extends keyof T>(key: E, filter?: Partial<Input<T>>): Promise<v.InferOutput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>[]>;
     deleteId<E extends keyof T>(key: E, id: string): Promise<number>;
     deleteIds<E extends keyof T>(key: E, ids: string[]): Promise<number>;
-    updateOne<E extends keyof T>(key: E, id: string, doc: Omit<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>, "_id">): Promise<void>;
+    updateOne<E extends keyof T>(key: E, id: string, doc: Omit<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>, "_id">): Promise<number>;
+    updateMany(operation: {
+        [key in keyof T]?: {
+            [id: string]: Omit<Partial<FlatType<v.InferInput<ElementSchema<T, key>>>>, "_id">;
+        }
+    }): Promise<number>;
     aggregate(stageBuilder: (stage: StageBuilder<T>) => AggregationStage[]): Promise<any[]>;
 }
 
@@ -247,6 +252,48 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             if (result.modifiedCount === 0) {
                 throw new Error("No element that match the filter to update");
             }
+
+            return result.modifiedCount;
+        },
+        async updateMany(operation) {
+            const bulkOps: any[] = [];
+            for(const type in operation) {
+                const elements = operation[type];
+                for(const id in elements) {
+                    const element = elements[id];
+                    const dotSchema = dotSchemaElements[type];
+                    if(!id.startsWith(`${type}:`)) {
+                        throw new Error(`Invalid id format`);
+                    }
+                    if(!dotSchema) {
+                        throw new Error(`Invalid element type`);
+                    }
+                    v.parse(dotSchema, element);
+
+                    bulkOps.push({
+                        updateOne: {
+                            filter: { _id: id },
+                            update: { $set: element },
+                        }
+                    });
+                }
+            }
+
+            if (bulkOps.length === 0) {
+                throw new Error("No element to update");
+            }
+
+            const result = await collection.bulkWrite(bulkOps);
+
+            if (result.matchedCount === 0) {
+                throw new Error("No element that match the filter to update");
+            }
+
+            if (result.modifiedCount === 0) {
+                throw new Error("No element that match the filter to update");
+            }
+
+            return result.modifiedCount;
         },
         async aggregate(stageBuilder) {
             const stage: StageBuilder<T> = {
