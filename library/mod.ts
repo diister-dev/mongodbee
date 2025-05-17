@@ -8,4 +8,4 @@
 
 export * from "./src/collection.ts";
 export * from "./src/multi-collection.ts";
-export * from "mongodb"
+export * from "./src/mongodb.ts"

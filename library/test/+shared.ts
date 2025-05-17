@@ -1,12 +1,13 @@
-import { type Db, MongoClient } from "mongodb";
+import { type Db, MongoClient } from "../src/mongodb.ts";
 
 function computePrefix(prefix: string) {
     // Replace all non-alphanumeric characters with "_"
-    const prefix_sanitize = prefix.replace(/[^a-zA-Z0-9]/g, "_").toLocaleLowerCase();
+    const prefixSanitize = prefix.replace(/[^a-zA-Z0-9]/g, "_").toLocaleLowerCase();
     // Remove all leading and trailing "_"
-    const prefix_fixed = prefix_sanitize.replace(/^_+|_+$/g, "");
+    const prefixFixed = prefixSanitize.replace(/^_+|_+$/g, "");
 
-    return `@TEST_${prefix_fixed}@`;
+    const finalName = `@TEST_${prefixFixed}@`;
+    return finalName.substring(0, 63);
 }
 
 function randomDBName(prefix: string) {

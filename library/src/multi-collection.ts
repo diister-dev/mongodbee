@@ -4,6 +4,8 @@ import { ulid } from "@std/ulid";
 import { toMongoValidator } from "./validator.ts";
 import { FlatType } from "../types/flat.ts";
 import { createDotNotationSchema } from "./dot-notation.ts";
+import { Db } from "./mongodb.ts";
+import { getSessionContext } from "./session.ts";
 
 type CollectionOptions = {
     safeDelete?: boolean,
@@ -44,6 +46,7 @@ type Input<T extends MultiCollectionSchema> = v.InferInput<v.UnionSchema<[v.Obje
 type Output<T extends MultiCollectionSchema> = v.InferOutput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>;
 
 type MultiCollectionResult<T extends MultiCollectionSchema> = {
+    withSession: Awaited<ReturnType<typeof getSessionContext>>["withSession"],
     insertOne<E extends keyof T>(key: E, doc: v.InferInput<ElementSchema<T, E>>): Promise<string>;
     insertMany<E extends keyof T>(key: E, docs: v.InferInput<ElementSchema<T, E>>[]): Promise<(string)[]>;
     findOne<E extends keyof T>(key: E, filter: Partial<Input<T>>): Promise<v.InferOutput<ElementSchema<T, E>>>;
@@ -62,7 +65,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
 // Objective
 // - Support many aggregation stages (https://www.mongodb.com/docs/manual/reference/operator/aggregation-pipeline)
 export async function multiCollection<const T extends MultiCollectionSchema>(
-    db: m.Db,
+    db: Db,
     collectionName: string,
     collectionSchema: T,
     options?: m.CollectionOptions & CollectionOptions
@@ -123,14 +126,18 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         }
     }
 
+    let sessionContext: Awaited<ReturnType<typeof getSessionContext>>;
+    
     async function init() {
         await applyValidator();
+        sessionContext = await getSessionContext(db.client);
     }
 
     const collection = db.collection<TOutput>(collectionName, opts);
     await init();
 
     return {
+        withSession: sessionContext!.withSession,
         async insertOne(key, doc) {
             const _id = doc._id ?? `${key as string}:${ulid()}`;
             const schema = schemaElements[key];
@@ -139,7 +146,8 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 _id,
             });
 
-            const result = await collection.insertOne(validation as any);
+            const session = sessionContext.getSession();
+            const result = await collection.insertOne(validation as any, { session });
             if(!result.acknowledged) {
                 throw new Error("Insert failed");
             }
@@ -155,7 +163,8 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 });
             });
 
-            const result = await collection.insertMany(validation as any);
+            const session = sessionContext.getSession();
+            const result = await collection.insertMany(validation as any, { session });
             if(!result.acknowledged) {
                 throw new Error("Insert failed");
             }
@@ -163,12 +172,13 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             return Object.values(result.insertedIds) as unknown as string[];
         },
         async findOne(key, filter) {
+            const session = sessionContext.getSession();
             const result = await collection.findOne({
                 $and: [
                     { _id: { $regex: new RegExp(`^${key as string}:`) } },
                     filter,
                 ]
-            } as any);
+            } as any, { session });
 
             if (!result) {
                 throw new Error("Not found");
@@ -179,9 +189,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         async find(key, filter) {
             const idChecker = { _id: { $regex: new RegExp(`^${key as string}:`) } };
 
+            const session = sessionContext.getSession();
             const cursor = collection.find({
                 $and: filter ? [idChecker, filter] : [idChecker],
-            } as any);
+            } as any, { session });
             
             const result = await cursor.toArray();
 
@@ -191,9 +202,15 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             const schema = schemaWithId[key];
             v.parse(schema._id, id);
 
+            if(!id.startsWith(`${key as string}:`)) {
+                throw new Error(`Invalid id format`);
+            }
+
+            const session = sessionContext.getSession();
+
             const result = await collection.deleteOne({
                 _id: { $regex: new RegExp(`^${key as string}:`) },
-            } as any);
+            } as any, { session });
 
             if(!result.acknowledged) {
                 throw new Error("Delete failed");
@@ -211,11 +228,13 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 v.parse(schema._id, id);
             });
 
+            const session = sessionContext.getSession();
+
             const result = await collection.deleteMany({
                 _id: {
                     $in: ids,
                 }
-            } as any);
+            } as any, { session });
 
             if(!result.acknowledged) {
                 throw new Error("Delete failed");
@@ -235,11 +254,13 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
             v.parse(dotSchema, doc);
 
+            const session = sessionContext.getSession();
+
             const result = await collection.updateOne({
                 _id: id,
             } as any, {
                 $set: doc,
-            } as any);
+            } as any, { session });
 
             if(!result.acknowledged) {
                 throw new Error("Update failed");
@@ -283,7 +304,9 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 throw new Error("No element to update");
             }
 
-            const result = await collection.bulkWrite(bulkOps);
+            const session = sessionContext.getSession();
+
+            const result = await collection.bulkWrite(bulkOps, { session });
 
             if (result.matchedCount === 0) {
                 throw new Error("No element that match the filter to update");
@@ -315,9 +338,11 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                     },
                 }),
             };
+
+            const session = sessionContext.getSession();
             
             const pipeline = stageBuilder(stage);
-            const cursor = collection.aggregate(pipeline);
+            const cursor = collection.aggregate(pipeline, { session });
             
             return await cursor.toArray();
         },

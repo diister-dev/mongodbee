@@ -3,6 +3,8 @@ import { toMongoValidator } from "./validator.ts";
 import type * as m from "mongodb";
 import { EventEmitter } from "./events.ts";
 import { watchEvent } from "./change-stream.ts";
+import { getSessionContext } from "./session.ts"
+import type { Db } from "./mongodb.ts";
 
 type CollectionOptions = {
     safeDelete?: boolean,
@@ -20,15 +22,26 @@ type Events<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<
     delete: (deleteEvent: m.ChangeStreamDeleteDocument<TOutput<T>>) => void,
 }
 
-export type CollectionResult<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>> = Omit<m.Collection<TInput<T>>, "findOne" | "find" | "insertOne"> & {
-    collection: m.Collection<TInput<T>>,
-    schema: v.ObjectSchema<{readonly _id: v.OptionalSchema<v.AnySchema, undefined>} & T, undefined>,
-    on: ReturnType<typeof EventEmitter<Events<T>>>["on"],
-    off: ReturnType<typeof EventEmitter<Events<T>>>["off"],
-    insertOne: (doc: m.OptionalUnlessRequiredId<TInput<T>>, options?: m.InsertOneOptions) => Promise<WithId<TOutput<T>>["_id"]>,
-    findOne: (filter: m.Filter<TInput<T>>, options?: Omit<m.FindOptions, 'timeoutMode'> & m.Abortable) => Promise<WithId<TOutput<T>>>,
-    find: (filter: m.Filter<TInput<T>>, options?: m.FindOptions & m.Abortable) => m.AbstractCursor<TOutput<T>>,
-}
+export type CollectionResult<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>> =
+    Omit<m.Collection<TInput<T>>, "findOne" | "find" | "insertOne" | "distinct" | "findOneAndDelete" | "findOneAndReplace" | "findOneAndUpdate" | "indexInformation" | "listSearchIndexes"> & {
+        collection: m.Collection<TInput<T>>,
+        schema: v.ObjectSchema<{readonly _id: v.OptionalSchema<v.AnySchema, undefined>} & T, undefined>,
+        on: ReturnType<typeof EventEmitter<Events<T>>>["on"],
+        off: ReturnType<typeof EventEmitter<Events<T>>>["off"],
+        insertOne: (doc: m.OptionalUnlessRequiredId<TInput<T>>, options?: m.InsertOneOptions) => Promise<WithId<TOutput<T>>["_id"]>,
+        findOne: (filter: m.Filter<WithId<TInput<T>>>, options?: Omit<m.FindOptions, 'timeoutMode'> & m.Abortable) => Promise<WithId<TOutput<T>>>,
+        find: (filter: m.Filter<TInput<T>>, options?: m.FindOptions & m.Abortable) => m.AbstractCursor<TOutput<T>>,
+        withSession: Awaited<ReturnType<typeof getSessionContext>>["withSession"],
+
+        // From mongodb.Collection
+        updateOne(filter: m.Filter<WithId<TInput<T>>>, update: m.UpdateFilter<TInput<T>> | m.Document[], options?: m.UpdateOptions): Promise<m.UpdateResult<TInput<T>>>;
+        distinct<Key extends keyof WithId<TInput<T>>>(key: Key, filter: m.Filter<TInput<T>>, options?: m.DistinctOptions): Promise<Array<m.Flatten<WithId<TInput<T>>[Key]>>>;
+        findOneAndDelete(filter: m.Filter<TInput<T>>, options?: m.FindOneAndDeleteOptions & { includeResultMetadata: boolean; }): Promise<WithId<TInput<T>> | null>;
+        findOneAndReplace(filter: m.Filter<TInput<T>>, replacement: m.WithoutId<TInput<T>>, options?: m.FindOneAndReplaceOptions & { includeResultMetadata: boolean; }): Promise<m.ModifyResult<TInput<T>> | null>;
+        findOneAndUpdate(filter: m.Filter<TInput<T>>, update: m.UpdateFilter<TInput<T>> | m.Document[], options?: m.FindOneAndUpdateOptions & { includeResultMetadata: boolean; }): Promise<m.WithId<TInput<T>> | null>;
+        indexInformation(options: m.IndexInformationOptions & { full: true; }): Promise<m.IndexDescriptionInfo[]>;
+        listSearchIndexes(name: string, options?: m.ListSearchIndexesOptions): m.ListSearchIndexesCursor;
+    }
 
 export type CollectionSchema<T> = T extends CollectionResult<infer U> ? WithId<v.InferOutput<v.ObjectSchema<U, undefined>>> : never;
 
@@ -70,7 +83,12 @@ export type CollectionSchema<T> = T extends CollectionResult<infer U> ? WithId<v
 //    - [ ] Validate a collection with a validator
 //    - [ ] Validate a document with a validator
 // 3. Support deep key validation (e.g. "a.b.c")
-export async function collection<const T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>>(db: m.Db, collectionName: string, collectionSchema: T, options?: m.CollectionOptions & CollectionOptions) : Promise<CollectionResult<T>> {
+export async function collection<const T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>>(
+    db: Db,
+    collectionName: string,
+    collectionSchema: T,
+    options?: m.CollectionOptions & CollectionOptions
+) : Promise<CollectionResult<T>> {
     type TInput = v.InferInput<v.ObjectSchema<T, undefined>>;
     type TOutput = WithId<v.InferOutput<v.ObjectSchema<T, undefined>>>;
 
@@ -133,9 +151,12 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
         await new Promise(resolve => setTimeout(resolve, 100));
     }
 
+    let sessionContext: Awaited<ReturnType<typeof getSessionContext>>;
+
     async function init() {
         await applyValidator();
         await startWatching();
+        sessionContext = await getSessionContext(db.client);
     }
 
     const collection = db.collection<TInput>(collectionName, opts);
@@ -151,6 +172,7 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
         // Events
         on: events.on,
         off: events.off,
+        withSession: sessionContext!.withSession,
 
         get bsonOptions() { return collection.bsonOptions },
         get collectionName() { return collection.collectionName },
@@ -164,7 +186,8 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
         // Document creation operations with validation
         async insertOne(doc, options?) {
             const safeDoc = v.parse(schema, doc) as m.OptionalUnlessRequiredId<TInput>;
-            const inserted = await collection.insertOne(safeDoc, options);
+            const session = sessionContext.getSession();
+            const inserted = await collection.insertOne(safeDoc, { session, ...options });
             if(!inserted.acknowledged) {
                 throw new Error("Insert failed");
             }
@@ -172,7 +195,8 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
         },
         async insertMany(docs, options?) {
             const safeDocs = docs.map(doc => v.parse(schema, doc)) as unknown as typeof docs;
-            const inserted = await collection.insertMany(safeDocs, options);
+            const session = sessionContext.getSession();
+            const inserted = await collection.insertMany(safeDocs, { session, ...options });
             if(!inserted.acknowledged) {
                 throw new Error("Insert failed");
             }
@@ -181,7 +205,8 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
         
         // Document read operations with validation
         async findOne(filter, options?) {
-            const result = await collection.findOne(filter, options);
+            const session = sessionContext.getSession();
+            const result = await collection.findOne(filter as any, { session, ...options });
 
             if (!result) {
                 throw new Error("Document not found");
@@ -199,7 +224,8 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
             }
         },
         find(filter: m.Filter<TInput>, options?: m.FindOptions & m.Abortable): m.AbstractCursor<TOutput> {
-            const cursor = collection.find(filter, options);
+            const session = sessionContext.getSession();
+            const cursor = collection.find(filter, { session, ...options });
             const originalToArray = cursor.toArray;
             // Override toArray
             cursor.toArray = async function () {
@@ -231,9 +257,18 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
 
             return cursor as unknown as m.AbstractCursor<TOutput>;
         },
-        countDocuments(...params) { return collection.countDocuments(...params) },
-        estimatedDocumentCount(...params) { return collection.estimatedDocumentCount(...params) },
-        distinct: collection.distinct,
+        countDocuments(filter, options?) {
+            const session = sessionContext.getSession();
+            return collection.countDocuments(filter, { session, ...options });
+        },
+        estimatedDocumentCount(options?) {
+            const session = sessionContext.getSession();
+            return collection.estimatedDocumentCount({ session, ...options });
+        },
+        distinct(key, filter, options?) {
+            const session = sessionContext.getSession();
+            return collection.distinct(key as string, filter, { session, ...options });
+        },
         
         // Document update operations
         replaceOne(filter, replacement, options?) {
@@ -244,19 +279,26 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
                     errors: validation,
                 }
             }
-            return collection.replaceOne(filter, validation.output as TInput, options);
+
+            const session = sessionContext.getSession();
+            return collection.replaceOne(filter, validation.output as TInput, { session, ...options });
         },
         updateOne(filter, update, options?) {
             // @TODO: check if update is valid
-            return collection.updateOne(filter, update, options);
+            const session = sessionContext.getSession();
+            return collection.updateOne(filter as any, update, { session, ...options });
         },
         updateMany(filter, update, options?) {
             // @TODO: check if update is valid
-            return collection.updateMany(filter, update, options);
+            const session = sessionContext.getSession();
+            return collection.updateMany(filter, update, { session, ...options });
         },
         
         // Document delete operations
-        deleteOne(...params) { return collection.deleteOne(...params) },
+        deleteOne(filter, options?) {
+            const session = sessionContext.getSession();
+            return collection.deleteOne(filter, { session, ...options });
+        },
         deleteMany(filter, options?) {
             if (opts.safeDelete) {
                 const filterSize = Object.keys(filter ?? {}).length;
@@ -277,42 +319,114 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
                 }
             }
 
-            return collection.deleteMany(filter, options);
+            const session = sessionContext.getSession();
+            return collection.deleteMany(filter, { session, ...options });
         },
         
         // Compound operations
-        findOneAndDelete: collection.findOneAndDelete,
-        findOneAndReplace: collection.findOneAndReplace,
-        findOneAndUpdate: collection.findOneAndUpdate,
+        findOneAndDelete(filter, options?) {
+            const session = sessionContext.getSession();
+            return collection.findOneAndDelete(filter, { session, ...options });
+        },
+        findOneAndReplace(filter, replacement, options?) {
+            const session = sessionContext.getSession();
+            return collection.findOneAndReplace(filter, replacement, { session, ...options });
+        },
+        findOneAndUpdate(filter, update, options?) {
+            const session = sessionContext.getSession();
+            return collection.findOneAndUpdate(filter, update, { session, ...options });
+        },
         
         // Bulk operations
-        aggregate(...params) { return collection.aggregate(...params) },
-        bulkWrite(...params) { return collection.bulkWrite(...params) },
-        initializeOrderedBulkOp(...params) { return collection.initializeOrderedBulkOp(...params) },
-        initializeUnorderedBulkOp(...params) { return collection.initializeUnorderedBulkOp(...params) },
+        aggregate(pipeline, options?) {
+            const session = sessionContext.getSession();
+            return collection.aggregate(pipeline, { session, ...options });
+        },
+        bulkWrite(operations, options?) {
+            const session = sessionContext.getSession();
+            return collection.bulkWrite(operations, { session, ...options });
+        },
+        initializeOrderedBulkOp(options?) {
+            const session = sessionContext.getSession();
+            return collection.initializeOrderedBulkOp({ session, ...options });
+        },
+        initializeUnorderedBulkOp(options?) {
+            const session = sessionContext.getSession();
+            return collection.initializeUnorderedBulkOp({ session, ...options });
+        },
         
         // Index operations
-        createIndex(...params) { return collection.createIndex(...params) },
-        createIndexes(...params) { return collection.createIndexes(...params) },
-        dropIndex(...params) { return collection.dropIndex(...params) },
-        dropIndexes(...params) { return collection.dropIndexes(...params) },
-        indexes(...params) { return collection.indexes(...params) },
-        listIndexes(...params) { return collection.listIndexes(...params) },
-        indexExists(...params) { return collection.indexExists(...params) },
-        indexInformation: collection.indexInformation,
+        createIndex(indexSpec, options?) {
+            const session = sessionContext.getSession();
+            return collection.createIndex(indexSpec, { session, ...options });
+        },
+        createIndexes(indexSpecs, options?) {
+            const session = sessionContext.getSession();
+            return collection.createIndexes(indexSpecs, { session, ...options });
+        },
+        dropIndex(indexName, options?) {
+            const session = sessionContext.getSession();
+            return collection.dropIndex(indexName, { session, ...options });
+        },
+        dropIndexes(options?) {
+            const session = sessionContext.getSession();
+            return collection.dropIndexes({ session, ...options });
+        },
+        indexes(options?) {
+            const session = sessionContext.getSession();
+            return collection.indexes({ session, ...options });
+        },
+        listIndexes(options?) {
+            const session = sessionContext.getSession();
+            return collection.listIndexes({ session, ...options });
+        },
+        indexExists(indexes, options?) {
+            const session = sessionContext.getSession();
+            return collection.indexExists(indexes, { session, ...options });
+        },
+        indexInformation(options) {
+            const session = sessionContext.getSession();
+            return collection.indexInformation({ session, ...options });
+        },
         
         // Search operations
-        createSearchIndex(...params) { return collection.createSearchIndex(...params) },
-        createSearchIndexes(...params) { return collection.createSearchIndexes(...params) },
-        dropSearchIndex(...params) { return collection.dropSearchIndex(...params) },
-        listSearchIndexes: collection.listSearchIndexes,
-        updateSearchIndex(...params) { return collection.updateSearchIndex(...params) },
+        createSearchIndex(description) {
+            return collection.createSearchIndex(description);
+        },
+        createSearchIndexes(descriptions) {
+            return collection.createSearchIndexes(descriptions);
+        },
+        dropSearchIndex(name) {
+            return collection.dropSearchIndex(name);
+        },
+        listSearchIndexes(name, options?) {
+            const session = sessionContext.getSession();
+            return collection.listSearchIndexes(name, { session, ...options });
+        },
+        updateSearchIndex(name, indexSpec) {
+            return collection.updateSearchIndex(name, indexSpec);
+        },
         
         // Collection operations
-        drop(...params) { return collection.drop(...params) },
-        isCapped(...params) { return collection.isCapped(...params) },
-        options(...params) { return collection.options(...params) },
-        rename(...params) { return collection.rename(...params) },
-        watch(...params) { return collection.watch(...params) },
+        drop(options?) {
+            const session = sessionContext.getSession();
+            return collection.drop({ session, ...options });
+        },
+        isCapped(options?) {
+            const session = sessionContext.getSession();
+            return collection.isCapped({ session, ...options });
+        },
+        options(options?) {
+            const session = sessionContext.getSession();
+            return collection.options({ session, ...options });
+        },
+        rename(newName, options?) {
+            const session = sessionContext.getSession();
+            return collection.rename(newName, { session, ...options });
+        },
+        watch(pipeline, options?) {
+            const session = sessionContext.getSession();
+            return collection.watch(pipeline, { session, ...options });
+        },
     } as CollectionResult<T>;
 }
