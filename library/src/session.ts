@@ -9,7 +9,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
  * @returns A promise that resolves to true if transactions are enabled, false otherwise
  * @internal
  */
-export async function checkTransactionEnabled(mongoClient: MongoClient, mongoDb: Db) {
+export async function checkTransactionEnabled(mongoClient: MongoClient, mongoDb: Db): Promise<boolean> {
     const session = mongoClient.startSession();
     const collectionId = `transaction_test_${crypto.randomUUID()}`;
     try {
@@ -97,11 +97,11 @@ export async function createSessionContext(mongoClient: MongoClient) : Promise<{
 
     const asyncSession = new AsyncLocalStorage<ClientSession | undefined>();
 
-    function getSession() {
+    function getSession(): ClientSession | undefined {
         return asyncSession.getStore();
     }
 
-    async function withSession<T>(fn: (session?: ClientSession) => Promise<T>) {
+    async function withSession<T>(fn: (session?: ClientSession) => Promise<T>): Promise<T> {
         if (!warningDisplayed && !transactionsEnabled) {
             console.warn("MongoDB transactions are not enabled. This may cause issues with concurrent operations.");
             warningDisplayed = true;
