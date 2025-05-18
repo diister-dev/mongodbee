@@ -32,9 +32,26 @@ const sessionContextMap = new WeakMap<MongoClient, Awaited<ReturnType<typeof cre
 /**
  * Gets or creates a session context for a MongoDB client
  * 
+ * Creates a session context for managing MongoDB transactions. This context 
+ * provides utilities to transparently propagate sessions across async boundaries,
+ * making transaction management simpler.
+ * 
  * @param mongoClient - MongoDB client instance
  * @returns A session context that can be used for transaction management
- * @internal
+ * @example
+ * ```typescript
+ * const client = new MongoClient("mongodb://localhost:27017");
+ * await client.connect();
+ * 
+ * const { withSession } = await getSessionContext(client);
+ * 
+ * // Use a transaction with automatic commit/rollback
+ * await withSession(async () => {
+ *   // All operations using the session will be part of the same transaction
+ *   await users.insertOne({ name: "Alice" });
+ *   await orders.insertOne({ userId: user._id });
+ * });
+ * ```
  */
 export async function getSessionContext(mongoClient: MongoClient) : ReturnType<typeof createSessionContext> {
     let context = sessionContextMap.get(mongoClient);
@@ -56,7 +73,23 @@ export async function getSessionContext(mongoClient: MongoClient) : ReturnType<t
  * @internal
  */
 export async function createSessionContext(mongoClient: MongoClient) : Promise<{
+    /**
+     * Gets the current MongoDB session from the async context
+     * 
+     * @returns The current MongoDB session or undefined if no session is active
+     */
     getSession: () => ClientSession | undefined;
+    
+    /**
+     * Executes a function within a MongoDB session context
+     * 
+     * If there's already an active session, it reuses it.
+     * Otherwise, it creates a new session and automatically manages
+     * the transaction lifecycle (start, commit, abort).
+     * 
+     * @param fn - The function to execute within the session context
+     * @returns A promise that resolves to the function's result
+     */
     withSession: <T>(fn: (session?: ClientSession) => Promise<T>) => Promise<T>;
 }> {
     let warningDisplayed = false;
