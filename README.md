@@ -6,11 +6,11 @@
   <p align="center">
     <strong>A type-safe MongoDB wrapper with built-in validation powered by Valibot</strong>
   </p>
-  
   <p align="center">
     <a href="#key-features">Features</a> •
     <a href="#installation">Installation</a> •
     <a href="#usage">Usage</a> •
+    <a href="#indexes-with-withindex">Indexing</a> •
     <a href="#examples">Examples</a> •
     <a href="#transactions">Transactions</a> •
     <a href="#project-status">Status</a>
@@ -37,6 +37,7 @@
 - **🛡️ Data Protection**: Built-in safeguards against accidental data deletion
 - **🔄 Change Streams**: Type-safe event listeners for collection changes
 - **🔗 Dot Notation**: Support for nested object operations (MultiCollection API)
+- **📊 Indexing**: Declarative index creation with `withIndex()` for performance optimization
 
 ## 📦 Installation
 
@@ -44,7 +45,7 @@
 
 ```ts
 // Import from JSR
-import { collection, multiCollection } from "jsr:@diister/mongodbee";
+import { collection, multiCollection, withIndex } from "jsr:@diister/mongodbee";
 import * as v from "jsr:@diister/mongodbee/schema";
 ```
 
@@ -56,7 +57,7 @@ npm install mongodbee mongodb
 
 ```ts
 // Import in Node.js
-import { collection, multiCollection } from "mongodbee";
+import { collection, multiCollection, withIndex } from "mongodbee";
 import * as v from "mongodbee/schema";
 ```
 
@@ -76,7 +77,7 @@ const db = client.db("myapp");
 // Define a schema with validation
 const users = await collection(db, "users", {
   username: v.pipe(v.string(), v.minLength(3)),
-  email: v.pipe(v.string(), v.email()),
+  email: withIndex(v.pipe(v.string(), v.email()), { unique: true }),
   age: v.pipe(v.number(), v.minValue(0)),
   createdAt: v.date()
 });
@@ -105,13 +106,13 @@ import * as v from "mongodbee/schema";
 // Define a catalog schema with multiple document types in a single collection
 const catalog = await multiCollection(db, "catalog", {
   product: {  // First document type
-    name: v.string(),
+    name: withIndex(v.string(), { unique: true }),
     price: v.number(),
     stock: v.number(),
     category: v.string()
   },
   category: { // Second document type in the same collection
-    name: v.string(),
+    name: withIndex(v.string(), { unique: true }),
     parentId: v.optional(v.string())
   }
 });
@@ -133,7 +134,64 @@ const electronics = await catalog.findOne("category", { name: "Electronics" });
 const products = await catalog.find("product", { category: electronics._id });
 ```
 
-> ⚠️ **Important Note**: MultiCollection uses a single MongoDB collection to store different document types, not multiple collections. This provides a more efficient storage model while maintaining type safety.
+> ⚠️ **Important Note**: MultiCollection uses a single MongoDB collection to store different document types, not multiple collections. This provides a more efficient storage model while maintaining type safety. Each document automatically gets a `type` field to identify its document type.
+
+## 📊 Indexes with `withIndex`
+
+MongoDBee provides declarative index creation through the `withIndex()` function. Indexes are automatically created and managed based on your schema definition:
+
+```typescript
+import { withIndex } from "mongodbee";
+
+// Basic unique index
+const users = await collection(db, "users", {
+  email: withIndex(v.string(), { unique: true }),
+  username: withIndex(v.string(), { unique: true, insensitive: true })
+});
+
+// MultiCollection with indexes
+const catalog = await multiCollection(db, "catalog", {
+  user: {
+    email: withIndex(v.string(), { unique: true }),
+    name: withIndex(v.string(), { unique: true })
+  },
+  product: {
+    name: withIndex(v.string(), { unique: true }),
+    price: v.number()
+  }
+});
+```
+
+### Index Options
+
+- **`unique`**: Creates a unique index to prevent duplicate values (default: `false`)
+- **`insensitive`**: Case-insensitive index using MongoDB collation (default: `false`)
+- **`collation`**: Custom MongoDB collation options for advanced text sorting
+
+```typescript
+// Case-insensitive unique index
+email: withIndex(v.string(), { 
+  unique: true, 
+  insensitive: true 
+})
+
+// Custom collation
+name: withIndex(v.string(), { 
+  unique: true,
+  collation: { locale: 'fr', strength: 2 }
+})
+```
+
+### Multi-Collection Index Behavior
+
+In multi-collections, indexes are automatically scoped to document types using MongoDB partial filter expressions. This provides several benefits:
+
+- **Type-scoped uniqueness**: Unique constraints apply only within the same document type
+- **Schema flexibility**: Each document type can have the same field name with different uniqueness rules  
+- **Performance optimization**: Indexes are automatically filtered by `type` field for better query performance
+- **Automatic management**: Index creation, updates, and cleanup are handled automatically
+
+> ⚠️ **Work in Progress**: Index support is currently in development. Basic functionality works, but advanced features are being added.
 
 ## 🔄 Change Streams
 
@@ -279,10 +337,41 @@ const addressSchema = {
 // Use it in multiple collections
 const customers = await collection(db, "customers", {
   name: v.string(),
-  email: v.string(),
+  email: withIndex(v.string(), { unique: true }),
   billingAddress: v.object(addressSchema),
   shippingAddress: v.object(addressSchema)
 });
+```
+
+### Real-world Index Example
+
+Here's an example from the playground showing indexes in action:
+
+```typescript
+// Regular collection with unique email index
+const users = await collection(db, "users", {
+  _id: dbId("user"),
+  name: v.string(),
+  email: withIndex(v.string(), { unique: true, insensitive: false })
+});
+
+// Multi-collection with type-scoped unique indexes
+const catalog = await multiCollection(db, "catalog", {
+  user: {
+    _id: dbId("user"),
+    name: withIndex(v.string(), { unique: true }),
+    email: withIndex(v.string(), { unique: true, insensitive: false })
+  },
+  product: {
+    _id: dbId("product"),
+    name: withIndex(v.string(), { unique: true }),
+    price: v.number()
+  }
+});
+
+// This works because unique constraints are scoped by document type
+await catalog.insertOne("user", { name: "Alice", email: "alice@example.com" });
+await catalog.insertOne("product", { name: "Alice", price: 19.99 }); // Same name, different type
 ```
 
 ## 📊 Project Status
@@ -294,6 +383,7 @@ Current implementation status by feature:
 | MultiCollection API | ✅ Complete | Full implementation with multiple document types in a single collection |
 | Transactions | ✅ Complete | Session-based transaction support with AsyncLocalStorage |
 | Change Streams | ✅ Complete | Real-time data change events and listeners |
+| Index Management | ⚠️ Partial | `withIndex()` function implemented, automatic index creation works |
 | Basic Collection API | ⚠️ Partial | Core functionality works, some operations need improved validation |
 | Type Inference | ⚠️ Partial | Good typing for basic operations, limited for advanced operations |
 | Dot Notation (Collection) | ⚠️ In Development | Full support in MultiCollection, partial in regular Collection |
@@ -302,11 +392,12 @@ Current implementation status by feature:
 
 - **Full Support**: 
   - `insertOne`, `insertMany` - Fully implemented with validation
-  - MultiCollection API - Complete implementation
+  - MultiCollection API - Complete implementation with automatic `type` field
   - Transaction support - Complete implementation
   - Change streams - Complete implementation
   
 - **Partial Support**:
+  - Index Management - `withIndex()` works, advanced indexing features in development
   - `updateOne`, `updateMany` (Collection API) - Needs improved type validation
   - `findOneAndDelete`, `findOneAndReplace`, `findOneAndUpdate` - Basic implementation
   - `aggregate`, `bulkWrite` - Limited type safety
