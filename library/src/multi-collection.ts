@@ -16,13 +16,13 @@ type CollectionOptions = {
 type Elements<T extends Record<string, any>> = {
     [key in keyof T]: {
         _id: ReturnType<typeof dbId>,
-        type: v.LiteralSchema<key, any>,
+        _type: v.LiteralSchema<key, any>,
     } & T[key]
 }[keyof T];
 
 type OutputElementSchema<T extends Record<string, any>, K extends keyof T> = v.ObjectSchema<{
     _id: ReturnType<typeof dbId>,
-    type: v.LiteralSchema<K, any>,
+    _type: v.LiteralSchema<K, any>,
 } & T[K], any>;
 
 type ElementSchema<T extends Record<string, any>, K extends keyof T> = v.ObjectSchema<{
@@ -130,7 +130,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             ...acc,
             [key]: {
                 _id: dbId(key),
-                type: withIndex(v.optional(v.literal(key), () => key)),
+                _type: withIndex(v.optional(v.literal(key), () => key)),
                 ...value,
             }
         }
@@ -168,7 +168,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 ...Object.entries(schemaWithId).map(([key, value]) => {
                     return v.object({
                         ...value,
-                        type: v.literal(key as string)
+                        _type: v.literal(key as string)
                     })
                 })
             ])
@@ -212,7 +212,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                     {
                         ...index.metadata,
                         partialFilterExpression: {
-                            type: { $eq: type },
+                            _type: { $eq: type },
                         },
                         name: indexName,
                     }
@@ -271,7 +271,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             const session = sessionContext.getSession();
             const result = await collection.findOne({
                 $and: [
-                    { type: key as string },
+                    { _type: key as string },
                     filter,
                 ]
             } as any, { session });
@@ -284,7 +284,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         },
         async find(key, filter) {
             const typeChecker = {
-                type: key as string,
+                _type: key as string,
             };
 
             const session = sessionContext.getSession();
@@ -332,7 +332,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 _id: {
                     $in: ids,
                 },
-                type: key as string,
+                _type: key as string,
             } as any, { session });
 
             if(!result.acknowledged) {
@@ -357,7 +357,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
             const result = await collection.updateOne({
                 _id: id,
-                type: key as string,
+                _type: key as string,
             } as any, {
                 $set: doc,
             } as any, { session });
@@ -422,7 +422,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             const stage: StageBuilder<T> = {
                 match: (key, filter) => ({
                     $match: {
-                        type: key as string,
+                        _type: key as string,
                         ...filter,
                     },
                 }),

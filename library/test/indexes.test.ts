@@ -260,8 +260,8 @@ Deno.test("withIndex - Automatic type field in multi-collection", async (t) => {
 
     assertEquals(products.length, 1);
     assertEquals(categories.length, 1);
-    assertEquals(products[0].type, "product");
-    assertEquals(categories[0].type, "category");
+    assertEquals(products[0]._type, "product");
+    assertEquals(categories[0]._type, "category");
   });
 });
 

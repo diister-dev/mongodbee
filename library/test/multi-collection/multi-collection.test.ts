@@ -40,7 +40,7 @@ Deno.test("Basic test", async (t) => {
         const findUserB = await collection.findOne("user", { _id: userB });
         assertEquals(findUserB, {
             _id: userB,
-            type: "user",
+            _type: "user",
             name: "Jane",
             mail: "jane@doe.d"
         });
@@ -94,7 +94,7 @@ Deno.test("FindOne: Ensure find correct type", async (t) => {
         const findUserB = await collection.findOne("user", { _id: usersId[1] });
         assertEquals(findUserB, {
             _id: usersId[1],
-            type: "user",
+            _type: "user",
             name: "Jane",
             mail: "jane@doe.d"
         });
@@ -102,7 +102,7 @@ Deno.test("FindOne: Ensure find correct type", async (t) => {
         const findGroupB = await collection.findOne("group", { _id: groupsId[1] });
         assertEquals(findGroupB, {
             _id: groupsId[1],
-            type: "group",
+            _type: "group",
             name: "Jane",
             members: [usersId[1]]
         });
