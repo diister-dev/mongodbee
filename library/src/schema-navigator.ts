@@ -3,8 +3,8 @@ import type * as v from './schema.ts';
 /**
  * Generic types to represent any Valibot schema or validation
  */
-type UnknownSchema = v.BaseSchema<any, any, any>;
-type UnknownValidation = v.BaseValidation<any, any, any>;
+type UnknownSchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
+type UnknownValidation = v.BaseValidation<unknown, unknown, v.BaseIssue<unknown>>;
 
 /**
  * Navigation context containing information about the traversed path
@@ -21,13 +21,31 @@ export interface NavigationContext {
 }
 
 /**
+ * Navigation node that combines schema and context information
+ */
+export interface NavigationNode {
+    /** The schema or validation at this node */
+    schema: UnknownSchema | UnknownValidation;
+    /** Navigation context for this node */
+    context: NavigationContext;
+    /** Complete path from root (convenience accessor) */
+    get path(): string[];
+    /** Current depth in the tree (convenience accessor) */
+    get depth(): number;
+    /** Parent schema (convenience accessor) */
+    get parent(): UnknownSchema | UnknownValidation | undefined;
+    /** Key in the parent (convenience accessor) */
+    get key(): string | number | undefined;
+}
+
+/**
  * Result of a node visit
  */
 export interface VisitResult {
     /** If true, continue navigation into children */
     continue: boolean;
     /** Optional data to attach to the node */
-    data?: any;
+    data?: unknown;
 }
 
 /**
@@ -36,32 +54,28 @@ export interface VisitResult {
 export interface SchemaVisitor {
     /**
      * Called for each schema node encountered
-     * @param schema - The current schema or validation
-     * @param context - Navigation context
+     * @param node - The navigation node containing schema and context
      * @returns Visit result
      */
-    visitNode(schema: UnknownSchema | UnknownValidation, context: NavigationContext): VisitResult;
+    visitNode(node: NavigationNode): VisitResult;
 
     /**
      * Called before entering a container node (object, array, union, etc.)
-     * @param schema - The container schema
-     * @param context - Navigation context
+     * @param node - The navigation node for the container
      * @returns Visit result
      */
-    enterContainer?(schema: UnknownSchema, context: NavigationContext): VisitResult;    /**
-     * Called after traversing all children of a container
-     * @param schema - The container schema
-     * @param context - Navigation context
-     */
-    exitContainer?(schema: UnknownSchema, context: NavigationContext): void;
+    enterContainer?(node: NavigationNode): VisitResult;
 
     /**
+     * Called after traversing all children of a container
+     * @param node - The navigation node for the container
+     */
+    exitContainer?(node: NavigationNode): void;    /**
      * Called for each validation in a pipe
-     * @param validation - The validation
-     * @param context - Navigation context
+     * @param node - The navigation node for the validation
      * @returns Visit result
      */
-    visitValidation?(validation: UnknownValidation, context: NavigationContext): VisitResult;
+    visitValidation?(node: NavigationNode): VisitResult;
 }
 
 /**
@@ -69,15 +83,14 @@ export interface SchemaVisitor {
  * 
  * This class provides an AST-like interface for recursively navigating
  * through Valibot schemas, visiting each node in a controlled manner.
- * 
- * @example
+ *  * @example
  * ```typescript
  * const navigator = new SchemaNavigator();
  * 
  * // Visitor that collects all schema types
  * const typeCollector: SchemaVisitor = {
- *   visitNode(schema, context) {
- *     console.log(`${' '.repeat(context.depth)}${schema.type} at ${context.path.join('.')}`);
+ *   visitNode(node) {
+ *     console.log(`${' '.repeat(node.depth)}${node.schema.type} at ${node.path.join('.')}`);
  *     return { continue: true };
  *   }
  * };
@@ -116,6 +129,18 @@ export class SchemaNavigator {
         };
 
         this.visitNodeRecursive(schema, visitor, context);
+    }    /**
+     * Create a navigation node from schema and context
+     */
+    private createNode(schema: UnknownSchema | UnknownValidation, context: NavigationContext): NavigationNode {
+        return {
+            schema,
+            context,
+            get path() { return context.path; },
+            get depth() { return context.depth; },
+            get parent() { return context.parent; },
+            get key() { return context.key; }
+        };
     }
 
     /**
@@ -126,24 +151,22 @@ export class SchemaNavigator {
         visitor: SchemaVisitor,
         context: NavigationContext
     ): void {
-        // Visiter le nœud actuel
-        const result = visitor.visitNode(schema, context);
+        // Create navigation node
+        const node = this.createNode(schema, context);
+          // Visit the current node
+        const result = visitor.visitNode(node);
 
         if (!result.continue) {
             return;
         }
 
-        const { kind, type } = schema;
-
-        // Traiter selon le type de schéma
-        if (kind === "schema") {
+        // Process according to schema type
+        if (schema.kind === "schema") {
             this.navigateSchema(schema as UnknownSchema, visitor, context);
-        } else if (kind === "validation") {
+        } else if (schema.kind === "validation") {
             this.navigateValidation(schema as UnknownValidation, visitor, context);
         }
-    }
-
-    /**
+    }    /**
      * Navigate in a schema (kind === "schema")
      */
     private navigateSchema(
@@ -155,7 +178,8 @@ export class SchemaNavigator {
 
         // Call enterContainer if it's a container
         if (this.isContainerSchema(type)) {
-            const enterResult = visitor.enterContainer?.(schema, context) ?? { continue: true };
+            const node = this.createNode(schema, context);
+            const enterResult = visitor.enterContainer?.(node) ?? { continue: true };
             if (!enterResult.continue) {
                 return;
             }
@@ -163,47 +187,46 @@ export class SchemaNavigator {
 
         switch (type) {
             case "object": {
-                this.navigateObjectSchema(schema as v.ObjectSchema<any, any>, visitor, context);
+                this.navigateObjectSchema(schema as v.ObjectSchema<v.ObjectEntries, v.ErrorMessage<v.ObjectIssue> | undefined>, visitor, context);
                 break;
             }
             case "array": {
-                this.navigateArraySchema(schema as v.ArraySchema<any, any>, visitor, context);
+                this.navigateArraySchema(schema as v.ArraySchema<UnknownSchema, v.ErrorMessage<v.ArrayIssue> | undefined>, visitor, context);
                 break;
-            }
-            case "union": {
-                this.navigateUnionSchema(schema as v.UnionSchema<any, any>, visitor, context);
+            }            case "union": {
+                this.navigateUnionSchema(schema as v.UnionSchema<v.UnionOptions, v.ErrorMessage<v.UnionIssue<v.BaseIssue<unknown>>> | undefined>, visitor, context);
                 break;
             }
             case "intersect": {
-                this.navigateIntersectSchema(schema as v.IntersectSchema<any, any>, visitor, context);
+                this.navigateIntersectSchema(schema as v.IntersectSchema<v.IntersectOptions, v.ErrorMessage<v.IntersectIssue> | undefined>, visitor, context);
                 break;
             }
             case "optional": {
-                this.navigateOptionalSchema(schema as v.OptionalSchema<any, any>, visitor, context);
+                this.navigateOptionalSchema(schema as v.OptionalSchema<UnknownSchema, never>, visitor, context);
                 break;
             }
             case "nullable": {
-                this.navigateNullableSchema(schema as v.NullableSchema<any, any>, visitor, context);
+                this.navigateNullableSchema(schema as v.NullableSchema<UnknownSchema, v.ErrorMessage<v.NonNullableIssue> | undefined>, visitor, context);
                 break;
             }
             case "nullish": {
-                this.navigateNullishSchema(schema as v.NullishSchema<any, any>, visitor, context);
+                this.navigateNullishSchema(schema as v.NullishSchema<UnknownSchema, v.ErrorMessage<v.NonNullishIssue> | undefined>, visitor, context);
                 break;
             }
             case "tuple": {
-                this.navigateTupleSchema(schema as v.TupleSchema<any, any>, visitor, context);
+                this.navigateTupleSchema(schema as v.TupleSchema<v.TupleItems, v.ErrorMessage<v.TupleIssue> | undefined>, visitor, context);
                 break;
             }
             case "record": {
-                this.navigateRecordSchema(schema as v.RecordSchema<any, any, any>, visitor, context);
+                this.navigateRecordSchema(schema as v.RecordSchema<v.BaseSchema<string, string | number | symbol, v.BaseIssue<unknown>>, UnknownSchema, v.ErrorMessage<v.RecordIssue> | undefined>, visitor, context);
                 break;
             }
             case "map": {
-                this.navigateMapSchema(schema as v.MapSchema<any, any, any>, visitor, context);
+                this.navigateMapSchema(schema as v.MapSchema<UnknownSchema, UnknownSchema, v.ErrorMessage<v.MapIssue> | undefined>, visitor, context);
                 break;
             }
             case "set": {
-                this.navigateSetSchema(schema as v.SetSchema<any, any>, visitor, context);
+                this.navigateSetSchema(schema as v.SetSchema<UnknownSchema, v.ErrorMessage<v.SetIssue> | undefined>, visitor, context);
                 break;
             } default: {
                 // For schemas with pipes (string, number, etc.)
@@ -214,7 +237,8 @@ export class SchemaNavigator {
 
         // Call exitContainer if it's a container
         if (this.isContainerSchema(type)) {
-            visitor.exitContainer?.(schema, context);
+            const node = this.createNode(schema, context);
+            visitor.exitContainer?.(node);
         }
     }
 
@@ -226,14 +250,13 @@ export class SchemaNavigator {
         visitor: SchemaVisitor,
         context: NavigationContext
     ): void {
-        visitor.visitValidation?.(validation, context);
-    }
-
-    /**
+        const node = this.createNode(validation, context);
+        visitor.visitValidation?.(node);
+    }    /**
      * Navigate in an object schema
      */
     private navigateObjectSchema(
-        schema: v.ObjectSchema<any, any>,
+        schema: v.ObjectSchema<v.ObjectEntries, v.ErrorMessage<v.ObjectIssue> | undefined>,
         visitor: SchemaVisitor,
         context: NavigationContext
     ): void {
@@ -253,7 +276,7 @@ export class SchemaNavigator {
      * Navigate in an array schema
      */
     private navigateArraySchema(
-        schema: v.ArraySchema<any, any>,
+        schema: v.ArraySchema<UnknownSchema, v.ErrorMessage<v.ArrayIssue> | undefined>,
         visitor: SchemaVisitor,
         context: NavigationContext
     ): void {
@@ -274,7 +297,7 @@ export class SchemaNavigator {
      * Navigate in a union schema
      */
     private navigateUnionSchema(
-        schema: v.UnionSchema<any, any>,
+        schema: v.UnionSchema<v.UnionOptions, v.ErrorMessage<v.UnionIssue<v.BaseIssue<unknown>>> | undefined>,
         visitor: SchemaVisitor,
         context: NavigationContext
     ): void {
@@ -288,13 +311,11 @@ export class SchemaNavigator {
 
             this.visitNodeRecursive(option, visitor, childContext);
         });
-    }
-
-    /**
+    }    /**
      * Navigate in an intersect schema
      */
     private navigateIntersectSchema(
-        schema: v.IntersectSchema<any, any>,
+        schema: v.IntersectSchema<v.IntersectOptions, v.ErrorMessage<v.IntersectIssue> | undefined>,
         visitor: SchemaVisitor,
         context: NavigationContext
     ): void {
@@ -314,7 +335,7 @@ export class SchemaNavigator {
      * Navigate in an optional schema
      */
     private navigateOptionalSchema(
-        schema: v.OptionalSchema<any, any>,
+        schema: v.OptionalSchema<UnknownSchema, never>,
         visitor: SchemaVisitor,
         context: NavigationContext
     ): void {
@@ -332,7 +353,7 @@ export class SchemaNavigator {
      * Navigate in a nullable schema
      */
     private navigateNullableSchema(
-        schema: v.NullableSchema<any, any>,
+        schema: v.NullableSchema<UnknownSchema, v.ErrorMessage<v.NonNullableIssue> | undefined>,
         visitor: SchemaVisitor,
         context: NavigationContext
     ): void {
@@ -350,7 +371,7 @@ export class SchemaNavigator {
      * Navigate in a nullish schema
      */
     private navigateNullishSchema(
-        schema: v.NullishSchema<any, any>,
+        schema: v.NullishSchema<UnknownSchema, v.ErrorMessage<v.NonNullishIssue> | undefined>,
         visitor: SchemaVisitor,
         context: NavigationContext
     ): void {
@@ -368,11 +389,10 @@ export class SchemaNavigator {
      * Navigate in a tuple schema
      */
     private navigateTupleSchema(
-        schema: v.TupleSchema<any, any>,
+        schema: v.TupleSchema<v.TupleItems, v.ErrorMessage<v.TupleIssue> | undefined>,
         visitor: SchemaVisitor,
         context: NavigationContext
-    ): void {
-        schema.items.forEach((item: UnknownSchema, index: number) => {
+    ): void {        schema.items.forEach((item: UnknownSchema, index: number) => {
             const childContext: NavigationContext = {
                 path: [...context.path, index.toString()],
                 depth: context.depth + 1,
@@ -388,7 +408,7 @@ export class SchemaNavigator {
      * Navigate in a record schema
      */
     private navigateRecordSchema(
-        schema: v.RecordSchema<any, any, any>,
+        schema: v.RecordSchema<v.BaseSchema<string, string | number | symbol, v.BaseIssue<unknown>>, UnknownSchema, v.ErrorMessage<v.RecordIssue> | undefined>,
         visitor: SchemaVisitor,
         context: NavigationContext
     ): void {
@@ -415,7 +435,7 @@ export class SchemaNavigator {
      * Navigate in a map schema
      */
     private navigateMapSchema(
-        schema: v.MapSchema<any, any, any>,
+        schema: v.MapSchema<UnknownSchema, UnknownSchema, v.ErrorMessage<v.MapIssue> | undefined>,
         visitor: SchemaVisitor,
         context: NavigationContext
     ): void {
@@ -442,7 +462,7 @@ export class SchemaNavigator {
      * Navigate in a set schema
      */
     private navigateSetSchema(
-        schema: v.SetSchema<any, any>,
+        schema: v.SetSchema<UnknownSchema, v.ErrorMessage<v.SetIssue> | undefined>,
         visitor: SchemaVisitor,
         context: NavigationContext
     ): void {
@@ -465,9 +485,7 @@ export class SchemaNavigator {
         context: NavigationContext
     ): void {
         this.navigatePipes(schema, visitor, context);
-    }
-
-    /**
+    }    /**
      * Navigate in the pipes (validations) of a schema
      */
     private navigatePipes(
@@ -475,7 +493,7 @@ export class SchemaNavigator {
         visitor: SchemaVisitor,
         context: NavigationContext
     ): void {
-        const pipes = (schema as any).pipe;
+        const pipes = (schema as UnknownSchema & { pipe?: UnknownValidation[] }).pipe;
         if (pipes && Array.isArray(pipes)) {
             pipes.forEach((pipe: UnknownValidation, index: number) => {
                 const pipeContext: NavigationContext = {
@@ -526,23 +544,23 @@ export class SchemaNavigator {
  * ```
  */
 export function createSimpleVisitor(handlers: {
-    onNode?: (schema: UnknownSchema | UnknownValidation, context: NavigationContext) => boolean | void;
-    onContainer?: (schema: UnknownSchema, context: NavigationContext) => boolean | void;
-    onValidation?: (validation: UnknownValidation, context: NavigationContext) => boolean | void;
+    onNode?: (node: NavigationNode) => boolean | void;
+    onContainer?: (node: NavigationNode) => boolean | void;
+    onValidation?: (node: NavigationNode) => boolean | void;
 }): SchemaVisitor {
     return {
-        visitNode(schema, context) {
-            const result = handlers.onNode?.(schema, context);
+        visitNode(node) {
+            const result = handlers.onNode?.(node);
             return { continue: result !== false };
         },
 
-        enterContainer(schema, context) {
-            const result = handlers.onContainer?.(schema, context);
+        enterContainer(node) {
+            const result = handlers.onContainer?.(node);
             return { continue: result !== false };
         },
 
-        visitValidation(validation, context) {
-            const result = handlers.onValidation?.(validation, context);
+        visitValidation(node) {
+            const result = handlers.onValidation?.(node);
             return { continue: result !== false };
         }
     };
@@ -579,9 +597,9 @@ export function extractSchemaPaths(schema: UnknownSchema): Array<{ path: string[
     const navigator = new SchemaNavigator();
 
     const visitor = createSimpleVisitor({
-        onNode: (schema, context) => {
-            if (context.path.length > 0 && !context.path.some(p => p.startsWith('$'))) {
-                paths.push({ path: [...context.path], schema });
+        onNode: (node) => {
+            if (node.path.length > 0 && !node.path.some(p => p.startsWith('$'))) {
+                paths.push({ path: [...node.path], schema: node.schema });
             }
         }
     });
@@ -617,10 +635,10 @@ export function findSchemaAtPath(
     const navigator = new SchemaNavigator();
 
     const visitor = createSimpleVisitor({
-        onNode: (schema, context) => {
-            if (context.path.length === targetPath.length &&
-                context.path.every((p, i) => p === targetPath[i])) {
-                found = schema;
+        onNode: (node) => {
+            if (node.path.length === targetPath.length &&
+                node.path.every((p, i) => p === targetPath[i])) {
+                found = node.schema;
                 return false; // Stop navigation
             }
         }
@@ -628,4 +646,275 @@ export function findSchemaAtPath(
 
     navigator.navigate(schema, visitor);
     return found;
+}
+
+/**
+ * Path element processor result types
+ */
+type PathProcessorResult = boolean | string;
+
+/**
+ * Function to process each path element during path computation
+ * @param pathElement - The current path element (string or number)
+ * @param schema - The schema/validation at this path element
+ * @param context - The navigation context at this element
+ * @returns 
+ *   - true: accept the element as-is
+ *   - false: discard this element
+ *   - string: override with this value
+ */
+type PathProcessor = (
+    pathElement: string | number, 
+    schema: UnknownSchema | UnknownValidation,
+    context: NavigationContext
+) => PathProcessorResult;
+
+/**
+ * Custom dot notation utility that builds paths by traversing up the parent chain
+ * 
+ * This function takes a NavigationContext and rebuilds the path by calling a processor
+ * function for each element, allowing filtering and transformation of path components.
+ * 
+ * @param context - The navigation context to start from
+ * @param processor - Function to process each path element
+ * @returns Array of processed path elements
+ * 
+ * @example
+ * ```typescript
+ * // Simple path building
+ * const path = computePath(context, () => true).join('.');
+ * 
+ * // Filter out array notations
+ * const cleanPath = computePath(context, (element) => {
+ *   if (element.toString().startsWith('$')) return false;
+ *   return true;
+ * }).join('.');
+ * 
+ * // Transform pipe validations
+ * const transformedPath = computePath(context, (element, schema) => {
+ *   if (element.toString().startsWith('$pipe[')) {
+ *     return `validation:${schema.type}`;
+ *   }
+ *   return true;
+ * }).join('.');
+ * 
+ * // Complex filtering and renaming
+ * const customPath = computePath(context, (element, schema, ctx) => {
+ *   // Skip internal notations
+ *   if (element.toString().startsWith('$')) return false;
+ *   
+ *   // Rename based on schema type
+ *   if (schema.type === 'object' && element === 'data') return 'payload';
+ *   
+ *   return true;
+ * }).join('.');
+ * ```
+ */
+export function computePath(
+    context: NavigationContext,
+    processor: PathProcessor
+): string[] {
+    const result: string[] = [];
+    
+    // Process each element in the path
+    for (let i = 0; i < context.path.length; i++) {
+        const pathElement = context.path[i];
+        
+        // We need to reconstruct context info for this path element
+        // For now, we'll create a minimal context - this could be enhanced
+        // to traverse back through the actual schema tree if needed
+        const elementContext: NavigationContext = {
+            path: context.path.slice(0, i + 1),
+            depth: i,
+            parent: undefined, // Could be enhanced to get actual parent
+            key: pathElement
+        };
+        
+        // For the processor, we need the schema at this path element
+        // Since we don't have direct access, we'll pass the context's schema info
+        // This is a limitation - in a real implementation, we might want to store
+        // schema references in the context during navigation
+        const currentSchema = context.parent; // This is approximate
+        
+        if (currentSchema) {
+            const processorResult = processor(pathElement, currentSchema, elementContext);
+            
+            if (processorResult === false) {
+                // Discard this element
+                continue;
+            } else if (typeof processorResult === 'string') {
+                // Override with new value
+                result.push(processorResult);
+            } else {
+                // Accept as-is (true)
+                result.push(pathElement.toString());
+            }
+        } else {
+            // Fallback: just process the path element without schema info
+            const processorResult = processor(pathElement, {} as UnknownSchema, elementContext);
+            
+            if (processorResult === false) {
+                continue;
+            } else if (typeof processorResult === 'string') {
+                result.push(processorResult);
+            } else {
+                result.push(pathElement.toString());
+            }
+        }
+    }
+    
+    return result;
+}
+
+/**
+ * Enhanced version of computePath that reconstructs schema information
+ * by re-navigating from the root. This provides accurate schema context
+ * for each path element but is less performant.
+ * 
+ * @param rootSchema - The root schema to start navigation from
+ * @param targetContext - The target context to build path for
+ * @param processor - Function to process each path element
+ * @returns Array of processed path elements
+ * 
+ * @example
+ * ```typescript
+ * const userSchema = v.object({
+ *   name: v.string(),
+ *   address: v.object({
+ *     street: v.pipe(v.string(), v.minLength(1))
+ *   })
+ * });
+ * 
+ * // During navigation, when you reach a deep context:
+ * const path = computePathWithSchema(userSchema, context, (element, schema) => {
+ *   // Now you have accurate schema information
+ *   if (schema.type === 'string' && element === 'street') {
+ *     return 'road'; // rename street to road
+ *   }
+ *   return true;
+ * }).join('.');
+ * ```
+ */
+export function computePathWithSchema(
+    rootSchema: UnknownSchema,
+    targetContext: NavigationContext,
+    processor: PathProcessor
+): string[] {
+    const result: string[] = [];
+    const navigator = new SchemaNavigator();
+    
+    // Navigate to build accurate schema context for each path element
+    const pathSchemas: Array<{ element: string | number, schema: UnknownSchema | UnknownValidation, context: NavigationContext }> = [];
+      const visitor = createSimpleVisitor({
+        onNode: (node) => {
+            // Check if this context path is a prefix of our target path
+            if (node.path.length <= targetContext.path.length) {
+                const isPrefix = node.path.every((element: string | number, index: number) => element === targetContext.path[index]);
+                if (isPrefix && node.path.length > 0) {
+                    pathSchemas.push({
+                        element: node.path[node.path.length - 1],
+                        schema: node.schema,
+                        context: { ...node.context }
+                    });
+                }
+            }
+        }
+    });
+    
+    navigator.navigate(rootSchema, visitor);
+    
+    // Process each path element with its accurate schema
+    for (const { element, schema, context } of pathSchemas) {
+        const processorResult = processor(element, schema, context);
+        
+        if (processorResult === false) {
+            continue;
+        } else if (typeof processorResult === 'string') {
+            result.push(processorResult);
+        } else {
+            result.push(element.toString());
+        }
+    }
+    
+    return result;
+}
+
+/**
+ * Predefined path processors for common use cases
+ */
+export const PathProcessors = {
+    /**
+     * Accept all path elements as-is
+     */
+    identity: (): PathProcessor => () => true,
+    
+    /**
+     * Filter out internal schema notations (elements starting with $)
+     */
+    cleanPath: (): PathProcessor => (element) => {
+        return !element.toString().startsWith('$');
+    },
+    
+    /**
+     * Keep only object property paths (filter arrays, unions, etc.)
+     */
+    propertiesOnly: (): PathProcessor => (element) => {
+        const str = element.toString();
+        return !str.startsWith('$') && !str.match(/^\d+$/);
+    },
+    
+    /**
+     * Transform array notations to bracket syntax
+     */
+    arrayBrackets: (): PathProcessor => (element) => {
+        if (element === '$[]') return '[]';
+        return true;
+    },
+      /**
+     * Custom processor with options
+     */
+    custom: (options: {
+        skipInternal?: boolean;
+        transformArrays?: boolean;
+        renameMap?: Record<string, string>;
+    }): PathProcessor => (element, _schema, _context) => {
+        const str = element.toString();
+        
+        // Skip internal notations
+        if (options.skipInternal && str.startsWith('$')) {
+            return false;
+        }
+        
+        // Transform arrays
+        if (options.transformArrays && element === '$[]') {
+            return '[]';
+        }
+        
+        // Apply rename map
+        if (options.renameMap && str in options.renameMap) {
+            return options.renameMap[str];
+        }
+        
+        return true;
+    }
+};
+
+/**
+ * Utility function to sanitize path names
+ * This function removes leading/trailing whitespace, replaces spaces with underscores,
+ * and removes any invalid characters, leaving only alphanumeric characters, underscores, and dots.
+ * @param path - The path name to sanitize
+ * @return Sanitized path name
+ */
+export function sanitizePathName(path: string) : string {
+    // Remove any leading/trailing whitespace
+    path = path.trim();
+    
+    // Replace spaces with underscores
+    path = path.replace(/\s+/g, '_');
+    
+    // Remove any invalid characters (keep alphanumeric, underscores, and dots)
+    path = path.replace(/[^a-zA-Z0-9_.]/g, '');
+    
+    return path;
 }

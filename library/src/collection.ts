@@ -5,6 +5,8 @@ import { EventEmitter } from "./events.ts";
 import { watchEvent } from "./change-stream.ts";
 import { getSessionContext } from "./session.ts"
 import type { Db } from "./mongodb.ts";
+import { extractIndexes } from "./indexes.ts";
+import { sanitizePathName } from "./schema-navigator.ts";
 
 type CollectionOptions = {
     safeDelete?: boolean,
@@ -158,7 +160,34 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
                 validator,
             });
         }
-    }    async function startWatching() {
+    }
+
+    async function applyIndexes() {
+        const currentIndexes = await collection.indexes();
+        const indexes = extractIndexes(schema);
+        
+        for (const index of indexes) {
+            const indexPath = sanitizePathName(index.path);
+            
+            const existingIndex = currentIndexes.find(i => {
+                return i.name === indexPath || i.key[index.path] !== undefined;
+            });
+            
+            if (existingIndex) {
+                await collection.dropIndex(existingIndex.name!);
+            }
+
+            await collection.createIndex(
+                { [index.path]: 1 },
+                {
+                    ...index.metadata,
+                    name: indexPath,
+                }
+            );
+        }
+    }
+    
+    async function startWatching() {
         watchEvent(db, collection, (change) => {
             switch (change.operationType) {
                 case "insert":
@@ -191,7 +220,9 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
 
     async function init() {
         await applyValidator();
+        await applyIndexes();
         await startWatching();
+
         sessionContext = await getSessionContext(db.client);
     }
 

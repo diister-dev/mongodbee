@@ -6,6 +6,8 @@ import { FlatType } from "../types/flat.ts";
 import { createDotNotationSchema } from "./dot-notation.ts";
 import { Db } from "./mongodb.ts";
 import { getSessionContext } from "./session.ts";
+import { extractIndexes, withIndex } from "./indexes.ts";
+import { sanitizePathName } from "./schema-navigator.ts";
 
 type CollectionOptions = {
     safeDelete?: boolean,
@@ -13,9 +15,15 @@ type CollectionOptions = {
 
 type Elements<T extends Record<string, any>> = {
     [key in keyof T]: {
-        _id: ReturnType<typeof dbId>;
+        _id: ReturnType<typeof dbId>,
+        type: v.LiteralSchema<key, any>,
     } & T[key]
 }[keyof T];
+
+type OutputElementSchema<T extends Record<string, any>, K extends keyof T> = v.ObjectSchema<{
+    _id: ReturnType<typeof dbId>,
+    type: v.LiteralSchema<K, any>,
+} & T[K], any>;
 
 type ElementSchema<T extends Record<string, any>, K extends keyof T> = v.ObjectSchema<{
     _id: ReturnType<typeof dbId>,
@@ -65,14 +73,14 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
     withSession: Awaited<ReturnType<typeof getSessionContext>>["withSession"],
     insertOne<E extends keyof T>(key: E, doc: v.InferInput<ElementSchema<T, E>>): Promise<string>;
     insertMany<E extends keyof T>(key: E, docs: v.InferInput<ElementSchema<T, E>>[]): Promise<(string)[]>;
-    findOne<E extends keyof T>(key: E, filter: Partial<Input<T>>): Promise<v.InferOutput<ElementSchema<T, E>>>;
+    findOne<E extends keyof T>(key: E, filter: Partial<Input<T>>): Promise<v.InferOutput<OutputElementSchema<T, E>>>;
     find<E extends keyof T>(key: E, filter?: Partial<Input<T>>): Promise<v.InferOutput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>[]>;
     deleteId<E extends keyof T>(key: E, id: string): Promise<number>;
     deleteIds<E extends keyof T>(key: E, ids: string[]): Promise<number>;
-    updateOne<E extends keyof T>(key: E, id: string, doc: Omit<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>, "_id">): Promise<number>;
+    updateOne<E extends keyof T>(key: E, id: string, doc: Omit<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>, "_id" | "type">): Promise<number>;
     updateMany(operation: {
         [key in keyof T]?: {
-            [id: string]: Omit<Partial<FlatType<v.InferInput<ElementSchema<T, key>>>>, "_id">;
+            [id: string]: Omit<Partial<FlatType<v.InferInput<ElementSchema<T, key>>>>, "_id" | "type">;
         }
     }): Promise<number>;
     aggregate(stageBuilder: (stage: StageBuilder<T>) => AggregationStage[]): Promise<any[]>;
@@ -122,6 +130,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             ...acc,
             [key]: {
                 _id: dbId(key),
+                type: withIndex(v.optional(v.literal(key), () => key)),
                 ...value,
             }
         }
@@ -154,7 +163,16 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
     async function applyValidator() {
         const collections = await db.listCollections({ name: collectionName }).toArray();
-        const validator = toMongoValidator(schema);
+        const validator = toMongoValidator(
+            v.union([
+                ...Object.entries(schemaWithId).map(([key, value]) => {
+                    return v.object({
+                        ...value,
+                        type: v.literal(key as string)
+                    })
+                })
+            ])
+        );
 
         if (collections.length === 0) {
             // Create the collection with the validator
@@ -170,10 +188,44 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         }
     }
 
+    async function applyIndexes() {
+        const currentIndexes = await collection.indexes();
+        const allIndexes = Object.entries(schemaElements).map(([key, value]) => {
+            const indexes = extractIndexes(value);
+            return {
+                type: key,
+                indexes,
+            };
+        });
+        
+        for (const { type, indexes } of allIndexes) {
+            for (const index of indexes) {
+                const indexName = sanitizePathName(`${type}_${index.path}`);
+                const existingIndex = currentIndexes.find(i => i.name === indexName);
+                
+                if(existingIndex) {
+                    await collection.dropIndex(indexName);
+                }
+
+                await collection.createIndex(
+                    { [index.path]: 1 },
+                    {
+                        ...index.metadata,
+                        partialFilterExpression: {
+                            type: { $eq: type },
+                        },
+                        name: indexName,
+                    }
+                );
+            }
+        }
+    }
+
     let sessionContext: Awaited<ReturnType<typeof getSessionContext>>;
     
     async function init() {
         await applyValidator();
+        await applyIndexes();
         sessionContext = await getSessionContext(db.client);
     }
 
@@ -219,7 +271,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             const session = sessionContext.getSession();
             const result = await collection.findOne({
                 $and: [
-                    { _id: { $regex: new RegExp(`^${key as string}:`) } },
+                    { type: key as string },
                     filter,
                 ]
             } as any, { session });
@@ -231,11 +283,13 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             return v.parse(schema, result);
         },
         async find(key, filter) {
-            const idChecker = { _id: { $regex: new RegExp(`^${key as string}:`) } };
+            const typeChecker = {
+                type: key as string,
+            };
 
             const session = sessionContext.getSession();
             const cursor = collection.find({
-                $and: filter ? [idChecker, filter] : [idChecker],
+                $and: filter ? [typeChecker, filter] : [typeChecker],
             } as any, { session });
             
             const result = await cursor.toArray();
@@ -253,7 +307,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             const session = sessionContext.getSession();
 
             const result = await collection.deleteOne({
-                _id: { $regex: new RegExp(`^${key as string}:`) },
+                _id: id,
             } as any, { session });
 
             if(!result.acknowledged) {
@@ -277,7 +331,8 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             const result = await collection.deleteMany({
                 _id: {
                     $in: ids,
-                }
+                },
+                type: key as string,
             } as any, { session });
 
             if(!result.acknowledged) {
@@ -302,6 +357,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
             const result = await collection.updateOne({
                 _id: id,
+                type: key as string,
             } as any, {
                 $set: doc,
             } as any, { session });
@@ -366,7 +422,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             const stage: StageBuilder<T> = {
                 match: (key, filter) => ({
                     $match: {
-                        _id: { $regex: new RegExp(`^${key as string}:`) },
+                        type: key as string,
                         ...filter,
                     },
                 }),
