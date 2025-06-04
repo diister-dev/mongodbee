@@ -1,5 +1,5 @@
 import * as v from './schema.ts';
-import type * as m from "mongodb";
+import * as m from "mongodb";
 import { ulid } from "@std/ulid";
 import { toMongoValidator } from "./validator.ts";
 import { FlatType } from "../types/flat.ts";
@@ -73,8 +73,8 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
     withSession: Awaited<ReturnType<typeof getSessionContext>>["withSession"],
     insertOne<E extends keyof T>(key: E, doc: v.InferInput<ElementSchema<T, E>>): Promise<string>;
     insertMany<E extends keyof T>(key: E, docs: v.InferInput<ElementSchema<T, E>>[]): Promise<(string)[]>;
-    findOne<E extends keyof T>(key: E, filter: Partial<Input<T>>): Promise<v.InferOutput<OutputElementSchema<T, E>>>;
-    find<E extends keyof T>(key: E, filter?: Partial<Input<T>>): Promise<v.InferOutput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>[]>;
+    findOne<E extends keyof T>(key: E, filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>): Promise<v.InferOutput<OutputElementSchema<T, E>>>;
+    find<E extends keyof T>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>): Promise<v.InferOutput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>[]>;
     deleteId<E extends keyof T>(key: E, id: string): Promise<number>;
     deleteIds<E extends keyof T>(key: E, ids: string[]): Promise<number>;
     updateOne<E extends keyof T>(key: E, id: string, doc: Omit<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>, "_id" | "type">): Promise<number>;
@@ -204,7 +204,14 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 const existingIndex = currentIndexes.find(i => i.name === indexName);
                 
                 if(existingIndex) {
-                    await collection.dropIndex(indexName);
+                    await collection.dropIndex(indexName).catch((e) => {
+                        // https://www.mongodb.com/docs/manual/reference/error-codes/
+                        if (e instanceof m.MongoServerError && e.codeName === "IndexNotFound") {
+                            return;
+                        }
+
+                        throw e;
+                    });
                 }
 
                 await collection.createIndex(

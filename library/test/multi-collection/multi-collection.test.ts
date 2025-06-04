@@ -1,5 +1,5 @@
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { assertEquals, assertRejects, assert } from "jsr:@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 
@@ -324,5 +324,196 @@ Deno.test("RANDOM TEST - TO DELETE", async (t) => {
             stage.unwind("group", "members"),
             stage.lookup("group", "members", "_id"),
         ]);
+    });
+});
+
+Deno.test("Date fields: Insert and query with dates", async (t) => {
+    await withDatabase(t.name, async (db) => {
+        const collection = await multiCollection(db, "test", {
+            event: {
+                name: v.string(),
+                startDate: v.date(),
+                endDate: v.date(),
+            },
+            user: {
+                name: v.string(),
+                birthDate: v.date(),
+                lastLogin: v.date(),
+            }
+        });
+
+        const now = new Date();
+        const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+        const birthDate = new Date("1990-05-15");
+
+        const eventId = await collection.insertOne("event", {
+            name: "Conference",
+            startDate: now,
+            endDate: tomorrow,
+        });
+
+        const userId = await collection.insertOne("user", {
+            name: "Alice",
+            birthDate: birthDate,
+            lastLogin: yesterday,
+        });
+
+        // Test finding by date
+        const events = await collection.find("event", {
+            startDate: { $lte: now }
+        });
+        assertEquals(events.length, 1);
+        assertEquals(events[0].name, "Conference");
+
+        // Test finding users by date range
+        const users = await collection.find("user", {
+            lastLogin: { $gte: yesterday }
+        });
+        assertEquals(users.length, 1);
+        assertEquals(users[0].name, "Alice");
+
+        // Verify date fields are preserved correctly
+        const foundEvent = await collection.findOne("event", { _id: eventId });
+        assertEquals(foundEvent?.startDate.getTime(), now.getTime());
+        assertEquals(foundEvent?.endDate.getTime(), tomorrow.getTime());
+    });
+});
+
+Deno.test("Date fields: Date comparisons and sorting", async (t) => {
+    await withDatabase(t.name, async (db) => {
+        const collection = await multiCollection(db, "test", {
+            task: {
+                title: v.string(),
+                dueDate: v.date(),
+                createdAt: v.date(),
+            }
+        });
+
+        const baseDate = new Date("2025-01-01");
+        const tasks = [
+            {
+                title: "Task 1",
+                dueDate: new Date(baseDate.getTime() + 1 * 24 * 60 * 60 * 1000),
+                createdAt: baseDate,
+            },
+            {
+                title: "Task 2", 
+                dueDate: new Date(baseDate.getTime() + 3 * 24 * 60 * 60 * 1000),
+                createdAt: new Date(baseDate.getTime() + 1 * 24 * 60 * 60 * 1000),
+            },
+            {
+                title: "Task 3",
+                dueDate: new Date(baseDate.getTime() + 2 * 24 * 60 * 60 * 1000),
+                createdAt: new Date(baseDate.getTime() + 2 * 24 * 60 * 60 * 1000),
+            }
+        ];
+
+        await collection.insertMany("task", tasks);
+
+        // Test date range queries
+        const urgentTasks = await collection.find("task", {
+            dueDate: { 
+                $lte: new Date(baseDate.getTime() + 2 * 24 * 60 * 60 * 1000) 
+            }
+        });
+        assertEquals(urgentTasks.length, 2);
+
+        // Test finding tasks created after a specific date
+        const recentTasks = await collection.find("task", {
+            createdAt: { $gt: baseDate }
+        });
+        assertEquals(recentTasks.length, 2);
+
+        // Test date between range
+        const midRangeTasks = await collection.find("task", {
+            dueDate: {
+                $gte: new Date(baseDate.getTime() + 1 * 24 * 60 * 60 * 1000),
+                $lte: new Date(baseDate.getTime() + 2 * 24 * 60 * 60 * 1000)
+            }
+        });
+        assertEquals(midRangeTasks.length, 2);
+    });
+});
+
+Deno.test("Date fields: Current date and date updates", async (t) => {
+    await withDatabase(t.name, async (db) => {
+        const collection = await multiCollection(db, "test", {
+            document: {
+                title: v.string(),
+                createdAt: v.date(),
+                updatedAt: v.date(),
+            }
+        });
+
+        const startTime = new Date();
+        
+        const docId = await collection.insertOne("document", {
+            title: "My Document",
+            createdAt: startTime,
+            updatedAt: startTime,
+        });
+
+        // Wait a bit to ensure different timestamps
+        await new Promise(resolve => setTimeout(resolve, 10));
+        
+        const updateTime = new Date();
+        
+        await collection.updateOne("document", docId, { title: "Updated Document", updatedAt: updateTime });
+
+        const updatedDoc = await collection.findOne("document", { _id: docId });
+        
+        assertEquals(updatedDoc?.title, "Updated Document");
+        assertEquals(updatedDoc?.createdAt.getTime(), startTime.getTime());
+        assertEquals(updatedDoc?.updatedAt.getTime(), updateTime.getTime());
+        
+        // Verify updatedAt is after createdAt
+        assert(updatedDoc?.updatedAt >= updatedDoc?.createdAt);
+    });
+});
+
+Deno.test("Date fields: Date edge cases", async (t) => {
+    await withDatabase(t.name, async (db) => {        const collection = await multiCollection(db, "test", {
+            appointment: {
+                title: v.string(),
+                scheduledFor: v.date(),
+                reminderDate: v.optional(v.date()),
+            }
+        });
+
+        // Test with very old date
+        const oldDate = new Date("1900-01-01");
+        // Test with future date
+        const futureDate = new Date("2030-12-31");
+        
+        const appointment1 = await collection.insertOne("appointment", {
+            title: "Historical Event",
+            scheduledFor: oldDate,
+        });
+
+        const appointment2 = await collection.insertOne("appointment", {
+            title: "Future Meeting",
+            scheduledFor: futureDate,
+            reminderDate: new Date("2030-12-30"),
+        });
+
+        // Find appointments by date range
+        const oldAppointments = await collection.find("appointment", {
+            scheduledFor: { $lt: new Date("2000-01-01") }
+        });
+        assertEquals(oldAppointments.length, 1);
+        assertEquals(oldAppointments[0].title, "Historical Event");
+
+        const futureAppointments = await collection.find("appointment", {
+            scheduledFor: { $gt: new Date("2025-01-01") },
+        });
+        assertEquals(futureAppointments.length, 1);
+        assertEquals(futureAppointments[0].title, "Future Meeting");
+
+        // Test optional date field
+        const withReminder = await collection.find("appointment", {
+            reminderDate: { $exists: true }
+        });
+        assertEquals(withReminder.length, 1);
     });
 });
