@@ -517,3 +517,28 @@ Deno.test("Date fields: Date edge cases", async (t) => {
         assertEquals(withReminder.length, 1);
     });
 });
+
+Deno.test("Literal id must have valid type", async (t) => {
+    await withDatabase(t.name, async (db) => {
+        const collection = await multiCollection(db, "test", {
+            item: {
+                _id: v.literal("item-id"),
+                name: v.string(),
+                createdAt: v.date(),
+            }
+        });
+
+        // Insert an item with a valid _id
+        const itemId = await collection.insertOne("item", {
+            _id: "item-id",
+            name: "Test Item",
+            createdAt: new Date()
+        });
+
+        // Attempt to find the item using a literal id
+        const foundItem = await collection.findOne("item", {
+            _id: "item-id"
+        });
+        assertEquals(foundItem?._id, itemId);
+    });
+});

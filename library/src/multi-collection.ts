@@ -2,31 +2,34 @@ import * as v from './schema.ts';
 import * as m from "mongodb";
 import { ulid } from "@std/ulid";
 import { toMongoValidator } from "./validator.ts";
-import { FlatType } from "../types/flat.ts";
 import { createDotNotationSchema } from "./dot-notation.ts";
-import { Db } from "./mongodb.ts";
 import { getSessionContext } from "./session.ts";
 import { extractIndexes, withIndex } from "./indexes.ts";
 import { sanitizePathName } from "./schema-navigator.ts";
+import type { FlatType } from "../types/flat.ts";
+import type { Db } from "./mongodb.ts";
 
 type CollectionOptions = {
     safeDelete?: boolean,
 }
 
+// Use _id if the schema is a literal schema, otherwise use dbId
+type DynId<T> = T extends v.LiteralSchema<any, any> ? T : ReturnType<typeof dbId>;
+
 type Elements<T extends Record<string, any>> = {
     [key in keyof T]: {
-        _id: ReturnType<typeof dbId>,
+        _id: DynId<T[key]["_id"]>,
         _type: v.LiteralSchema<key, any>,
     } & T[key]
 }[keyof T];
 
 type OutputElementSchema<T extends Record<string, any>, K extends keyof T> = v.ObjectSchema<{
-    _id: ReturnType<typeof dbId>,
+    _id: DynId<T[K]["_id"]>,
     _type: v.LiteralSchema<K, any>,
 } & T[K], any>;
 
 type ElementSchema<T extends Record<string, any>, K extends keyof T> = v.ObjectSchema<{
-    _id: ReturnType<typeof dbId>,
+    _id: DynId<T[K]["_id"]>,
 } & T[K], any>;
 
 type AnySchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
