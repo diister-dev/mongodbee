@@ -38,13 +38,22 @@ type MultiSchema<T extends Record<string, any>> = Elements<T>;
 type MultiCollectionSchema = Record<string, Record<string, AnySchema>>;
 
 /**
+ * Generates a new unique ID using ULID
+ * 
+ * @returns A new ULID string in lowercase
+ */
+function newId() {
+    return ulid().toLowerCase();
+}
+
+/**
  * Creates an optional ID field for a document type with automatic generation
  * 
  * @param type - The document type identifier to use in the ID prefix
  * @returns A Valibot schema for an ID field with optional auto-generation
  */
 export function dbId(type: string): v.OptionalSchema<v.SchemaWithPipe<readonly [v.StringSchema<undefined>, v.RegexAction<string, undefined>]>, () => string> {
-    return v.optional(refId(type), () => `${type}:${ulid()}`);
+    return v.optional(refId(type), () => `${type}:${newId()}`);
 }
 
 /**
@@ -245,7 +254,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     return {
         withSession: sessionContext!.withSession,
         async insertOne(key, doc) {
-            const _id = doc._id ?? `${key as string}:${ulid()}`;
+            const _id = doc._id ?? `${key as string}:${newId()}`;
             const schema = schemaElements[key];
             const validation = v.parse(schema, {
                 ...doc,
@@ -262,7 +271,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         },
         async insertMany(key, docs) {
             const validation = docs.map((doc) => {
-                const _id = doc._id ?? `${key as string}:${ulid()}`;
+                const _id = doc._id ?? `${key as string}:${newId()}`;
                 return v.parse(schema, {
                     ...doc,
                     _id,
