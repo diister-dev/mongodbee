@@ -45,9 +45,9 @@ export type CollectionResult<T extends Record<string, v.BaseSchema<unknown, unkn
             afterId?: string | m.ObjectId,
             beforeId?: string | m.ObjectId,
             sort?: m.Sort | m.SortDirection,
-            prepare?: (doc: WithId<TOutput<T>>) => Promise<E>,
+            prepare?: (doc: WithId<TOutput<T>>) => Promise<E> | E,
             filter?: (doc: E) => Promise<boolean> | boolean,
-            format?: (doc: E) => Promise<R>,
+            format?: (doc: E) => Promise<R> | R,
         }) => Promise<R[]>,
 
         // From mongodb.Collection

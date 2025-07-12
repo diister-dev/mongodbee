@@ -92,9 +92,9 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
         afterId?: string,
         beforeId?: string,
         sort?: m.Sort | m.SortDirection,
-        prepare?: (doc: v.InferOutput<OutputElementSchema<T, E>>) => Promise<EN>,
+        prepare?: (doc: v.InferOutput<OutputElementSchema<T, E>>) => Promise<EN> | EN,
         filter?: (doc: EN) => Promise<boolean> | boolean,
-        format?: (doc: EN) => Promise<R>,
+        format?: (doc: EN) => Promise<R> | R,
     }): Promise<R[]>;
     deleteId<E extends keyof T>(key: E, id: string): Promise<number>;
     deleteIds<E extends keyof T>(key: E, ids: string[]): Promise<number>;
