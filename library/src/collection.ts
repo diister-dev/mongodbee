@@ -29,7 +29,7 @@ type Events<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<
  * @template T - Schema type containing Valibot schemas for document fields
  */
 export type CollectionResult<T extends Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>> =
-    Omit<m.Collection<TInput<T>>, "findOne" | "find" | "insertOne" | "distinct" | "findOneAndDelete" | "findOneAndReplace" | "findOneAndUpdate" | "indexInformation" | "listSearchIndexes"> & {
+    Omit<m.Collection<TInput<T>>, "findOne" | "find" | "insertOne" | "distinct" | "findOneAndDelete" | "findOneAndReplace" | "findOneAndUpdate" | "indexInformation" | "listSearchIndexes" | "count"> & {
         collection: m.Collection<TInput<T>>,
         schema: v.ObjectSchema<{readonly _id: v.OptionalSchema<v.AnySchema, undefined>} & T, undefined>,
         on: ReturnType<typeof EventEmitter<Events<T>>>["on"],
@@ -40,13 +40,15 @@ export type CollectionResult<T extends Record<string, v.BaseSchema<unknown, unkn
         withSession: Awaited<ReturnType<typeof getSessionContext>>["withSession"],
 
         // Utilities
-        paginate: (filter: m.Filter<TInput<T>>, options?: {
+        paginate: <E = WithId<TOutput<T>>, R = E>(filter: m.Filter<TInput<T>>, options?: {
             limit?: number,
             afterId?: string | m.ObjectId,
             beforeId?: string | m.ObjectId,
             sort?: m.Sort | m.SortDirection,
-            filter?: (doc: WithId<TOutput<T>>) => Promise<boolean> | boolean,
-        }) => Promise<WithId<TOutput<T>>[]>,
+            prepare?: (doc: WithId<TOutput<T>>) => Promise<E>,
+            filter?: (doc: E) => Promise<boolean> | boolean,
+            format?: (doc: E) => Promise<R>,
+        }) => Promise<R[]>,
 
         // From mongodb.Collection
         updateOne(filter: m.Filter<WithId<TInput<T>>>, update: m.UpdateFilter<TInput<T>> | m.Document[], options?: m.UpdateOptions): Promise<m.UpdateResult<TInput<T>>>;
@@ -333,8 +335,16 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
 
             return cursor as unknown as m.AbstractCursor<TOutput>;
         },
-        async paginate(filter, options) {
-            let { limit = 100, afterId, beforeId, sort, filter: customFilter } = options || {};
+        async paginate<E = WithId<TOutput>, R = E>(filter: m.Filter<TInput>, options?: {
+            limit?: number,
+            afterId?: string | m.ObjectId,
+            beforeId?: string | m.ObjectId,
+            sort?: m.Sort | m.SortDirection,
+            prepare?: (doc: WithId<TOutput>) => Promise<E>,
+            filter?: (doc: E) => Promise<boolean> | boolean,
+            format?: (doc: E) => Promise<R>,
+        }): Promise<R[]> {
+            let { limit = 100, afterId, beforeId, sort, prepare, filter: customFilter, format } = options || {};
             const session = sessionContext.getSession();
             const query: m.Filter<TInput> = { ...filter };
 
@@ -347,9 +357,9 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
                 sort = sort || { _id: -1 };
             }
 
-            const cursor = collection.find(query, { session }).sort(sort as any);
+            const cursor = collection.find(query, { session }).sort(sort as m.Sort);
             let hardLimit = 10_000;
-            const elements: WithId<TOutput>[] = [];
+            const elements: R[] = [];
             while(hardLimit-- > 0 && limit > 0) {
                 const doc = await cursor.next() as WithId<TOutput> | null;
                 if (!doc) break;
@@ -361,11 +371,19 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
                 }
 
                 const validatedDoc = validation.output as WithId<TOutput>;
-                const isValid = await customFilter?.(validatedDoc) ?? true;
-                if (isValid) {
-                    elements.push(validatedDoc);
-                    limit--;
-                }
+                
+                // Step 1: Prepare - enrich document with external data
+                const enrichedDoc = prepare ? await prepare(validatedDoc) : validatedDoc as unknown as E;
+                
+                // Step 2: Filter - apply custom filtering logic
+                const isValid = await customFilter?.(enrichedDoc) ?? true;
+                if (!isValid) continue;
+                
+                // Step 3: Format - transform document to final output format
+                const finalDoc = format ? await format(enrichedDoc) : enrichedDoc as unknown as R;
+                
+                elements.push(finalDoc);
+                limit--;
             }
 
             return elements;

@@ -87,13 +87,15 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
     insertMany<E extends keyof T>(key: E, docs: v.InferInput<ElementSchema<T, E>>[]): Promise<(string)[]>;
     findOne<E extends keyof T>(key: E, filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>): Promise<v.InferOutput<OutputElementSchema<T, E>>>;
     find<E extends keyof T>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, options?: m.FindOptions): Promise<v.InferOutput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>[]>;
-    paginate<E extends keyof T>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, options?: {
+    paginate<E extends keyof T, EN = v.InferOutput<OutputElementSchema<T, E>>, R = EN>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, options?: {
         limit?: number,
         afterId?: string,
         beforeId?: string,
         sort?: m.Sort | m.SortDirection,
-        filter?: (doc: v.InferOutput<OutputElementSchema<T, E>>) => Promise<boolean> | boolean,
-    }): Promise<v.InferOutput<OutputElementSchema<T, E>>[]>;
+        prepare?: (doc: v.InferOutput<OutputElementSchema<T, E>>) => Promise<EN>,
+        filter?: (doc: EN) => Promise<boolean> | boolean,
+        format?: (doc: EN) => Promise<R>,
+    }): Promise<R[]>;
     deleteId<E extends keyof T>(key: E, id: string): Promise<number>;
     deleteIds<E extends keyof T>(key: E, ids: string[]): Promise<number>;
     updateOne<E extends keyof T>(key: E, id: string, doc: Omit<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>, "_id" | "type">): Promise<number>;
@@ -322,8 +324,20 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
             return result.map((item) => v.parse(schema, item));
         },
-        async paginate(key, filter, options) {
-            let { limit = 100, afterId, beforeId, sort, filter: customFilter } = options || {};
+        async paginate<E extends keyof T, EN = v.InferOutput<OutputElementSchema<T, E>>, R = EN>(
+            key: E, 
+            filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, 
+            options?: {
+                limit?: number,
+                afterId?: string,
+                beforeId?: string,
+                sort?: m.Sort | m.SortDirection,
+                prepare?: (doc: v.InferOutput<OutputElementSchema<T, E>>) => Promise<EN>,
+                filter?: (doc: EN) => Promise<boolean> | boolean,
+                format?: (doc: EN) => Promise<R>,
+            }
+        ): Promise<R[]> {
+            let { limit = 100, afterId, beforeId, sort, prepare, filter: customFilter, format } = options || {};
             const session = sessionContext.getSession();
             
             const typeChecker = {
@@ -360,9 +374,9 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 sort = sort || { _id: -1 };
             }
 
-            const cursor = collection.find(query as any, { session }).sort(sort as any);
+            const cursor = collection.find(query as never, { session }).sort(sort as m.Sort);
             let hardLimit = 10_000;
-            const elements: v.InferOutput<OutputElementSchema<T, typeof key>>[] = [];
+            const elements: R[] = [];
             
             while(hardLimit-- > 0 && limit > 0) {
                 const doc = await cursor.next();
@@ -374,12 +388,20 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                     continue; // Skip invalid documents
                 }
 
-                const validatedDoc = validation.output as v.InferOutput<OutputElementSchema<T, typeof key>>;
-                const isValid = await customFilter?.(validatedDoc) ?? true;
-                if (isValid) {
-                    elements.push(validatedDoc);
-                    limit--;
-                }
+                const validatedDoc = validation.output as v.InferOutput<OutputElementSchema<T, E>>;
+                
+                // Step 1: Prepare - enrich document with external data
+                const enrichedDoc = prepare ? await prepare(validatedDoc) : validatedDoc as unknown as EN;
+                
+                // Step 2: Filter - apply custom filtering logic
+                const isValid = await customFilter?.(enrichedDoc) ?? true;
+                if (!isValid) continue;
+                
+                // Step 3: Format - transform document to final output format
+                const finalDoc = format ? await format(enrichedDoc) : enrichedDoc as unknown as R;
+                
+                elements.push(finalDoc);
+                limit--;
             }
 
             return elements;
