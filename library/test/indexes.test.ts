@@ -5,6 +5,7 @@ import { multiCollection } from "../src/multi-collection.ts";
 import { withIndex } from "../src/indexes.ts";
 import { withDatabase } from "./+shared.ts";
 import { MongoServerError } from "mongodb";
+import { slug } from "@diister/mongodbee/schema";
 
 Deno.test("withIndex - Basic index creation", async (t) => {
   await withDatabase(t.name, async (db) => {
@@ -227,6 +228,174 @@ Deno.test("withIndex - Multi-collection with type scoped indexes", async (t) => 
       name: "Laptops Category",
       slug: "LAP001" // Same as product SKU, but different type
     });
+  });
+});
+
+Deno.test("withIndex - Multi-collection with scoped indexes by type", async (e) => {
+  await withDatabase(e.name, async (db) => {
+    const catalogSchema = {
+      products: {
+        name: v.string(),
+        price: v.number(),
+        slug: withIndex(v.string(), { unique: true }),
+      },
+      cars: {
+        name: v.string(),
+        model: v.string(),
+        slug: withIndex(v.string(), { unique: true }),
+      }
+    };
+
+    const catalog = await multiCollection(db, "catalog", catalogSchema);
+
+    // Insert product with unique slug
+    await catalog.insertOne("products", {
+      name: "Laptop",
+      price: 999.99,
+      slug: "laptop-2023"
+    });
+
+    // Insert car with unique slug
+    await catalog.insertOne("cars", {
+      name: "Tesla",
+      model: "Model S",
+      slug: "tesla-model-s"
+    });
+
+    // Insert a car with same slug as product - should work because indexes are scoped by type
+    await catalog.insertOne("cars", {
+      name: "Another Tesla",
+      model: "Model 3",
+      slug: "laptop-2023" // Same slug as product
+    });
+
+    // Insert another product with same slug - should fail
+    await assertRejects(
+      async () => {
+        await catalog.insertOne("products", {
+          name: "Gaming Laptop",
+          price: 1499.99,
+          slug: "laptop-2023" // Duplicate slug for products
+        });
+      },
+      MongoServerError,
+      "duplicate key"
+    );
+
+    // Insert another car with same slug - should fail
+    await assertRejects(
+      async () => {
+        await catalog.insertOne("cars", {
+          name: "Luxury Car",
+          model: "Model X",
+          slug: "tesla-model-s" // Duplicate slug for cars
+        });
+      },
+      MongoServerError,
+      "duplicate key"
+    );
+
+    // Verify products and cars can be queried correctly
+    const products = await catalog.find("products");
+    const cars = await catalog.find("cars");
+    assertEquals(products.length, 1);
+    assertEquals(cars.length, 2);
+    assertEquals(products[0].slug, "laptop-2023");
+    assertEquals(cars[0].slug, "tesla-model-s");
+    assertEquals(cars[1].slug, "laptop-2023"); // Car with same slug as product
+    assertEquals(cars[1]._type, "cars"); // Ensure type is preserved
+    assertEquals(products[0]._type, "products"); // Ensure type is preserved
+  });
+});
+
+Deno.test("withIndex - Multi-collection with scoped deep indexes by type", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const catalogSchema = {
+      products: {
+        name: v.string(),
+        details: v.object({
+          price: v.number(),
+          slug: withIndex(v.string(), { unique: true }),
+        })
+      },
+      cars: {
+        name: v.string(),
+        details: v.object({
+          model: v.string(),
+          slug: withIndex(v.string(), { unique: true }),
+        })
+      }
+    };
+
+    const catalog = await multiCollection(db, "catalog", catalogSchema);
+
+    // Insert product with unique slug
+    await catalog.insertOne("products", {
+      name: "Laptop",
+      details: {
+        price: 999.99,
+        slug: "laptop-2023"
+      }
+    });
+
+    // Insert car with unique slug
+    await catalog.insertOne("cars", {
+      name: "Tesla",
+      details: {
+        model: "Model S",
+        slug: "tesla-model-s"
+      }
+    });
+
+    // Insert a car with same slug as product - should work because indexes are scoped by type
+    await catalog.insertOne("cars", {
+      name: "Another Tesla",
+      details: {
+        model: "Model 3",
+        slug: "laptop-2023" // Same slug as product
+      }
+    });
+
+    // Insert another product with same slug - should fail
+    await assertRejects(
+      async () => {
+        await catalog.insertOne("products", {
+          name: "Gaming Laptop",
+          details: {
+            price: 1499.99,
+            slug: "laptop-2023" // Duplicate slug for products
+          }
+        });
+      },
+      MongoServerError,
+      "duplicate key"
+    );
+
+    // Insert another car with same slug - should fail
+    await assertRejects(
+      async () => {
+        await catalog.insertOne("cars", {
+          name: "Luxury Car",
+          details: {
+            model: "Model X",
+            slug: "tesla-model-s" // Duplicate slug for cars
+          }
+        });
+      },
+      MongoServerError,
+      "duplicate key"
+    );
+
+    // Verify products and cars can be queried correctly
+    const products = await catalog.find("products");
+    const cars = await catalog.find("cars");
+    assertEquals(products.length, 1);
+    assertEquals(cars.length, 2);
+    assertEquals(products[0].details.slug, "laptop-2023");
+    assertEquals(cars[0].details.slug, "tesla-model-s");
+    assertEquals(cars[1].details.slug, "laptop-2023"); // Car with same slug as product
+    assertEquals(cars[1]._type, "cars"); // Ensure type is preserved
+    assertEquals(products[0]._type, "products"); // Ensure type is preserved
   });
 });
 
