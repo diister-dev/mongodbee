@@ -39,6 +39,15 @@ export type CollectionResult<T extends Record<string, v.BaseSchema<unknown, unkn
         find: (filter: m.Filter<TInput<T>>, options?: m.FindOptions & m.Abortable) => m.AbstractCursor<TOutput<T>>,
         withSession: Awaited<ReturnType<typeof getSessionContext>>["withSession"],
 
+        // Utilities
+        paginate: (filter: m.Filter<TInput<T>>, options?: {
+            limit?: number,
+            afterId?: string | m.ObjectId,
+            beforeId?: string | m.ObjectId,
+            sort?: m.Sort | m.SortDirection,
+            filter?: (doc: WithId<TOutput<T>>) => Promise<boolean> | boolean,
+        }) => Promise<WithId<TOutput<T>>[]>,
+
         // From mongodb.Collection
         updateOne(filter: m.Filter<WithId<TInput<T>>>, update: m.UpdateFilter<TInput<T>> | m.Document[], options?: m.UpdateOptions): Promise<m.UpdateResult<TInput<T>>>;
         distinct<Key extends keyof WithId<TInput<T>>>(key: Key, filter: m.Filter<TInput<T>>, options?: m.DistinctOptions): Promise<Array<m.Flatten<WithId<TInput<T>>[Key]>>>;
@@ -323,6 +332,43 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
             };
 
             return cursor as unknown as m.AbstractCursor<TOutput>;
+        },
+        async paginate(filter, options) {
+            let { limit = 100, afterId, beforeId, sort, filter: customFilter } = options || {};
+            const session = sessionContext.getSession();
+            const query: m.Filter<TInput> = { ...filter };
+
+            if (afterId) {
+                (query as Record<string, unknown>)._id = { $gt: afterId };
+                sort = sort || { _id: 1 };
+            }
+            if (beforeId) {
+                (query as Record<string, unknown>)._id = { $lt: beforeId };
+                sort = sort || { _id: -1 };
+            }
+
+            const cursor = collection.find(query, { session }).sort(sort as any);
+            let hardLimit = 10_000;
+            const elements: WithId<TOutput>[] = [];
+            while(hardLimit-- > 0 && limit > 0) {
+                const doc = await cursor.next() as WithId<TOutput> | null;
+                if (!doc) break;
+
+                // Validate document with schema
+                const validation = v.safeParse(schema, doc);
+                if (!validation.success) {
+                    continue; // Skip invalid documents
+                }
+
+                const validatedDoc = validation.output as WithId<TOutput>;
+                const isValid = await customFilter?.(validatedDoc) ?? true;
+                if (isValid) {
+                    elements.push(validatedDoc);
+                    limit--;
+                }
+            }
+
+            return elements;
         },
         countDocuments(filter, options?) {
             const session = sessionContext.getSession();

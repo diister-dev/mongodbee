@@ -86,7 +86,14 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
     insertOne<E extends keyof T>(key: E, doc: v.InferInput<ElementSchema<T, E>>): Promise<string>;
     insertMany<E extends keyof T>(key: E, docs: v.InferInput<ElementSchema<T, E>>[]): Promise<(string)[]>;
     findOne<E extends keyof T>(key: E, filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>): Promise<v.InferOutput<OutputElementSchema<T, E>>>;
-    find<E extends keyof T>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>): Promise<v.InferOutput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>[]>;
+    find<E extends keyof T>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, options?: m.FindOptions): Promise<v.InferOutput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>[]>;
+    paginate<E extends keyof T>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, options?: {
+        limit?: number,
+        afterId?: string,
+        beforeId?: string,
+        sort?: m.Sort | m.SortDirection,
+        filter?: (doc: v.InferOutput<OutputElementSchema<T, E>>) => Promise<boolean> | boolean,
+    }): Promise<v.InferOutput<OutputElementSchema<T, E>>[]>;
     deleteId<E extends keyof T>(key: E, id: string): Promise<number>;
     deleteIds<E extends keyof T>(key: E, ids: string[]): Promise<number>;
     updateOne<E extends keyof T>(key: E, id: string, doc: Omit<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>, "_id" | "type">): Promise<number>;
@@ -301,7 +308,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             
             return v.parse(schema, result);
         },
-        async find(key, filter) {
+        async find(key, filter, options) {
             const typeChecker = {
                 _type: key as string,
             };
@@ -309,11 +316,73 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             const session = sessionContext.getSession();
             const cursor = collection.find({
                 $and: filter ? [typeChecker, filter] : [typeChecker],
-            } as any, { session });
+            } as any, { session, ...options });
             
             const result = await cursor.toArray();
 
             return result.map((item) => v.parse(schema, item));
+        },
+        async paginate(key, filter, options) {
+            let { limit = 100, afterId, beforeId, sort, filter: customFilter } = options || {};
+            const session = sessionContext.getSession();
+            
+            const typeChecker = {
+                _type: key as string,
+            };
+            
+            // Build the base query with type filter
+            const baseQuery = filter ? [typeChecker, filter] : [typeChecker];
+            let query: Record<string, unknown> = { $and: baseQuery };
+
+            // Add pagination filters
+            if (afterId) {
+                if (!afterId.startsWith(`${key as string}:`)) {
+                    throw new Error(`Invalid afterId format for type ${key as string}`);
+                }
+                query = {
+                    $and: [
+                        ...baseQuery,
+                        { _id: { $gt: afterId } }
+                    ]
+                };
+                sort = sort || { _id: 1 };
+            }
+            if (beforeId) {
+                if (!beforeId.startsWith(`${key as string}:`)) {
+                    throw new Error(`Invalid beforeId format for type ${key as string}`);
+                }
+                query = {
+                    $and: [
+                        ...baseQuery,
+                        { _id: { $lt: beforeId } }
+                    ]
+                };
+                sort = sort || { _id: -1 };
+            }
+
+            const cursor = collection.find(query as any, { session }).sort(sort as any);
+            let hardLimit = 10_000;
+            const elements: v.InferOutput<OutputElementSchema<T, typeof key>>[] = [];
+            
+            while(hardLimit-- > 0 && limit > 0) {
+                const doc = await cursor.next();
+                if (!doc) break;
+
+                // Validate document with schema
+                const validation = v.safeParse(schema, doc);
+                if (!validation.success) {
+                    continue; // Skip invalid documents
+                }
+
+                const validatedDoc = validation.output as v.InferOutput<OutputElementSchema<T, typeof key>>;
+                const isValid = await customFilter?.(validatedDoc) ?? true;
+                if (isValid) {
+                    elements.push(validatedDoc);
+                    limit--;
+                }
+            }
+
+            return elements;
         },
         async deleteId(key, id) {
             const schema = schemaWithId[key];

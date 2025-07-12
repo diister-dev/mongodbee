@@ -5,6 +5,11 @@ on:
       - main
       - develop
       - release/*
+  pull_request:
+    branches:
+      - main
+      - develop
+      - release/*
 
 jobs:
   test:
