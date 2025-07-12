@@ -86,7 +86,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
     insertOne<E extends keyof T>(key: E, doc: v.InferInput<ElementSchema<T, E>>): Promise<string>;
     insertMany<E extends keyof T>(key: E, docs: v.InferInput<ElementSchema<T, E>>[]): Promise<(string)[]>;
     findOne<E extends keyof T>(key: E, filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>): Promise<v.InferOutput<OutputElementSchema<T, E>>>;
-    find<E extends keyof T>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>): Promise<v.InferOutput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>[]>;
+    find<E extends keyof T>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, options?: m.FindOptions): Promise<v.InferOutput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>[]>;
     deleteId<E extends keyof T>(key: E, id: string): Promise<number>;
     deleteIds<E extends keyof T>(key: E, ids: string[]): Promise<number>;
     updateOne<E extends keyof T>(key: E, id: string, doc: Omit<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>, "_id" | "type">): Promise<number>;
@@ -301,7 +301,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             
             return v.parse(schema, result);
         },
-        async find(key, filter) {
+        async find(key, filter, options) {
             const typeChecker = {
                 _type: key as string,
             };
@@ -309,7 +309,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             const session = sessionContext.getSession();
             const cursor = collection.find({
                 $and: filter ? [typeChecker, filter] : [typeChecker],
-            } as any, { session });
+            } as any, { session, ...options });
             
             const result = await cursor.toArray();
 
