@@ -86,7 +86,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
     insertOne<E extends keyof T>(key: E, doc: v.InferInput<ElementSchema<T, E>>): Promise<string>;
     insertMany<E extends keyof T>(key: E, docs: v.InferInput<ElementSchema<T, E>>[]): Promise<(string)[]>;
     findOne<E extends keyof T>(key: E, filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>): Promise<v.InferOutput<OutputElementSchema<T, E>>>;
-    find<E extends keyof T>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, options?: m.FindOptions): Promise<v.InferOutput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>[]>;
+    find<E extends keyof T>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, options?: m.FindOptions): Promise<v.InferOutput<OutputElementSchema<T, E>>[]>;
     paginate<E extends keyof T, EN = v.InferOutput<OutputElementSchema<T, E>>, R = EN>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, options?: {
         limit?: number,
         afterId?: string,
