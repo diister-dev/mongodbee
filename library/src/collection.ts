@@ -232,7 +232,8 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
     async function init() {
         await applyValidator();
         await applyIndexes();
-        await startWatching();
+        // WARNING Disable watching for now, as it can cause issues with the change stream
+        // await startWatching();
 
         sessionContext = await getSessionContext(db.client);
     }
