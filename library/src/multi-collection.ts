@@ -8,6 +8,7 @@ import { extractIndexes, withIndex } from "./indexes.ts";
 import { sanitizePathName } from "./schema-navigator.ts";
 import type { FlatType } from "../types/flat.ts";
 import type { Db } from "./mongodb.ts";
+import { withMongoSpan, wrapCursorWithTelemetry } from "./telemetry.ts";
 
 type CollectionOptions = {
     safeDelete?: boolean,
@@ -263,66 +264,110 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     return {
         withSession: sessionContext!.withSession,
         async insertOne(key, doc) {
-            const _id = doc._id ?? `${key as string}:${newId()}`;
-            const schema = schemaElements[key];
-            const validation = v.parse(schema, {
-                ...doc,
-                _id,
-            });
+            return withMongoSpan(
+                "insertOne",
+                `${collectionName}.${key as string}`,
+                db.databaseName,
+                async () => {
+                    const _id = doc._id ?? `${key as string}:${newId()}`;
+                    const schema = schemaElements[key];
+                    const validation = v.parse(schema, {
+                        ...doc,
+                        _id,
+                    });
 
-            const session = sessionContext.getSession();
-            const result = await collection.insertOne(validation as any, { session });
-            if(!result.acknowledged) {
-                throw new Error("Insert failed");
-            }
+                    const session = sessionContext.getSession();
+                    const result = await collection.insertOne(validation as any, { session });
+                    if(!result.acknowledged) {
+                        throw new Error("Insert failed");
+                    }
 
-            return result.insertedId as unknown as string;
+                    return result.insertedId as unknown as string;
+                },
+                { 
+                    "db.mongodb.collection_type": key as string,
+                    "db.mongodb.document_keys": doc ? Object.keys(doc).join(",") : undefined
+                }
+            );
         },
         async insertMany(key, docs) {
-            const validation = docs.map((doc) => {
-                const _id = doc._id ?? `${key as string}:${newId()}`;
-                return v.parse(schema, {
-                    ...doc,
-                    _id,
-                });
-            });
+            return withMongoSpan(
+                "insertMany",
+                `${collectionName}.${key as string}`,
+                db.databaseName,
+                async () => {
+                    const validation = docs.map((doc) => {
+                        const _id = doc._id ?? `${key as string}:${newId()}`;
+                        return v.parse(schema, {
+                            ...doc,
+                            _id,
+                        });
+                    });
 
-            const session = sessionContext.getSession();
-            const result = await collection.insertMany(validation as any, { session });
-            if(!result.acknowledged) {
-                throw new Error("Insert failed");
-            }
+                    const session = sessionContext.getSession();
+                    const result = await collection.insertMany(validation as any, { session });
+                    if(!result.acknowledged) {
+                        throw new Error("Insert failed");
+                    }
 
-            return Object.values(result.insertedIds) as unknown as string[];
+                    return Object.values(result.insertedIds) as unknown as string[];
+                },
+                { 
+                    "db.mongodb.collection_type": key as string,
+                    "db.mongodb.document_count": docs.length
+                }
+            );
         },
         async findOne(key, filter) {
-            const session = sessionContext.getSession();
-            const result = await collection.findOne({
-                $and: [
-                    { _type: key as string },
-                    filter,
-                ]
-            } as any, { session });
+            return withMongoSpan(
+                "findOne",
+                `${collectionName}.${key as string}`,
+                db.databaseName,
+                async () => {
+                    const session = sessionContext.getSession();
+                    const result = await collection.findOne({
+                        $and: [
+                            { _type: key as string },
+                            filter,
+                        ]
+                    } as any, { session });
 
-            if (!result) {
-                throw new Error("Not found");
-            }
-            
-            return v.parse(schema, result);
+                    if (!result) {
+                        throw new Error("Not found");
+                    }
+                    
+                    return v.parse(schema, result);
+                },
+                { 
+                    "db.mongodb.collection_type": key as string,
+                    "db.mongodb.filter": filter ? JSON.stringify(filter) : undefined
+                }
+            );
         },
         async find(key, filter, options) {
-            const typeChecker = {
-                _type: key as string,
-            };
+            return withMongoSpan(
+                "find",
+                `${collectionName}.${key as string}`,
+                db.databaseName,
+                async () => {
+                    const typeChecker = {
+                        _type: key as string,
+                    };
 
-            const session = sessionContext.getSession();
-            const cursor = collection.find({
-                $and: filter ? [typeChecker, filter] : [typeChecker],
-            } as any, { session, ...options });
-            
-            const result = await cursor.toArray();
+                    const session = sessionContext.getSession();
+                    const cursor = collection.find({
+                        $and: filter ? [typeChecker, filter] : [typeChecker],
+                    } as any, { session, ...options });
+                    
+                    const result = await cursor.toArray();
 
-            return result.map((item) => v.parse(schema, item));
+                    return result.map((item) => v.parse(schema, item));
+                },
+                { 
+                    "db.mongodb.collection_type": key as string,
+                    "db.mongodb.filter": filter ? JSON.stringify(filter) : undefined
+                }
+            );
         },
         async paginate<E extends keyof T, EN = v.InferOutput<OutputElementSchema<T, E>>, R = EN>(
             key: E, 
@@ -407,126 +452,173 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             return elements;
         },
         async deleteId(key, id) {
-            const schema = schemaWithId[key];
-            v.parse(schema._id, id);
+            return withMongoSpan(
+                "deleteOne",
+                `${collectionName}.${key as string}`,
+                db.databaseName,
+                async () => {
+                    const schema = schemaWithId[key];
+                    v.parse(schema._id, id);
 
-            if(!id.startsWith(`${key as string}:`)) {
-                throw new Error(`Invalid id format`);
-            }
-
-            const session = sessionContext.getSession();
-
-            const result = await collection.deleteOne({
-                _id: id,
-            } as any, { session });
-
-            if(!result.acknowledged) {
-                throw new Error("Delete failed");
-            }
-
-            if (result.deletedCount === 0) {
-                throw new Error("No element that match the filter to delete");
-            }
-
-            return result.deletedCount;
-        },
-        async deleteIds(key, ids) {
-            const schema = schemaWithId[key];
-            ids.forEach((id) => {
-                v.parse(schema._id, id);
-            });
-
-            const session = sessionContext.getSession();
-
-            const result = await collection.deleteMany({
-                _id: {
-                    $in: ids,
-                },
-                _type: key as string,
-            } as any, { session });
-
-            if(!result.acknowledged) {
-                throw new Error("Delete failed");
-            }
-
-            if (result.deletedCount === 0) {
-                throw new Error("No element that match the filter to delete");
-            }
-
-            return result.deletedCount;
-        },
-        async updateOne(key, id, doc) {
-            const dotSchema = dotSchemaElements[key];
-            if(!dotSchema) {
-                throw new Error(`Invalid element type`);
-            }
-
-            v.parse(dotSchema, doc);
-
-            const session = sessionContext.getSession();
-
-            const result = await collection.updateOne({
-                _id: id,
-                _type: key as string,
-            } as any, {
-                $set: doc,
-            } as any, { session });
-
-            if(!result.acknowledged) {
-                throw new Error("Update failed");
-            }
-
-            if (result.matchedCount === 0) {
-                throw new Error("No element that match the filter to update");
-            }
-
-            if (result.modifiedCount === 0) {
-                throw new Error("No element that match the filter to update");
-            }
-
-            return result.modifiedCount;
-        },
-        async updateMany(operation) {
-            const bulkOps: any[] = [];
-            for(const type in operation) {
-                const elements = operation[type];
-                for(const id in elements) {
-                    const element = elements[id];
-                    const dotSchema = dotSchemaElements[type];
-                    if(!id.startsWith(`${type}:`)) {
+                    if(!id.startsWith(`${key as string}:`)) {
                         throw new Error(`Invalid id format`);
                     }
+
+                    const session = sessionContext.getSession();
+
+                    const result = await collection.deleteOne({
+                        _id: id,
+                    } as any, { session });
+
+                    if(!result.acknowledged) {
+                        throw new Error("Delete failed");
+                    }
+
+                    if (result.deletedCount === 0) {
+                        throw new Error("No element that match the filter to delete");
+                    }
+
+                    return result.deletedCount;
+                },
+                { 
+                    "db.mongodb.collection_type": key as string,
+                    "db.mongodb.document_id": id
+                }
+            );
+        },
+        async deleteIds(key, ids) {
+            return withMongoSpan(
+                "deleteMany",
+                `${collectionName}.${key as string}`,
+                db.databaseName,
+                async () => {
+                    const schema = schemaWithId[key];
+                    ids.forEach((id) => {
+                        v.parse(schema._id, id);
+                    });
+
+                    const session = sessionContext.getSession();
+
+                    const result = await collection.deleteMany({
+                        _id: {
+                            $in: ids,
+                        },
+                        _type: key as string,
+                    } as any, { session });
+
+                    if(!result.acknowledged) {
+                        throw new Error("Delete failed");
+                    }
+
+                    if (result.deletedCount === 0) {
+                        throw new Error("No element that match the filter to delete");
+                    }
+
+                    return result.deletedCount;
+                },
+                { 
+                    "db.mongodb.collection_type": key as string,
+                    "db.mongodb.document_count": ids.length
+                }
+            );
+        },
+        async updateOne(key, id, doc) {
+            return withMongoSpan(
+                "updateOne",
+                `${collectionName}.${key as string}`,
+                db.databaseName,
+                async () => {
+                    const dotSchema = dotSchemaElements[key];
                     if(!dotSchema) {
                         throw new Error(`Invalid element type`);
                     }
-                    v.parse(dotSchema, element);
 
-                    bulkOps.push({
-                        updateOne: {
-                            filter: { _id: id },
-                            update: { $set: element },
-                        }
-                    });
+                    v.parse(dotSchema, doc);
+
+                    const session = sessionContext.getSession();
+
+                    const result = await collection.updateOne({
+                        _id: id,
+                        _type: key as string,
+                    } as any, {
+                        $set: doc,
+                    } as any, { session });
+
+                    if(!result.acknowledged) {
+                        throw new Error("Update failed");
+                    }
+
+                    if (result.matchedCount === 0) {
+                        throw new Error("No element that match the filter to update");
+                    }
+
+                    if (result.modifiedCount === 0) {
+                        throw new Error("No element that match the filter to update");
+                    }
+
+                    return result.modifiedCount;
+                },
+                { 
+                    "db.mongodb.collection_type": key as string,
+                    "db.mongodb.document_id": id,
+                    "db.mongodb.update.set_fields": Object.keys(doc).length
                 }
-            }
+            );
+        },
+        async updateMany(operation) {
+            return withMongoSpan(
+                "bulkWrite",
+                collectionName,
+                db.databaseName,
+                async () => {
+                    const bulkOps: any[] = [];
+                    const types = new Set<string>();
+                    for(const type in operation) {
+                        types.add(type);
+                        const elements = operation[type];
+                        for(const id in elements) {
+                            const element = elements[id];
+                            const dotSchema = dotSchemaElements[type];
+                            if(!id.startsWith(`${type}:`)) {
+                                throw new Error(`Invalid id format`);
+                            }
+                            if(!dotSchema) {
+                                throw new Error(`Invalid element type`);
+                            }
+                            v.parse(dotSchema, element);
 
-            if (bulkOps.length === 0) {
-                throw new Error("No element to update");
-            }
+                            bulkOps.push({
+                                updateOne: {
+                                    filter: { _id: id },
+                                    update: { $set: element },
+                                }
+                            });
+                        }
+                    }
 
-            const session = sessionContext.getSession();
+                    if (bulkOps.length === 0) {
+                        throw new Error("No element to update");
+                    }
 
-            const result = await collection.bulkWrite(bulkOps, { session });
+                    const session = sessionContext.getSession();
 
-            if (result.matchedCount === 0) {
-                throw new Error("No element that match the filter to update");
-            }
+                    const result = await collection.bulkWrite(bulkOps, { session });
 
-            if (result.modifiedCount === 0) {
-                throw new Error("No element that match the filter to update");
-            }
+                    if (result.matchedCount === 0) {
+                        throw new Error("No element that match the filter to update");
+                    }
 
-            return result.modifiedCount;
+                    if (result.modifiedCount === 0) {
+                        throw new Error("No element that match the filter to update");
+                    }
+
+                    return result.modifiedCount;
+                },
+                { 
+                    "db.mongodb.operations_count": Object.values(operation).reduce((acc, ops) => acc + Object.keys(ops).length, 0),
+                    "db.mongodb.collection_types": Object.keys(operation).join(",")
+                }
+            );
         },
         async aggregate(stageBuilder) {
             const stage: StageBuilder<T> = {
@@ -554,7 +646,16 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             const pipeline = stageBuilder(stage);
             const cursor = collection.aggregate(pipeline, { session });
             
-            return await cursor.toArray();
+            // Wrap cursor with telemetry
+            const tracedCursor = wrapCursorWithTelemetry(
+                cursor,
+                "aggregate",
+                collectionName,
+                db.databaseName,
+                { "pipeline_stages": pipeline.map(stage => Object.keys(stage)[0]).join(",") }
+            );
+            
+            return await tracedCursor.toArray();
         },
     }
 }

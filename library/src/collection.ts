@@ -7,6 +7,7 @@ import { getSessionContext } from "./session.ts"
 import type { Db } from "./mongodb.ts";
 import { extractIndexes } from "./indexes.ts";
 import { sanitizePathName } from "./schema-navigator.ts";
+import { withMongoSpan, wrapCursorWithTelemetry, addFilterAttributes, addUpdateAttributes } from "./telemetry.ts";
 
 type CollectionOptions = {
     safeDelete?: boolean,
@@ -264,51 +265,85 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
         get writeConcern() { return collection.writeConcern },
         // Document creation operations with validation
         async insertOne(doc, options?) {
-            const safeDoc = v.parse(schema, doc) as m.OptionalUnlessRequiredId<TInput>;
-            const session = sessionContext.getSession();
-            const inserted = await collection.insertOne(safeDoc, { session, ...options });
-            if(!inserted.acknowledged) {
-                throw new Error("Insert failed");
-            }
-            return inserted.insertedId as WithId<TOutput>["_id"];
+            return withMongoSpan(
+                "insertOne",
+                collectionName,
+                db.databaseName,
+                async () => {
+                    const safeDoc = v.parse(schema, doc) as m.OptionalUnlessRequiredId<TInput>;
+                    const session = sessionContext.getSession();
+                    const inserted = await collection.insertOne(safeDoc, { session, ...options });
+                    if(!inserted.acknowledged) {
+                        throw new Error("Insert failed");
+                    }
+                    return inserted.insertedId as WithId<TOutput>["_id"];
+                },
+                { "db.mongodb.document_keys": doc ? Object.keys(doc).join(",") : undefined }
+            );
         },
         async insertMany(docs, options?) {
-            const safeDocs = docs.map(doc => v.parse(schema, doc)) as unknown as typeof docs;
-            const session = sessionContext.getSession();
-            const inserted = await collection.insertMany(safeDocs, { session, ...options });
-            if(!inserted.acknowledged) {
-                throw new Error("Insert failed");
-            }
-            return inserted;
+            return withMongoSpan(
+                "insertMany",
+                collectionName,
+                db.databaseName,
+                async () => {
+                    const safeDocs = docs.map(doc => v.parse(schema, doc)) as unknown as typeof docs;
+                    const session = sessionContext.getSession();
+                    const inserted = await collection.insertMany(safeDocs, { session, ...options });
+                    if(!inserted.acknowledged) {
+                        throw new Error("Insert failed");
+                    }
+                    return inserted;
+                },
+                { "db.mongodb.document_count": docs.length }
+            );
         },
         
         // Document read operations with validation
         async findOne(filter, options?) {
-            const session = sessionContext.getSession();
-            const result = await collection.findOne(filter as any, { session, ...options });
+            return withMongoSpan(
+                "findOne",
+                collectionName,
+                db.databaseName,
+                async () => {
+                    const session = sessionContext.getSession();
+                    const result = await collection.findOne(filter as any, { session, ...options });
 
-            if (!result) {
-                throw new Error("Document not found");
-            }
+                    if (!result) {
+                        throw new Error("Document not found");
+                    }
 
-            const validation = v.safeParse(schema, result);
-            if (validation.success) {
-                return validation.output as WithId<TOutput>;
-            }
+                    const validation = v.safeParse(schema, result);
+                    if (validation.success) {
+                        return validation.output as WithId<TOutput>;
+                    }
 
-            throw {
-                message: "Validation error",
-                errors: validation,
-                result,
-            }
+                    throw {
+                        message: "Validation error",
+                        errors: validation,
+                        result,
+                    }
+                },
+                { "db.mongodb.filter": filter ? JSON.stringify(filter) : undefined }
+            );
         },
         find(filter: m.Filter<TInput>, options?: m.FindOptions & m.Abortable): m.AbstractCursor<TOutput> {
             const session = sessionContext.getSession();
             const cursor = collection.find(filter, { session, ...options });
-            const originalToArray = cursor.toArray;
-            // Override toArray
-            cursor.toArray = async function () {
-                const results = await originalToArray.call(cursor);
+            
+            // Wrap cursor with telemetry
+            const tracedCursor = wrapCursorWithTelemetry(
+                cursor,
+                "find",
+                collectionName,
+                db.databaseName,
+                filter
+            );
+            
+            const originalToArray = tracedCursor.toArray;
+            // Override toArray for validation
+            tracedCursor.toArray = async function () {
+                const results = await originalToArray.call(tracedCursor);
                 const valids = [];
                 const invalids = [];
                 for (const doc of results) {
@@ -334,7 +369,7 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
                 return valids;
             };
 
-            return cursor as unknown as m.AbstractCursor<TOutput>;
+            return tracedCursor as unknown as m.AbstractCursor<TOutput>;
         },
         async paginate<E = WithId<TOutput>, R = E>(filter: m.Filter<TInput>, options?: {
             limit?: number,
@@ -390,93 +425,207 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
             return elements;
         },
         countDocuments(filter, options?) {
-            const session = sessionContext.getSession();
-            return collection.countDocuments(filter, { session, ...options });
+            return withMongoSpan(
+                "countDocuments",
+                collectionName,
+                db.databaseName,
+                async () => {
+                    const session = sessionContext.getSession();
+                    return collection.countDocuments(filter, { session, ...options });
+                },
+                { "db.mongodb.filter": filter ? JSON.stringify(filter) : undefined }
+            );
         },
         estimatedDocumentCount(options?) {
-            const session = sessionContext.getSession();
-            return collection.estimatedDocumentCount({ session, ...options });
+            return withMongoSpan(
+                "estimatedDocumentCount",
+                collectionName,
+                db.databaseName,
+                async () => {
+                    const session = sessionContext.getSession();
+                    return collection.estimatedDocumentCount({ session, ...options });
+                }
+            );
         },
         distinct(key, filter, options?) {
-            const session = sessionContext.getSession();
-            return collection.distinct(key as string, filter, { session, ...options });
+            return withMongoSpan(
+                "distinct",
+                collectionName,
+                db.databaseName,
+                async () => {
+                    const session = sessionContext.getSession();
+                    return collection.distinct(key as string, filter, { session, ...options });
+                },
+                { 
+                    "db.mongodb.filter": filter ? JSON.stringify(filter) : undefined,
+                    "db.mongodb.distinct_key": key as string
+                }
+            );
         },
         
         // Document update operations
         replaceOne(filter, replacement, options?) {
-            const validation = v.safeParse(schema, replacement);
-            if (!validation.success) {
-                throw {
-                    message: "Validation error",
-                    errors: validation,
-                }
-            }
+            return withMongoSpan(
+                "replaceOne",
+                collectionName,
+                db.databaseName,
+                async () => {
+                    const validation = v.safeParse(schema, replacement);
+                    if (!validation.success) {
+                        throw {
+                            message: "Validation error",
+                            errors: validation,
+                        }
+                    }
 
-            const session = sessionContext.getSession();
-            return collection.replaceOne(filter, validation.output as TInput, { session, ...options });
+                    const session = sessionContext.getSession();
+                    return collection.replaceOne(filter, validation.output as TInput, { session, ...options });
+                },
+                { "db.mongodb.filter": filter ? JSON.stringify(filter) : undefined }
+            );
         },
         updateOne(filter, update, options?) {
-            // @TODO: check if update is valid
-            const session = sessionContext.getSession();
-            return collection.updateOne(filter as any, update, { session, ...options });
+            return withMongoSpan(
+                "updateOne",
+                collectionName,
+                db.databaseName,
+                async () => {
+                    // @TODO: check if update is valid
+                    const session = sessionContext.getSession();
+                    return collection.updateOne(filter as any, update, { session, ...options });
+                },
+                { 
+                    "db.mongodb.filter": filter ? JSON.stringify(filter) : undefined,
+                    "db.mongodb.update.operators": Array.isArray(update) ? "pipeline" : Object.keys(update).filter(k => k.startsWith("$")).join(",")
+                }
+            );
         },
         updateMany(filter, update, options?) {
-            // @TODO: check if update is valid
-            const session = sessionContext.getSession();
-            return collection.updateMany(filter, update, { session, ...options });
+            return withMongoSpan(
+                "updateMany",
+                collectionName,
+                db.databaseName,
+                async () => {
+                    // @TODO: check if update is valid
+                    const session = sessionContext.getSession();
+                    return collection.updateMany(filter, update, { session, ...options });
+                },
+                { 
+                    "db.mongodb.filter": filter ? JSON.stringify(filter) : undefined,
+                    "db.mongodb.update.operators": Array.isArray(update) ? "pipeline" : Object.keys(update).filter(k => k.startsWith("$")).join(",")
+                }
+            );
         },
         
         // Document delete operations
         deleteOne(filter, options?) {
-            const session = sessionContext.getSession();
-            return collection.deleteOne(filter, { session, ...options });
+            return withMongoSpan(
+                "deleteOne",
+                collectionName,
+                db.databaseName,
+                async () => {
+                    const session = sessionContext.getSession();
+                    return collection.deleteOne(filter, { session, ...options });
+                },
+                { "db.mongodb.filter": filter ? JSON.stringify(filter) : undefined }
+            );
         },
         deleteMany(filter, options?) {
-            if (opts.safeDelete) {
-                const filterSize = Object.keys(filter ?? {}).length;
-                if (filterSize === 0) throw new Error("Filter is empty");
+            return withMongoSpan(
+                "deleteMany",
+                collectionName,
+                db.databaseName,
+                async () => {
+                    if (opts.safeDelete) {
+                        const filterSize = Object.keys(filter ?? {}).length;
+                        if (filterSize === 0) throw new Error("Filter is empty");
 
-                let anyValidFilter = false;
-                for (const key in filter) {
-                    if (key === "_id") continue;
-                    const value = filter[key];
-                    if (value !== undefined) {
-                        anyValidFilter = true;
-                        break;
+                        let anyValidFilter = false;
+                        for (const key in filter) {
+                            if (key === "_id") continue;
+                            const value = filter[key];
+                            if (value !== undefined) {
+                                anyValidFilter = true;
+                                break;
+                            }
+                        }
+
+                        if (!anyValidFilter) {
+                            throw new Error("Filter is empty or only contains _id");
+                        }
                     }
-                }
 
-                if (!anyValidFilter) {
-                    throw new Error("Filter is empty or only contains _id");
-                }
-            }
-
-            const session = sessionContext.getSession();
-            return collection.deleteMany(filter, { session, ...options });
+                    const session = sessionContext.getSession();
+                    return collection.deleteMany(filter, { session, ...options });
+                },
+                { "db.mongodb.filter": filter ? JSON.stringify(filter) : undefined }
+            );
         },
         
         // Compound operations
         findOneAndDelete(filter, options?) {
-            const session = sessionContext.getSession();
-            return collection.findOneAndDelete(filter, { session, ...options });
+            return withMongoSpan(
+                "findOneAndDelete",
+                collectionName,
+                db.databaseName,
+                async () => {
+                    const session = sessionContext.getSession();
+                    return collection.findOneAndDelete(filter, { session, ...options });
+                },
+                { "db.mongodb.filter": filter ? JSON.stringify(filter) : undefined }
+            );
         },
         findOneAndReplace(filter, replacement, options?) {
-            const session = sessionContext.getSession();
-            return collection.findOneAndReplace(filter, replacement, { session, ...options });
+            return withMongoSpan(
+                "findOneAndReplace",
+                collectionName,
+                db.databaseName,
+                async () => {
+                    const session = sessionContext.getSession();
+                    return collection.findOneAndReplace(filter, replacement, { session, ...options });
+                },
+                { "db.mongodb.filter": filter ? JSON.stringify(filter) : undefined }
+            );
         },
         findOneAndUpdate(filter, update, options?) {
-            const session = sessionContext.getSession();
-            return collection.findOneAndUpdate(filter, update, { session, ...options });
+            return withMongoSpan(
+                "findOneAndUpdate",
+                collectionName,
+                db.databaseName,
+                async () => {
+                    const session = sessionContext.getSession();
+                    return collection.findOneAndUpdate(filter, update, { session, ...options });
+                },
+                { 
+                    "db.mongodb.filter": filter ? JSON.stringify(filter) : undefined,
+                    "db.mongodb.update.operators": Array.isArray(update) ? "pipeline" : Object.keys(update).filter(k => k.startsWith("$")).join(",")
+                }
+            );
         },
         
         // Bulk operations
         aggregate(pipeline, options?) {
             const session = sessionContext.getSession();
-            return collection.aggregate(pipeline, { session, ...options });
+            const cursor = collection.aggregate(pipeline, { session, ...options });
+            return wrapCursorWithTelemetry(
+                cursor,
+                "aggregate",
+                collectionName,
+                db.databaseName,
+                { "pipeline_stages": pipeline.map(stage => Object.keys(stage)[0]).join(",") }
+            );
         },
         bulkWrite(operations, options?) {
-            const session = sessionContext.getSession();
-            return collection.bulkWrite(operations, { session, ...options });
+            return withMongoSpan(
+                "bulkWrite",
+                collectionName,
+                db.databaseName,
+                async () => {
+                    const session = sessionContext.getSession();
+                    return collection.bulkWrite(operations, { session, ...options });
+                },
+                { "db.mongodb.operations_count": operations.length }
+            );
         },
         initializeOrderedBulkOp(options?) {
             const session = sessionContext.getSession();
