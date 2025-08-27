@@ -10,6 +10,7 @@ import { sanitizePathName } from "./schema-navigator.ts";
 
 type CollectionOptions = {
     safeDelete?: boolean,
+    enableWatching?: boolean,
 }
 
 type WithId<T> = T extends { _id: infer U } ? T : m.WithId<T> | { _id: string } & T;
@@ -232,8 +233,11 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
     async function init() {
         await applyValidator();
         await applyIndexes();
-        // WARNING Disable watching for now, as it can cause issues with the change stream
-        // await startWatching();
+        
+        // Only start watching if explicitly enabled
+        if (opts.enableWatching) {
+            await startWatching();
+        }
 
         sessionContext = await getSessionContext(db.client);
     }

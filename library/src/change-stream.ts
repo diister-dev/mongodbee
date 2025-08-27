@@ -140,3 +140,17 @@ export function watchEvent<TSchema extends m.Document = m.Document>(
         }
     };
 }
+
+/**
+ * Closes all change streams for a given database and cleans up resources
+ * This should be called when closing or dropping a database to prevent resource leaks
+ * 
+ * @param db - The MongoDB database to clean up watchers for
+ */
+export function closeAllWatchers(db: m.Db): void {
+    const watchers = watchingMap.get(db);
+    if (watchers) {
+        watchers.changeStream.close();
+        watchingMap.delete(db);
+    }
+}
