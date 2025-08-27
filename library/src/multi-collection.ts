@@ -11,6 +11,7 @@ import type { Db } from "./mongodb.ts";
 
 type CollectionOptions = {
     safeDelete?: boolean,
+    enableWatching?: boolean,
 }
 
 // Use _id if the schema is a literal schema, otherwise use dbId

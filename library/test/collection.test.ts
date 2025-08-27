@@ -21,8 +21,8 @@ Deno.test("Collection watcher events test", async (t) => {
       age: v.number()
     };
 
-    // insert a collection with the schema
-    const users = await collection(db, "users", userSchema);
+    // insert a collection with the schema and enable watching
+    const users = await collection(db, "users", userSchema, { enableWatching: true });
     
     // Register event listeners
     users.on("insert", () => { events.insert++; });
@@ -58,7 +58,7 @@ Deno.test("Collection watcher events test", async (t) => {
 
     // Wait for events to be processed
     // MongoDB change streams might have a slight delay
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise(resolve => setTimeout(resolve, 1000));
     
     // Assert events were fired
     assertEquals(events.insert, 1, "Insert event should be triggered once");
@@ -79,8 +79,8 @@ Deno.test("Collection watcher event unsubscribe", async (t) => {
       email: v.string()
     };
 
-    // Create a collection with the schema
-    const users = await collection(db, "users", userSchema);
+    // Create a collection with the schema and enable watching
+    const users = await collection(db, "users", userSchema, { enableWatching: true });
     
     // Register event listeners with the returned unsubscribe functions
     const unsubscribeInsert = users.on("insert", () => { insertCount++; });
@@ -113,7 +113,7 @@ Deno.test("Collection watcher event unsubscribe", async (t) => {
     );
     
     // Wait for events to be processed
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise(resolve => setTimeout(resolve, 1000));
     
     // Insert count should still be 1, update count should be 2
     assertEquals(insertCount, 1, "Insert listener should have been called once before unsubscribing");
@@ -129,7 +129,7 @@ Deno.test("Collection watcher event unsubscribe", async (t) => {
     );
     
     // Wait for events to be processed
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise(resolve => setTimeout(resolve, 1000));
     
     // Counts should remain the same
     assertEquals(insertCount, 1, "Insert count should remain 1");
@@ -154,8 +154,8 @@ Deno.test("Multiple collections with watchers", async (t) => {
       content: v.string()
     };
 
-    const users = await collection(db, "users", userSchema);
-    const posts = await collection(db, "posts", postSchema);
+    const users = await collection(db, "users", userSchema, { enableWatching: true });
+    const posts = await collection(db, "posts", postSchema, { enableWatching: true });
     
     users.on("insert", () => { events.usersInsert++; });
     posts.on("insert", () => { events.postsInsert++; });
@@ -165,7 +165,7 @@ Deno.test("Multiple collections with watchers", async (t) => {
     await posts.insertOne({ title: "Post 2", content: "Content 2" });
 
     // Wait for events to be processed
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise(resolve => setTimeout(resolve, 1000));
     
     assertEquals(events.usersInsert, 1, "Should have 1 user insert event");
     assertEquals(events.postsInsert, 2, "Should have 2 post insert events");
@@ -216,8 +216,8 @@ Deno.test("Collection destroy and recreate test", async (t) => {
       email: v.string()
     };
 
-    // Create a collection with the schema
-    let users = await collection(db, "users", userSchema);
+    // Create a collection with the schema and enable watching
+    let users = await collection(db, "users", userSchema, { enableWatching: true });
     
     // Register event listener
     users.on("insert", () => { insertEvents++; });
@@ -229,15 +229,15 @@ Deno.test("Collection destroy and recreate test", async (t) => {
     });
     
     // Wait for event to be processed
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise(resolve => setTimeout(resolve, 1000));
     
     assertEquals(insertEvents, 1, "Insert event should be triggered once");
     
     // Drop the collection
     await users.drop();
     
-    // Recreate the same collection
-    users = await collection(db, "users", userSchema);
+    // Recreate the same collection with watching enabled
+    users = await collection(db, "users", userSchema, { enableWatching: true });
     
     // No need to re-register the event listener, it should still be active
     // users.on("insert", () => { insertEvents++; });
@@ -249,7 +249,7 @@ Deno.test("Collection destroy and recreate test", async (t) => {
     });
     
     // Wait for event to be processed
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise(resolve => setTimeout(resolve, 1000));
     
     // Event count should now be 2
     assertEquals(insertEvents, 2, "Insert event should be triggered after collection recreation");
@@ -267,8 +267,8 @@ Deno.test("Database drop and recreate test", async (t) => {
         age: v.number()
         };
 
-        // Create a collection with the schema
-        let users = await collection(db, "users", userSchema);
+        // Create a collection with the schema and enable watching
+        let users = await collection(db, "users", userSchema, { enableWatching: true });
         
         // Register event listeners
         users.on("insert", () => { insertEvents++; });
@@ -287,7 +287,7 @@ Deno.test("Database drop and recreate test", async (t) => {
         );
         
         // Wait for events to be processed
-        await new Promise(resolve => setTimeout(resolve, 300));
+        await new Promise(resolve => setTimeout(resolve, 1000));
         
         assertEquals(insertEvents, 1, "Insert event should be triggered once");
         assertEquals(updateEvents, 1, "Update event should be triggered once");
@@ -295,7 +295,7 @@ Deno.test("Database drop and recreate test", async (t) => {
         // Drop the entire database
         await db.dropDatabase();
         
-        users = await collection(db, "users", userSchema);
+        users = await collection(db, "users", userSchema, { enableWatching: true });
         
         // Register event listeners again
         users.on("insert", () => { insertEvents++; });
@@ -313,7 +313,7 @@ Deno.test("Database drop and recreate test", async (t) => {
         );
         
         // Wait for events to be processed
-        await new Promise(resolve => setTimeout(resolve, 300));
+        await new Promise(resolve => setTimeout(resolve, 1000));
         
         // Event counts should be updated
         assertEquals(insertEvents, 2, "Insert event should be triggered after database recreation");
@@ -329,7 +329,7 @@ Deno.test("Database cascade creation", async (t) => {
             email: v.string()
         };
 
-        const users = await collection(db, "users", userSchema);
+        const users = await collection(db, "users", userSchema, { enableWatching: true });
 
         // Register event listener
         let insertCount = 0;
