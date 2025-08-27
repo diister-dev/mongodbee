@@ -98,6 +98,8 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
     }): Promise<R[]>;
     deleteId<E extends keyof T>(key: E, id: string): Promise<number>;
     deleteIds<E extends keyof T>(key: E, ids: string[]): Promise<number>;
+    deleteMany<E extends keyof T>(key: E, filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>): Promise<number>;
+    deleteAny(filter: m.Filter<Input<T>>): Promise<number>;
     updateOne<E extends keyof T>(key: E, id: string, doc: Omit<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>, "_id" | "type">): Promise<number>;
     updateMany(operation: {
         [key in keyof T]?: {
@@ -451,6 +453,34 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
             if (result.deletedCount === 0) {
                 throw new Error("No element that match the filter to delete");
+            }
+
+            return result.deletedCount;
+        },
+        async deleteMany(key, filter) {
+            const session = sessionContext.getSession();
+
+            // Combine the user filter with the type filter
+            const combinedFilter = {
+                ...filter,
+                _type: key as string,
+            } as any;
+
+            const result = await collection.deleteMany(combinedFilter, { session });
+
+            if (!result.acknowledged) {
+                throw new Error("Delete failed");
+            }
+
+            return result.deletedCount;
+        },
+        async deleteAny(filter) {
+            const session = sessionContext.getSession();
+
+            const result = await collection.deleteMany(filter as any, { session });
+
+            if (!result.acknowledged) {
+                throw new Error("Delete failed");
             }
 
             return result.deletedCount;
