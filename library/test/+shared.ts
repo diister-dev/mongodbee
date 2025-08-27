@@ -1,4 +1,5 @@
 import { type Db, MongoClient } from "../src/mongodb.ts";
+import { closeAllWatchers } from "../src/change-stream.ts";
 
 const MAX_DB_NAME_LENGTH = 63;
 const RANDOM_SIZE = 8;
@@ -33,6 +34,8 @@ export async function withDatabase(prefix: string, work: (db: Db) => Promise<voi
     try {
         await work(db);
     } finally {
+        // Close all change streams before dropping the database
+        closeAllWatchers(db);
         await db.dropDatabase(); // Uncomment to debug after test
         await client.close();
     }
