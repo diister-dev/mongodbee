@@ -100,6 +100,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
         filter?: (doc: EN) => Promise<boolean> | boolean,
         format?: (doc: EN) => Promise<R> | R,
     }): Promise<R[]>;
+    countDocuments<E extends keyof T>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, options?: m.CountDocumentsOptions): Promise<number>;
     deleteId<E extends keyof T>(key: E, id: string): Promise<number>;
     deleteIds<E extends keyof T>(key: E, ids: string[]): Promise<number>;
     deleteMany<E extends keyof T>(key: E, filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>): Promise<number>;
@@ -424,6 +425,20 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             }
 
             return elements;
+        },
+        countDocuments(key, filter, options?) {
+            const session = sessionContext.getSession();
+            
+            const typeChecker = {
+                _type: key as string,
+            };
+            
+            // Build the query using the same logic as find()
+            const query = {
+                $and: filter ? [typeChecker, filter] : [typeChecker],
+            };
+            
+            return collection.countDocuments(query as never, { session, ...options });
         },
         async deleteId(key, id) {
             const schema = schemaWithId[key];
