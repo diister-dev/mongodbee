@@ -461,3 +461,106 @@ Deno.test("Literal with pipes", () => {
         enum: ["active"]
     });
 });
+
+Deno.test("Record schema - string keys and number values", () => {
+    const schema = v.object({
+        map: v.record(v.string(), v.number())
+    });
+
+    const validator = toMongoValidator(schema);
+    const jsonSchema = validator.$jsonSchema!;
+
+    assertEquals(jsonSchema.properties!.map, {
+        bsonType: "object",
+        description: "must be a record",
+        propertyNames: {
+            bsonType: "string",
+            description: "must be a string"
+        },
+        additionalProperties: {
+            bsonType: "number",
+            description: "must be a number"
+        }
+    });
+});
+
+Deno.test("Record schema with key regex", () => {
+    const schema = v.object({
+        mapRegex: v.record(v.pipe(v.string(), v.regex(/^[a-z]+$/)), v.string())
+    });
+
+    const validator = toMongoValidator(schema);
+    const jsonSchema = validator.$jsonSchema!;
+
+    assertEquals(jsonSchema.properties!.mapRegex.propertyNames, {
+        bsonType: "string",
+        description: "must be a string",
+        pattern: "^[a-z]+$"
+    });
+
+    assertEquals(jsonSchema.properties!.mapRegex.additionalProperties, {
+        bsonType: "string",
+        description: "must be a string"
+    });
+});
+
+Deno.test("Record validation should accept valid and reject invalid values", () => {
+    const schema = v.object({
+        map: v.record(v.string(), v.number())
+    });
+
+    // Valid document
+    const ok = v.safeParse(schema, { map: { a: 1, b: 2 } });
+    assert(ok.success);
+
+    // Invalid value for a key
+    const nokValue = v.safeParse(schema, { map: { a: "1" } });
+    assert(!nokValue.success);
+
+    // Invalid overall type
+    const nokType = v.safeParse(schema, { map: "not-an-object" });
+    assert(!nokType.success);
+});
+
+Deno.test("Record key regex validation should accept and reject keys", () => {
+    const schema = v.object({
+        mapRegex: v.record(v.pipe(v.string(), v.regex(/^[a-z]+$/)), v.string())
+    });
+
+    const ok = v.safeParse(schema, { mapRegex: { abc: "ok", xyz: "ok" } });
+    assert(ok.success);
+
+    const nok = v.safeParse(schema, { mapRegex: { Abc: "ok" } });
+    assert(!nok.success);
+});
+
+Deno.test("Deep nested record schema: toMongoValidator structure and valibot validation", () => {
+    const schema = v.object({
+        level1: v.object({
+            level2: v.record(v.string(), v.object({ x: v.number() }))
+        })
+    });
+
+    const validator = toMongoValidator(schema);
+    const jsonSchema = validator.$jsonSchema!;
+
+    // Check generated JSON Schema for deep nested record
+    assertEquals(jsonSchema.properties!.level1.properties!.level2.additionalProperties, {
+        bsonType: "object",
+        properties: {
+            x: {
+                bsonType: "number",
+                description: "must be a number"
+            }
+        },
+        required: ["x"]
+    });
+
+    // Valid document
+    const ok = v.safeParse(schema, { level1: { level2: { a: { x: 1 }, b: { x: 2 } } } });
+    assert(ok.success);
+
+    // Invalid document: nested value wrong type
+    const nok = v.safeParse(schema, { level1: { level2: { a: { x: "no" } } } });
+    assert(!nok.success);
+});

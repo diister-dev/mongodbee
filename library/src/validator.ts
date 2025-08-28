@@ -227,6 +227,34 @@ function constructorToValidator(schema: UnknownSchema | UnknownValidation) {
                     description: s.message ?? `must be one of the allowed values`,
                 }
             }
+            case "record": {
+                // Record: arbitrary keys validated by `key` schema and values by `value` schema
+                const s = schema as v.RecordSchema<any, UnknownSchema, any>;
+
+                // Build validators for key and value
+                const keyValidator = constructorToValidator(s.key as any) as any;
+                const valueValidator = constructorToValidator(s.value as any) as any;
+
+                const result: any = {
+                    bsonType: "object",
+                    description: s.message ?? `must be a record`,
+                };
+
+                // If we have a key schema, use it as `propertyNames` to validate object keys
+                if (keyValidator && Object.keys(keyValidator).length > 0) {
+                    result.propertyNames = keyValidator;
+                }
+
+                // Use `additionalProperties` to validate values of the record
+                if (valueValidator) {
+                    result.additionalProperties = valueValidator;
+                } else {
+                    // If no specific value validator, allow any type
+                    result.additionalProperties = {};
+                }
+
+                return result;
+            }
             case "any" : {
                 return;
             }
