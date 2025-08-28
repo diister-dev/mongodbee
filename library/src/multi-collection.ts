@@ -2,6 +2,7 @@ import * as v from './schema.ts';
 import * as m from "mongodb";
 import { ulid } from "@std/ulid";
 import { toMongoValidator } from "./validator.ts";
+import { sanitizeForMongoDB } from "./sanitizer.ts";
 import { createDotNotationSchema } from "./dot-notation.ts";
 import { getSessionContext } from "./session.ts";
 import { extractIndexes, withIndex } from "./indexes.ts";
@@ -12,6 +13,8 @@ import type { Db } from "./mongodb.ts";
 type CollectionOptions = {
     safeDelete?: boolean,
     enableWatching?: boolean,
+    /** How to handle undefined values in updates: 'remove' | 'ignore' | 'error' */
+    undefinedBehavior?: 'remove' | 'ignore' | 'error',
 }
 
 // Use _id if the schema is a literal schema, otherwise use dbId
@@ -181,6 +184,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     const opts: m.CollectionOptions & CollectionOptions = {
         ...{
             safeDelete: true,
+            undefinedBehavior: 'remove', // Default behavior
         },
         ...options,
     }
@@ -273,8 +277,14 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 _id,
             });
 
+            // Apply sanitization based on configuration
+            const safeDoc = sanitizeForMongoDB(validation, {
+                undefinedBehavior: opts.undefinedBehavior || 'remove',
+                deep: true
+            }) as any;
+
             const session = sessionContext.getSession();
-            const result = await collection.insertOne(validation as any, { session });
+            const result = await collection.insertOne(safeDoc, { session });
             if(!result.acknowledged) {
                 throw new Error("Insert failed");
             }
@@ -290,8 +300,14 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 });
             });
 
+            // Apply sanitization based on configuration
+            const safeDocs = validation.map(doc => sanitizeForMongoDB(doc, {
+                undefinedBehavior: opts.undefinedBehavior || 'remove',
+                deep: true
+            }) as any);
+
             const session = sessionContext.getSession();
-            const result = await collection.insertMany(validation as any, { session });
+            const result = await collection.insertMany(safeDocs, { session });
             if(!result.acknowledged) {
                 throw new Error("Insert failed");
             }
