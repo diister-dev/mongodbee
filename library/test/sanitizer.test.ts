@@ -487,5 +487,5 @@ Deno.test("Type consistency: Results should be properly typed", () => {
     // TypeScript should recognize this as the same interface type
     const typedResult = result as TestInterface;
     assertEquals(typedResult.required, "value");
-    assertEquals(typedResult.optional, undefined);
+    assert(!("optional" in typedResult)); // Field should not exist after sanitization
 });

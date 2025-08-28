@@ -429,7 +429,6 @@ Deno.test("MultiCollection: Ignore undefined behavior", async () => {
             // Expected: MongoDB will likely reject undefined values
             assert(error instanceof Error);
             // This is acceptable behavior for 'ignore' mode
-            console.log("Expected MongoDB error for undefined value:", error.message);
         }
         
     } finally {
@@ -472,7 +471,7 @@ Deno.test("MultiCollection: Performance with undefined sanitization", async () =
         const endTime = Date.now();
         
         assertEquals(itemIds.length, 50);
-        console.log(`Inserted 50 documents with sanitization in ${endTime - startTime}ms`);
+        // Performance validation: should handle 50 documents efficiently
         
         // Verify correct sanitization
         const items = await mc.find("items", {});
