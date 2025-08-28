@@ -473,10 +473,6 @@ Deno.test("Record schema - string keys and number values", () => {
     assertEquals(jsonSchema.properties!.map, {
         bsonType: "object",
         description: "must be a record",
-        propertyNames: {
-            bsonType: "string",
-            description: "must be a string"
-        },
         additionalProperties: {
             bsonType: "number",
             description: "must be a number"
@@ -492,16 +488,14 @@ Deno.test("Record schema with key regex", () => {
     const validator = toMongoValidator(schema);
     const jsonSchema = validator.$jsonSchema!;
 
-    assertEquals(jsonSchema.properties!.mapRegex.propertyNames, {
-        bsonType: "string",
-        description: "must be a string",
-        pattern: "^[a-z]+$"
+    assertEquals(jsonSchema.properties!.mapRegex.patternProperties, {
+        "^[a-z]+$": {
+            bsonType: "string",
+            description: "must be a string"
+        }
     });
 
-    assertEquals(jsonSchema.properties!.mapRegex.additionalProperties, {
-        bsonType: "string",
-        description: "must be a string"
-    });
+    assertEquals(jsonSchema.properties!.mapRegex.additionalProperties, false);
 });
 
 Deno.test("Record validation should accept valid and reject invalid values", () => {
@@ -563,4 +557,83 @@ Deno.test("Deep nested record schema: toMongoValidator structure and valibot val
     // Invalid document: nested value wrong type
     const nok = v.safeParse(schema, { level1: { level2: { a: { x: "no" } } } });
     assert(!nok.success);
+});
+
+Deno.test("Record schema complex cases", () => {
+    // Record with enum keys
+    const enumSchema = v.object({
+        enumRecord: v.record(v.picklist(["a", "b", "c"]), v.number())
+    });
+
+    const enumValidator = toMongoValidator(enumSchema);
+    const enumJsonSchema = enumValidator.$jsonSchema!;
+
+    // Since enum doesn't produce a pattern, it should use additionalProperties
+    assertEquals(enumJsonSchema.properties!.enumRecord, {
+        bsonType: "object",
+        description: "must be a record",
+        additionalProperties: {
+            bsonType: "number",
+            description: "must be a number"
+        }
+    });
+
+    // Record with complex value schema
+    const complexSchema = v.object({
+        complexRecord: v.record(
+            v.pipe(v.string(), v.regex(/^key_/)),
+            v.object({
+                name: v.string(),
+                count: v.number()
+            })
+        )
+    });
+
+    const complexValidator = toMongoValidator(complexSchema);
+    const complexJsonSchema = complexValidator.$jsonSchema!;
+
+    assertEquals(complexJsonSchema.properties!.complexRecord, {
+        bsonType: "object",
+        description: "must be a record",
+        patternProperties: {
+            "^key_": {
+                bsonType: "object",
+                properties: {
+                    name: {
+                        bsonType: "string",
+                        description: "must be a string"
+                    },
+                    count: {
+                        bsonType: "number",
+                        description: "must be a number"
+                    }
+                },
+                required: ["name", "count"]
+            }
+        },
+        additionalProperties: false
+    });
+});
+
+Deno.test("Record validation edge cases", () => {
+    // Test that patternProperties validation works
+    const schema = v.object({
+        data: v.record(v.pipe(v.string(), v.regex(/^[a-z]+$/)), v.number())
+    });
+
+    // Valid: keys match pattern, values are numbers
+    const valid1 = v.safeParse(schema, { data: { abc: 1, xyz: 2 } });
+    assert(valid1.success);
+
+    // Invalid: key doesn't match pattern (contains uppercase)
+    const invalid1 = v.safeParse(schema, { data: { Abc: 1 } });
+    assert(!invalid1.success);
+
+    // Invalid: value is wrong type
+    const invalid2 = v.safeParse(schema, { data: { abc: "not-a-number" } });
+    assert(!invalid2.success);
+
+    // Valid: empty record
+    const valid2 = v.safeParse(schema, { data: {} });
+    assert(valid2.success);
 });

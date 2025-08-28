@@ -1,5 +1,5 @@
 {  "name": "@diister/mongodbee",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "license": "MIT",
   "imports": {
     "@std/ulid": "jsr:@std/ulid@^1.0.0",
@@ -12,6 +12,6 @@
     "./session": "./session.ts"
   },
   "tasks": {
-    "test": "deno test -A"
+    "test": "deno test -A --parallel"
   }
 }

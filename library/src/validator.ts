@@ -227,6 +227,33 @@ function constructorToValidator(schema: UnknownSchema | UnknownValidation) {
                     description: s.message ?? `must be one of the allowed values`,
                 }
             }
+            case "picklist": {
+                const s = schema as v.PicklistSchema<any, any>;
+                
+                // Get all the picklist values
+                const picklistValues = s.options;
+                
+                // Determine bsonType based on the actual values
+                const firstValue = picklistValues[0];
+                let bsonType: string;
+                
+                switch (typeof firstValue) {
+                    case "string":
+                        bsonType = "string";
+                        break;
+                    case "number":
+                        bsonType = "number";
+                        break;
+                    default:
+                        bsonType = "string";
+                }
+                
+                return {
+                    bsonType,
+                    enum: picklistValues,
+                    description: s.message ?? `must be one of the allowed values`,
+                }
+            }
             case "record": {
                 // Record: arbitrary keys validated by `key` schema and values by `value` schema
                 const s = schema as v.RecordSchema<any, UnknownSchema, any>;
@@ -240,17 +267,23 @@ function constructorToValidator(schema: UnknownSchema | UnknownValidation) {
                     description: s.message ?? `must be a record`,
                 };
 
-                // If we have a key schema, use it as `propertyNames` to validate object keys
-                if (keyValidator && Object.keys(keyValidator).length > 0) {
-                    result.propertyNames = keyValidator;
-                }
-
-                // Use `additionalProperties` to validate values of the record
-                if (valueValidator) {
-                    result.additionalProperties = valueValidator;
+                // MongoDB doesn't support propertyNames, so we use patternProperties instead
+                // If we have a key pattern (regex), use it with patternProperties
+                if (keyValidator && keyValidator.pattern) {
+                    // Use patternProperties with the key pattern to validate both key pattern and value
+                    result.patternProperties = {
+                        [keyValidator.pattern]: valueValidator || {}
+                    };
+                    // Don't allow additional properties that don't match the pattern
+                    result.additionalProperties = false;
                 } else {
-                    // If no specific value validator, allow any type
-                    result.additionalProperties = {};
+                    // If no key pattern specified, just validate values with additionalProperties
+                    if (valueValidator) {
+                        result.additionalProperties = valueValidator;
+                    } else {
+                        // If no specific value validator, allow any type
+                        result.additionalProperties = {};
+                    }
                 }
 
                 return result;
