@@ -1,5 +1,6 @@
 import * as v from './schema.ts';
 import { toMongoValidator } from "./validator.ts";
+import { sanitizeForMongoDB } from "./sanitizer.ts";
 import type * as m from "mongodb";
 import { EventEmitter } from "./events.ts";
 import { watchEvent } from "./change-stream.ts";
@@ -11,6 +12,8 @@ import { sanitizePathName } from "./schema-navigator.ts";
 type CollectionOptions = {
     safeDelete?: boolean,
     enableWatching?: boolean,
+    /** How to handle undefined values in updates: 'remove' | 'ignore' | 'error' */
+    undefinedBehavior?: 'remove' | 'ignore' | 'error',
 }
 
 type WithId<T> = T extends { _id: infer U } ? T : m.WithId<T> | { _id: string } & T;
@@ -150,6 +153,7 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
     const opts: m.CollectionOptions & CollectionOptions = {
         ...{
             safeDelete: true,
+            undefinedBehavior: 'remove', // Default behavior
         },
         ...options,
     }
@@ -268,7 +272,14 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
         get writeConcern() { return collection.writeConcern },
         // Document creation operations with validation
         async insertOne(doc, options?) {
-            const safeDoc = v.parse(schema, doc) as m.OptionalUnlessRequiredId<TInput>;
+            const validatedDoc = v.parse(schema, doc) as m.OptionalUnlessRequiredId<TInput>;
+            
+            // Apply sanitization based on configuration
+            const safeDoc = sanitizeForMongoDB(validatedDoc, {
+                undefinedBehavior: opts.undefinedBehavior || 'remove',
+                deep: true
+            }) as m.OptionalUnlessRequiredId<TInput>;
+            
             const session = sessionContext.getSession();
             const inserted = await collection.insertOne(safeDoc, { session, ...options });
             if(!inserted.acknowledged) {
@@ -277,7 +288,14 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
             return inserted.insertedId as WithId<TOutput>["_id"];
         },
         async insertMany(docs, options?) {
-            const safeDocs = docs.map(doc => v.parse(schema, doc)) as unknown as typeof docs;
+            const validatedDocs = docs.map(doc => v.parse(schema, doc));
+            
+            // Apply sanitization based on configuration
+            const safeDocs = validatedDocs.map(doc => sanitizeForMongoDB(doc, {
+                undefinedBehavior: opts.undefinedBehavior || 'remove',
+                deep: true
+            }) as m.OptionalUnlessRequiredId<TInput>);
+            
             const session = sessionContext.getSession();
             const inserted = await collection.insertMany(safeDocs, { session, ...options });
             if(!inserted.acknowledged) {
@@ -416,8 +434,12 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
                 }
             }
 
+            const sanitizedReplacement = sanitizeForMongoDB(validation.output, {
+                undefinedBehavior: opts.undefinedBehavior || 'remove',
+                deep: true
+            }) as TInput;
             const session = sessionContext.getSession();
-            return collection.replaceOne(filter, validation.output as TInput, { session, ...options });
+            return collection.replaceOne(filter, sanitizedReplacement, { session, ...options });
         },
         updateOne(filter, update, options?) {
             // @TODO: check if update is valid
