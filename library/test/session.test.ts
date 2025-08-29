@@ -82,13 +82,8 @@ Deno.test("Session: Transaction rollback on error", async (t) => {
     assertEquals(product.stock, 5, "Transaction should have rolled back the stock update");
     
     // Verify that no user was added
-    await assertRejects(
-      async () => {
-        await users.findOne({ name: "Jane Doe" });
-      },
-      Error,
-      "Document not found"
-    );
+    const user = await users.findOne({ name: "Jane Doe" });
+    assertEquals(user, null, "User should not exist after transaction rollback");
   });
 });
 

@@ -1,7 +1,8 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
 import * as v from "../src/schema.ts";
+import { ObjectId } from "mongodb";
 
 // Simple test schema
 const userSchema = {
@@ -100,5 +101,37 @@ Deno.test("Collection: Error handling coverage", async (t) => {
         // Test count with empty collection
         const emptyCount = await users.countDocuments({});
         assertEquals(emptyCount, 0);
+    });
+});
+
+Deno.test("Collection: getById functionality", async (t) => {
+    await withDatabase(t.name, async (db) => {
+        const users = await collection(db, "users", userSchema);
+        
+        // Insert a document
+        const userId = await users.insertOne({
+            name: "Test User",
+            age: 25,
+            email: "test@example.com"
+        });
+        
+        // Test getById with valid ID
+        const foundById = await users.getById(userId);
+        assert(foundById);
+        assertEquals(foundById.name, "Test User");
+        assertEquals(foundById.age, 25);
+        assertEquals(foundById.email, "test@example.com");
+        assertEquals(foundById._id, userId);
+        
+        // Test getById with non-existent ID
+        assertRejects(async () => {
+            await users.getById("nonexistent-id");
+        });
+        
+        // Test getById with ObjectId
+        const objectId = new ObjectId();
+        assertRejects(async () => {
+            await users.getById(objectId);
+        });
     });
 });

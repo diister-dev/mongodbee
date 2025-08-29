@@ -40,6 +40,7 @@ export type CollectionResult<T extends Record<string, v.BaseSchema<unknown, unkn
         off: ReturnType<typeof EventEmitter<Events<T>>>["off"],
         insertOne: (doc: m.OptionalUnlessRequiredId<TInput<T>>, options?: m.InsertOneOptions) => Promise<WithId<TOutput<T>>["_id"]>,
         findOne: (filter: m.Filter<WithId<TInput<T>>>, options?: Omit<m.FindOptions, 'timeoutMode'> & m.Abortable) => Promise<WithId<TOutput<T>>>,
+        getById: (id: string | m.ObjectId) => Promise<WithId<TOutput<T>>>,
         find: (filter: m.Filter<TInput<T>>, options?: m.FindOptions & m.Abortable) => m.AbstractCursor<TOutput<T>>,
         withSession: Awaited<ReturnType<typeof getSessionContext>>["withSession"],
 
@@ -310,7 +311,26 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
             const result = await collection.findOne(filter as any, { session, ...options });
 
             if (!result) {
-                throw new Error("Document not found");
+                return null;
+            }
+
+            const validation = v.safeParse(schema, result);
+            if (validation.success) {
+                return validation.output as WithId<TOutput>;
+            }
+
+            throw {
+                message: "Validation error",
+                errors: validation,
+                result,
+            }
+        },
+        async getById(id) {
+            const session = sessionContext.getSession();
+            const result = await collection.findOne({ _id: id } as any, { session });
+
+            if (!result) {
+                throw new Error("No element found");
             }
 
             const validation = v.safeParse(schema, result);
