@@ -75,7 +75,12 @@ type AggregationStage = Record<string, unknown>;
 type StageBuilder<T extends MultiCollectionSchema> = {
     match: <E extends keyof T>(key: E, filter: Record<string, unknown>) => AggregationStage;
     unwind: <E extends keyof T>(key: E, field: string) => AggregationStage;
-    lookup: <E extends keyof T>(key: E, localField: string, foreignField: string) => AggregationStage;
+    lookup: <E extends keyof T>(key: E, localField: string, foreignField: string, others?: Record<string, any>) => AggregationStage;
+    project: (projection: Record<string, 1 | 0>) => AggregationStage;
+    group: (grouping: Record<string, unknown>) => AggregationStage;
+    sort: (sort: Record<string, 1 | -1>) => AggregationStage;
+    limit: (limit: number) => AggregationStage;
+    skip: (skip: number) => AggregationStage;
 };
 
 type Input<T extends MultiCollectionSchema> = v.InferInput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>;
@@ -627,14 +632,29 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 unwind: (key, field) => ({
                     $unwind: `$${field}`,
                 }),
-                lookup: (key, localField, foreignField) => ({
+                lookup: (key, localField, foreignField, others) => ({
                     $lookup: {
                         from: collectionName,
                         localField,
                         foreignField,
-                        as: localField,
+                        ...(others || {})
                     },
                 }),
+                project: (projection) => ({
+                    $project: projection,
+                }),
+                group: (grouping) => ({
+                    $group: grouping,
+                }),
+                sort: (sort) => ({
+                    $sort: sort,
+                }),
+                limit: (limit) => ({
+                    $limit: limit,
+                }),
+                skip: (skip) => ({
+                    $skip: skip,
+                })
             };
 
             const session = sessionContext.getSession();
