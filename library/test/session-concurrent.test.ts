@@ -74,11 +74,11 @@ Deno.test("Session Concurrent: Regular collection operations inside and outside 
       );
       
       // Read values within session should see session's changes
-      const userInSession = await users.findOne({ _id: userId });
+      const userInSession = await users.getById(userId);
       assertEquals(userInSession.age, 31);
       assertEquals(userInSession.version, 2);
       
-      const productInSession = await products.findOne({ _id: productId });
+      const productInSession = await products.getById(productId);
       assertEquals(productInSession.stock, 19);
       assertEquals(productInSession.version, 2);
       
@@ -94,11 +94,11 @@ Deno.test("Session Concurrent: Regular collection operations inside and outside 
     
     // Read values outside session should still see the original values
     // until transaction is committed
-    const userOutsideSession = await users.findOne({ _id: userId });
+    const userOutsideSession = await users.getById(userId);
     assertEquals(userOutsideSession.age, 30);
     assertEquals(userOutsideSession.version, 1);
     
-    const productOutsideSession = await products.findOne({ _id: productId });
+    const productOutsideSession = await products.getById(productId);
     assertEquals(productOutsideSession.stock, 20);
     assertEquals(productOutsideSession.version, 1);
     
@@ -112,11 +112,11 @@ Deno.test("Session Concurrent: Regular collection operations inside and outside 
     const sessionResults = await sessionUpdatePromise;
     
     // After transaction, check final state
-    const finalUser = await users.findOne({ _id: userId });
+    const finalUser = await users.getById(userId);
     assertEquals(finalUser.age, 31);
     assertEquals(finalUser.version, 2);
     
-    const finalProduct = await products.findOne({ _id: productId });
+    const finalProduct = await products.getById(productId);
     assertEquals(finalProduct.stock, 19);
     assertEquals(finalProduct.price, 95); // This update was made outside the transaction
     assertEquals(finalProduct.version, 2);
@@ -239,7 +239,7 @@ Deno.test("Session Concurrent: Mixed collection types with concurrent operations
       });
       
       // Read values within session
-      const userInSession = await users.findOne({ _id: userId });
+      const userInSession = await users.getById(userId);
       assert(userInSession !== null);
       assertEquals(userInSession.age, 36);
       
@@ -258,7 +258,7 @@ Deno.test("Session Concurrent: Mixed collection types with concurrent operations
     await new Promise(resolve => setTimeout(resolve, 50));
     
     // Read values outside session
-    const userOutsideSession = await users.findOne({ _id: userId });
+    const userOutsideSession = await users.getById(userId);
     assert(userOutsideSession !== null);
     assertEquals(userOutsideSession.age, 35);
     assertEquals(userOutsideSession.version, 1);
@@ -282,7 +282,7 @@ Deno.test("Session Concurrent: Mixed collection types with concurrent operations
     const sessionResults = await sessionUpdatePromise;
     
     // After transaction, check final state
-    const finalUser = await users.findOne({ _id: userId });
+    const finalUser = await users.getById(userId);
     assert(finalUser !== null);
     assertEquals(finalUser.age, 36);
     assertEquals(finalUser.version, 2);
@@ -368,7 +368,7 @@ Deno.test("Session Concurrent: Rollback shouldn't affect outside operations", as
     }
     
     // After rollback, check final state
-    const finalUser = await users.findOne({ _id: userId });
+    const finalUser = await users.getById(userId);
     assert(finalUser !== null);
     assertEquals(finalUser.age, 40); // Session changes rolled back
     assertEquals(finalUser.version, 1); // Session changes rolled back

@@ -32,7 +32,7 @@ Deno.test("Session: Basic session creation and usage", async (t) => {
     });
     
     // Verify that the data was inserted correctly
-    const user = await users.findOne({ _id: userId });
+    const user = await users.getById(userId);
     assertEquals(user.name, "John Doe");
     assertEquals(user.email, "john@example.com");
     assertEquals(user.age, 30);
@@ -78,7 +78,7 @@ Deno.test("Session: Transaction rollback on error", async (t) => {
     );
     
     // Verify that the product stock wasn't updated (transaction rolled back)
-    const product = await products.findOne({ _id: productId });
+    const product = await products.getById(productId);
     assertEquals(product.stock, 5, "Transaction should have rolled back the stock update");
     
     // Verify that no user was added
@@ -115,10 +115,10 @@ Deno.test("Session: Nested transactions", async (t) => {
     });
     
     // Verify both operations succeeded
-    const product = await products.findOne({ _id: results.productId });
+    const product = await products.getById(results.productId);
     assertEquals(product.name, "Nested Test Product");
     
-    const user = await users.findOne({ _id: results.userId });
+    const user = await users.getById(results.userId);
     assertEquals(user.name, "Nested User");
   });
 });
@@ -147,10 +147,10 @@ Deno.test("Session: Multiple collections in the same transaction", async (t) => 
     });
     
     // Verify both operations succeeded
-    const user = await users.findOne({ _id: userId });
+    const user = await users.getById(userId);
     assertEquals(user.name, "Multi Collection User");
     
-    const product = await products.findOne({ _id: productId });
+    const product = await products.getById(productId);
     assertEquals(product.name, "Multi Collection Product");
   });
 });
@@ -170,7 +170,7 @@ Deno.test("Session: Direct session access via getSession", async (t) => {
       });
       
       // Find the user and verify
-      const user = await users.findOne({ _id: userId });
+      const user = await users.getById(userId);
       assertEquals(user.name, "Direct Session User");
     });
   });

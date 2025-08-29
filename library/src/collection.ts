@@ -39,7 +39,7 @@ export type CollectionResult<T extends Record<string, v.BaseSchema<unknown, unkn
         on: ReturnType<typeof EventEmitter<Events<T>>>["on"],
         off: ReturnType<typeof EventEmitter<Events<T>>>["off"],
         insertOne: (doc: m.OptionalUnlessRequiredId<TInput<T>>, options?: m.InsertOneOptions) => Promise<WithId<TOutput<T>>["_id"]>,
-        findOne: (filter: m.Filter<WithId<TInput<T>>>, options?: Omit<m.FindOptions, 'timeoutMode'> & m.Abortable) => Promise<WithId<TOutput<T>>>,
+        findOne: (filter: m.Filter<WithId<TInput<T>>>, options?: Omit<m.FindOptions, 'timeoutMode'> & m.Abortable) => Promise<WithId<TOutput<T>> | null>,
         getById: (id: string | m.ObjectId) => Promise<WithId<TOutput<T>>>,
         find: (filter: m.Filter<TInput<T>>, options?: m.FindOptions & m.Abortable) => m.AbstractCursor<TOutput<T>>,
         withSession: Awaited<ReturnType<typeof getSessionContext>>["withSession"],

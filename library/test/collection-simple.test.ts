@@ -24,7 +24,7 @@ Deno.test("Collection: Basic operations coverage", async (t) => {
         
         // Test findOne
         const found = await users.findOne({ name: "John" });
-        assert(found);
+        assert(found !== null);
         assertEquals(found.name, "John");
         
         // Test find

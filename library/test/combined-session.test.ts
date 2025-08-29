@@ -92,7 +92,7 @@ Deno.test("Combined Session: Collection and Multi-Collection in same transaction
     });
     
     // Verify all entities were created correctly
-    const user = await users.findOne({ _id: results.userId });
+    const user = await users.getById(results.userId);
     assertEquals(user.name, "Combined Test User");
     
     const product = await catalog.findOne("product", { _id: results.productIds[0] });
@@ -103,7 +103,7 @@ Deno.test("Combined Session: Collection and Multi-Collection in same transaction
     assert(category !== null);
     assertEquals(category.name, "Electronics");
     
-    const order = await orders.findOne({ _id: results.orderId });
+    const order = await orders.getById(results.orderId);
     assertEquals(order.items.length, 2);
     assertEquals(order.total, 2 * 25.99 + 35.50);
   });
@@ -256,7 +256,7 @@ Deno.test("Combined Session: Update operations across collection types", async (
     });
     
     // Verify all updates were applied
-    const user = await users.findOne({ _id: initialData.userId });
+    const user = await users.getById(initialData.userId);
     assertEquals(user.age, 31, "User age should be updated");
     
     const product = await catalog.findOne("product", { _id: initialData.productId });
@@ -264,7 +264,7 @@ Deno.test("Combined Session: Update operations across collection types", async (
     assertEquals(product.stock, 9, "Product stock should be updated");
     assertEquals(product.price, 16.99, "Product price should be updated");
     
-    const order = await orders.findOne({ _id: initialData.orderId });
+    const order = await orders.getById(initialData.orderId);
     assertEquals(order.status, "processed", "Order status should be updated");
     assertEquals(order.total, 16.99, "Order total should be updated");
   });
@@ -299,7 +299,7 @@ Deno.test("Combined Session: Shared session context", async (t) => {
       });
       
       // Verify data is accessible within the same transaction
-      const user = await users.findOne({ _id: userId });
+      const user = await users.getById(userId);
       assertEquals(user.name, "Shared Session User");
       
       const product = await catalog.findOne("product", { _id: productId });
@@ -320,7 +320,7 @@ Deno.test("Combined Session: Shared session context", async (t) => {
         });
         
         // Verify order creation worked
-        const order = await orders.findOne({ _id: orderId });
+        const order = await orders.getById(orderId);
         assertEquals(order.total, 29.99);
       });
     });
