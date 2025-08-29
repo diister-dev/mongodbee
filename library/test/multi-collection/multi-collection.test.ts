@@ -539,3 +539,47 @@ Deno.test("Literal id must have valid type", async (t) => {
         assertEquals(foundItem?._id, itemId);
     });
 });
+
+Deno.test("getById: retrieve by id and error cases", async (t) => {
+    await withDatabase(t.name, async (db) => {
+        const collection = await multiCollection(db, "test", {
+            user: {
+                name: v.string(),
+                mail: v.string(),
+            },
+            group: {
+                name: v.string(),
+                members: v.array(v.string()),
+            }
+        });
+
+        const userId = await collection.insertOne("user", {
+            name: "John",
+            mail: "john@doe.d",
+        });
+
+        const groupId = await collection.insertOne("group", {
+            name: "Team",
+            members: [userId],
+        });
+
+        // Successful retrieval
+        const foundUser = await collection.getById("user", userId);
+            assertEquals(foundUser, {
+                _id: userId,
+                _type: "user",
+                name: "John",
+                mail: "john@doe.d",
+            });
+
+            // Trying to get a group id as a user should fail
+            await assertRejects(async () => {
+                await collection.getById("user", groupId);
+            });
+
+            // Nonexistent id should also throw
+            await assertRejects(async () => {
+                await collection.getById("user", "user:nonexistent-id");
+            });
+        });
+});

@@ -89,6 +89,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
     withSession: Awaited<ReturnType<typeof getSessionContext>>["withSession"],
     insertOne<E extends keyof T>(key: E, doc: v.InferInput<ElementSchema<T, E>>): Promise<string>;
     insertMany<E extends keyof T>(key: E, docs: v.InferInput<ElementSchema<T, E>>[]): Promise<(string)[]>;
+    getById<E extends keyof T>(key: E, id: string): Promise<v.InferOutput<OutputElementSchema<T, E>>>;
     findOne<E extends keyof T>(key: E, filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>): Promise<v.InferOutput<OutputElementSchema<T, E>> | null>;
     find<E extends keyof T>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, options?: m.FindOptions): Promise<v.InferOutput<OutputElementSchema<T, E>>[]>;
     paginate<E extends keyof T, EN = v.InferOutput<OutputElementSchema<T, E>>, R = EN>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, options?: {
@@ -314,6 +315,21 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             }
 
             return Object.values(result.insertedIds) as unknown as string[];
+        },
+        async getById(key, id) {
+            const session = sessionContext.getSession();
+            const result = await collection.findOne({
+                $and: [
+                    { _type: key as string },
+                    { _id: id },
+                ]
+            } as any, { session });
+
+            if (!result) {
+                throw new Error("No element found");
+            }
+            
+            return v.parse(schema, result);
         },
         async findOne(key, filter) {
             const session = sessionContext.getSession();
