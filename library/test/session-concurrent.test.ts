@@ -1,5 +1,5 @@
 import * as v from "../src/schema.ts";
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { assertEquals, assert, assertRejects } from "jsr:@std/assert";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { withDatabase } from "./+shared.ts";
@@ -155,10 +155,12 @@ Deno.test("Session Concurrent: MultiCollection operations inside and outside ses
       
       // Read values within session should see session's changes
       const productInSession = await store.findOne("product", { _id: productId });
+      assert(productInSession !== null);
       assertEquals(productInSession.stock, 19);
       assertEquals(productInSession.version, 2);
       
       const categoryInSession = await store.findOne("category", { _id: categoryId });
+      assert(categoryInSession !== null);
       assertEquals(categoryInSession.productCount, 2);
       
       // Sleep to simulate long-running transaction
@@ -174,10 +176,12 @@ Deno.test("Session Concurrent: MultiCollection operations inside and outside ses
     // Read values outside session should still see the original values
     // until transaction is committed
     const productOutsideSession = await store.findOne("product", { _id: productId });
+    assert(productOutsideSession !== null);
     assertEquals(productOutsideSession.stock, 20);
     assertEquals(productOutsideSession.version, 1);
     
     const categoryOutsideSession = await store.findOne("category", { _id: categoryId });
+    assert(categoryOutsideSession !== null);
     assertEquals(categoryOutsideSession.productCount, 1);
     
     // Make a separate update outside the session
@@ -190,11 +194,13 @@ Deno.test("Session Concurrent: MultiCollection operations inside and outside ses
     
     // After transaction, check final state
     const finalProduct = await store.findOne("product", { _id: productId });
+    assert(finalProduct !== null);
     assertEquals(finalProduct.stock, 19);
     assertEquals(finalProduct.version, 2);
     assertEquals(finalProduct.price, 95); // This update was made outside the transaction
     
     const finalCategory = await store.findOne("category", { _id: categoryId });
+    assert(finalCategory !== null);
     assertEquals(finalCategory.productCount, 2);
   });
 });
@@ -234,9 +240,11 @@ Deno.test("Session Concurrent: Mixed collection types with concurrent operations
       
       // Read values within session
       const userInSession = await users.findOne({ _id: userId });
+      assert(userInSession !== null);
       assertEquals(userInSession.age, 36);
       
       const productInSession = await store.findOne("product", { _id: productId });
+      assert(productInSession !== null);
       assertEquals(productInSession.stock, 49);
       
       // Sleep to simulate long-running transaction
@@ -251,10 +259,12 @@ Deno.test("Session Concurrent: Mixed collection types with concurrent operations
     
     // Read values outside session
     const userOutsideSession = await users.findOne({ _id: userId });
+    assert(userOutsideSession !== null);
     assertEquals(userOutsideSession.age, 35);
     assertEquals(userOutsideSession.version, 1);
     
     const productOutsideSession = await store.findOne("product", { _id: productId });
+    assert(productOutsideSession !== null);
     assertEquals(productOutsideSession.stock, 50);
     assertEquals(productOutsideSession.version, 1);
     
@@ -273,11 +283,13 @@ Deno.test("Session Concurrent: Mixed collection types with concurrent operations
     
     // After transaction, check final state
     const finalUser = await users.findOne({ _id: userId });
+    assert(finalUser !== null);
     assertEquals(finalUser.age, 36);
     assertEquals(finalUser.version, 2);
     assertEquals(finalUser.email, "jane.smith@example.com");
     
     const finalProduct = await store.findOne("product", { _id: productId });
+    assert(finalProduct !== null);
     assertEquals(finalProduct.stock, 49);
     assertEquals(finalProduct.version, 2);
     assertEquals(finalProduct.price, 549);
@@ -357,11 +369,13 @@ Deno.test("Session Concurrent: Rollback shouldn't affect outside operations", as
     
     // After rollback, check final state
     const finalUser = await users.findOne({ _id: userId });
+    assert(finalUser !== null);
     assertEquals(finalUser.age, 40); // Session changes rolled back
     assertEquals(finalUser.version, 1); // Session changes rolled back
     assertEquals(finalUser.email, "alex.brown@example.com"); // Outside changes preserved
     
     const finalProduct = await store.findOne("product", { _id: productId });
+    assert(finalProduct !== null);
     assertEquals(finalProduct.stock, 10); // Session changes rolled back
     assertEquals(finalProduct.version, 1); // Session changes rolled back
     assertEquals(finalProduct.price, 1100); // Outside changes preserved

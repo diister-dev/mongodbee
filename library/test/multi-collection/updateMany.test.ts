@@ -2,6 +2,7 @@ import * as v from "../../src/schema.ts";
 import { assertEquals, assertRejects } from "jsr:@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
+import assert from "node:assert";
 
 Deno.test("updateMany: Basic multiple update", async (t) => {
     await withDatabase(t.name, async (db) => {
@@ -34,6 +35,7 @@ Deno.test("updateMany: Basic multiple update", async (t) => {
 
         const userA = await collection.findOne("user", { _id: userIds[0] });
         const userB = await collection.findOne("user", { _id: userIds[1] });
+        assert(userA !== null && userB !== null);
         assertEquals(userA.age, 21);
         assertEquals(userB.name, "Bobby");
     });
@@ -67,6 +69,7 @@ Deno.test("updateMany: Update nested and array fields", async (t) => {
 
         const userA = await collection.findOne("user", { _id: userIds[0] });
         const userB = await collection.findOne("user", { _id: userIds[1] });
+        assert(userA !== null && userB !== null);
         assertEquals(userA.profile.city, "Berlin");
         assertEquals(userA.tags[0], "z");
         assertEquals(userB.name, "Bee");

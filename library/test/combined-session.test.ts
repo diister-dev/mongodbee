@@ -3,6 +3,7 @@ import { assertEquals, assertRejects } from "jsr:@std/assert";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { withDatabase } from "./+shared.ts";
+import assert from "node:assert";
 
 // Test schemas
 const userSchema = {
@@ -95,9 +96,11 @@ Deno.test("Combined Session: Collection and Multi-Collection in same transaction
     assertEquals(user.name, "Combined Test User");
     
     const product = await catalog.findOne("product", { _id: results.productIds[0] });
+    assert(product !== null);
     assertEquals(product.name, "First Product");
     
     const category = await catalog.findOne("category", { _id: results.categoryId });
+    assert(category !== null);
     assertEquals(category.name, "Electronics");
     
     const order = await orders.findOne({ _id: results.orderId });
@@ -177,6 +180,7 @@ Deno.test("Combined Session: Transaction rollback across collection types", asyn
     
     // Verify multi-collection had rollback
     const product = await catalog.findOne("product", { _id: existingProductId });
+    assert(product !== null);
     assertEquals(product.stock, 20, "Stock should be unchanged");
     assertEquals(product.price, 99.99, "Price should be unchanged");
     
@@ -256,6 +260,7 @@ Deno.test("Combined Session: Update operations across collection types", async (
     assertEquals(user.age, 31, "User age should be updated");
     
     const product = await catalog.findOne("product", { _id: initialData.productId });
+    assert(product !== null);
     assertEquals(product.stock, 9, "Product stock should be updated");
     assertEquals(product.price, 16.99, "Product price should be updated");
     
@@ -298,6 +303,7 @@ Deno.test("Combined Session: Shared session context", async (t) => {
       assertEquals(user.name, "Shared Session User");
       
       const product = await catalog.findOne("product", { _id: productId });
+      assert(product !== null);
       assertEquals(product.name, "Shared Session Product");
       
       // Now start a "nested" session from the catalog

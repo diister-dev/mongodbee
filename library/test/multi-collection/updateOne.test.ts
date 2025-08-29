@@ -2,6 +2,7 @@ import * as v from "../../src/schema.ts";
 import { assertEquals, assertRejects } from "jsr:@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
+import assert from "node:assert";
 
 Deno.test("UpdateOne: Basic update test", async (t) => {
     await withDatabase(t.name, async (db) => {
@@ -35,6 +36,7 @@ Deno.test("UpdateOne: Basic update test", async (t) => {
 
         // Verify update
         const updatedUser = await collection.findOne("user", { _id: userId });
+        assert(updatedUser !== null);
         assertEquals(updatedUser.name, "John Smith");
         assertEquals(updatedUser.mail, "john@example.com");
         assertEquals(updatedUser.age, 30);
@@ -56,6 +58,7 @@ Deno.test("UpdateOne: Basic update test", async (t) => {
 
         // Verify nested update
         const updatedGroup = await collection.findOne("group", { _id: groupId });
+        assert(updatedGroup !== null);
         assertEquals(updatedGroup.name, "Team A");
         assertEquals(updatedGroup.metadata.createdAt, "2023-01-01");
         assertEquals(updatedGroup.metadata.type, "private");
@@ -113,6 +116,7 @@ Deno.test("UpdateOne: Array updates test", async (t) => {
 
         // Verify array updates
         const updatedGroup = await collection.findOne("group", { _id: groupId });
+        assert(updatedGroup !== null);
         assertEquals(updatedGroup.tags, ["important", "inactive"]);
         assertEquals(updatedGroup.nestedData[0].value, "home");
         assertEquals(updatedGroup.nestedData[0].key, "location");
@@ -206,6 +210,7 @@ Deno.test("UpdateOne: Support optional object entry", async (t) => {
 
         // Verify update
         const updatedUser = await collection.findOne("user", { _id: userId });
+        assert(updatedUser !== null);
         assertEquals(updatedUser.name, "John");
         assertEquals(updatedUser.age, 30);
         assertEquals(updatedUser.address?.city, "New York");
@@ -254,7 +259,7 @@ Deno.test("UpdateOne: Multiple updates at once", async (t) => {
 
         // Verify all updates were applied
         const updatedUser = await collection.findOne("user", { _id: userId });
-        
+        assert(updatedUser !== null);
         assertEquals(updatedUser.name, "Jane Doe");
         assertEquals(updatedUser.email, "john@example.com"); // unchanged
         assertEquals(updatedUser.profile.age, 28);
@@ -297,6 +302,7 @@ Deno.test("UpdateOne: Update Complex array", async (t) => {
 
         // Verify all updates were applied
         const updatedUser = await collection.findOne("user", { _id: userId });
+        assert(updatedUser !== null);
         assertEquals(updatedUser.name, "Jane Doe");
         assertEquals(updatedUser.email, "john@example.com"); // unchanged
         assertEquals(updatedUser.tags[0].name, "role");
@@ -312,6 +318,7 @@ Deno.test("UpdateOne: Update Complex array", async (t) => {
 
         // Verify the entire array element was changed
         const updatedUser2 = await collection.findOne("user", { _id: userId });
+        assert(updatedUser2 !== null);
         assertEquals(updatedUser2.tags[0].name, "role");
         assertEquals(updatedUser2.tags[0].value, "super-admin");
         assertEquals(updatedUser2.tags[1].name, "location");

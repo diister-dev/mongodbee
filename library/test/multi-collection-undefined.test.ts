@@ -49,6 +49,7 @@ Deno.test("MultiCollection: undefined behavior remove (default)", async () => {
         });
         
         const product = await catalog.findOne("product", { _id: productId });
+        assert(product !== null);
         assert(!("description" in product));
         assertEquals(product.name, "Laptop");
         assertEquals(product.price, 999.99);
@@ -61,6 +62,7 @@ Deno.test("MultiCollection: undefined behavior remove (default)", async () => {
         });
         
         const category = await catalog.findOne("category", { _id: categoryId });
+        assert(category !== null);
         assert(!("parentId" in category));
         assertEquals(category.name, "Electronics");
         
@@ -122,6 +124,7 @@ Deno.test("MultiCollection: undefined behavior error", async () => {
         });
         
         const product = await catalog.findOne("product", { _id: productId });
+        assert(product !== null);
         assertEquals(product.name, "Laptop");
         assertEquals(product.price, 999.99);
         assertEquals(product.category, "Electronics");
@@ -258,16 +261,19 @@ Deno.test("MultiCollection: Mixed document types with different undefined values
         const product = await catalog.findOne("product", { _id: productId });
         
         // Check category
+        assert(category !== null);
         assert(!("parentId" in category));
         assertEquals(category.name, "Electronics");
         assertEquals(category.description, "Electronic devices");
         
         // Check brand
+        assert(brand !== null);
         assert(!("country" in brand));
         assertEquals(brand.name, "TechCorp");
         assertEquals(brand.website, "https://techcorp.com");
         
         // Check product
+        assert(product !== null);
         assert(!("description" in product));
         assertEquals(product.name, "Smartphone");
         assertEquals(product.price, 599.99);
@@ -313,6 +319,7 @@ Deno.test("MultiCollection: Multiple collections with different undefined behavi
         // First collection should work (remove undefined)
         const productId1 = await catalogRemove.insertOne("product", testProduct);
         const product1 = await catalogRemove.findOne("product", { _id: productId1 });
+        assert(product1 !== null);
         assert(!("description" in product1));
         assertEquals(product1.name, "TestProduct");
         
@@ -332,6 +339,7 @@ Deno.test("MultiCollection: Multiple collections with different undefined behavi
         });
         
         const product2 = await catalogError.findOne("product", { _id: productId2 });
+        assert(product2 !== null);
         assertEquals(product2.name, "TestProduct2");
         assertEquals(product2.price, 59.99);
         
@@ -378,6 +386,7 @@ Deno.test("MultiCollection: Nested undefined values", async () => {
         
         const profile = await mc.findOne("profiles", { _id: profileId });
         
+        assert(profile !== null);
         assertEquals(profile.name, "Developer");
         assert("profile" in profile);
         assert(!("preferences" in profile));
@@ -547,6 +556,7 @@ Deno.test("MultiCollection: Array sanitization with undefined values", async () 
         
         const post = await mc.findOne("posts", { _id: postId });
         
+        assert(post !== null);
         assertEquals(post.title, "Test Post");
         assert(post.tags !== undefined);
         assertEquals(post.tags.length, 2);

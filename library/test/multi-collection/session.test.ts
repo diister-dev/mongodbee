@@ -3,6 +3,7 @@ import { assertEquals, assertRejects } from "jsr:@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import { ulid } from "../../src/schema.ts";
+import assert from "node:assert";
 
 // Helper function for creating test schemas
 const createTestSchema = () => ({
@@ -56,12 +57,15 @@ Deno.test("MultiCollection Session: Basic transaction", async (t) => {
     
     // Verify all data was inserted correctly
     const user = await store.findOne("user", { _id: results.userId });
+    assert(user !== null);
     assertEquals(user.name, "John Doe");
     
     const product = await store.findOne("product", { _id: results.productId });
+    assert(product !== null);
     assertEquals(product.name, "Test Product");
     
     const order = await store.findOne("order", { _id: results.orderId });
+    assert(order !== null);
     assertEquals(order.total, 99.99);
     assertEquals(order.status, "pending");
   });
@@ -113,6 +117,7 @@ Deno.test("MultiCollection Session: Transaction rollback", async (t) => {
     
     // Verify that product wasn't updated (transaction rolled back)
     const product = await store.findOne("product", { _id: productId });
+    assert(product !== null);
     assertEquals(product.stock, 5, "Stock should be unchanged due to rollback");
     assertEquals(product.price, 50, "Price should be unchanged due to rollback");
     
@@ -191,15 +196,19 @@ Deno.test("MultiCollection Session: Complex multi-entity update", async (t) => {
     
     // Verify all updates were applied
     const user1 = await store.findOne("user", { _id: setupData.userIds[0] });
+    assert(user1 !== null);
     assertEquals(user1.age, 31, "User 1 age should be updated");
     
     const user2 = await store.findOne("user", { _id: setupData.userIds[1] });
+    assert(user2 !== null);
     assertEquals(user2.age, 26, "User 2 age should be updated");
     
     const productA = await store.findOne("product", { _id: setupData.productIds[0] });
+    assert(productA !== null);
     assertEquals(productA.stock, 99, "Product A stock should be updated");
     
     const order1 = await store.findOne("order", { _id: setupData.orderIds[0] });
+    assert(order1 !== null);
     assertEquals(order1.status, "processed", "Order 1 status should be updated");
   });
 });
@@ -219,6 +228,7 @@ Deno.test("MultiCollection Session: Read operations in transaction", async (t) =
     await store.withSession(async () => {
       // Find the user
       const user = await store.findOne("user", { _id: userId });
+      assert(user !== null);
       assertEquals(user.name, "Read Test User");
       
       // Test find with filter
@@ -242,6 +252,7 @@ Deno.test("MultiCollection Session: Read operations in transaction", async (t) =
       
       // Find should reflect the update in the same transaction
       const updatedUser = await store.findOne("user", { _id: userId });
+      assert(updatedUser !== null);
       assertEquals(updatedUser.age, 51);
     });
   });

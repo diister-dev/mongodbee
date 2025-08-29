@@ -79,17 +79,14 @@ Deno.test("FindOne: Ensure find correct type", async (t) => {
             members: [usersId[1]]
         }]);
 
-        await assertRejects(async () => {
-            await collection.findOne("user", { _id: groupsId[0] });
-        });
+        const notFoundUser = await collection.findOne("user", { _id: groupsId[0] });
+        assert(notFoundUser === null);
 
-        await assertRejects(async () => {
-            await collection.findOne("group", { _id: usersId[0] });
-        });
+        const notFoundGroup = await collection.findOne("group", { _id: usersId[0] });
+        assert(notFoundGroup === null);
 
-        await assertRejects(async () => {
-            await collection.findOne("group", { _id: "group-invalid:id" });
-        });
+        const notFoundGroup2 = await collection.findOne("group", { _id: "group-invalid:id" });
+        assert(notFoundGroup2 === null);
 
         const findUserB = await collection.findOne("user", { _id: usersId[1] });
         assertEquals(findUserB, {
@@ -462,7 +459,7 @@ Deno.test("Date fields: Current date and date updates", async (t) => {
         await collection.updateOne("document", docId, { title: "Updated Document", updatedAt: updateTime });
 
         const updatedDoc = await collection.findOne("document", { _id: docId });
-        
+        assert(updatedDoc !== null);
         assertEquals(updatedDoc?.title, "Updated Document");
         assertEquals(updatedDoc?.createdAt.getTime(), startTime.getTime());
         assertEquals(updatedDoc?.updatedAt.getTime(), updateTime.getTime());

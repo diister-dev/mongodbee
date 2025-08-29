@@ -1,7 +1,7 @@
-import * as v from "../src/schema.ts";
-import { multiCollection } from "../src/multi-collection.ts";
+import * as v from "../../src/schema.ts";
+import { multiCollection } from "../../src/multi-collection.ts";
 import { assertEquals } from "jsr:@std/assert";
-import { withDatabase } from "./+shared.ts";
+import { withDatabase } from "../+shared.ts";
 
 Deno.test("MultiCollection: countDocuments functionality", async (t) => {
     await withDatabase(t.name, async (db) => {

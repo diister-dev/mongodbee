@@ -89,7 +89,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
     withSession: Awaited<ReturnType<typeof getSessionContext>>["withSession"],
     insertOne<E extends keyof T>(key: E, doc: v.InferInput<ElementSchema<T, E>>): Promise<string>;
     insertMany<E extends keyof T>(key: E, docs: v.InferInput<ElementSchema<T, E>>[]): Promise<(string)[]>;
-    findOne<E extends keyof T>(key: E, filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>): Promise<v.InferOutput<OutputElementSchema<T, E>>>;
+    findOne<E extends keyof T>(key: E, filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>): Promise<v.InferOutput<OutputElementSchema<T, E>> | null>;
     find<E extends keyof T>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, options?: m.FindOptions): Promise<v.InferOutput<OutputElementSchema<T, E>>[]>;
     paginate<E extends keyof T, EN = v.InferOutput<OutputElementSchema<T, E>>, R = EN>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, options?: {
         limit?: number,
@@ -325,7 +325,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             } as any, { session });
 
             if (!result) {
-                throw new Error("Not found");
+                return null;
             }
             
             return v.parse(schema, result);
@@ -341,8 +341,18 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             } as any, { session, ...options });
             
             const result = await cursor.toArray();
+            let invalidsCount = 0;
 
-            return result.map((item) => v.parse(schema, item));
+            const output = result.map((item) => {
+                const parsed = v.safeParse(schema, item);
+                if(!parsed.success) {
+                    invalidsCount++;
+                    return null;
+                }
+                return parsed.output;
+            }).filter((item): item is v.InferOutput<OutputElementSchema<T, typeof key>> => item !== null);
+            
+            return output;
         },
         async paginate<E extends keyof T, EN = v.InferOutput<OutputElementSchema<T, E>>, R = EN>(
             key: E, 
