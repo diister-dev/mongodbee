@@ -637,6 +637,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                         from: collectionName,
                         localField,
                         foreignField,
+                        as: localField,
                         ...(others || {})
                     },
                 }),
