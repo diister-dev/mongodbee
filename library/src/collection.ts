@@ -1,12 +1,12 @@
 import * as v from './schema.ts';
 import { toMongoValidator } from "./validator.ts";
 import { sanitizeForMongoDB } from "./sanitizer.ts";
-import type * as m from "mongodb";
+import * as m from "mongodb";
 import { EventEmitter } from "./events.ts";
 import { watchEvent } from "./change-stream.ts";
 import { getSessionContext } from "./session.ts"
 import type { Db } from "./mongodb.ts";
-import { extractIndexes } from "./indexes.ts";
+import { extractIndexes, keyEqual, normalizeIndexOptions } from "./indexes.ts";
 import { sanitizePathName } from "./schema-navigator.ts";
 
 type CollectionOptions = {
@@ -182,25 +182,51 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
     async function applyIndexes() {
         const currentIndexes = await collection.indexes();
         const indexes = extractIndexes(schema);
-        
+
         for (const index of indexes) {
+            const keySpec = { [index.path]: 1 };
             const indexPath = sanitizePathName(index.path);
-            
-            const existingIndex = currentIndexes.find(i => {
-                return i.name === indexPath || i.key[index.path] !== undefined;
-            });
-            
+
+            // Try to find an existing index: prefer exact name, fallback to key match
+            const existingIndex = currentIndexes.find(i => i.name === indexPath) || currentIndexes.find(i => keyEqual(i.key || {}, keySpec));
+
+            const desiredOptions = {
+                ...index.metadata,
+                name: indexPath,
+            };
+
+            let needsRecreate = true;
             if (existingIndex) {
-                await collection.dropIndex(existingIndex.name!);
+                const existingNorm = normalizeIndexOptions(existingIndex);
+                const desiredNorm = normalizeIndexOptions(desiredOptions);
+                if (existingNorm.unique === desiredNorm.unique
+                    && existingNorm.collation === desiredNorm.collation
+                    && existingNorm.partialFilterExpression === desiredNorm.partialFilterExpression) {
+                    needsRecreate = false;
+                }
             }
 
-            await collection.createIndex(
-                { [index.path]: 1 },
-                {
-                    ...index.metadata,
-                    name: indexPath,
+            if (!needsRecreate) continue;
+
+            if (existingIndex) {
+                try {
+                    await collection.dropIndex(existingIndex.name!);
+                } catch (err: unknown) {
+                    // tolerate race / already dropped
+                    if (err instanceof m.MongoServerError && err.codeName === "IndexNotFound") {
+                        // ignore
+                    } else {
+                        const maybe = err as { code?: number };
+                        if (maybe.code === 27) {
+                            // legacy IndexNotFound code
+                        } else {
+                            throw err;
+                        }
+                    }
                 }
-            );
+            }
+
+            await collection.createIndex(keySpec, desiredOptions);
         }
     }
     

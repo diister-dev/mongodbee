@@ -106,3 +106,27 @@ export function extractIndexes(
     
     return uniqueIndexes;
 }
+
+/**
+ * Compare two index key specs for equality in a safe way.
+ * Uses JSON.stringify as a deterministic fallback for nested keys.
+ */
+export function keyEqual(a: Record<string, unknown> | undefined, b: Record<string, unknown> | undefined) {
+    try {
+        return JSON.stringify(a ?? {}) === JSON.stringify(b ?? {});
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Normalize index options for comparison purposes.
+ */
+export function normalizeIndexOptions(opts: unknown) {
+    const obj = (opts as Record<string, unknown> | undefined) ?? {};
+    return {
+        unique: !!obj.unique,
+        collation: obj.collation ? JSON.stringify(obj.collation) : undefined,
+        partialFilterExpression: obj.partialFilterExpression ? JSON.stringify(obj.partialFilterExpression) : undefined,
+    };
+}

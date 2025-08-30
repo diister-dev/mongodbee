@@ -5,7 +5,7 @@ import { toMongoValidator } from "./validator.ts";
 import { sanitizeForMongoDB } from "./sanitizer.ts";
 import { createDotNotationSchema } from "./dot-notation.ts";
 import { getSessionContext } from "./session.ts";
-import { extractIndexes, withIndex } from "./indexes.ts";
+import { extractIndexes, withIndex, keyEqual, normalizeIndexOptions } from "./indexes.ts";
 import { sanitizePathName } from "./schema-navigator.ts";
 import type { FlatType } from "../types/flat.ts";
 import type { Db } from "./mongodb.ts";
@@ -232,32 +232,51 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 indexes,
             };
         });
-        
+
         for (const { type, indexes } of allIndexes) {
             for (const index of indexes) {
+                const keySpec = { [index.path]: 1 };
                 const indexName = sanitizePathName(`${type}_${index.path}`);
-                const existingIndex = currentIndexes.find(i => i.name === indexName);
-                
-                if(existingIndex) {
-                    await collection.dropIndex(indexName).catch((e) => {
-                        // https://www.mongodb.com/docs/manual/reference/error-codes/
-                        if (e instanceof m.MongoServerError && e.codeName === "IndexNotFound") {
-                            return;
-                        }
 
-                        throw e;
-                    });
+                const existingIndex = currentIndexes.find(i => i.name === indexName) || currentIndexes.find(i => keyEqual(i.key || {}, keySpec));
+
+                const desiredOptions = {
+                    ...index.metadata,
+                    partialFilterExpression: {
+                        _type: { $eq: type },
+                    },
+                    name: indexName,
+                };
+
+                let needsRecreate = true;
+                if (existingIndex) {
+                    const existingNorm = normalizeIndexOptions(existingIndex);
+                    const desiredNorm = normalizeIndexOptions(desiredOptions);
+                    if (existingNorm.unique === desiredNorm.unique
+                        && existingNorm.collation === desiredNorm.collation
+                        && existingNorm.partialFilterExpression === desiredNorm.partialFilterExpression) {
+                        needsRecreate = false;
+                    }
+                }
+
+                if (!needsRecreate) continue;
+
+                if (existingIndex) {
+                    try {
+                        await collection.dropIndex(existingIndex.name!);
+                    } catch (e) {
+                        // tolerate index already missing (race) when MongoServerError reports IndexNotFound
+                        if (e instanceof m.MongoServerError && e.codeName === "IndexNotFound") {
+                            // already gone, continue
+                        } else {
+                            throw e;
+                        }
+                    }
                 }
 
                 await collection.createIndex(
-                    { [index.path]: 1 },
-                    {
-                        ...index.metadata,
-                        partialFilterExpression: {
-                            _type: { $eq: type },
-                        },
-                        name: indexName,
-                    }
+                    keySpec,
+                    desiredOptions
                 );
             }
         }
