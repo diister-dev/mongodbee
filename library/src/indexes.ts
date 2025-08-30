@@ -111,7 +111,7 @@ export function extractIndexes(
  * Compare two index key specs for equality in a safe way.
  * Uses JSON.stringify as a deterministic fallback for nested keys.
  */
-export function keyEqual(a: Record<string, unknown> | undefined, b: Record<string, unknown> | undefined) {
+export function keyEqual(a: Record<string, unknown> | undefined, b: Record<string, unknown> | undefined): boolean {
     try {
         return JSON.stringify(a ?? {}) === JSON.stringify(b ?? {});
     } catch {
@@ -122,11 +122,15 @@ export function keyEqual(a: Record<string, unknown> | undefined, b: Record<strin
 /**
  * Normalize index options for comparison purposes.
  */
-export function normalizeIndexOptions(opts: unknown) {
+export function normalizeIndexOptions(opts: unknown): { unique: boolean; collation?: string; partialFilterExpression?: string } {
     const obj = (opts as Record<string, unknown> | undefined) ?? {};
+    const objTyped = obj as Record<string, unknown>;
+    const hasUnique = Object.prototype.hasOwnProperty.call(objTyped, 'unique') ? Boolean(objTyped['unique']) : false;
+    const collationVal = Object.prototype.hasOwnProperty.call(objTyped, 'collation') ? objTyped['collation'] : undefined;
+    const pfeVal = Object.prototype.hasOwnProperty.call(objTyped, 'partialFilterExpression') ? objTyped['partialFilterExpression'] : undefined;
     return {
-        unique: !!obj.unique,
-        collation: obj.collation ? JSON.stringify(obj.collation) : undefined,
-        partialFilterExpression: obj.partialFilterExpression ? JSON.stringify(obj.partialFilterExpression) : undefined,
+        unique: hasUnique,
+        collation: collationVal ? JSON.stringify(collationVal) : undefined,
+        partialFilterExpression: pfeVal ? JSON.stringify(pfeVal) : undefined,
     };
 }
