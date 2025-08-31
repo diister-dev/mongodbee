@@ -106,8 +106,8 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
         filter?: (doc: EN) => Promise<boolean> | boolean,
         format?: (doc: EN) => Promise<R> | R,
     }): Promise<{
-        total?: number,
-        position?: number,
+        total: number,
+        position: number,
         data: R[],
     }>;
     countDocuments<E extends keyof T>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, options?: m.CountDocumentsOptions): Promise<number>;
