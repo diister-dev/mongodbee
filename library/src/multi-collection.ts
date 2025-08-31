@@ -105,7 +105,9 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
         prepare?: (doc: v.InferOutput<OutputElementSchema<T, E>>) => Promise<EN> | EN,
         filter?: (doc: EN) => Promise<boolean> | boolean,
         format?: (doc: EN) => Promise<R> | R,
-    }): Promise<R[]>;
+    }): Promise<{
+        data: R[],
+    }>;
     countDocuments<E extends keyof T>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, options?: m.CountDocumentsOptions): Promise<number>;
     deleteId<E extends keyof T>(key: E, id: string): Promise<number>;
     deleteIds<E extends keyof T>(key: E, ids: string[]): Promise<number>;
@@ -406,7 +408,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 filter?: (doc: EN) => Promise<boolean> | boolean,
                 format?: (doc: EN) => Promise<R>,
             }
-        ): Promise<R[]> {
+        ) {
             let { limit = 100, afterId, beforeId, sort, prepare, filter: customFilter, format } = options || {};
             const session = sessionContext.getSession();
             
@@ -474,7 +476,14 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 limit--;
             }
 
-            return elements;
+            // If paginating backwards (beforeId) and no explicit sort was provided, reverse the results to maintain chronological order
+            if(beforeId && !sort) {
+                elements.reverse();
+            }
+
+            return {
+                data: elements,
+            };
         },
         countDocuments(key, filter, options?) {
             const session = sessionContext.getSession();
