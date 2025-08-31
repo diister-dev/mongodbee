@@ -445,7 +445,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                         { _id: { $lt: beforeId } }
                     ]
                 };
-                // sort = sort || { _id: -1 };
+                sort = sort || { _id: -1 };
             }
 
             let total: number | undefined;
@@ -508,7 +508,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
             // If paginating backwards (beforeId) and no explicit sort was provided, reverse the results to maintain chronological order
             if(beforeId) {
-                // elements.reverse();
+                elements.reverse();
                 position = (position || 0) - elements.length;
                 position = position < 0 ? 0 : position;
             }
