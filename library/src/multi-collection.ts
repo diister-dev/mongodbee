@@ -106,6 +106,8 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
         filter?: (doc: EN) => Promise<boolean> | boolean,
         format?: (doc: EN) => Promise<R> | R,
     }): Promise<{
+        total?: number,
+        position?: number,
         data: R[],
     }>;
     countDocuments<E extends keyof T>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, options?: m.CountDocumentsOptions): Promise<number>;
@@ -446,6 +448,34 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 sort = sort || { _id: -1 };
             }
 
+            let total: number | undefined;
+            let position: number | undefined;
+            {
+                const baseCountQuery = { $and: baseQuery };
+                total = await collection.countDocuments(baseCountQuery as never, { session });
+                
+                if (afterId) {
+                    const positionQuery = {
+                        $and: [
+                            ...baseQuery,
+                            { _id: { $lte: afterId } }
+                        ]
+                    };
+                    position = await collection.countDocuments(positionQuery as never, { session });
+                } else if (beforeId) {
+                    const positionQuery = {
+                        $and: [
+                            ...baseQuery,
+                            { _id: { $gte: beforeId } }
+                        ]
+                    };
+                    const remainingCount = await collection.countDocuments(positionQuery as never, { session });
+                    position = total - remainingCount;
+                } else {
+                    position = 0;
+                }
+            }
+
             const cursor = collection.find(query as never, { session }).sort(sort as m.Sort);
             let hardLimit = 10_000;
             const elements: R[] = [];
@@ -482,6 +512,8 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             }
 
             return {
+                total,
+                position,
                 data: elements,
             };
         },
