@@ -477,7 +477,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             }
 
             // If paginating backwards (beforeId) and no explicit sort was provided, reverse the results to maintain chronological order
-            if(beforeId && !sort) {
+            if(beforeId) {
                 elements.reverse();
             }
 
