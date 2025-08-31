@@ -9,6 +9,7 @@ const userSchema = {
     name: v.string(),
     age: v.number(),
     email: v.optional(v.string()),
+    status: v.null()
 } as const;
 
 Deno.test("Collection: Basic operations coverage", async (t) => {
@@ -19,7 +20,8 @@ Deno.test("Collection: Basic operations coverage", async (t) => {
         const _insertResult = await users.insertOne({
             name: "John",
             age: 30,
-            email: "john@example.com"
+            email: "john@example.com",
+            status: null
         });
         
         // Test findOne
@@ -46,8 +48,8 @@ Deno.test("Collection: Basic operations coverage", async (t) => {
         
         // Test insertMany
         await users.insertMany([
-            { name: "Alice", age: 25 },
-            { name: "Bob", age: 35 }
+            { name: "Alice", age: 25, status: null },
+            { name: "Bob", age: 35, status: null }
         ]);
         
         // Test count
@@ -64,7 +66,7 @@ Deno.test("Collection: Basic operations coverage", async (t) => {
         assertEquals(results.length, 1);
         
         // Test replaceOne
-        await users.replaceOne({ name: "Alice" }, { name: "Alice", age: 26 });
+        await users.replaceOne({ name: "Alice" }, { name: "Alice", age: 26, status: null });
         const replaced = await users.findOne({ name: "Alice" });
         assertEquals(replaced?.age, 26);
         
@@ -95,7 +97,7 @@ Deno.test("Collection: Error handling coverage", async (t) => {
         assertEquals(deleteResult.deletedCount, 0);
         
         // Test replaceOne with non-existent document
-        const replaceResult = await users.replaceOne({ name: "NonExistent" }, { name: "New", age: 20 });
+        const replaceResult = await users.replaceOne({ name: "NonExistent" }, { name: "New", age: 20, status: null });
         assertEquals(replaceResult.modifiedCount, 0);
         
         // Test count with empty collection
@@ -112,7 +114,8 @@ Deno.test("Collection: getById functionality", async (t) => {
         const userId = await users.insertOne({
             name: "Test User",
             age: 25,
-            email: "test@example.com"
+            email: "test@example.com",
+            status: null
         });
         
         // Test getById with valid ID

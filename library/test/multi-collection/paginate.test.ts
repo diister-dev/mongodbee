@@ -46,10 +46,10 @@ Deno.test("Multi-collection paginate basic functionality", async (t) => {
 
     // Test basic pagination for products
     const firstPageProducts = await catalog.paginate("product", {}, { limit: 5 });
-    assertEquals(firstPageProducts.length, 5);
+    assertEquals(firstPageProducts.data.length, 5);
     
     // Verify all results are products
-    for (const product of firstPageProducts) {
+    for (const product of firstPageProducts.data) {
       assertEquals(product._type, "product");
       assertExists(product.name);
       assertExists(product.price);
@@ -58,10 +58,10 @@ Deno.test("Multi-collection paginate basic functionality", async (t) => {
 
     // Test basic pagination for categories
     const firstPageCategories = await catalog.paginate("category", {}, { limit: 3 });
-    assertEquals(firstPageCategories.length, 3);
+    assertEquals(firstPageCategories.data.length, 3);
     
     // Verify all results are categories
-    for (const category of firstPageCategories) {
+    for (const category of firstPageCategories.data) {
       assertEquals(category._type, "category");
       assertExists(category.name);
       assertExists(category.description);
@@ -104,18 +104,18 @@ Deno.test("Multi-collection paginate with afterId", async (t) => {
 
     // Test pagination with afterId for products
     const firstPageProducts = await catalog.paginate("product", {}, { limit: 5, sort: { _id: 1 } });
-    assertEquals(firstPageProducts.length, 5);
+    assertEquals(firstPageProducts.data.length, 5);
     
     const secondPageProducts = await catalog.paginate("product", {}, { 
       limit: 5, 
-      afterId: firstPageProducts[firstPageProducts.length - 1]._id,
+      afterId: firstPageProducts.data[firstPageProducts.data.length - 1]._id,
       sort: { _id: 1 }
     });
-    assertEquals(secondPageProducts.length, 5);
+    assertEquals(secondPageProducts.data.length, 5);
     
     // Verify no overlap between pages
-    const firstPageIds = new Set(firstPageProducts.map(p => p._id));
-    const secondPageIds = new Set(secondPageProducts.map(p => p._id));
+    const firstPageIds = new Set(firstPageProducts.data.map(p => p._id));
+    const secondPageIds = new Set(secondPageProducts.data.map(p => p._id));
     
     for (const id of secondPageIds) {
       assertEquals(firstPageIds.has(id), false);
@@ -123,17 +123,17 @@ Deno.test("Multi-collection paginate with afterId", async (t) => {
 
     // Test pagination with afterId for users
     const firstPageUsers = await catalog.paginate("user", {}, { limit: 3, sort: { _id: 1 } });
-    assertEquals(firstPageUsers.length, 3);
+    assertEquals(firstPageUsers.data.length, 3);
     
     const secondPageUsers = await catalog.paginate("user", {}, { 
       limit: 3, 
-      afterId: firstPageUsers[firstPageUsers.length - 1]._id,
+      afterId: firstPageUsers.data[firstPageUsers.data.length - 1]._id,
       sort: { _id: 1 }
     });
-    assertEquals(secondPageUsers.length, 3);
+    assertEquals(secondPageUsers.data.length, 3);
     
     // Verify all are users
-    for (const user of secondPageUsers) {
+    for (const user of secondPageUsers.data) {
       assertEquals(user._type, "user");
     }
   });
@@ -166,11 +166,11 @@ Deno.test("Multi-collection paginate with beforeId", async (t) => {
       sort: { _id: -1 }
     });
     
-    assertEquals(beforePage.length, 3);
+    assertEquals(beforePage.data.length, 3);
     
     // Verify items come before the reference point
     const referenceId = allProducts[6]._id;
-    for (const product of beforePage) {
+    for (const product of beforePage.data) {
       assertEquals(product._id < referenceId, true);
       assertEquals(product._type, "product");
     }
@@ -202,10 +202,10 @@ Deno.test("Multi-collection paginate with filter", async (t) => {
       { limit: 10 }
     );
     
-    assertEquals(electronicsProducts.length, 10);
+    assertEquals(electronicsProducts.data.length, 10);
     
     // Verify all are electronics
-    for (const product of electronicsProducts) {
+    for (const product of electronicsProducts.data) {
       assertEquals(product.category, "electronics");
       assertEquals(product._type, "product");
     }
@@ -220,9 +220,9 @@ Deno.test("Multi-collection paginate with filter", async (t) => {
     );
     
     // Should get products with price 110, 130, 150, 170, 190
-    assertEquals(expensiveElectronics.length, 5);
+    assertEquals(expensiveElectronics.data.length, 5);
     
-    for (const product of expensiveElectronics) {
+    for (const product of expensiveElectronics.data) {
       assertEquals(product.category, "electronics");
       assertEquals(product.price > 100, true);
     }
@@ -257,19 +257,19 @@ Deno.test("Multi-collection paginate with sorting", async (t) => {
       sort: { price: 1 }
     });
     
-    assertEquals(sortedByPrice.length, 5);
+    assertEquals(sortedByPrice.data.length, 5);
     
     // Verify items are sorted by price
-    for (let i = 0; i < sortedByPrice.length - 1; i++) {
-      assertEquals(sortedByPrice[i].price <= sortedByPrice[i + 1].price, true);
+    for (let i = 0; i < sortedByPrice.data.length - 1; i++) {
+      assertEquals(sortedByPrice.data[i].price <= sortedByPrice.data[i + 1].price, true);
     }
     
     // Verify the actual order
-    assertEquals(sortedByPrice[0].price, 100);
-    assertEquals(sortedByPrice[1].price, 200);
-    assertEquals(sortedByPrice[2].price, 300);
-    assertEquals(sortedByPrice[3].price, 400);
-    assertEquals(sortedByPrice[4].price, 500);
+    assertEquals(sortedByPrice.data[0].price, 100);
+    assertEquals(sortedByPrice.data[1].price, 200);
+    assertEquals(sortedByPrice.data[2].price, 300);
+    assertEquals(sortedByPrice.data[3].price, 400);
+    assertEquals(sortedByPrice.data[4].price, 500);
   });
 });
 
@@ -323,18 +323,18 @@ Deno.test("Multi-collection paginate with empty results", async (t) => {
 
     // Test empty collection
     const emptyProducts = await catalog.paginate("product", {}, { limit: 10 });
-    assertEquals(emptyProducts.length, 0);
+    assertEquals(emptyProducts.data.length, 0);
 
     // Insert some users but test products (should be empty)
     await catalog.insertOne("user", { name: "User 1", email: "user1@test.com" });
     await catalog.insertOne("user", { name: "User 2", email: "user2@test.com" });
     
     const stillEmptyProducts = await catalog.paginate("product", {}, { limit: 10 });
-    assertEquals(stillEmptyProducts.length, 0);
+    assertEquals(stillEmptyProducts.data.length, 0);
     
     // But users should exist
     const existingUsers = await catalog.paginate("user", {}, { limit: 10 });
-    assertEquals(existingUsers.length, 2);
+    assertEquals(existingUsers.data.length, 2);
   });
 });
 
@@ -357,14 +357,14 @@ Deno.test("Multi-collection paginate with limit boundary conditions", async (t) 
 
     // Test with limit larger than available data
     const largeLimitPage = await catalog.paginate("product", {}, { limit: 100 });
-    assertEquals(largeLimitPage.length, 5);
+    assertEquals(largeLimitPage.data.length, 5);
     
     // Test with limit of 1
     const singleItemPage = await catalog.paginate("product", {}, { limit: 1 });
-    assertEquals(singleItemPage.length, 1);
+    assertEquals(singleItemPage.data.length, 1);
     
     // Test with limit of 0
     const zeroLimitPage = await catalog.paginate("product", {}, { limit: 0 });
-    assertEquals(zeroLimitPage.length, 0);
+    assertEquals(zeroLimitPage.data.length, 0);
   });
 });

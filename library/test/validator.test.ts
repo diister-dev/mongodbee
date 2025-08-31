@@ -46,7 +46,8 @@ Deno.test("Basic types schemas", () => {
         stringField: v.string(),
         numberField: v.number(),
         booleanField: v.boolean(),
-        dateField: v.date()
+        dateField: v.date(),
+        nullField: v.null()
     });
 
     const validator = toMongoValidator(schema);
@@ -70,6 +71,11 @@ Deno.test("Basic types schemas", () => {
     assertEquals(jsonSchema.properties!.dateField, {
         bsonType: "date",
         description: "must be a date"
+    });
+
+    assertEquals(jsonSchema.properties!.nullField, {
+        bsonType: "null",
+        description: "must be null"
     });
 });
 

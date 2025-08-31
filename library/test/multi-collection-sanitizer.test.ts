@@ -27,7 +27,8 @@ const userSchema = {
     name: v.string(),
     email: v.optional(v.string()),
     phone: v.optional(v.string()),
-    age: v.optional(v.number())
+    age: v.optional(v.number()),
+    status: v.optional(v.null())
 };
 
 const productSchema = {
@@ -442,6 +443,54 @@ Deno.test("Multi-collection: Mixed undefined behaviors in transactions", async (
         assert(lenientUser2 !== null);
         assert(!("email" in lenientUser2));
         assertEquals(lenientUser2.phone, "123-456-7890");
+        
+    } finally {
+        await cleanupTestDb();
+    }
+});
+
+Deno.test("Multi-collection: Null validation", async () => {
+    await setupTestDb();
+    
+    try {
+        const users = await collection(db, "null_test_users", userSchema, {
+            undefinedBehavior: 'remove'
+        });
+        
+        // Test inserting with null status
+        await users.insertOne({
+            name: "NullUser",
+            email: "null@example.com",
+            phone: "123-456-7890",
+            age: 30,
+            status: null
+        });
+        
+        const insertedUser = await users.findOne({ name: "NullUser" });
+        assert(insertedUser !== null);
+        assertEquals(insertedUser.status, null);
+        assertEquals(insertedUser.name, "NullUser");
+        
+        // Test inserting without status (should be undefined, not null)
+        await users.insertOne({
+            name: "NoStatusUser",
+            email: "nostatus@example.com",
+            age: 25
+        });
+        
+        const noStatusUser = await users.findOne({ name: "NoStatusUser" });
+        assert(noStatusUser !== null);
+        assert(!("status" in noStatusUser)); // status should not be present
+        
+        // Test updating to null
+        await users.updateOne(
+            { name: "NoStatusUser" },
+            { $set: { status: null } }
+        );
+        
+        const updatedUser = await users.findOne({ name: "NoStatusUser" });
+        assert(updatedUser !== null);
+        assertEquals(updatedUser.status, null);
         
     } finally {
         await cleanupTestDb();

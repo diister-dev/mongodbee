@@ -52,13 +52,13 @@ Deno.test("Multi-Collection: Basic prepare → filter → format", async (t) => 
             })
         });
 
-        assert(results.length === 2, "Should return 2 active users");
-        assert(results[0].displayName === "Alice", "First user should be Alice");
-        assert(results[0].category === "young", "Alice should be young");
-        assert(results[0].domain === "test.com", "Domain should be test.com");
-        assert(results[0].type === "users", "Type should be users");
-        assert(results[1].displayName === "Charlie", "Second user should be Charlie");
-        assert(results[1].category === "adult", "Charlie should be adult");
+        assert(results.data.length === 2, "Should return 2 active users");
+        assert(results.data[0].displayName === "Alice", "First user should be Alice");
+        assert(results.data[0].category === "young", "Alice should be young");
+        assert(results.data[0].domain === "test.com", "Domain should be test.com");
+        assert(results.data[0].type === "users", "Type should be users");
+        assert(results.data[1].displayName === "Charlie", "Second user should be Charlie");
+        assert(results.data[1].category === "adult", "Charlie should be adult");
     });
 });
 
@@ -92,13 +92,13 @@ Deno.test("Multi-Collection: Products with pricing logic", async (t) => {
             })
         });
 
-        assert(results.length === 2, "Should return 2 in-stock products");
-        assert(results[0].productName === "Laptop", "First product should be Laptop");
-        assert(results[0].tier === "premium", "Laptop should be premium");
-        assert(results[0].canDiscount === true, "Laptop should be discount eligible");
-        assert(results[1].productName === "Book", "Second product should be Book");
-        assert(results[1].tier === "budget", "Book should be budget");
-        assert(results[1].canDiscount === false, "Book should not be discount eligible");
+        assert(results.data.length === 2, "Should return 2 in-stock products");
+        assert(results.data[0].productName === "Laptop", "First product should be Laptop");
+        assert(results.data[0].tier === "premium", "Laptop should be premium");
+        assert(results.data[0].canDiscount === true, "Laptop should be discount eligible");
+        assert(results.data[1].productName === "Book", "Second product should be Book");
+        assert(results.data[1].tier === "budget", "Book should be budget");
+        assert(results.data[1].canDiscount === false, "Book should not be discount eligible");
     });
 });
 
@@ -133,10 +133,10 @@ Deno.test("Multi-Collection: Cross-type isolation", async (t) => {
             })
         });
 
-        assert(userResults.length === 2, "Should return 2 users");
-        assert(userResults.every(r => r.recordType === "user-record"), "All should be user records");
-        assert(productResults.length === 1, "Should return 1 product");
-        assert(productResults.every(r => r.recordType === "product-record"), "All should be product records");
+        assert(userResults.data.length === 2, "Should return 2 users");
+        assert(userResults.data.every(r => r.recordType === "user-record"), "All should be user records");
+        assert(productResults.data.length === 1, "Should return 1 product");
+        assert(productResults.data.every(r => r.recordType === "product-record"), "All should be product records");
     });
 });
 
@@ -198,13 +198,13 @@ Deno.test("Multi-Collection: External API enrichment", async (t) => {
             })
         });
 
-        assert(userResults.length === 1, "Should return 1 active user");
-        assert(userResults[0].trust === "high", "Alice should have high trust");
-        assert(userResults[0].score === 95, "Alice should have score 95");
+        assert(userResults.data.length === 1, "Should return 1 active user");
+        assert(userResults.data[0].trust === "high", "Alice should have high trust");
+        assert(userResults.data[0].score === 95, "Alice should have score 95");
         
-        assert(productResults.length === 1, "Should return 1 in-stock product");
-        assert(productResults[0].rating === 4.5, "Laptop should have 4.5 rating");
-        assert(productResults[0].popularity === "popular", "Laptop should be popular");
+        assert(productResults.data.length === 1, "Should return 1 in-stock product");
+        assert(productResults.data[0].rating === 4.5, "Laptop should have 4.5 rating");
+        assert(productResults.data[0].popularity === "popular", "Laptop should be popular");
     });
 });
 
@@ -247,9 +247,9 @@ Deno.test("Multi-Collection: Type safety with generics", async (t) => {
             }
         });
 
-        assert(results.length === 1, "Should return 1 result");
-        assert(results[0].finalName === "Alice", "Should have final name");
-        assert(results[0].finalValue === "test-value", "Should have final value");
+        assert(results.data.length === 1, "Should return 1 result");
+        assert(results.data[0].finalName === "Alice", "Should have final name");
+        assert(results.data[0].finalValue === "test-value", "Should have final value");
     });
 });
 

@@ -119,6 +119,13 @@ function constructorToValidator(schema: UnknownSchema | UnknownValidation) {
                     description: s.message ?? `must be a date`,
                 }
             }
+            case "null": {
+                const s = schema as v.NullSchema<undefined>;
+                return {
+                    bsonType: "null",
+                    description: s.message ?? `must be null`,
+                }
+            }
             case "array": {
                 const s = schema as v.ArraySchema<any, undefined>;
                 const items = constructorToValidator(s.item) as any;
