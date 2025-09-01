@@ -11,11 +11,19 @@ function buildPipelineResult<T>(pipe: any) {
             for (const [key, val] of Object.entries(value)) {
                 if (key in acc) {
                     if (key == "pattern") {
+                        // Combine regex patterns with lookahead
                         acc[key] = `(?=${acc[key]})(?=${val})`;
                     } else if (key == "enum") {
                         // For enum values, we keep them as they are
                         acc[key] = val;
+                    } else if (key == "minLength" || key == "minItems" || key == "minimum") {
+                        // For minimum constraints, take the maximum value (most restrictive)
+                        acc[key] = Math.max(acc[key], val as number);
+                    } else if (key == "maxLength" || key == "maxItems" || key == "maximum") {
+                        // For maximum constraints, take the minimum value (most restrictive)
+                        acc[key] = Math.min(acc[key], val as number);
                     } else {
+                        // For other properties, last value wins
                         acc[key] = val;
                     }
                 } else {
@@ -352,6 +360,14 @@ function constructorToValidator(schema: UnknownSchema | UnknownValidation) {
                 const s = schema as v.MaxLengthAction<any, any, any>;
                 return {
                     maxLength: s.requirement,
+                }
+            }
+            case "non_empty": {
+                // For arrays, use minItems, for strings use minLength
+                // We can't distinguish here, so we provide both and let MongoDB pick the right one
+                return {
+                    minLength: 1,
+                    minItems: 1,
                 }
             }
             default: {
