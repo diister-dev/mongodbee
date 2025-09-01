@@ -20,7 +20,7 @@ Deno.test("Basic prepare → filter → format pipeline", async (t) => {
         await users.insertOne({ name: "Bob", age: 30, email: "bob@test.com", isActive: false });
         await users.insertOne({ name: "Charlie", age: 35, email: "charlie@test.com", isActive: true });
 
-        const results = await users.paginate({}, {
+        const { data: results} = await users.paginate({}, {
             // Step 1: Prepare (enrich with computed field)
             prepare: async (user) => ({
                 ...user,
@@ -55,7 +55,7 @@ Deno.test("Only prepare stage (no filter/format)", async (t) => {
         await users.insertOne({ name: "Alice", age: 25, email: "alice@test.com", isActive: true });
         await users.insertOne({ name: "Bob", age: 30, email: "bob@test.com", isActive: false });
 
-        const results = await users.paginate({}, {
+        const { data: results } = await users.paginate({}, {
             prepare: async (user) => ({
                 ...user,
                 ageGroup: user.age < 30 ? "young" : "adult",
@@ -79,7 +79,7 @@ Deno.test("Only filter stage (no prepare/format)", async (t) => {
         await users.insertOne({ name: "Bob", age: 30, email: "bob@test.com", isActive: false });
         await users.insertOne({ name: "Charlie", age: 35, email: "charlie@test.com", isActive: true });
 
-        const results = await users.paginate({}, {
+        const {data: results} = await users.paginate({}, {
             filter: (user) => user.age >= 30
         });
 
@@ -96,7 +96,7 @@ Deno.test("Only format stage (no prepare/filter)", async (t) => {
         await users.insertOne({ name: "Alice", age: 25, email: "alice@test.com", isActive: true });
         await users.insertOne({ name: "Bob", age: 30, email: "bob@test.com", isActive: false });
 
-        const results = await users.paginate({}, {
+        const {data: results} = await users.paginate({}, {
             format: async (user) => ({
                 id: user._id,
                 fullName: user.name,
@@ -140,7 +140,7 @@ Deno.test("Async external API simulation", async (t) => {
             }
         };
 
-        const results = await users.paginate({}, {
+        const {data: results} = await users.paginate({}, {
             // Step 1: Prepare - fetch external data
             prepare: async (user) => {
                 const profile = await mockExternalAPI.getUserProfile(user.email);
@@ -245,7 +245,7 @@ Deno.test("Type safety verification", async (t) => {
         await users.insertOne({ name: "Alice", age: 25, email: "alice@test.com", isActive: true });
 
         // Test type transformations
-        const results = await users.paginate({}, {
+        const {data: results} = await users.paginate({}, {
             prepare: async (user) => {
                 // user should be WithId<User>
                 assert(typeof user.name === "string", "Should have name");

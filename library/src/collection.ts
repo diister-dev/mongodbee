@@ -53,7 +53,11 @@ export type CollectionResult<T extends Record<string, v.BaseSchema<unknown, unkn
             prepare?: (doc: WithId<TOutput<T>>) => Promise<E> | E,
             filter?: (doc: E) => Promise<boolean> | boolean,
             format?: (doc: E) => Promise<R> | R,
-        }) => Promise<R[]>,
+        }) => Promise<{
+            total: number,
+            position: number,
+            data: R[],
+        }>,
 
         // From mongodb.Collection
         updateOne(filter: m.Filter<WithId<TInput<T>>>, update: m.UpdateFilter<TInput<T>> | m.Document[], options?: m.UpdateOptions): Promise<m.UpdateResult<TInput<T>>>;
@@ -377,29 +381,22 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
             // Override toArray
             cursor.toArray = async function () {
                 const results = await originalToArray.call(cursor);
-                const valids = [];
-                const invalids = [];
-                for (const doc of results) {
-                    const validation = v.safeParse(schema, doc);
-                    if (validation.success) {
-                        valids.push(validation.output as m.WithId<TInput>);
-                    } else {
-                        invalids.push({
-                            errors: validation,
-                            result: doc,
-                        });
+                let invalidsCount = 0;
+
+                const output = results.map((item) => {
+                    const validation = v.safeParse(schema, item);
+                    if (!validation.success) {
+                        invalidsCount++;
+                        return null;
                     }
+                    return validation.output as m.WithId<TInput>;
+                }).filter((item): item is m.WithId<TInput> => item !== null);
+
+                if (invalidsCount > 0) {
+                    console.warn(`Warning: ${invalidsCount} invalid documents were ignored during find operation`);
                 }
 
-                if (invalids.length > 0) {
-                    throw {
-                        message: "Validation error",
-                        valids,
-                        invalids,
-                    }
-                }
-
-                return valids;
+                return output;
             };
 
             return cursor as unknown as m.AbstractCursor<TOutput>;
@@ -412,11 +409,17 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
             prepare?: (doc: WithId<TOutput>) => Promise<E>,
             filter?: (doc: E) => Promise<boolean> | boolean,
             format?: (doc: E) => Promise<R>,
-        }): Promise<R[]> {
+        }): Promise<{
+            total: number,
+            position: number,
+            data: R[],
+        }> {
             let { limit = 100, afterId, beforeId, sort, prepare, filter: customFilter, format } = options || {};
             const session = sessionContext.getSession();
-            const query: m.Filter<TInput> = { ...filter };
+            const baseQuery: m.Filter<TInput> = { ...filter };
+            let query: m.Filter<TInput> = { ...filter };
 
+            // Add pagination filters
             if (afterId) {
                 (query as Record<string, unknown>)._id = { $gt: afterId };
                 sort = sort || { _id: 1 };
@@ -426,9 +429,34 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
                 sort = sort || { _id: -1 };
             }
 
+            let total: number | undefined;
+            let position: number | undefined;
+            {
+                // Count total documents matching the base filter
+                total = await collection.countDocuments(baseQuery, { session });
+                
+                if (afterId) {
+                    const positionQuery = { 
+                        ...baseQuery,
+                        _id: { $lte: afterId }
+                    } as m.Filter<TInput>;
+                    position = await collection.countDocuments(positionQuery, { session });
+                } else if (beforeId) {
+                    const positionQuery = { 
+                        ...baseQuery,
+                        _id: { $gte: beforeId }
+                    } as m.Filter<TInput>;
+                    const remainingCount = await collection.countDocuments(positionQuery, { session });
+                    position = total - remainingCount;
+                } else {
+                    position = 0;
+                }
+            }
+
             const cursor = collection.find(query, { session }).sort(sort as m.Sort);
             let hardLimit = 10_000;
             const elements: R[] = [];
+            
             while(hardLimit-- > 0 && limit > 0) {
                 const doc = await cursor.next() as WithId<TOutput> | null;
                 if (!doc) break;
@@ -455,7 +483,18 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
                 limit--;
             }
 
-            return elements;
+            // If paginating backwards (beforeId) and no explicit sort was provided, reverse the results to maintain chronological order
+            if(beforeId) {
+                elements.reverse();
+                position = (position || 0) - elements.length;
+                position = position < 0 ? 0 : position;
+            }
+
+            return {
+                total,
+                position,
+                data: elements,
+            };
         },
         countDocuments(filter, options?) {
             const session = sessionContext.getSession();
