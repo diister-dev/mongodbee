@@ -621,6 +621,244 @@ Deno.test("Record schema complex cases", () => {
     });
 });
 
+Deno.test("Nullable schema", () => {
+    const schema = v.object({
+        nullableString: v.nullable(v.string()),
+        nullableNumber: v.nullable(v.number()),
+        nullableObject: v.nullable(v.object({ name: v.string() })),
+        nullableStringWithDefault: v.nullable(v.string(), "default")
+    });
+
+    const validator = toMongoValidator(schema);
+    const jsonSchema = validator.$jsonSchema!;
+    
+    // Test nullable string
+    assertEquals(jsonSchema.properties!.nullableString, {
+        anyOf: [
+            {
+                bsonType: "string",
+                description: "must be a string"
+            },
+            {
+                bsonType: "null"
+            }
+        ]
+    });
+
+    // Test nullable number
+    assertEquals(jsonSchema.properties!.nullableNumber, {
+        anyOf: [
+            {
+                bsonType: "number",
+                description: "must be a number"
+            },
+            {
+                bsonType: "null"
+            }
+        ]
+    });
+
+    // Test nullable object
+    assertEquals(jsonSchema.properties!.nullableObject, {
+        anyOf: [
+            {
+                bsonType: "object",
+                properties: {
+                    name: {
+                        bsonType: "string",
+                        description: "must be a string"
+                    }
+                },
+                required: ["name"]
+            },
+            {
+                bsonType: "null"
+            }
+        ]
+    });
+
+    // Test nullable with default (should still be required in MongoDB schema)
+    assertEquals(jsonSchema.properties!.nullableStringWithDefault, {
+        anyOf: [
+            {
+                bsonType: "string",
+                description: "must be a string"
+            },
+            {
+                bsonType: "null"
+            }
+        ]
+    });
+
+    // All nullable fields should be required in the schema (MongoDB doesn't handle defaults)
+    assert(jsonSchema.required!.includes("nullableString"));
+    assert(jsonSchema.required!.includes("nullableNumber"));
+    assert(jsonSchema.required!.includes("nullableObject"));
+    assert(jsonSchema.required!.includes("nullableStringWithDefault"));
+});
+
+Deno.test("Nullable with validations", () => {
+    const schema = v.object({
+        nullableEmail: v.nullable(v.pipe(v.string(), v.regex(/^.+@.+\..+$/))),
+        nullableAge: v.nullable(v.pipe(v.number(), v.minValue(0), v.maxValue(120))),
+        nullableArray: v.nullable(v.pipe(v.array(v.string()), v.minLength(1), v.maxLength(5)))
+    });
+
+    const validator = toMongoValidator(schema);
+    const jsonSchema = validator.$jsonSchema!;
+    
+    // Test nullable string with regex validation
+    assertEquals(jsonSchema.properties!.nullableEmail, {
+        anyOf: [
+            {
+                bsonType: "string",
+                description: "must be a string",
+                pattern: "^.+@.+\\..+$"
+            },
+            {
+                bsonType: "null"
+            }
+        ]
+    });
+
+    // Test nullable number with range validation
+    assertEquals(jsonSchema.properties!.nullableAge, {
+        anyOf: [
+            {
+                bsonType: "number",
+                description: "must be a number",
+                minimum: 0,
+                maximum: 120
+            },
+            {
+                bsonType: "null"
+            }
+        ]
+    });
+
+    // Test nullable array with length validation
+    assertEquals(jsonSchema.properties!.nullableArray, {
+        anyOf: [
+            {
+                bsonType: "array",
+                items: {
+                    bsonType: "string",
+                    description: "must be a string"
+                },
+                description: "must be an array",
+                minItems: 1,
+                maxItems: 5
+            },
+            {
+                bsonType: "null"
+            }
+        ]
+    });
+});
+
+Deno.test("Nullable validation with Valibot", () => {
+    // Test that nullable schemas work correctly with Valibot validation
+    const schema = v.object({
+        nullableString: v.nullable(v.string()),
+        nullableNumber: v.nullable(v.pipe(v.number(), v.minValue(0)))
+    });
+
+    // Valid: null values
+    const validNull = v.safeParse(schema, { 
+        nullableString: null, 
+        nullableNumber: null 
+    });
+    assert(validNull.success);
+
+    // Valid: actual values
+    const validValues = v.safeParse(schema, { 
+        nullableString: "test", 
+        nullableNumber: 42 
+    });
+    assert(validValues.success);
+
+    // Invalid: wrong types (should fail)
+    const invalidType = v.safeParse(schema, { 
+        nullableString: 123, 
+        nullableNumber: "not a number" 
+    });
+    assert(!invalidType.success);
+
+    // Invalid: number validation fails
+    const invalidNumber = v.safeParse(schema, { 
+        nullableString: "test", 
+        nullableNumber: -5 
+    });
+    assert(!invalidNumber.success);
+
+    // Valid: mixed null and values
+    const mixedValid = v.safeParse(schema, { 
+        nullableString: "test", 
+        nullableNumber: null 
+    });
+    assert(mixedValid.success);
+});
+
+Deno.test("Nested nullable schemas", () => {
+    const schema = v.object({
+        user: v.nullable(v.object({
+            name: v.string(),
+            age: v.nullable(v.number())
+        })),
+        tags: v.array(v.nullable(v.string()))
+    });
+
+    const validator = toMongoValidator(schema);
+    const jsonSchema = validator.$jsonSchema!;
+    
+    // Test nested nullable object
+    assertEquals(jsonSchema.properties!.user, {
+        anyOf: [
+            {
+                bsonType: "object",
+                properties: {
+                    name: {
+                        bsonType: "string",
+                        description: "must be a string"
+                    },
+                    age: {
+                        anyOf: [
+                            {
+                                bsonType: "number",
+                                description: "must be a number"
+                            },
+                            {
+                                bsonType: "null"
+                            }
+                        ]
+                    }
+                },
+                required: ["name", "age"]
+            },
+            {
+                bsonType: "null"
+            }
+        ]
+    });
+
+    // Test array of nullable items
+    assertEquals(jsonSchema.properties!.tags, {
+        bsonType: "array",
+        items: {
+            anyOf: [
+                {
+                    bsonType: "string",
+                    description: "must be a string"
+                },
+                {
+                    bsonType: "null"
+                }
+            ]
+        },
+        description: "must be an array"
+    });
+});
+
 Deno.test("Record validation edge cases", () => {
     // Test that patternProperties validation works
     const schema = v.object({

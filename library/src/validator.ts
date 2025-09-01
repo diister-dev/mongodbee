@@ -153,6 +153,25 @@ function constructorToValidator(schema: UnknownSchema | UnknownValidation) {
                 const s = schema as v.OptionalSchema<any, any>;
                 return constructorToValidator(s.wrapped);
             }
+            case "nullable": {
+                const s = schema as v.OptionalSchema<any, any>;
+                const wrappedValidator = constructorToValidator(s.wrapped) as any;
+                
+                if (!wrappedValidator) {
+                    return {
+                        anyOf: [
+                            { bsonType: "null" }
+                        ]
+                    };
+                }
+                
+                return {
+                    anyOf: [
+                        wrappedValidator,
+                        { bsonType: "null" }
+                    ]
+                };
+            }
             case "union": {
                 const s = schema as v.UnionSchema<any, any>;
                 const anyOf: any[] = [];
