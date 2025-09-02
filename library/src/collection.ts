@@ -8,6 +8,7 @@ import { getSessionContext } from "./session.ts"
 import type { Db } from "./mongodb.ts";
 import { extractIndexes, keyEqual, normalizeIndexOptions } from "./indexes.ts";
 import { sanitizePathName } from "./schema-navigator.ts";
+import { dirtyEquivalent } from "./utilities.ts";
 
 type CollectionOptions = {
     safeDelete?: boolean,
@@ -175,6 +176,14 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
                 validator,
             });
         } else {
+            // Check collection options
+            const existingOptions = await db.command({ listCollections: 1, filter: { name: collectionName } });
+            const currentSchema = existingOptions.cursor.firstBatch[0].options?.validator || {};
+            const sameSchema = dirtyEquivalent(currentSchema, validator);
+            if (sameSchema) {
+                return; // No need to update
+            }
+            
             // Update the collection with the validator
             await db.command({
                 collMod: collectionName,
@@ -198,7 +207,7 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
                 ...index.metadata,
                 name: indexPath,
             };
-
+            
             let needsRecreate = true;
             if (existingIndex) {
                 const existingNorm = normalizeIndexOptions(existingIndex);

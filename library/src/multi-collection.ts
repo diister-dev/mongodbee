@@ -9,6 +9,7 @@ import { extractIndexes, withIndex, keyEqual, normalizeIndexOptions } from "./in
 import { sanitizePathName } from "./schema-navigator.ts";
 import type { FlatType } from "../types/flat.ts";
 import type { Db } from "./mongodb.ts";
+import { dirtyEquivalent } from "./utilities.ts";
 
 type CollectionOptions = {
     safeDelete?: boolean,
@@ -219,6 +220,16 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 validator,
             });
         } else {
+            // Check collection options
+            const existingOptions = await db.command({ listCollections: 1, filter: { name: collectionName } });
+            const currentSchema = existingOptions.cursor.firstBatch[0].options?.validator || {};
+            
+            const sameSchema = dirtyEquivalent(currentSchema, validator);
+            
+            if (sameSchema) {
+                return; // No need to update
+            }
+
             // Update the collection with the validator
             await db.command({
                 collMod: collectionName,
@@ -263,7 +274,9 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                     }
                 }
 
-                if (!needsRecreate) continue;
+                if (!needsRecreate) {
+                    continue;
+                }
 
                 if (existingIndex) {
                     try {
