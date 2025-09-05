@@ -9,8 +9,6 @@
 export interface QueueOptions {
     /** Maximum number of concurrent operations (default: 3) */
     maxConcurrent?: number;
-    /** Default timeout for operations in milliseconds (default: 30000) */
-    defaultTimeout?: number;
     /** Whether to retry failed operations (default: false) */
     retry?: boolean;
     /** Number of retry attempts (default: 1) */
@@ -23,7 +21,6 @@ export interface QueueTask<T = unknown> {
     id: string;
     operation: () => Promise<T>;
     priority?: number;
-    timeout?: number;
     resolve: (value: T) => void;
     reject: (error: Error) => void;
     attempts?: number;
@@ -41,7 +38,6 @@ export interface QueueStats {
  */
 export class MongoOperationQueue {
     private readonly maxConcurrent: number;
-    private readonly defaultTimeout: number;
     private readonly retry: boolean;
     private readonly retryAttempts: number;
     private readonly retryDelay: number;
@@ -54,7 +50,6 @@ export class MongoOperationQueue {
 
     constructor(options: QueueOptions = {}) {
         this.maxConcurrent = options.maxConcurrent ?? 3;
-        this.defaultTimeout = options.defaultTimeout ?? 30000;
         this.retry = options.retry ?? false;
         this.retryAttempts = options.retryAttempts ?? 1;
         this.retryDelay = options.retryDelay ?? 1000;
@@ -71,7 +66,6 @@ export class MongoOperationQueue {
         operation: () => Promise<T>,
         options: {
             priority?: number;
-            timeout?: number;
         } = {}
     ): Promise<T> {
         return new Promise<T>((resolve, reject) => {
@@ -79,7 +73,6 @@ export class MongoOperationQueue {
                 id: `task_${++this.taskIdCounter}`,
                 operation,
                 priority: options.priority ?? 0,
-                timeout: options.timeout ?? this.defaultTimeout,
                 resolve,
                 reject,
                 attempts: 0,
@@ -151,26 +144,9 @@ export class MongoOperationQueue {
     private async executeTask<T>(task: QueueTask<T>): Promise<void> {
         task.attempts = (task.attempts ?? 0) + 1;
 
-        let timeoutId: number | undefined;
-
         try {
-            // Set up timeout
-            const timeoutPromise = new Promise<never>((_, reject) => {
-                timeoutId = setTimeout(() => {
-                    reject(new Error(`Operation timeout after ${task.timeout}ms`));
-                }, task.timeout);
-            });
-
-            // Race between operation and timeout
-            const result = await Promise.race([
-                task.operation(),
-                timeoutPromise
-            ]);
-
-            // Clear timeout on success
-            if (timeoutId !== undefined) {
-                clearTimeout(timeoutId);
-            }
+            // Execute the operation
+            const result = await task.operation();
 
             // Success
             this.runningTasks.delete(task as QueueTask);
@@ -178,17 +154,10 @@ export class MongoOperationQueue {
             task.resolve(result);
             
         } catch (error) {
-            // Clear timeout on error
-            if (timeoutId !== undefined) {
-                clearTimeout(timeoutId);
-            }
-
             // Check if we should retry
             if (
                 this.retry && 
-                task.attempts! < this.retryAttempts &&
-                error instanceof Error &&
-                !error.message.includes('timeout')
+                task.attempts! < this.retryAttempts
             ) {
                 // Retry after delay
                 setTimeout(() => {
@@ -201,9 +170,6 @@ export class MongoOperationQueue {
             this.runningTasks.delete(task as QueueTask);
             this.failedCount++;
             task.reject(error instanceof Error ? error : new Error(String(error)));
-        } finally {
-            // Cleanup
-            clearTimeout(timeoutId);
         }
 
         // Continue processing queue
