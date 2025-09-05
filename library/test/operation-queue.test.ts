@@ -70,6 +70,23 @@ Deno.test("MongoOperationQueue - Priority ordering", async () => {
     assertEquals(executionOrder, [1, 2, 3]);
 });
 
+Deno.test("MongoOperationQueue - Timeout handling", async () => {
+    const queue = createQueueSystem({ defaultTimeout: 30 }); // Very short timeout
+    
+    try {
+        await queue.add(() => {
+            // Operation that just waits a bit longer than timeout
+            return new Promise((resolve) => setTimeout(() => resolve("should not complete"), 50));
+        });
+        throw new Error("Should have timed out");
+    } catch (error) {
+        assertEquals((error as Error).message, "Operation timeout after 30ms");
+    }
+    
+    // Wait a bit to ensure all timers are cleaned up
+    await new Promise(resolve => setTimeout(resolve, 60));
+});
+
 Deno.test("MongoOperationQueue - Error handling", async () => {
     const queue = createQueueSystem();
     
@@ -119,6 +136,27 @@ Deno.test("MongoOperationQueue - Error isolation between operations", async () =
     // Check that failed operations return errors
     assertEquals((results[1] as Error).message, "failure-2");
     assertEquals((results[3] as Error).message, "failure-4");
+});
+
+Deno.test("MongoOperationQueue - Retry functionality", async () => {
+    const queue = createQueueSystem({ 
+        retry: true, 
+        retryAttempts: 2,
+        retryDelay: 1 // Very short delay
+    });
+    
+    let attempts = 0;
+    
+    const result = await queue.add(() => {
+        attempts++;
+        if (attempts < 2) {
+            throw new Error("Temporary failure");
+        }
+        return Promise.resolve("success after retry");
+    });
+    
+    assertEquals(result, "success after retry");
+    assertEquals(attempts, 2);
 });
 
 Deno.test("MongoOperationQueue - Stats tracking", async () => {
