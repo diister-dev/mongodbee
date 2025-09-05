@@ -9,7 +9,8 @@ import { extractIndexes, withIndex, keyEqual, normalizeIndexOptions } from "./in
 import { sanitizePathName } from "./schema-navigator.ts";
 import type { FlatType } from "../types/flat.ts";
 import type { Db } from "./mongodb.ts";
-import { dirtyEquivalent } from "./utilities.ts";
+import { dirtyEquivalent } from "./utils/object.ts";
+import { mongoOperationQueue } from "./operation.ts";
 
 type CollectionOptions = {
     safeDelete?: boolean,
@@ -248,6 +249,13 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             };
         });
 
+        // Collect all indexes that need to be created or recreated
+        const indexesToCreate: Array<{
+            key: Record<string, number>;
+            options: m.CreateIndexesOptions;
+        }> = [];
+        const indexesToDrop: string[] = [];
+
         for (const { type, indexes } of allIndexes) {
             for (const index of indexes) {
                 const keySpec = { [index.path]: 1 };
@@ -279,22 +287,52 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 }
 
                 if (existingIndex) {
-                    try {
-                        await collection.dropIndex(existingIndex.name!);
-                    } catch (e) {
-                        // tolerate index already missing (race) when MongoServerError reports IndexNotFound
-                        if (e instanceof m.MongoServerError && e.codeName === "IndexNotFound") {
-                            // already gone, continue
-                        } else {
-                            throw e;
-                        }
-                    }
+                    indexesToDrop.push(existingIndex.name!);
                 }
 
-                await collection.createIndex(
-                    keySpec,
-                    desiredOptions
-                );
+                indexesToCreate.push({
+                    key: keySpec,
+                    options: desiredOptions,
+                });
+            }
+        }
+
+        // Use the queue system to manage index operations
+        if (indexesToDrop.length > 0) {
+            await Promise.all(indexesToDrop.map(indexName => {
+                return mongoOperationQueue.add(() => {
+                    return collection.dropIndex(indexName).catch(e => {
+                        // tolerate index already
+                        if (e instanceof m.MongoServerError && e.codeName === "IndexNotFound") {
+                            // already gone, continue
+                            return;
+                        }
+                        throw e;
+                    });
+                });
+            }));
+        }
+
+        if (indexesToCreate.length > 0) {
+            // Use createIndexes (bulk) when possible for better efficiency
+            if (indexesToCreate.length > 1) {
+                await mongoOperationQueue.add(() => {
+                    return collection.createIndexes(
+                        indexesToCreate.map(spec => ({
+                            key: spec.key,
+                            ...spec.options,
+                        }))
+                    );
+                });
+            } else {
+                // Single index creation
+                const indexSpec = indexesToCreate[0];
+                await mongoOperationQueue.add(() => {
+                    return collection.createIndex(
+                        indexSpec.key,
+                        indexSpec.options
+                    );
+                });
             }
         }
     }
