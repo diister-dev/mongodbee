@@ -261,26 +261,14 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
         }
 
         if (indexesToCreate.length > 0) {
-            // Use createIndexes (bulk) when possible for better efficiency
-            if (indexesToCreate.length > 1) {
-                await mongoOperationQueue.add(() => {
-                    return collection.createIndexes(
-                        indexesToCreate.map(spec => ({
-                            key: spec.key,
-                            ...spec.options,
-                        }))
-                    );
-                });
-            } else {
-                // Single index creation
-                const indexSpec = indexesToCreate[0];
-                await mongoOperationQueue.add(() => {
+            await Promise.all(indexesToCreate.map(indexSpec => {
+                return mongoOperationQueue.add(() => {
                     return collection.createIndex(
                         indexSpec.key,
                         indexSpec.options
                     );
                 });
-            }
+            }));
         }
     }
     

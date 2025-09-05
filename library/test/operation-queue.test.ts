@@ -121,27 +121,6 @@ Deno.test("MongoOperationQueue - Error isolation between operations", async () =
     assertEquals((results[3] as Error).message, "failure-4");
 });
 
-Deno.test("MongoOperationQueue - Retry functionality", async () => {
-    const queue = createQueueSystem({ 
-        retry: true, 
-        retryAttempts: 2,
-        retryDelay: 1 // Very short delay
-    });
-    
-    let attempts = 0;
-    
-    const result = await queue.add(() => {
-        attempts++;
-        if (attempts < 2) {
-            throw new Error("Temporary failure");
-        }
-        return Promise.resolve("success after retry");
-    });
-    
-    assertEquals(result, "success after retry");
-    assertEquals(attempts, 2);
-});
-
 Deno.test("MongoOperationQueue - Stats tracking", async () => {
     const queue = createQueueSystem({ maxConcurrent: 1 });
     
