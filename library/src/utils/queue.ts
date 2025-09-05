@@ -201,6 +201,9 @@ export class MongoOperationQueue {
             this.runningTasks.delete(task as QueueTask);
             this.failedCount++;
             task.reject(error instanceof Error ? error : new Error(String(error)));
+        } finally {
+            // Cleanup
+            clearTimeout(timeoutId);
         }
 
         // Continue processing queue
