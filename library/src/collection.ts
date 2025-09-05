@@ -178,7 +178,7 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
         } else {
             // Check collection options
             const existingOptions = await db.command({ listCollections: 1, filter: { name: collectionName } });
-            const currentSchema = existingOptions.cursor.firstBatch[0].options?.validator || {};
+            const currentSchema = existingOptions.cursor?.firstBatch?.[0]?.options?.validator || {};
             const sameSchema = dirtyEquivalent(currentSchema, validator);
             if (sameSchema) {
                 return; // No need to update

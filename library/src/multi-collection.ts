@@ -222,7 +222,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         } else {
             // Check collection options
             const existingOptions = await db.command({ listCollections: 1, filter: { name: collectionName } });
-            const currentSchema = existingOptions.cursor.firstBatch[0].options?.validator || {};
+            const currentSchema = existingOptions.cursor?.firstBatch?.[0]?.options?.validator || {};
             
             const sameSchema = dirtyEquivalent(currentSchema, validator);
             
