@@ -154,18 +154,6 @@ export class MongoOperationQueue {
             task.resolve(result);
             
         } catch (error) {
-            // Check if we should retry
-            if (
-                this.retry && 
-                task.attempts! < this.retryAttempts
-            ) {
-                // Retry after delay
-                setTimeout(() => {
-                    this.executeTask(task);
-                }, this.retryDelay);
-                return;
-            }
-
             // Failed permanently
             this.runningTasks.delete(task as QueueTask);
             this.failedCount++;
