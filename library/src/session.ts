@@ -4,30 +4,75 @@ import { AsyncLocalStorage } from "node:async_hooks";
 /**
  * Checks if MongoDB transactions are enabled on the current database
  * 
+ * This function uses lightweight administrative commands instead of creating test collections
+ * to determine if transactions are supported. Transactions require either a replica set
+ * or a sharded cluster configuration.
+ * 
+ * Results are cached per MongoClient to avoid repeated network calls.
+ * 
  * @param mongoClient - MongoDB client instance
  * @param mongoDb - MongoDB database instance
  * @returns A promise that resolves to true if transactions are enabled, false otherwise
  * @internal
  */
 export async function checkTransactionEnabled(mongoClient: MongoClient, mongoDb: Db): Promise<boolean> {
-    const session = mongoClient.startSession();
-    const collectionId = `transaction_test_${crypto.randomUUID()}`;
+    // Check cache first
+    const cachedResult = transactionSupportCache.get(mongoClient);
+    if (cachedResult !== undefined) {
+        return cachedResult;
+    }
+
     try {
-        session.startTransaction();
-        await mongoDb.collection(collectionId).insertOne({ test: true }, { session });
-        await mongoDb.collection(collectionId).deleteOne({ test: true }, { session });
-        await session.commitTransaction();
-        return true;
-    } catch (_) {
-        await session.abortTransaction();
-        return false;
-    } finally {
-        await session.endSession();
-        await mongoDb.collection(collectionId).drop();
+        // First, check using the hello command (most efficient)
+        const helloResult = await mongoDb.command({ hello: 1 });
+        
+        // Transactions are supported if:
+        // 1. It's a replica set (has setName)
+        // 2. It's a mongos instance (sharded cluster)
+        if (helloResult.setName || helloResult.msg === 'isdbgrid') {
+            transactionSupportCache.set(mongoClient, true);
+            return true;
+        }
+        
+        // Fallback: check serverStatus for additional information
+        const serverStatus = await mongoDb.command({ serverStatus: 1 });
+        
+        // Check if it's a replica set via serverStatus
+        const isReplicaSet = serverStatus.repl && serverStatus.repl.setName;
+        // Check if it's a mongos instance
+        const isMongos = serverStatus.process === 'mongos';
+        
+        const supportsTransactions = !!(isReplicaSet || isMongos);
+        transactionSupportCache.set(mongoClient, supportsTransactions);
+        return supportsTransactions;
+        
+    } catch (error) {
+        // If administrative commands fail, fall back to the original method
+        // This might happen in restricted environments
+        console.warn('Unable to check transaction support via administrative commands, falling back to test transaction:', error);
+        
+        const session = mongoClient.startSession();
+        const collectionId = `transaction_test_${crypto.randomUUID()}`;
+        try {
+            session.startTransaction();
+            await mongoDb.collection(collectionId).insertOne({ test: true }, { session });
+            await mongoDb.collection(collectionId).deleteOne({ test: true }, { session });
+            await session.commitTransaction();
+            transactionSupportCache.set(mongoClient, true);
+            return true;
+        } catch (_) {
+            await session.abortTransaction();
+            transactionSupportCache.set(mongoClient, false);
+            return false;
+        } finally {
+            await session.endSession();
+            await mongoDb.collection(collectionId).drop().catch(() => {}); // Ignore drop errors
+        }
     }
 }
 
-const sessionContextMap = new WeakMap<MongoClient, Awaited<ReturnType<typeof createSessionContext>>>();
+const sessionContextMap = new WeakMap<MongoClient, ReturnType<typeof createSessionContext>>();
+const transactionSupportCache = new WeakMap<MongoClient, boolean>();
 
 /**
  * Gets or creates a session context for a MongoDB client
@@ -43,7 +88,7 @@ const sessionContextMap = new WeakMap<MongoClient, Awaited<ReturnType<typeof cre
  * const client = new MongoClient("mongodb://localhost:27017");
  * await client.connect();
  * 
- * const { withSession } = await getSessionContext(client);
+ * const { withSession } = getSessionContext(client);
  * 
  * // Use a transaction with automatic commit/rollback
  * await withSession(async () => {
@@ -53,10 +98,10 @@ const sessionContextMap = new WeakMap<MongoClient, Awaited<ReturnType<typeof cre
  * });
  * ```
  */
-export async function getSessionContext(mongoClient: MongoClient) : ReturnType<typeof createSessionContext> {
+export function getSessionContext(mongoClient: MongoClient) : ReturnType<typeof createSessionContext> {
     let context = sessionContextMap.get(mongoClient);
     if (!context) {
-        context = await createSessionContext(mongoClient);
+        context = createSessionContext(mongoClient);
         sessionContextMap.set(mongoClient, context);
     }
     return context;
@@ -72,7 +117,7 @@ export async function getSessionContext(mongoClient: MongoClient) : ReturnType<t
  * @returns An object with functions to manage sessions and transactions
  * @internal
  */
-export async function createSessionContext(mongoClient: MongoClient) : Promise<{
+export function createSessionContext(mongoClient: MongoClient) : {
     /**
      * Gets the current MongoDB session from the async context
      * 
@@ -91,9 +136,9 @@ export async function createSessionContext(mongoClient: MongoClient) : Promise<{
      * @returns A promise that resolves to the function's result
      */
     withSession: <T>(fn: (session?: ClientSession) => Promise<T>) => Promise<T>;
-}> {
+} {
     let warningDisplayed = false;
-    const transactionsEnabled = await checkTransactionEnabled(mongoClient, mongoClient.db());
+    let transactionsEnabledPromise: Promise<boolean> | undefined;
 
     const asyncSession = new AsyncLocalStorage<ClientSession | undefined>();
 
@@ -102,6 +147,13 @@ export async function createSessionContext(mongoClient: MongoClient) : Promise<{
     }
 
     async function withSession<T>(fn: (session?: ClientSession) => Promise<T>): Promise<T> {
+        // Lazy loading: ne vérifie le support des transactions qu'au premier appel de withSession
+        if (!transactionsEnabledPromise) {
+            transactionsEnabledPromise = checkTransactionEnabled(mongoClient, mongoClient.db());
+        }
+        
+        const transactionsEnabled = await transactionsEnabledPromise;
+        
         if (!warningDisplayed && !transactionsEnabled) {
             console.warn("MongoDB transactions are not enabled. This may cause issues with concurrent operations.");
             warningDisplayed = true;

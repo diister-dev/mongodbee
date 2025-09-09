@@ -434,4 +434,62 @@ Deno.test("withIndex - Automatic type field in multi-collection", async (t) => {
   });
 });
 
+Deno.test("withIndex - Union schemas with unique constraints", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    // Test union schema like SIRET/SIREN
+    const NumberOrString = v.union([v.string(), v.number()]);
+    
+    const testSchema = {
+      id: withIndex(v.string(), { unique: true }),
+      value: withIndex(NumberOrString, { unique: true }),
+      description: v.optional(v.string()),
+    };
+
+    const coll = await collection(db, "union_test", testSchema);
+
+    // Insert documents with different union types
+    await coll.insertOne({
+      id: "test1",
+      value: "string_value",
+      description: "String test",
+    });
+
+    await coll.insertOne({
+      id: "test2", 
+      value: 42,
+      description: "Number test",
+    });
+
+    // Should prevent duplicate string value
+    await assertRejects(
+      async () => {
+        await coll.insertOne({
+          id: "test3",
+          value: "string_value", // Same as first
+        });
+      },
+      MongoServerError,
+      "duplicate key"
+    );
+
+    // Should prevent duplicate number value
+    await assertRejects(
+      async () => {
+        await coll.insertOne({
+          id: "test4",
+          value: 42, // Same as second
+        });
+      },
+      MongoServerError,
+      "duplicate key"
+    );
+
+    // Verify indexes were created correctly
+    const indexes = await coll.collection.listIndexes().toArray();
+    const valueIndex = indexes.find(idx => idx.key?.value === 1);
+    assertExists(valueIndex);
+    assertEquals(valueIndex.unique, true);
+  });
+});
+
 

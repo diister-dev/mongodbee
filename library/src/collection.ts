@@ -204,6 +204,42 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
         }> = [];
         const indexesToDrop: string[] = [];
 
+        // Collect all expected index names from the current schema
+        const expectedIndexNames = new Set<string>();
+        for (const index of indexes) {
+            const indexPath = sanitizePathName(index.path);
+            expectedIndexNames.add(indexPath);
+        }
+
+        // Get all possible field paths from the current schema to detect potential mongodbee indexes
+        const allSchemaPaths = new Set<string>();
+        function collectPaths(obj: any, prefix = '') {
+            for (const [key, value] of Object.entries(obj)) {
+                const fullPath = prefix ? `${prefix}.${key}` : key;
+                const sanitizedPath = sanitizePathName(fullPath);
+                allSchemaPaths.add(sanitizedPath);
+                
+                if (value && typeof value === 'object' && 'entries' in value) {
+                    collectPaths((value as any).entries, fullPath);
+                }
+            }
+        }
+        collectPaths(schema.entries);
+        
+        // Find orphaned indexes that were created by mongodbee but are no longer in the schema
+        for (const existingIndex of currentIndexes) {
+            const indexName = existingIndex.name;
+            if (!indexName || indexName === '_id_') continue; // Skip default _id index
+            
+            // Check if this index name matches any field in our schema
+            const isSchemaField = allSchemaPaths.has(indexName);
+            
+            if (isSchemaField && !expectedIndexNames.has(indexName)) {
+                // This is an orphaned mongodbee index that should be removed
+                indexesToDrop.push(indexName);
+            }
+        }
+
         for (const index of indexes) {
             const keySpec = { [index.path]: 1 };
             const indexPath = sanitizePathName(index.path);

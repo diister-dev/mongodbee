@@ -256,6 +256,31 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         }> = [];
         const indexesToDrop: string[] = [];
 
+        // Collect all expected index names from the current schema
+        const expectedIndexNames = new Set<string>();
+        for (const { type, indexes } of allIndexes) {
+            for (const index of indexes) {
+                const indexName = sanitizePathName(`${type}_${index.path}`);
+                expectedIndexNames.add(indexName);
+            }
+        }
+
+        // Find orphaned indexes that were created by mongodbee but are no longer in the schema
+        for (const existingIndex of currentIndexes) {
+            const indexName = existingIndex.name;
+            if (!indexName || indexName === '_id_') continue; // Skip default _id index
+            
+            // Check if this looks like a mongodbee-created index (has type prefix)
+            const hasTypePrefix = Object.keys(schemaElements).some(type => 
+                indexName.startsWith(`${type}_`)
+            );
+            
+            if (hasTypePrefix && !expectedIndexNames.has(indexName)) {
+                // This is an orphaned mongodbee index that should be removed
+                indexesToDrop.push(indexName);
+            }
+        }
+
         for (const { type, indexes } of allIndexes) {
             for (const index of indexes) {
                 const keySpec = { [index.path]: 1 };

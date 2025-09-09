@@ -84,18 +84,43 @@ export function extractIndexes(
 
     const structureVisitor = createSimpleVisitor({
       onNode: (node) => {
+        // Skip metadata pipe nodes to avoid duplicates
+        if (node.schema.type === 'metadata') {
+          return false;
+        }
+
         const fullPath = computePath(node.context, (element) => {
           if (element.toString().startsWith('$')) return false;
           return true;
         }).join('.');
 
-        const indexMetadata = (node.schema as any).metadata?.[INDEX_SYMBOL];
-        if (!indexMetadata) return true;
+        // Check for index metadata on the schema itself
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let indexMetadata = (node.schema as any).metadata?.[INDEX_SYMBOL];
+        
+        // If not found on schema, check in pipe validations (for withIndex on unions, etc.)
+        if (!indexMetadata) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const pipes = (node.schema as any).pipe;
+          if (pipes && Array.isArray(pipes)) {
+            for (const pipe of pipes) {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const pipeMetadata = (pipe as any).metadata?.[INDEX_SYMBOL];
+              if (pipeMetadata) {
+                indexMetadata = pipeMetadata;
+                break; // Only need one index per field
+              }
+            }
+          }
+        }
 
-        uniqueIndexes.push({
-            path: fullPath,
-            metadata: indexMetadata,
-        });
+        if (indexMetadata) {
+          uniqueIndexes.push({
+              path: fullPath,
+              metadata: indexMetadata,
+          });
+          return true; // Stop navigation here, index found
+        }
     
         return true;
       },

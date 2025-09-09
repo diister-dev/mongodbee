@@ -91,7 +91,7 @@ Deno.test("multiCollection - index is created with partialFilterExpression scope
 });
 
 
-Deno.test("applyIndexes - schema delta: adding an index creates it; removing from schema does not drop existing index", async (t) => {
+Deno.test("applyIndexes - schema delta: adding an index creates it; removing from schema drops existing index", async (t) => {
   await withDatabase(t.name, async (db) => {
     const schemaA = {
       a: withIndex(v.string(), { unique: true }),
@@ -113,12 +113,12 @@ Deno.test("applyIndexes - schema delta: adding an index creates it; removing fro
     const cB = await collection(db, "delta", schemaB);
     idxs = await cB.collection.listIndexes().toArray();
 
-    // Current behavior: previously existing index 'a' is NOT automatically removed
+    // New behavior: orphaned index 'a' is automatically removed, new index 'c' is created
     const aIdxAfter = idxs.find((i: { key?: Record<string, number> }) => i.key && i.key.a === 1);
     const cIdx = idxs.find((i: { key?: Record<string, number> }) => i.key && i.key.c === 1);
 
-    // Expect both to exist: old index remains, new index created
-    assertExists(aIdxAfter);
-    assertExists(cIdx);
+    // Expect old index to be gone and new index to exist
+    assertEquals(aIdxAfter, undefined); // Old index should be dropped
+    assertExists(cIdx); // New index should exist
   });
 });
