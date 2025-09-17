@@ -48,6 +48,10 @@ function constructorToValidator(schema: UnknownSchema | UnknownValidation) {
                 const properties: Record<string, any> = {};
 
                 for (const [key, value] of Object.entries(s.entries) as [string, UnknownSchema][]) {
+                    if(value === undefined) {
+                        // Field is removed
+                        continue;
+                    }
                     const { type } = value;
 
                     // Optional check

@@ -16,6 +16,8 @@ type CollectionOptions = {
     enableWatching?: boolean,
     /** How to handle undefined values in updates: 'remove' | 'ignore' | 'error' */
     undefinedBehavior?: 'remove' | 'ignore' | 'error',
+    // Initialization options
+    noInit?: boolean, // If true, skip all initialization (validator, indexes, watching)
 }
 
 type WithId<T> = T extends { _id: infer U } ? T : m.WithId<T> | { _id: string } & T;
@@ -44,6 +46,7 @@ export type CollectionResult<T extends Record<string, v.BaseSchema<unknown, unkn
         findOne: (filter: m.Filter<WithId<TInput<T>>>, options?: Omit<m.FindOptions, 'timeoutMode'> & m.Abortable) => Promise<WithId<TOutput<T>> | null>,
         getById: (id: string | m.ObjectId) => Promise<WithId<TOutput<T>>>,
         find: (filter: m.Filter<TInput<T>>, options?: m.FindOptions & m.Abortable) => m.AbstractCursor<TOutput<T>>,
+        findInvalid: (filter: m.Filter<TInput<T>>, options?: m.FindOptions & m.Abortable) => m.AbstractCursor<WithId<TInput<T>>>,
         withSession: Awaited<ReturnType<typeof getSessionContext>>["withSession"],
 
         // Utilities
@@ -166,10 +169,11 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
     }
 
     const events = EventEmitter<Events<T>>();
+    const validator = toMongoValidator(schema);
+    const invalidValidation = { $nor: [validator] };
 
     async function applyValidator() {
         const collections = await db.listCollections({ name: collectionName }).toArray();
-        const validator = toMongoValidator(schema);
 
         if (collections.length === 0) {
             // Create the collection with the validator
@@ -340,6 +344,11 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
     let sessionContext: Awaited<ReturnType<typeof getSessionContext>>;
 
     async function init() {
+        sessionContext = getSessionContext(db.client);
+
+        // If raw mode, skip all initialization
+        if(opts.noInit) return;
+
         await applyValidator();
         await applyIndexes();
         
@@ -347,8 +356,6 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
         if (opts.enableWatching) {
             await startWatching();
         }
-
-        sessionContext = await getSessionContext(db.client);
     }
 
     const collection = db.collection<TInput>(collectionName, opts);
@@ -412,7 +419,10 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
         // Document read operations with validation
         async findOne(filter, options?) {
             const session = sessionContext.getSession();
-            const result = await collection.findOne(filter as any, { session, ...options });
+            const result = await collection.findOne({
+                ...validator, // Prevent returning invalid documents
+                ...filter as any,
+            }, { session, ...options });
 
             if (!result) {
                 return null;
@@ -470,6 +480,37 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
                     console.warn(`Warning: ${invalidsCount} invalid documents were ignored during find operation`);
                 }
 
+                return output;
+            };
+
+            return cursor as unknown as m.AbstractCursor<TOutput>;
+        },
+        findInvalid(filter: m.Filter<TInput>, options?: m.FindOptions & m.Abortable): m.AbstractCursor<TOutput> {
+            const session = sessionContext.getSession();
+            const cursor = collection.find({
+                $and: [
+                    filter as any,
+                    invalidValidation
+                ]
+            }, { session, ...options });
+
+            const originalToArray = cursor.toArray;
+            // Override toArray
+            cursor.toArray = async function () {
+                const results = await originalToArray.call(cursor);
+                let invalidsCount = 0;
+                const output = results.map((item) => {
+                    const validation = v.safeParse(schema, item);
+                    if (!validation.success) {
+                        invalidsCount++;
+                        return item as m.WithId<TInput>;
+                    }
+                    return null;
+                }).filter((item): item is m.WithId<TInput> => item !== null);
+
+                if (invalidsCount > 0) {
+                    console.warn(`Warning: ${invalidsCount} invalid documents were found during findInvalid operation`);
+                }
                 return output;
             };
 
