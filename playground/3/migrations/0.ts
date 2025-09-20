@@ -23,7 +23,7 @@ const schema = {
 }
 
 async function up(migration: any) {
-    // Create user collection
+    // Old way
     const { db } = migration;
     const userCollection = await collection(db, "+users", schema['+users'], { noInit: true });
     // Seed initial data
@@ -33,6 +33,17 @@ async function up(migration: any) {
         { firstname: "Alice", lastname: "Johnson" },
         { firstname: "Bob", lastname: "Brown" },
     ]);
+
+    // New way
+    migration.collection("+users")
+        .seed([
+            { firstname: "John", lastname: "Doe" },
+            { firstname: "Jane", lastname: "Smith" },
+            { firstname: "Alice", lastname: "Johnson" },
+            { firstname: "Bob", lastname: "Brown" },
+        ]);
+
+    return migration;
 }
 
 export default createMigration({

@@ -1,5 +1,6 @@
 import { collection, dbId, MongoClient } from "mongodbee"
 import * as v from "valibot"
+import { createMockGenerator } from "@diister/valibot-mock"
 
 import { migrationOrder } from "./migrations/mod.ts"
 import { getSessionContext } from "mongodbee/session.ts";
@@ -41,6 +42,20 @@ const lastMigration = migrationOrder[migrationOrder.length - 1];
 if (!lastMigration?.schema) throw new Error("Last migration has no schema");
 if (!flattenEquals(finalSchema, lastMigration.schema)) {
   throw new Error("Final schema does not match last migration schema");
+}
+
+console.debug("Ensure all migrations schemas are compatible...");
+const dataTest = {};
+const firstMigration = migrationOrder[0];
+const dataMocker = Object.keys(firstMigration.schema).reduce((acc, collectionName) => {
+  acc[collectionName] = createMockGenerator(
+    v.object(firstMigration.schema[collectionName as keyof typeof firstMigration.schema] as any)
+  );
+  return acc;
+}, {} as Record<string, () => any>);
+
+for (let i = 0; i < migrationOrder.length; i++) {
+  
 }
 
 console.debug("Starting migrations...");
