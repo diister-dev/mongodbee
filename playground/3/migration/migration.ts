@@ -20,115 +20,123 @@
 //     return migration; // System will call executeAll
 // }
 
-type TransformRule<T = unknown, U = unknown> = {
+type MigrationIrreversible = {
+    type: 'irreversible';
+}
+
+type MigrationPropertie = MigrationIrreversible;
+
+type CreateCollectionRule = {
+    type : 'create_collection';
+    collectionName: string;
+}
+
+type SeedCollectionRule = {
+    type: 'seed_collection';
+    collectionName: string;
+    documents: readonly unknown[];
+}
+
+type TransformCollectionRule = {
+    type: 'transform_collection';
+    collectionName: string;
+    up: (doc: any) => any;
+    down: (doc: any) => any;
+}
+
+type MigrationRule =
+    | CreateCollectionRule
+    | SeedCollectionRule
+    | TransformCollectionRule;
+
+type TransformRule<T = any, U = any> = {
     readonly up: (doc: T) => U;
     readonly down: (doc: U) => T;
 };
 
-function migrationBuilder(state: any = undefined) {
-    if(state === undefined) {
-        state = {
-            properties: [],
-            collections: {},
-            operations: [],
-            mark(props: string) {
-                if(!state.properties.includes(props)) {
-                    state.properties.push(props);
-                }
+type MigrationState = {
+    properties: MigrationPropertie[];
+    operations: MigrationRule[];
+    mark(props: MigrationPropertie): void;
+    hasProperty(type: MigrationPropertie['type']): boolean;
+}
+
+type MigrationCollectionBuilder = {
+    seed(documents: readonly unknown[]): MigrationCollectionBuilder;
+    transform(rule: TransformRule): MigrationCollectionBuilder;
+    done(): MigrationBuilder;
+}
+
+export type MigrationBuilder = {
+    createCollection(name: string): MigrationCollectionBuilder;
+    collection(name: string): MigrationCollectionBuilder;
+    compile(): MigrationState;
+}
+
+export function migrationBuilder(initState: MigrationState | undefined = undefined) : MigrationBuilder {
+    const state = initState ?? {
+        properties: [],
+        operations: [],
+        mark(props: (MigrationPropertie)) {
+            const exists = state!.properties.find(p => p.type === props.type);
+            if(!exists) {
+                state!.properties.push(props);
             }
+        },
+        hasProperty(type: MigrationPropertie['type']) : boolean {
+            return state!.properties.some(p => p.type === type);
         }
     }
 
     //#region PRIVATE CONTEXT
-    function collectionBuilding(parentState: any, collectionName: string, workingState: any) {
+    function collectionBuilding(workingState: MigrationState, collectionName: string) {
         function seed(documents: readonly unknown[]) {
-            console.log(`Seeding ${collectionName} with ${documents.length} documents`);
             workingState.operations ??= [];
             workingState.operations.push({
-                type: 'seed',
-                payload: documents
+                type: 'seed_collection',
+                collectionName,
+                documents
             });
-            return collectionBuilding(parentState, collectionName, workingState);
+            return collectionBuilding(workingState, collectionName);
         }
 
-        function transform<T, U>(rule: TransformRule<T, U>) {
-            console.log(`Adding transform rule for ${collectionName}`);
+        function transform(rule: TransformRule) {
             workingState.operations ??= [];
             workingState.operations.push({
-                type: 'transform',
-                payload: rule
+                type: 'transform_collection',
+                collectionName,
+                up: rule.up,
+                down: rule.down,
             });
-            return collectionBuilding(parentState, collectionName, workingState);
+            return collectionBuilding(workingState, collectionName);
         }
-
-        function addField(fieldName: string, valueOrGenerator: unknown | ((doc: unknown) => unknown)) {
-            console.log(`Adding field '${fieldName}' to ${collectionName}`);
-            workingState.operations ??= [];
-            workingState.operations.push({
-                type: 'addField',
-                payload: { fieldName, valueOrGenerator }
-            });
-            return collectionBuilding(parentState, collectionName, workingState);
-        }
-
-        function removeField(fieldName: string, options?: { backup?: boolean }) {
-            console.log(`Removing field '${fieldName}' from ${collectionName}`);
-            workingState.operations ??= [];
-            workingState.operations.push({
-                type: 'removeField',
-                payload: { fieldName, options }
-            });
-            parentState.mark('irreversible');
-            return collectionBuilding(parentState, collectionName, workingState);
-        }
-
-        function renameField(from: string, to: string) {
-            console.log(`Renaming field '${from}' to '${to}' in ${collectionName}`);
-            workingState.operations ??= [];
-            workingState.operations.push({
-                type: 'renameField',
-                payload: { from, to }
-            });
-            return collectionBuilding(parentState, collectionName, workingState);
-        }
-
-        // ✨ Le done() magique - retourne au contexte parent
+        
         function done() {
-            return migrationBuilder(parentState);
+            return migrationBuilder(workingState);
         }
 
-        // Interface collection - seulement les méthodes de collection + done
         return {
             seed,
             transform,
-            addField,
-            removeField,
-            renameField,
             done,
         }
     }
     // #endregion
 
     // #region PUBLIC CONTEXT
-    function collection(name: string) {
-        console.log(`Working on collection: ${name}`);        
-        if(!state.collections[name]) {
-            state.collections[name] = {
-                name,
-                operations: []
-            };
-        }
-        return collectionBuilding(state, name, state.collections[name]);
+    function createCollection(name: string) {
+        state.operations.push({
+            type: 'create_collection',
+            collectionName: name
+        });
+        // Any operation after createCollection makes the migration irreversible
+        // Because to reverse it, we would need to drop the collection, which would lead to data loss
+        state.mark({ type: 'irreversible' });
+        return collectionBuilding(state, name);
     }
 
-    function dropCollection(name: string) {
-        console.log(`Dropping collection: ${name}`);
-        state.operations.push({
-            type: 'dropCollection',
-            collection: name
-        });
-        state.mark('irreversible');
-        return migrationBuilder(state);
+    function collection(name: string) {
+        return collectionBuilding(state, name);
     }
     // #endregion
 
@@ -137,36 +145,67 @@ function migrationBuilder(state: any = undefined) {
     }
 
     return {
+        createCollection,
         collection,
-        dropCollection,
         compile,
     }
 }
 
-const migration = migrationBuilder()
-    .collection("+users")
-        .seed([
-            { firstname: "John", lastname: "Doe" },
-            { firstname: "Jane", lastname: "Smith" },
-        ])
-        .addField("isActive", () => true)
-        .addField("uuid", () => crypto.randomUUID())
-        .done()
-    .collection("+articles")
-        .transform({
-            up: (doc: any) => ({
-                ...doc,
-                slug: doc.title.toLowerCase()
-            }),
-            down: (doc: any) => {
-                const { slug, ...rest } = doc;
-                return rest;
-            }
-        })
-        .addField("publishedAt", () => new Date())
-        .done()
-    .dropCollection("temp_collection");
+type SchemasDefinition = {
+    collections: Record<string, any>;
+    multiCollections?: Record<string, any>;
+}
 
-const compiled = migration.compile();
+type MigrationDefinition<
+    Schema extends SchemasDefinition,
+    Parent extends null | MigrationDefinition<any, any>
+> = {
+    id: string;
+    name: string;
+    parent: Parent;
+    schemas: Schema;
+    migrate: (migration: MigrationBuilder) => MigrationState;
+}
 
-console.log(compiled);
+export function migrationDefinition<
+    Schema extends SchemasDefinition,
+    Parent extends null | MigrationDefinition<any, any>
+>(
+    id: string,
+    name: string,
+    options: {
+        parent: Parent,
+        schemas: Schema,
+        migrate: (migration: MigrationBuilder) => MigrationState,
+    }
+) {
+    return {
+        id,
+        name,
+        ...options,
+    };
+}
+
+// const migration = migrationBuilder()
+//     .createCollection("+users")
+//         .seed([
+//             { firstname: "John", lastname: "Doe" },
+//             { firstname: "Jane", lastname: "Smith" },
+//         ])
+//         .done()
+//     .collection("+articles")
+//         .transform({
+//             up: (doc) => ({
+//                 ...doc,
+//                 slug: doc.title.toLowerCase()
+//             }),
+//             down: (doc) => {
+//                 const { slug, ...rest } = doc;
+//                 return rest;
+//             }
+//         })
+//         .done()
+
+// const compiled = migration.compile();
+
+// console.log(compiled);

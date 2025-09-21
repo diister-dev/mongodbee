@@ -6,50 +6,31 @@
  */
 
 import * as v from "valibot";
-import { collection, dbId } from "mongodbee";
+import { dbId } from "mongodbee";
+import { migrationDefinition } from "../migration/migration.ts";
 
-function createMigration<T>(content: T): T {
-    return content;
-}
-
-const parent = null; // No parent for the initial migration
-
-const schema = {
-    "+users": {
-        _id: dbId("user"),
-        firstname: v.string(),
-        lastname: v.string(),
+const schemas = {
+    collections: {
+        "+users": {
+            _id: dbId("user"),
+            firstname: v.string(),
+            lastname: v.string(),
+        }
     }
 }
 
-async function up(migration: any) {
-    // Old way
-    const { db } = migration;
-    const userCollection = await collection(db, "+users", schema['+users'], { noInit: true });
-    // Seed initial data
-    await userCollection.insertMany([
-        { firstname: "John", lastname: "Doe" },
-        { firstname: "Jane", lastname: "Smith" },
-        { firstname: "Alice", lastname: "Johnson" },
-        { firstname: "Bob", lastname: "Brown" },
-    ]);
+export default migrationDefinition("0000000000000", "Initial Migration", {
+    schemas,
+    parent: null, // No parent for the initial migration
+    migrate(migration) {
+        migration.createCollection("+users")
+            .seed([
+                { firstname: "John", lastname: "Doe" },
+                { firstname: "Jane", lastname: "Smith" },
+                { firstname: "Alice", lastname: "Johnson" },
+                { firstname: "Bob", lastname: "Brown" },
+            ]);
 
-    // New way
-    migration.collection("+users")
-        .seed([
-            { firstname: "John", lastname: "Doe" },
-            { firstname: "Jane", lastname: "Smith" },
-            { firstname: "Alice", lastname: "Johnson" },
-            { firstname: "Bob", lastname: "Brown" },
-        ]);
-
-    return migration;
-}
-
-export default createMigration({
-    name: "Initial Migration",
-    id: "0000000000000",
-    parent,
-    schema,
-    up,
-})
+        return migration.compile();
+    },
+});

@@ -1,40 +1,45 @@
 /**
  * mongodbee migration
- * ---
- * This is an empty initial migration file.
- * You can use it as a starting point for your own migrations.
  */
 
 import * as v from "valibot";
-import parentMigration from "./2.ts";
+import parent from "./2.ts";
+import { migrationDefinition } from "../migration/migration.ts";
 
-export const name = "Add Groups collection";
-export const id = "0000000000002";
-
-export const parent = parentMigration;
-
-const schema = {
-    ...parent.schema,
-    "+users": {
-        ...parent.schema['+users'],
-        fullname: undefined, // Remove fullname field
-        firstname: v.string(), // Add firstname field
-        lastname: v.string(),  // Add lastname field
+const schemas = {
+    collections: {
+        ...parent.schemas.collections,
+        "+users": {
+            _id: parent.schemas.collections['+users']._id,
+            firstname: v.string(),
+            lastname: v.string(),
+        },
     }
 }
 
-export async function up(migration: any) {
-    const { db } = migration;
-}
-
-export async function down(migration: any) {
-}
-
-export default {
-    name,
-    id,
+export default migrationDefinition("0000000000003", "Replace fullname with firstname and lastname", {
     parent,
-    schema,
-    up,
-    down,
-}
+    schemas,
+    migrate(migration) {
+        migration.collection("+users")
+            .transform({
+                up: (doc) => {
+                    const { fullname, ...rest } = doc;
+                    const [firstname, ...lastnameParts] = fullname.split(" ");
+                    const lastname = lastnameParts.join(" ");
+                    return { ...rest, firstname, lastname };
+                },
+                down: (doc) => {
+                    const { firstname, lastname, ...rest } = doc;
+                    const fullnames = [];
+                    if (firstname) fullnames.push(firstname);
+                    if (lastname) fullnames.push(lastname);
+                    const fullname = fullnames.join(" ");
+                    return { ...rest, fullname };
+                }
+            })
+            .done();
+
+        return migration.compile();
+    },
+});
