@@ -1,0 +1,41 @@
+# Generated directories# Generated migration files
+
+migrations/migrations/
+
+schemas/schemas/
+
+temp/
+
+backup/# Configuration file (will be generated)
+
+logs/mongodbee.config.json
+
+
+
+# Deno# Deno cache
+
+.deno/.deno/
+
+
+
+# IDE# IDE files
+
+.vscode/.vscode/
+
+.idea/.idea/
+
+
+
+# OS# OS files
+
+.DS_Store.DS_Store
+
+Thumbs.dbThumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/

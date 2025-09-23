@@ -3,15 +3,28 @@
   "license": "MIT",
   "imports": {
     "@std/ulid": "jsr:@std/ulid@^1.0.0",
+    "@std/cli": "jsr:@std/cli@^1.0.8",
+    "@std/fmt": "jsr:@std/fmt@^1.0.2",
+    "@std/path": "jsr:@std/path@^1.0.7", 
+    "@std/fs": "jsr:@std/fs@^1.0.5",
     "valibot": "npm:valibot@^1.0.0",
     "mongodb": "npm:mongodb@^6.16.0"
   },
   "exports": {
     ".": "./mod.ts",
     "./schema": "./schema.ts",
-    "./session": "./session.ts"
+    "./session": "./session.ts",
+    "./migration": "./src/migration/mod.ts",
+    "./migration/cli": "./src/migration/cli/mod.ts",
+    "./migration/cli/bin": "./src/migration/cli/bin.ts"
   },
   "tasks": {
-    "test": "deno test -A --parallel"
+    "test": "deno test -A --parallel",
+    "migrate": "deno run --allow-read --allow-write --allow-net --allow-env src/migration/cli/bin.ts",
+    "migrate:init": "deno task migrate init",
+    "migrate:generate": "deno task migrate generate",
+    "migrate:apply": "deno task migrate apply",
+    "migrate:status": "deno task migrate status",
+    "migrate:rollback": "deno task migrate rollback"
   }
 }
