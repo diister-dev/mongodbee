@@ -1,24 +1,4 @@
-// async function upgrade(migration: MigrationBuilder) {
-//     const userMigration = migration.collection("+users")
-//         .seed([
-//             { firstname: "John", lastname: "Doe" },
-//             { firstname: "Jane", lastname: "Smith" },
-//         ])
-//         .addField("isActive", (doc) => true)
-//         .done();
-
-//     const articleMigration = migration.collection("+articles")
-//         .transform({
-//             up: (doc) => ({ ...doc, slug: generateSlug(doc.title) }),
-//             down: (doc) => {
-//                 delete doc[slug];
-//                 return doc;
-//             }
-//         })
-//         .done();
-
-//     return migration; // System will call executeAll
-// }
+import * as v from 'valibot';
 
 type MigrationIrreversible = {
     type: 'irreversible';
@@ -73,7 +53,7 @@ export type MigrationBuilder = {
     compile(): MigrationState;
 }
 
-export function migrationBuilder(initState: MigrationState | undefined = undefined) : MigrationBuilder {
+export function migrationBuilder(migrationOptions: { schemas: SchemasDefinition }, initState: MigrationState | undefined = undefined) : MigrationBuilder {
     const state = initState ?? {
         properties: [],
         operations: [],
@@ -91,11 +71,18 @@ export function migrationBuilder(initState: MigrationState | undefined = undefin
     //#region PRIVATE CONTEXT
     function collectionBuilding(workingState: MigrationState, collectionName: string) {
         function seed(documents: readonly unknown[]) {
+            const schema = migrationOptions.schemas.collections[collectionName];
             workingState.operations ??= [];
             workingState.operations.push({
                 type: 'seed_collection',
                 collectionName,
-                documents
+                documents: documents.map(doc => {
+                    const parseResult = v.safeParse(v.object(schema), doc);
+                    if(!parseResult.success) {
+                        throw new Error(`Document in collection ${collectionName} failed schema validation`);
+                    }
+                    return parseResult.output;
+                })
             });
             return collectionBuilding(workingState, collectionName);
         }
@@ -112,7 +99,7 @@ export function migrationBuilder(initState: MigrationState | undefined = undefin
         }
         
         function done() {
-            return migrationBuilder(workingState);
+            return migrationBuilder(migrationOptions, workingState);
         }
 
         return {

@@ -104,8 +104,10 @@ const migrationSimulation = {
 }
 
 
-function verifyMigrationIntegrity(migrationDeclaration: any) {
-  const builder = migrationBuilder();
+async function verifyMigrationIntegrity(migrationDeclaration: any) {
+  const builder = migrationBuilder({
+    schemas: migrationDeclaration.schemas,
+  });
   const migrationResult = migrationDeclaration.migrate(builder);
   let databaseContent: any = {
     collections: {},
@@ -184,35 +186,98 @@ function verifyMigrationIntegrity(migrationDeclaration: any) {
 
 for(const migration of migrationOrder) {
   console.debug(`Verifying migration integrity: ${migration.name} (${migration.id})`);
-  verifyMigrationIntegrity(migration);
+  await verifyMigrationIntegrity(migration);
 }
 
-// for (let i = 0; i < migrationOrder.length; i++) {
-  
-// }
+console.debug("✅ All migrations verified successfully.");
 
-// console.debug("Starting migrations...");
+function createMongoMigrationApplier(client: MongoClient, databaseName: string) {
+  const db = client.db(databaseName);
 
-// const sessionContext = await getSessionContext(client);
-// for (const migration of migrationOrder) {
-//   // await sessionContext.withSession(async (session) => {
-//     await migration.up({ db: database, client });
-//     console.debug("Verifying schema after migration...");
-//     for (const [collectionName, schema] of Object.entries(migration.schema)) {
-//       const coll = database.collection(collectionName);
-//       const jsonSchema = toMongoValidator(v.object(schema));
-//       // Find invalid documents
-//       const invalidDocs = await coll.find({ $nor: [jsonSchema] }).toArray();
-//       if (invalidDocs.length > 0) {
-//         console.log(jsonSchema);
-//         console.log(invalidDocs);
-//         throw new Error(`Migration ${migration.name} (${migration.id}) failed: Collection ${collectionName} has ${invalidDocs.length} invalid documents after migration.`);
-//       }
-//     }
+  return {
+    async applyOperation(operation: any) {
+      switch(operation.type) {
+        case "create_collection" : {
+          const collections = await db.listCollections({ name: operation.collectionName }).toArray();
+          if(collections.length > 0) {
+            throw new Error(`Collection ${operation.collectionName} already exists`);
+          }
+          await db.createCollection(operation.collectionName);
+          break;
+        }
+        case "seed_collection" : {
+          const coll = db.collection(operation.collectionName);
+          await coll.insertMany(operation.documents);
+          break;
+        }
+        case "transform_collection" : {
+          const coll = db.collection(operation.collectionName);
+          const allDocs = await coll.find().toArray();
+          const transformedDocs = allDocs.map((doc) => operation.up(doc));
+          for(const doc of transformedDocs) {
+            await coll.updateOne({ _id: doc._id }, { $set: doc });
+          }
+          break;
+        }
+      }
+    },
+    async applyReverseOperation(operation: any) {
+      switch(operation.type) {
+        case "create_collection" : {
+          const collections = await db.listCollections({ name: operation.collectionName }).toArray();
+          if(collections.length === 0) {
+            throw new Error(`Collection ${operation.collectionName} does not exist for dropping`);
+          }
+          await db.collection(operation.collectionName).drop();
+          break;
+        }
+        case "seed_collection" : {
+          const coll = db.collection(operation.collectionName);
+          const seededIds = new Set(operation.documents.map((doc: any) => doc._id));
+          await coll.deleteMany({ _id: { $in: Array.from(seededIds) } });
+          break;
+        }
+        case "transform_collection" : {
+          const coll = db.collection(operation.collectionName);
+          const allDocs = await coll.find().toArray();
+          const transformedDocs = allDocs.map((doc) => operation.down(doc));
+          for(const doc of transformedDocs) {
+            await coll.updateOne({ _id: doc._id }, { $set: doc });
+          }
+          break;
+        }
+      }
+    }
+  }
+}
 
-//     console.debug(`Migration ${migration.name} (${migration.id}) applied.`);
-//   // });
-// }
+const applier = createMongoMigrationApplier(client, DATABASE_MONGO_DB);
 
-console.debug("All migrations applied.");
+console.debug("Applying migrations to MongoDB...");
+for(const migration of migrationOrder) {
+  const builder = migrationBuilder({
+    schemas: migration.schemas,
+  });
+  const migrationResult = migration.migrate(builder);
+  for(const operation of migrationResult.operations) {
+    await applier.applyOperation(operation);
+  }
+  console.debug(`Migration ${migration.name} (${migration.id}) applied.`);
+}
+
+console.debug("Verifying final database schema...");
+const lastSchema = migrationOrder[migrationOrder.length - 1].schemas;
+for(const [collectionName, schema] of Object.entries(lastSchema.collections)) {
+  const collection = database.collection(collectionName);
+  const items = await collection.find();
+  for await (const item of items) {
+    const parseResult = v.safeParse(v.object(schema), item);
+    if(!parseResult.success) {
+      console.error(`Document in collection ${collectionName} failed schema validation:`, item, parseResult.issues);
+      throw new Error(`Document in collection ${collectionName} failed schema validation`);
+    }
+  }
+}
+
+console.debug("--- All migrations applied.");
 client.close();
