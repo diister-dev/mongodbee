@@ -13,9 +13,11 @@ import * as path from "@std/path";
 import { loadConfig } from "../../config/loader.ts";
 import { loadAllMigrations, buildMigrationChain } from "../../discovery.ts";
 import { getAllMigrationStates, type MigrationStateRecord } from "../../state.ts";
+import { getMigrationHistory, getAllOperations } from "../../history.ts";
 
 export interface StatusCommandOptions {
   configPath?: string;
+  history?: boolean;
 }
 
 /**
@@ -135,6 +137,65 @@ export async function statusCommand(options: StatusCommandOptions = {}): Promise
       console.log(dim("  Run `mongodbee apply` to apply pending migrations."));
     } else {
       console.log(green("  ✓ Database is up to date!"));
+    }
+
+    // Show detailed history if requested
+    if (options.history) {
+      console.log();
+      console.log(bold("Operation History:"));
+      console.log();
+
+      const allOps = await getAllOperations(db);
+
+      if (allOps.length === 0) {
+        console.log(dim("  No operations recorded yet."));
+      } else {
+        // Group operations by migration
+        const byMigration = new Map<string, typeof allOps>();
+        for (const op of allOps) {
+          const existing = byMigration.get(op.migrationId) || [];
+          existing.push(op);
+          byMigration.set(op.migrationId, existing);
+        }
+
+        // Display operations for each migration
+        for (const migration of allMigrations) {
+          const ops = byMigration.get(migration.id);
+          if (!ops || ops.length === 0) continue;
+
+          console.log(dim(`  ${migration.name} (${migration.id}):`));
+
+          for (const op of ops) {
+            const dateStr = op.executedAt.toISOString().replace('T', ' ').split('.')[0];
+            const durationStr = op.duration ? dim(`(${op.duration}ms)`) : '';
+
+            let icon = '  ';
+            let opColor = dim;
+
+            switch (op.operation) {
+              case 'applied':
+                icon = op.status === 'success' ? '✅' : '❌';
+                opColor = op.status === 'success' ? green : red;
+                break;
+              case 'reverted':
+                icon = op.status === 'success' ? '🔄' : '❌';
+                opColor = op.status === 'success' ? blue : red;
+                break;
+              case 'failed':
+                icon = '❌';
+                opColor = red;
+                break;
+            }
+
+            console.log(`    ${icon} ${dim(dateStr)}  ${opColor(op.operation.padEnd(10))} ${durationStr}`);
+            if (op.error) {
+              console.log(`       ${red(dim(op.error.slice(0, 60)))}`);
+            }
+          }
+
+          console.log();
+        }
+      }
     }
 
   } catch (error) {

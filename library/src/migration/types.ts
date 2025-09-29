@@ -38,7 +38,7 @@ export type SeedCollectionRule = {
 
 /**
  * Rule for transforming documents in a collection
- * 
+ *
  * @template T - Input document type
  * @template U - Output document type
  */
@@ -50,12 +50,46 @@ export type TransformCollectionRule<T = Record<string, unknown>, U = Record<stri
 };
 
 /**
+ * Rule for creating a multi-collection instance
+ */
+export type CreateMultiCollectionInstanceRule = {
+  type: 'create_multicollection_instance';
+  multiCollectionName: string;
+  instanceName: string;
+};
+
+/**
+ * Rule for seeding a specific type in a multi-collection instance
+ */
+export type SeedMultiCollectionInstanceRule = {
+  type: 'seed_multicollection_instance';
+  multiCollectionName: string;
+  instanceName: string;
+  typeName: string;
+  documents: readonly unknown[];
+};
+
+/**
+ * Rule for transforming a specific type across ALL instances of a multi-collection
+ */
+export type TransformMultiCollectionTypeRule<T = Record<string, unknown>, U = Record<string, unknown>> = {
+  type: 'transform_multicollection_type';
+  multiCollectionName: string;
+  typeName: string;
+  up: (doc: T) => U;
+  down: (doc: U) => T;
+};
+
+/**
  * Union type representing all possible migration operations
  */
 export type MigrationRule =
   | CreateCollectionRule
   | SeedCollectionRule
-  | TransformCollectionRule;
+  | TransformCollectionRule
+  | CreateMultiCollectionInstanceRule
+  | SeedMultiCollectionInstanceRule
+  | TransformMultiCollectionTypeRule;
 
 /**
  * Transformation rule for bidirectional document changes
@@ -126,8 +160,63 @@ export interface MigrationCollectionBuilder {
 }
 
 /**
+ * Builder interface for configuring a specific type within a multi-collection
+ */
+export interface MultiCollectionTypeBuilder {
+  /**
+   * Applies a transformation to all documents of this type across ALL instances
+   * @param rule - The transformation rule with up/down functions
+   * @returns The type builder for method chaining
+   */
+  transform(rule: TransformRule): MultiCollectionTypeBuilder;
+
+  /**
+   * Finishes configuring this type and returns to the multi-collection builder
+   * @returns The multi-collection builder
+   */
+  end(): MultiCollectionBuilder;
+}
+
+/**
+ * Builder interface for configuring a multi-collection template
+ */
+export interface MultiCollectionBuilder {
+  /**
+   * Configures a specific type within the multi-collection
+   * @param typeName - The name of the type to configure
+   * @returns A type builder for the specified type
+   */
+  type(typeName: string): MultiCollectionTypeBuilder;
+
+  /**
+   * Finishes configuring this multi-collection and returns to the main builder
+   * @returns The main migration builder
+   */
+  end(): MigrationBuilder;
+}
+
+/**
+ * Builder interface for configuring a specific multi-collection instance
+ */
+export interface MultiCollectionInstanceBuilder {
+  /**
+   * Seeds a specific type in this instance
+   * @param typeName - The name of the type to seed
+   * @param documents - Array of documents to insert
+   * @returns The instance builder for method chaining
+   */
+  seedType(typeName: string, documents: readonly unknown[]): MultiCollectionInstanceBuilder;
+
+  /**
+   * Finishes configuring this instance and returns to the main builder
+   * @returns The main migration builder
+   */
+  end(): MigrationBuilder;
+}
+
+/**
  * Main builder interface for defining migrations
- * 
+ *
  * This interface provides the primary API for defining migration operations
  * including creating collections, configuring existing collections, and
  * compiling the final migration state.
@@ -139,14 +228,37 @@ export interface MigrationBuilder {
    * @returns A collection builder for the new collection
    */
   createCollection(name: string): MigrationCollectionBuilder;
-  
+
   /**
    * Configures an existing collection
    * @param name - The name of the collection to configure
    * @returns A collection builder for the existing collection
    */
   collection(name: string): MigrationCollectionBuilder;
-  
+
+  /**
+   * Configures a multi-collection template (affects ALL instances)
+   * @param name - The name of the multi-collection template
+   * @returns A multi-collection builder for the template
+   */
+  multiCollection(name: string): MultiCollectionBuilder;
+
+  /**
+   * Creates a new instance of a multi-collection
+   * @param multiCollectionName - The name of the multi-collection template
+   * @param instanceName - The name for this specific instance
+   * @returns An instance builder for the new instance
+   */
+  createMultiCollectionInstance(multiCollectionName: string, instanceName: string): MultiCollectionInstanceBuilder;
+
+  /**
+   * Configures an existing multi-collection instance
+   * @param multiCollectionName - The name of the multi-collection template
+   * @param instanceName - The name of the instance
+   * @returns An instance builder for the existing instance
+   */
+  multiCollectionInstance(multiCollectionName: string, instanceName: string): MultiCollectionInstanceBuilder;
+
   /**
    * Compiles the migration into its final executable state
    * @returns The compiled migration state

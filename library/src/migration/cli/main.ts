@@ -16,6 +16,7 @@ import { generateCommand } from "./commands/generate.ts";
 import { applyCommand } from "./commands/apply.ts";
 import { rollbackCommand } from "./commands/rollback.ts";
 import { statusCommand } from "./commands/status.ts";
+import { historyCommand } from "./commands/history.ts";
 import { initCommand } from "./commands/init.ts";
 import { loadConfig } from "../config/loader.ts";
 
@@ -55,6 +56,11 @@ const commands = [
     name: "revert",
     description: "Revert the last applied migration",
     handler: rollbackCommand,
+  },
+  {
+    name: "history",
+    description: "Show migration operation history",
+    handler: historyCommand,
   }
 ]
 
@@ -98,6 +104,7 @@ ${yellow("COMMANDS:")}
   ${green("generate")}  Generate a new migration file
   ${green("apply")}     Apply pending migrations
   ${green("status")}    Show migration status
+  ${green("history")}   Show migration operation history
   ${green("revert")}    Revert the last applied migration
 
 ${yellow("GLOBAL OPTIONS:")}

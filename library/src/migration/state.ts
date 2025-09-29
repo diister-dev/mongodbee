@@ -1,16 +1,27 @@
 /**
- * @fileoverview Migration state tracking system
+ * @fileoverview Migration state tracking system (Compatibility Layer)
  *
- * This module handles tracking which migrations have been applied to the database.
- * State is stored in a dedicated MongoDB collection.
+ * This module provides a compatibility layer over the new history-based system.
+ * It maintains the same API but uses the event sourcing history internally.
  *
  * @module
  */
 
-import type { Db, Collection } from '../mongodb.ts';
+import type { Db } from '../mongodb.ts';
+import {
+  recordOperation,
+  getMigrationHistory,
+  getLastOperation,
+  getCurrentState,
+  getAppliedMigrationIds as getAppliedIdsFromHistory,
+  getLastAppliedMigration as getLastAppliedFromHistory,
+  calculateMigrationState,
+  clearAllOperations,
+  type MigrationOperation,
+} from './history.ts';
 
 /**
- * State of a migration in the database
+ * State of a migration in the database (computed from history)
  */
 export type MigrationStateRecord = {
   /** Unique migration ID */
@@ -39,31 +50,85 @@ export type MigrationStateRecord = {
 };
 
 /**
- * Name of the collection used to track migration state
+ * Name of the collection used to track migration state (deprecated, use history)
+ * @deprecated Use history.ts instead
  */
 export const MIGRATION_STATE_COLLECTION = 'mongodbee_state';
 
 /**
- * Gets the migration state collection
+ * Converts a migration operation to a state record
  */
-export function getMigrationStateCollection(db: Db): Collection<MigrationStateRecord> {
-  return db.collection(MIGRATION_STATE_COLLECTION);
+function operationToStateRecord(
+  migrationId: string,
+  migrationName: string,
+  operations: MigrationOperation[]
+): MigrationStateRecord {
+  const status = calculateMigrationState(operations);
+  const lastOp = operations[operations.length - 1];
+
+  // Find last applied operation
+  const lastApplied = operations
+    .filter(op => op.operation === 'applied' && op.status === 'success')
+    .pop();
+
+  // Find last reverted operation
+  const lastReverted = operations
+    .filter(op => op.operation === 'reverted' && op.status === 'success')
+    .pop();
+
+  // Find last failed operation
+  const lastFailed = operations
+    .filter(op => op.operation === 'failed')
+    .pop();
+
+  return {
+    id: migrationId,
+    name: migrationName,
+    status,
+    appliedAt: lastApplied?.executedAt,
+    revertedAt: lastReverted?.executedAt,
+    duration: lastOp?.duration,
+    error: lastFailed?.error,
+  };
 }
 
 /**
  * Gets the current state of all migrations
  */
 export async function getAllMigrationStates(db: Db): Promise<MigrationStateRecord[]> {
-  const collection = getMigrationStateCollection(db);
-  return await collection.find({}).sort({ appliedAt: 1 }).toArray();
+  const states = await getCurrentState(db);
+  const records: MigrationStateRecord[] = [];
+
+  for (const [migrationId, state] of states.entries()) {
+    const history = await getMigrationHistory(db, migrationId);
+    const record = operationToStateRecord(
+      migrationId,
+      state.lastOperation?.migrationName || migrationId,
+      history
+    );
+    records.push(record);
+  }
+
+  // Sort by last operation date
+  return records.sort((a, b) => {
+    const dateA = a.appliedAt || a.revertedAt || new Date(0);
+    const dateB = b.appliedAt || b.revertedAt || new Date(0);
+    return dateA.getTime() - dateB.getTime();
+  });
 }
 
 /**
  * Gets the state of a specific migration
  */
 export async function getMigrationState(db: Db, migrationId: string): Promise<MigrationStateRecord | null> {
-  const collection = getMigrationStateCollection(db);
-  return await collection.findOne({ id: migrationId });
+  const history = await getMigrationHistory(db, migrationId);
+
+  if (history.length === 0) {
+    return null;
+  }
+
+  const migrationName = history[0].migrationName;
+  return operationToStateRecord(migrationId, migrationName, history);
 }
 
 /**
@@ -84,23 +149,7 @@ export async function markMigrationAsApplied(
   duration?: number,
   checksum?: string
 ): Promise<void> {
-  const collection = getMigrationStateCollection(db);
-
-  await collection.updateOne(
-    { id: migrationId },
-    {
-      $set: {
-        id: migrationId,
-        name,
-        status: 'applied' as const,
-        appliedAt: new Date(),
-        duration,
-        checksum,
-        error: undefined,
-      }
-    },
-    { upsert: true }
-  );
+  await recordOperation(db, migrationId, name, 'applied', duration);
 }
 
 /**
@@ -112,21 +161,7 @@ export async function markMigrationAsFailed(
   name: string,
   error: string
 ): Promise<void> {
-  const collection = getMigrationStateCollection(db);
-
-  await collection.updateOne(
-    { id: migrationId },
-    {
-      $set: {
-        id: migrationId,
-        name,
-        status: 'failed' as const,
-        error,
-        appliedAt: new Date(),
-      }
-    },
-    { upsert: true }
-  );
+  await recordOperation(db, migrationId, name, 'failed', undefined, error);
 }
 
 /**
@@ -134,49 +169,43 @@ export async function markMigrationAsFailed(
  */
 export async function markMigrationAsReverted(
   db: Db,
-  migrationId: string
+  migrationId: string,
+  name?: string,
+  duration?: number
 ): Promise<void> {
-  const collection = getMigrationStateCollection(db);
+  // Get name from last operation if not provided
+  if (!name) {
+    const lastOp = await getLastOperation(db, migrationId);
+    name = lastOp?.migrationName || migrationId;
+  }
 
-  await collection.updateOne(
-    { id: migrationId },
-    {
-      $set: {
-        status: 'reverted' as const,
-        revertedAt: new Date(),
-      }
-    }
-  );
+  await recordOperation(db, migrationId, name, 'reverted', duration);
 }
 
 /**
  * Gets a list of applied migration IDs in order
  */
 export async function getAppliedMigrationIds(db: Db): Promise<string[]> {
-  const states = await getAllMigrationStates(db);
-  return states
-    .filter(s => s.status === 'applied')
-    .map(s => s.id);
+  return await getAppliedIdsFromHistory(db);
 }
 
 /**
  * Gets the last applied migration
  */
 export async function getLastAppliedMigration(db: Db): Promise<MigrationStateRecord | null> {
-  const collection = getMigrationStateCollection(db);
-  const results = await collection
-    .find({ status: 'applied' })
-    .sort({ appliedAt: -1 })
-    .limit(1)
-    .toArray();
+  const lastOp = await getLastAppliedFromHistory(db);
 
-  return results[0] ?? null;
+  if (!lastOp) {
+    return null;
+  }
+
+  const history = await getMigrationHistory(db, lastOp.migrationId);
+  return operationToStateRecord(lastOp.migrationId, lastOp.migrationName, history);
 }
 
 /**
  * Clears all migration state (dangerous, use with caution)
  */
 export async function clearMigrationState(db: Db): Promise<void> {
-  const collection = getMigrationStateCollection(db);
-  await collection.deleteMany({});
+  await clearAllOperations(db);
 }
