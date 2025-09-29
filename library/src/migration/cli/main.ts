@@ -27,7 +27,6 @@ const commands = [
   {
     name: "help",
     description: "Show help information",
-    options: {},
     handler: () => {
       showHelp();
     }
@@ -46,6 +45,16 @@ const commands = [
     name: "apply",
     description: "Apply pending migrations",
     handler: applyCommand,
+  },
+  {
+    name: "status",
+    description: "Show migration status",
+    handler: statusCommand,
+  },
+  {
+    name: "revert",
+    description: "Revert the last applied migration",
+    handler: rollbackCommand,
   }
 ]
 
@@ -88,8 +97,8 @@ ${yellow("COMMANDS:")}
   ${green("init")}      Initialize migration configuration
   ${green("generate")}  Generate a new migration file
   ${green("apply")}     Apply pending migrations
-  ${green("rollback")}  Rollback the last applied migration
   ${green("status")}    Show migration status
+  ${green("revert")}    Revert the last applied migration
 
 ${yellow("GLOBAL OPTIONS:")}
   -h, --help     Show this help message

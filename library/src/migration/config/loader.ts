@@ -299,27 +299,41 @@ export function createConfig(input: Partial<MigrationSystemConfig>): MigrationSy
   return validation.config!;
 }
 
-export async function loadConfig(options: any = {}) {
-  console.log(options);
+/**
+ * Loads MongoDBee configuration from file or uses defaults
+ *
+ * @param options - Optional configuration path
+ * @returns The loaded configuration
+ */
+export async function loadConfig(options: { configPath?: string } = {}): Promise<any> {
+  let config: any;
 
+  // If explicit config path provided, try to load it
+  if (options.configPath) {
+    try {
+      config = await loadFromFile(options.configPath);
+      return config;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`${red("Failed to load config from")} ${options.configPath}: ${message}`);
+      throw error;
+    }
+  }
+
+  // Otherwise, try to discover config files
   const toCheck = discoverConfigFiles();
-  let config;
   for (const configPath of toCheck) {
     try {
       config = await loadFromFile(configPath);
-      break;
+      return config;
     } catch {
-      // ignore
+      // Continue to next file
       continue;
     }
   }
 
-  if(!config) {
-    console.log(`${red("No configuration file found, using defaults.")}`);
-    config = DEFAULT_CONFIG;
-  }
-
-  console.log(config);
+  // If no config found, throw error
+  throw new Error('No configuration file found. Run "mongodbee init" to create one.');
 }
 
 /**
