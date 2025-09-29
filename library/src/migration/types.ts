@@ -277,7 +277,10 @@ export type SchemasDefinition = {
   collections: Record<string, Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>>;
   
   /** Schema definitions for multi-collections (optional) */
-  multiCollections?: Record<string, Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>>;
+  multiCollections?: Record<string, // multi-collection schema name
+    Record<string, // type name within the multi-collection
+      Record<string, // field name
+        v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>>>;
 };
 
 /**
