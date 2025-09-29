@@ -28,3 +28,4 @@ export * from "./src/collection.ts";
 export * from "./src/multi-collection.ts";
 export * from "./src/mongodb.ts";
 export * from "./src/indexes.ts";
+export * from "./src/config.ts";

@@ -56,6 +56,7 @@
  * @module
  */
 
+import { ulid } from "@std/ulid/ulid";
 import type {
   MigrationDefinition,
   MigrationBuilder,
@@ -237,32 +238,24 @@ export function validateMigrationChain(migrations: MigrationDefinition[]): {
 }
 
 /**
- * Generates a new migration ID based on the last migration in the chain
+ * Generates a unique migration ID based on the current timestamp and an optional name.
+ * The format is `YYYY_MM_DD_HHMM_<MINI_ULID>[@<name>]`, where `<ULID>` is a unique identifier.
  * 
- * @param migrations - Existing migrations in order
- * @returns A new unique migration ID
+ * @param name - Optional name to include in the migration ID
+ * @returns A unique migration ID string
  * 
  * @example
  * ```typescript
- * const migrations = [migration0, migration1];
- * const newId = generateMigrationId(migrations);
- * console.log(newId); // "000003"
+ * const migrationId = generateMigrationId("add-users-collection");
+ * console.log(migrationId); // e.g. "2023_10_05_01F8Z8X1Y2Z3_add-users-collection"
  * ```
  */
-export function generateMigrationId(migrations: MigrationDefinition[]): string {
-  if (migrations.length === 0) {
-    return "000001";
-  }
-
-  const lastMigration = migrations[migrations.length - 1];
-  const lastId = parseInt(lastMigration.id, 10);
-  
-  if (isNaN(lastId)) {
-    throw new Error(`Cannot generate next ID: last migration ID "${lastMigration.id}" is not numeric`);
-  }
-
-  const nextId = lastId + 1;
-  return nextId.toString().padStart(6, '0');
+export function generateMigrationId(name?: string): string {
+    const date = new Date();
+    const datePart = date.toISOString().split('T')[0].replace(/-/g, '_') + '_' + date.toTimeString().slice(0,5).replace(/:/g, '');
+    const uniquePart = ulid().slice(4, 14); // Shorten ULID for brevity
+    const namePart = name ? `@${name.replace(/\s+/g, '-').toLowerCase()}` : '';
+    return `${datePart}_${uniquePart}${namePart}`;
 }
 
 /**

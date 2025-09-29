@@ -9,91 +9,107 @@
 import { green, yellow, red, dim, blue } from "@std/fmt/colors";
 import * as path from "@std/path";
 import { existsSync } from "@std/fs";
+import { generateMigrationId } from "../../definition.ts";
+import { prettyText } from "../utils.ts";
 
-import { loadConfig } from "../../config/loader.ts";
-import { generateMigration } from "../../generators/templates.ts";
+async function extractMigrationDefinitions(migrationsDir: string): Promise<any[]> {
+  const migrations = Deno.readDirSync(migrationsDir);
+  const migrationsPaths = [...migrations].map(mig => mig.name)
+    .filter(name => name.endsWith(".ts"))
+    .sort((a, b) => a.localeCompare(b))
+    .map(async (name) => {
+      const migrationPath = new URL(`${migrationsDir}/${name}`, `file://${Deno.cwd()}/`).href;
+      console.log(migrationPath);
+      return [name, await import(migrationPath)];
+    });
 
-export interface GenerateCommandOptions {
-  configPath: string;
-  environment: string;
-  name: string;
-  template: string;
+  const migrationsModules = (await Promise.all(migrationsPaths)).map(([name, mod]) => {
+    const def = mod.default;
+    return [name, def];
+  });
+
+  return migrationsModules;
+}
+
+export type GenerateCommandOptions = {
+  name?: string;
+}
+
+export const generateCommandOptions = {
+  string: ["name"],
+  alias: { n: "name" },
+  default: { name: "" },
 }
 
 /**
  * Generate a new migration file
  */
 export async function generateCommand(options: GenerateCommandOptions): Promise<void> {
-  const { configPath, environment, name, template } = options;
+  console.log(dim("Loading configuration..."));
+  
+  const configPath = new URL("mongodbee.config.ts", `file://${Deno.cwd()}/`).href;
 
-  if (!existsSync(configPath)) {
-    console.error(red("Error: Configuration file not found"));
-    console.log(dim("Run 'mongodbee-migrate init' to initialize configuration"));
-    Deno.exit(1);
+  const importConfig = await import(configPath);
+  const config = importConfig.default;
+  
+  const migrationsDir = config.paths.migrationsDir || "./migrations";
+  const migrationsDirPath = path.resolve(migrationsDir);
+  if (!existsSync(migrationsDirPath)) {
+    console.log(red(`Migrations directory does not exist: ${migrationsDir}`));
+    return;
   }
 
-  try {
-    // Load configuration
-    const configResult = await loadConfig({ 
-      configPath,
-      environment 
-    });
-    const config = configResult.config;
-    
-    console.log(yellow(`Generating migration: ${blue(name)}`));
-    console.log(dim(`Template: ${template}`));
-    console.log(dim(`Environment: ${environment}`));
+  const migrationsDefinitions = await extractMigrationDefinitions(migrationsDir);
+  const lastMigration = migrationsDefinitions[migrationsDefinitions.length - 1];
 
-    // Resolve migrations directory
-    const migrationsDir = path.isAbsolute(config.paths.migrations)
-      ? config.paths.migrations
-      : path.resolve(path.dirname(configPath), config.paths.migrations);
-
-    // Ensure migrations directory exists
-    await Deno.mkdir(migrationsDir, { recursive: true });
-
-    // Generate migration file
-    const result = await generateMigration({
-      name,
-      template,
-      variables: {
-        database: config.database.name,
-        collectionName: name.includes('collection') ? name.replace(/^(create-|add-|remove-)?(.+?)(-collection)?$/, '$2') : name,
-        timestamp: new Date().toISOString(),
-        author: "CLI User",
-      },
-    }, config);
-
-    // Write the migration to the output directory using the generated ID
-    const fileName = `${result.metadata.id}.ts`;
-    const filePath = path.join(migrationsDir, fileName);
-    
-    await Deno.writeTextFile(filePath, result.content);
-
-    console.log(green("✓ Migration generated successfully"));
-    console.log(dim(`  File: ${filePath}`));
-    console.log(dim(`  Template: ${result.metadata.template}`));
-
-    console.log("\n" + yellow("Next steps:"));
-    console.log(dim("1. Edit the migration file to implement your changes"));
-    console.log(dim("2. Test the migration:"));
-    console.log(dim("   mongodbee-migrate apply --dry-run"));
-    console.log(dim("3. Apply the migration:"));
-    console.log(dim("   mongodbee-migrate apply"));
-
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(red("Error generating migration:"), message);
-    
-    if (message.includes("Unknown template")) {
-      console.log("\n" + yellow("Available templates:"));
-      console.log(dim("• empty - Empty migration"));
-      console.log(dim("• create-collection - Create a new collection"));
-      console.log(dim("• seed-data - Add initial data"));
-      console.log(dim("• transform-data - Transform existing data"));
-      console.log(dim("• add-index - Add database indexes"));
+  // Ensure a parent is never used twice
+  const parents = new Set<string>();
+  for (const [name, def] of migrationsDefinitions) {
+    if (def.parent) {
+      if (parents.has(def.parent.id)) {
+        console.log(red(`Error: Migration ${name} has a parent ID that is already used by another migration: ${def.parent.id}`));
+        return;
+      }
+      parents.add(def.parent.id);
     }
-    
-    Deno.exit(1);
   }
+
+  const id = generateMigrationId(options.name);
+  
+  const generation = `
+    /**
+     * This migration was generated using MongoDBee CLI
+     * Please edit the migration logic in the migrate() function.
+     * @module
+     */
+
+    import { migrationDefinition } from "@diister/mongodbee/migration";${lastMigration ? `
+    import parent from "./${lastMigration[0]}";` : ""}
+
+    const id = "${id}";
+    const name = "${options.name || "Migration Name"}";
+
+    export default migrationDefinition(id, name, {
+      parent: ${lastMigration ? "parent" : "null"},
+      schemas: {
+        collections: {${lastMigration ? `
+          ...parent.schemas.collections,` : `
+          // \"<collection_name>\" : {}`}
+        },
+        multiCollections: {${lastMigration?.[1]?.schemas?.multiCollections ? `
+          ...parent.schemas.multiCollections,` : `
+          // \"<collection_type>\" : {}`}
+        }
+      },
+      migrate(migration) {
+        return migration.compile();
+      },
+    })
+  `;
+
+  const fileName = `${id.replace(/-/g, "_")}.ts`;
+  const filePath = path.join(migrationsDir, fileName);
+  await Deno.writeTextFile(filePath, prettyText(generation));
+
+  console.log(`${green("Migration file created")}: ${filePath}`);
 }

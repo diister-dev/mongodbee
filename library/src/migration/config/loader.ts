@@ -34,6 +34,7 @@ import {
   MigrationSystemConfigSchema,
   DEFAULT_CONFIG
 } from './types.ts';
+import { red } from "@std/fmt/colors";
 
 /**
  * Deeply merges two configuration objects
@@ -298,6 +299,29 @@ export function createConfig(input: Partial<MigrationSystemConfig>): MigrationSy
   return validation.config!;
 }
 
+export async function loadConfig(options: any = {}) {
+  console.log(options);
+
+  const toCheck = discoverConfigFiles();
+  let config;
+  for (const configPath of toCheck) {
+    try {
+      config = await loadFromFile(configPath);
+      break;
+    } catch {
+      // ignore
+      continue;
+    }
+  }
+
+  if(!config) {
+    console.log(`${red("No configuration file found, using defaults.")}`);
+    config = DEFAULT_CONFIG;
+  }
+
+  console.log(config);
+}
+
 /**
  * Loads configuration from multiple sources with priority
  * 
@@ -329,7 +353,7 @@ export function createConfig(input: Partial<MigrationSystemConfig>): MigrationSy
  * });
  * ```
  */
-export async function loadConfig(options: ConfigLoadOptions = {}): Promise<ConfigResult> {
+export async function loadConfigOld(options: ConfigLoadOptions = {}): Promise<ConfigResult> {
   const {
     environment,
     configPath,
