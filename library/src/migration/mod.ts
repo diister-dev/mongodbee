@@ -122,7 +122,7 @@ export type {
 
 // Appliers
 export { SimulationApplier } from './appliers/simulation.ts';
-export { MongodbApplier } from './appliers/mongodb.ts';
+export { MongodbApplier, createMongodbApplier } from './appliers/mongodb.ts';
 
 // Configuration
 export * from './config/mod.ts';
@@ -136,6 +136,18 @@ export {
   createChainValidator,
   validateMigrationState,
 } from './validators/mod.ts';
+
+// Multi-collection registry
+export {
+  discoverMultiCollectionInstances,
+  getMultiCollectionInfo,
+  createMultiCollectionInfo,
+  recordMultiCollectionMigration,
+  getMultiCollectionMigrations,
+  multiCollectionInstanceExists,
+  MULTI_COLLECTION_INFO_TYPE,
+  MULTI_COLLECTION_MIGRATIONS_TYPE,
+} from './multicollection-registry.ts';
 
 /**
  * Version information for the migration system

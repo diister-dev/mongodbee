@@ -52,7 +52,7 @@ export type MigrationOperation = {
 /**
  * Name of the collection used to track migration operations
  */
-export const MIGRATION_OPERATIONS_COLLECTION = 'mongodbee_operations';
+export const MIGRATION_OPERATIONS_COLLECTION = '__dbee_migration__';
 
 /**
  * Gets the migration operations collection

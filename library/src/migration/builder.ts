@@ -29,6 +29,9 @@ import * as v from '../schema.ts';
 import type {
   MigrationBuilder,
   MigrationCollectionBuilder,
+  MultiCollectionBuilder,
+  MultiCollectionTypeBuilder,
+  MultiCollectionInstanceBuilder,
   MigrationState,
   MigrationProperty,
   MigrationRule,
@@ -36,6 +39,9 @@ import type {
   CreateCollectionRule,
   SeedCollectionRule,
   TransformCollectionRule,
+  CreateMultiCollectionInstanceRule,
+  SeedMultiCollectionInstanceRule,
+  TransformMultiCollectionTypeRule,
 } from './types.ts';
 
 /**
@@ -126,13 +132,109 @@ function createCollectionBuilder(
 }
 
 /**
+ * Creates a multi-collection type builder
+ */
+function createMultiCollectionTypeBuilder(
+  state: MigrationState,
+  multiCollectionName: string,
+  typeName: string,
+  parentBuilder: MultiCollectionBuilder
+): MultiCollectionTypeBuilder {
+  return {
+    transform(rule: TransformRule): MultiCollectionTypeBuilder {
+      const transformRule: TransformMultiCollectionTypeRule = {
+        type: 'transform_multicollection_type',
+        multiCollectionName,
+        typeName,
+        up: rule.up,
+        down: rule.down,
+      };
+
+      state.operations.push(transformRule);
+      return this;
+    },
+
+    end(): MultiCollectionBuilder {
+      return parentBuilder;
+    }
+  };
+}
+
+/**
+ * Creates a multi-collection builder
+ */
+function createMultiCollectionBuilder(
+  state: MigrationState,
+  multiCollectionName: string,
+  mainBuilder: MigrationBuilder
+): MultiCollectionBuilder {
+  const builder: MultiCollectionBuilder = {
+    type(typeName: string): MultiCollectionTypeBuilder {
+      return createMultiCollectionTypeBuilder(state, multiCollectionName, typeName, builder);
+    },
+
+    end(): MigrationBuilder {
+      return mainBuilder;
+    }
+  };
+
+  return builder;
+}
+
+/**
+ * Creates a multi-collection instance builder
+ */
+function createMultiCollectionInstanceBuilder(
+  state: MigrationState,
+  multiCollectionName: string,
+  instanceName: string,
+  mainBuilder: MigrationBuilder,
+  options: MigrationBuilderOptions
+): MultiCollectionInstanceBuilder {
+  return {
+    seedType(typeName: string, documents: readonly unknown[]): MultiCollectionInstanceBuilder {
+      // Validate documents against schema if available, similar to collection seed
+      const schema = options.schemas.multiCollections?.[multiCollectionName]?.[typeName];
+      let validatedDocs: readonly unknown[] = documents;
+      
+      if (schema) {
+        validatedDocs = documents.map(doc => {
+          const parseResult = v.safeParse(v.object(schema), doc);
+          if (!parseResult.success) {
+            throw new Error(
+              `Document in multi-collection ${multiCollectionName}.${typeName} failed schema validation: ${parseResult.issues.map(i => i.message).join(', ')}`
+            );
+          }
+          return parseResult.output;
+        });
+      }
+
+      const seedRule: SeedMultiCollectionInstanceRule = {
+        type: 'seed_multicollection_instance',
+        multiCollectionName,
+        instanceName,
+        typeName,
+        documents: validatedDocs,
+      };
+
+      state.operations.push(seedRule);
+      return this;
+    },
+
+    end(): MigrationBuilder {
+      return mainBuilder;
+    }
+  };
+}
+
+/**
  * Creates the main migration builder with functional operations
  */
 function createMigrationBuilder(
   state: MigrationState,
   options: MigrationBuilderOptions
 ): MigrationBuilder {
-  return {
+  const builder: MigrationBuilder = {
     createCollection(name: string): MigrationCollectionBuilder {
       const createRule: CreateCollectionRule = {
         type: 'create_collection',
@@ -151,10 +253,35 @@ function createMigrationBuilder(
       return createCollectionBuilder(state, name, options);
     },
 
+    multiCollection(name: string): MultiCollectionBuilder {
+      return createMultiCollectionBuilder(state, name, builder);
+    },
+
+    createMultiCollectionInstance(multiCollectionName: string, instanceName: string): MultiCollectionInstanceBuilder {
+      const createRule: CreateMultiCollectionInstanceRule = {
+        type: 'create_multicollection_instance',
+        multiCollectionName,
+        instanceName,
+      };
+
+      state.operations.push(createRule);
+
+      // Creating a multi-collection instance makes the migration irreversible
+      state.mark({ type: 'irreversible' });
+
+      return createMultiCollectionInstanceBuilder(state, multiCollectionName, instanceName, builder, options);
+    },
+
+    multiCollectionInstance(multiCollectionName: string, instanceName: string): MultiCollectionInstanceBuilder {
+      return createMultiCollectionInstanceBuilder(state, multiCollectionName, instanceName, builder, options);
+    },
+
     compile(): MigrationState {
       return state;
     }
   };
+
+  return builder;
 }
 
 /**
