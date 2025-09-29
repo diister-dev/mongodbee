@@ -14,6 +14,7 @@ import { loadConfig } from "../../config/loader.ts";
 import { loadAllMigrations, buildMigrationChain, getPendingMigrations } from "../../discovery.ts";
 import { getAppliedMigrationIds, markMigrationAsApplied, markMigrationAsFailed } from "../../state.ts";
 import { MongodbApplier } from "../../appliers/mongodb.ts";
+import { createSimulationValidator } from "../../validators/simulation.ts";
 import { migrationBuilder } from "../../builder.ts";
 import { validateMigrationChainWithProjectSchema } from "../../schema-validation.ts";
 
@@ -105,6 +106,11 @@ export async function applyCommand(options: ApplyCommandOptions = {}): Promise<v
 
     // Apply each pending migration
     const applier = new MongodbApplier(db);
+    const simulationValidator = createSimulationValidator({
+      validateReversibility: true,
+      strictValidation: true,
+      maxOperations: 1000
+    });
 
     for (const migration of pendingMigrations) {
       console.log(bold(`Applying: ${blue(migration.name)} ${dim(`(${migration.id})`)}`));
@@ -117,7 +123,28 @@ export async function applyCommand(options: ApplyCommandOptions = {}): Promise<v
       try {
         const startTime = Date.now();
 
-        // Execute migration
+        // Step 1: Validate migration with simulation
+        console.log(dim("  🧪 Validating with simulation..."));
+        const validationResult = await simulationValidator.validateMigration(migration);
+        
+        if (!validationResult.success) {
+          console.error(red(`  ✗ Simulation validation failed:`));
+          for (const error of validationResult.errors) {
+            console.error(red(`    ${error}`));
+          }
+          throw new Error(`Migration simulation validation failed`);
+        }
+
+        if (validationResult.warnings.length > 0) {
+          for (const warning of validationResult.warnings) {
+            console.log(yellow(`  ⚠ ${warning}`));
+          }
+        }
+
+        console.log(green(`  ✓ Simulation validation passed (${validationResult.data?.operationCount || 0} operations)`));
+
+        // Step 2: Execute migration on real database
+        console.log(dim("  📝 Executing migration..."));
         const builder = migrationBuilder({ schemas: migration.schemas });
         const state = migration.migrate(builder);
 

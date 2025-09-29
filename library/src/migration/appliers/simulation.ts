@@ -33,6 +33,9 @@ import type {
   CreateCollectionRule,
   SeedCollectionRule,
   TransformCollectionRule,
+  CreateMultiCollectionInstanceRule,
+  SeedMultiCollectionInstanceRule,
+  TransformMultiCollectionTypeRule,
 } from '../types.ts';
 
 /**
@@ -121,6 +124,18 @@ export class SimulationApplier implements SimulationMigrationApplier {
     transform_collection: {
       apply: (state, operation) => this.applyTransformCollection(state, operation),
       reverse: (state, operation) => this.reverseTransformCollection(state, operation),
+    },
+    create_multicollection_instance: {
+      apply: (state, operation) => this.applyCreateMultiCollectionInstance(state, operation),
+      reverse: (state, operation) => this.reverseCreateMultiCollectionInstance(state, operation),
+    },
+    seed_multicollection_instance: {
+      apply: (state, operation) => this.applySeedMultiCollectionInstance(state, operation),
+      reverse: (state, operation) => this.reverseSeedMultiCollectionInstance(state, operation),
+    },
+    transform_multicollection_type: {
+      apply: (state, operation) => this.applyTransformMultiCollectionType(state, operation),
+      reverse: (state, operation) => this.reverseTransformMultiCollectionType(state, operation),
     },
   };
 
@@ -358,6 +373,264 @@ export class SimulationApplier implements SimulationMigrationApplier {
         return doc;
       }
     });
+
+    this.trackOperation(state, operation, 'reverse');
+    return state;
+  }
+
+  /**
+   * Applies a create multi-collection instance operation
+   * 
+   * @private
+   * @param state - Current database state
+   * @param operation - Create multi-collection instance operation
+   * @returns Updated database state
+   */
+  private applyCreateMultiCollectionInstance(state: SimulationDatabaseState, operation: CreateMultiCollectionInstanceRule): SimulationDatabaseState {
+    // Initialize multiCollections if not present
+    if (!state.multiCollections) {
+      state.multiCollections = {};
+    }
+
+    const collectionName = `${operation.multiCollectionName}_${operation.instanceName}`;
+    
+    if (this.options.strictValidation && state.multiCollections[collectionName]) {
+      throw new Error(`Multi-collection instance ${collectionName} already exists`);
+    }
+
+    // Create the multi-collection instance with metadata document
+    state.multiCollections[collectionName] = {
+      content: [
+        {
+          _type: '_information',
+          multiCollectionType: operation.multiCollectionName,
+          instanceName: operation.instanceName,
+          createdAt: new Date(),
+          createdByMigration: 'simulation',
+          schemas: {}
+        }
+      ]
+    };
+
+    this.trackOperation(state, operation, 'apply');
+    return state;
+  }
+
+  /**
+   * Reverses a create multi-collection instance operation by removing the instance
+   * 
+   * @private
+   * @param state - Current database state
+   * @param operation - Create multi-collection instance operation to reverse
+   * @returns Updated database state
+   */
+  private reverseCreateMultiCollectionInstance(state: SimulationDatabaseState, operation: CreateMultiCollectionInstanceRule): SimulationDatabaseState {
+    if (!state.multiCollections) {
+      state.multiCollections = {};
+    }
+
+    const collectionName = `${operation.multiCollectionName}_${operation.instanceName}`;
+    
+    if (this.options.strictValidation && !state.multiCollections[collectionName]) {
+      throw new Error(`Multi-collection instance ${collectionName} does not exist for dropping`);
+    }
+
+    delete state.multiCollections[collectionName];
+    this.trackOperation(state, operation, 'reverse');
+    return state;
+  }
+
+  /**
+   * Applies a seed multi-collection instance operation
+   * 
+   * @private
+   * @param state - Current database state
+   * @param operation - Seed multi-collection instance operation
+   * @returns Updated database state
+   */
+  private applySeedMultiCollectionInstance(state: SimulationDatabaseState, operation: SeedMultiCollectionInstanceRule): SimulationDatabaseState {
+    if (!state.multiCollections) {
+      state.multiCollections = {};
+    }
+
+    const collectionName = `${operation.multiCollectionName}_${operation.instanceName}`;
+    
+    if (this.options.strictValidation && !state.multiCollections[collectionName]) {
+      throw new Error(`Multi-collection instance ${collectionName} does not exist for seeding`);
+    }
+
+    // Ensure collection exists (create if not in strict mode)
+    if (!state.multiCollections[collectionName]) {
+      state.multiCollections[collectionName] = { content: [] };
+    }
+
+    // Add documents to the multi-collection with _type field
+    const documents = operation.documents.map(doc => {
+      const docObj: Record<string, unknown> = typeof doc === 'object' && doc !== null 
+        ? { ...doc as Record<string, unknown> } 
+        : { value: doc };
+      
+      // Add _type field
+      docObj._type = operation.typeName;
+      
+      // Generate _id if missing (simple simulation)
+      if (!docObj._id) {
+        docObj._id = `${operation.typeName}:sim_${Math.random().toString(36).substring(2)}`;
+      }
+      
+      return docObj;
+    });
+    
+    state.multiCollections[collectionName].content.push(...documents);
+    this.trackOperation(state, operation, 'apply');
+    return state;
+  }
+
+  /**
+   * Reverses a seed multi-collection instance operation by removing seeded documents
+   * 
+   * @private
+   * @param state - Current database state
+   * @param operation - Seed multi-collection instance operation to reverse
+   * @returns Updated database state
+   */
+  private reverseSeedMultiCollectionInstance(state: SimulationDatabaseState, operation: SeedMultiCollectionInstanceRule): SimulationDatabaseState {
+    if (!state.multiCollections) {
+      return state;
+    }
+
+    const collectionName = `${operation.multiCollectionName}_${operation.instanceName}`;
+    const collection = state.multiCollections[collectionName];
+    
+    if (!collection) return state;
+
+    // Create a set of seeded document IDs for efficient lookup
+    const seededIds = new Set(
+      operation.documents
+        .map(doc => 
+          typeof doc === 'object' && doc !== null && '_id' in (doc as Record<string, unknown>) 
+            ? (doc as Record<string, unknown>)._id 
+            : null
+        )
+        .filter(id => id !== null)
+    );
+
+    // Filter out documents with matching IDs and type
+    collection.content = collection.content.filter(doc => {
+      const docId = typeof doc === 'object' && doc !== null && '_id' in doc ? doc._id : null;
+      const docType = typeof doc === 'object' && doc !== null && '_type' in doc ? doc._type : null;
+      
+      // Keep documents that don't match the operation's type or aren't in the seeded IDs
+      return docType !== operation.typeName || !seededIds.has(docId as string | number);
+    });
+
+    this.trackOperation(state, operation, 'reverse');
+    return state;
+  }
+
+  /**
+   * Applies a transform multi-collection type operation to ALL instances
+   * 
+   * @private
+   * @param state - Current database state
+   * @param operation - Transform multi-collection type operation
+   * @returns Updated database state
+   */
+  private applyTransformMultiCollectionType(state: SimulationDatabaseState, operation: TransformMultiCollectionTypeRule): SimulationDatabaseState {
+    if (!state.multiCollections) {
+      return state;
+    }
+
+    // Find all instances of this multi-collection type
+    const instancePattern = `${operation.multiCollectionName}_`;
+    const matchingCollections = Object.keys(state.multiCollections).filter(name => 
+      name.startsWith(instancePattern)
+    );
+
+    if (matchingCollections.length === 0) {
+      if (this.options.strictValidation) {
+        throw new Error(`No instances found for multi-collection type ${operation.multiCollectionName}`);
+      }
+      return state;
+    }
+
+    // Apply transformation to each instance
+    for (const collectionName of matchingCollections) {
+      const collection = state.multiCollections[collectionName];
+      if (!collection) continue;
+
+      // Transform documents of the specified type
+      collection.content = collection.content.map(doc => {
+        // Only transform documents of the specified type
+        if (typeof doc === 'object' && doc !== null && '_type' in doc && doc._type === operation.typeName) {
+          try {
+            return operation.up(doc);
+          } catch (error) {
+            if (this.options.strictValidation) {
+              throw new Error(`Transform failed for document in ${collectionName}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            }
+            // In non-strict mode, return original document if transform fails
+            return doc;
+          }
+        }
+        // Return other documents unchanged
+        return doc;
+      });
+    }
+
+    this.trackOperation(state, operation, 'apply');
+    return state;
+  }
+
+  /**
+   * Reverses a transform multi-collection type operation on ALL instances
+   * 
+   * @private
+   * @param state - Current database state
+   * @param operation - Transform multi-collection type operation to reverse
+   * @returns Updated database state
+   */
+  private reverseTransformMultiCollectionType(state: SimulationDatabaseState, operation: TransformMultiCollectionTypeRule): SimulationDatabaseState {
+    if (!state.multiCollections) {
+      return state;
+    }
+
+    // Find all instances of this multi-collection type
+    const instancePattern = `${operation.multiCollectionName}_`;
+    const matchingCollections = Object.keys(state.multiCollections).filter(name => 
+      name.startsWith(instancePattern)
+    );
+
+    if (matchingCollections.length === 0) {
+      if (this.options.strictValidation) {
+        throw new Error(`No instances found for multi-collection type ${operation.multiCollectionName}`);
+      }
+      return state;
+    }
+
+    // Apply reverse transformation to each instance
+    for (const collectionName of matchingCollections) {
+      const collection = state.multiCollections[collectionName];
+      if (!collection) continue;
+
+      // Reverse transform documents of the specified type
+      collection.content = collection.content.map(doc => {
+        // Only transform documents of the specified type
+        if (typeof doc === 'object' && doc !== null && '_type' in doc && doc._type === operation.typeName) {
+          try {
+            return operation.down(doc);
+          } catch (error) {
+            if (this.options.strictValidation) {
+              throw new Error(`Reverse transform failed for document in ${collectionName}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            }
+            // In non-strict mode, return original document if transform fails
+            return doc;
+          }
+        }
+        // Return other documents unchanged
+        return doc;
+      });
+    }
 
     this.trackOperation(state, operation, 'reverse');
     return state;

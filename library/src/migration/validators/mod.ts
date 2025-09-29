@@ -59,3 +59,12 @@ export {
   createIntegrityValidator,
   validateMigrationState,
 } from './integrity.ts';
+
+// Export simulation validation functionality
+export {
+  SimulationValidator,
+  createSimulationValidator,
+  validateMigrationWithSimulation,
+  type SimulationValidatorOptions,
+  DEFAULT_SIMULATION_VALIDATOR_OPTIONS,
+} from './simulation.ts';
