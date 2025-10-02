@@ -43,6 +43,7 @@ import type {
   SeedMultiCollectionInstanceRule,
   TransformMultiCollectionTypeRule,
   UpdateIndexesRule,
+  MarkAsMultiCollectionRule,
 } from './types.ts';
 
 /**
@@ -323,6 +324,19 @@ function createMigrationBuilder(
       state.operations.push(updateRule);
 
       // Updating indexes is reversible (can drop and recreate)
+      return builder;
+    },
+
+    markAsMultiCollection(collectionName: string, collectionType: string): MigrationBuilder {
+      const markRule: MarkAsMultiCollectionRule = {
+        type: 'mark_as_multicollection',
+        collectionName,
+        collectionType,
+      };
+
+      state.operations.push(markRule);
+
+      // Marking is reversible (can remove metadata documents)
       return builder;
     },
 

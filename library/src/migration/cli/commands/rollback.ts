@@ -1,7 +1,7 @@
 /**
- * Revert command for MongoDBee Migration CLI
+ * Rollback command for MongoDBee Migration CLI
  *
- * Reverts the last applied migration
+ * Rolls back the last applied migration
  *
  * @module
  */
@@ -16,7 +16,7 @@ import { getLastAppliedMigration, markMigrationAsReverted } from "../../state.ts
 import { MongodbApplier } from "../../appliers/mongodb.ts";
 import { migrationBuilder } from "../../builder.ts";
 
-export interface RevertCommandOptions {
+export interface RollbackCommandOptions {
   configPath?: string;
   force?: boolean;
 }
@@ -40,10 +40,10 @@ async function confirm(message: string): Promise<boolean> {
 }
 
 /**
- * Reverts the last applied migration
+ * Rolls back the last applied migration
  */
-export async function rollbackCommand(options: RevertCommandOptions = {}): Promise<void> {
-  console.log(bold(blue("🐝 Reverting migration...")));
+export async function rollbackCommand(options: RollbackCommandOptions = {}): Promise<void> {
+  console.log(bold(blue("🐝 Rolling back migration...")));
   console.log();
 
   let client: MongoClient | undefined;
@@ -76,48 +76,48 @@ export async function rollbackCommand(options: RevertCommandOptions = {}): Promi
     const lastApplied = await getLastAppliedMigration(db);
 
     if (!lastApplied) {
-      console.log(yellow("No migrations to revert."));
+      console.log(yellow("No migrations to rollback."));
       return;
     }
 
-    // Load migrations to find the one to revert
+    // Load migrations to find the one to rollback
     const migrationsWithFiles = await loadAllMigrations(migrationsDir);
     const allMigrations = buildMigrationChain(migrationsWithFiles);
 
-    const migrationToRevert = allMigrations.find(m => m.id === lastApplied.id);
+    const migrationToRollback = allMigrations.find(m => m.id === lastApplied.id);
 
-    if (!migrationToRevert) {
+    if (!migrationToRollback) {
       throw new Error(
         `Migration ${lastApplied.id} is marked as applied but not found in filesystem`
       );
     }
 
-    console.log(bold(`Last applied migration: ${blue(migrationToRevert.name)}`));
-    console.log(dim(`  ID: ${migrationToRevert.id}`));
+    console.log(bold(`Last applied migration: ${blue(migrationToRollback.name)}`));
+    console.log(dim(`  ID: ${migrationToRollback.id}`));
     console.log(dim(`  Applied at: ${lastApplied.appliedAt?.toISOString()}`));
     console.log();
 
     // Check if migration is reversible
-    const builder = migrationBuilder({ schemas: migrationToRevert.schemas });
-    const state = migrationToRevert.migrate(builder);
+    const builder = migrationBuilder({ schemas: migrationToRollback.schemas });
+    const state = migrationToRollback.migrate(builder);
 
     if (state.hasProperty('irreversible')) {
       console.log(red("⚠  This migration is marked as IRREVERSIBLE."));
-      console.log(red("   Reverting it may lead to data loss."));
+      console.log(red("   Rolling it back may lead to data loss."));
       console.log();
 
       if (!options.force) {
-        const confirmed = await confirm("Are you sure you want to revert this migration?");
+        const confirmed = await confirm("Are you sure you want to rollback this migration?");
 
         if (!confirmed) {
-          console.log(yellow("Revert cancelled."));
+          console.log(yellow("Rollback cancelled."));
           return;
         }
       }
     }
 
     // Apply reverse operations
-    console.log(bold("Reverting operations..."));
+    console.log(bold("Rolling back operations..."));
 
     const applier = new MongodbApplier(db);
 
@@ -125,7 +125,7 @@ export async function rollbackCommand(options: RevertCommandOptions = {}): Promi
       // Apply operations in reverse order
       for (let i = state.operations.length - 1; i >= 0; i--) {
         const operation = state.operations[i];
-        console.log(dim(`  Reverting ${operation.type} on ${operation.collectionName}...`));
+        console.log(dim(`  Rolling back ${operation.type}...`));
 
         try {
           await applier.applyReverseOperation(operation);
@@ -141,17 +141,17 @@ export async function rollbackCommand(options: RevertCommandOptions = {}): Promi
       }
 
       // Mark as reverted
-      await markMigrationAsReverted(db, migrationToRevert.id);
+      await markMigrationAsReverted(db, migrationToRollback.id);
 
       console.log();
-      console.log(green(bold("✓ Migration reverted successfully!")));
+      console.log(green(bold("✓ Migration rolled back successfully!")));
       console.log();
       console.log(dim("  Note: The migration file still exists in the filesystem."));
       console.log(dim("  To re-apply it, run `mongodbee apply`."));
 
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to revert migration: ${message}`);
+      throw new Error(`Failed to rollback migration: ${message}`);
     }
 
   } catch (error) {

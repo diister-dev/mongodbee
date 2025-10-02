@@ -2,11 +2,11 @@ import * as v from "../../src/schema.ts";
 import { assertEquals } from "@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
-import { createMultiCollectionModel } from "../../src/multi-collection-model.ts";
+import { defineModel } from "../../src/multi-collection-model.ts";
 
 Deno.test("Types test - deleteMany and deleteAny should compile", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const testModel = createMultiCollectionModel("test", {
+        const testModel = defineModel("test", {
             schema: {
                 user: {
                     name: v.string(),

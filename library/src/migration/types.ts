@@ -94,6 +94,19 @@ export type UpdateIndexesRule = {
 };
 
 /**
+ * Rule for marking an existing collection as a multi-collection
+ * 
+ * This is useful when migrating from a regular collection to a multi-collection structure,
+ * or when adopting an existing collection that already has the multi-collection format
+ * (documents with _type field) but lacks the metadata documents.
+ */
+export type MarkAsMultiCollectionRule = {
+  type: 'mark_as_multicollection';
+  collectionName: string;
+  collectionType: string;
+};
+
+/**
  * Union type representing all possible migration operations
  */
 export type MigrationRule =
@@ -103,7 +116,8 @@ export type MigrationRule =
   | CreateMultiCollectionInstanceRule
   | SeedMultiCollectionInstanceRule
   | TransformMultiCollectionTypeRule
-  | UpdateIndexesRule;
+  | UpdateIndexesRule
+  | MarkAsMultiCollectionRule;
 
 /**
  * Transformation rule for bidirectional document changes
@@ -278,6 +292,27 @@ export interface MigrationBuilder {
    * @returns The main migration builder for method chaining
    */
   updateIndexes(collectionName: string): MigrationBuilder;
+
+  /**
+   * Marks an existing collection as a multi-collection instance
+   * 
+   * This is useful when migrating from a regular collection to a multi-collection,
+   * or when adopting an existing collection that already has the multi-collection format.
+   * 
+   * @param collectionName - The full name of the collection to mark
+   * @param collectionType - The type/model of the multi-collection
+   * @returns The main migration builder for method chaining
+   * 
+   * @example
+   * ```typescript
+   * migrate(migration) {
+   *   return migration
+   *     .markAsMultiCollection("comments_legacy", "comments")
+   *     .compile();
+   * }
+   * ```
+   */
+  markAsMultiCollection(collectionName: string, collectionType: string): MigrationBuilder;
 
   /**
    * Compiles the migration into its final executable state

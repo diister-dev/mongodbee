@@ -2,7 +2,7 @@ import * as v from "../src/schema.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { MongoClient } from "../src/mongodb.ts";
-import { createMultiCollectionModel } from "../src/multi-collection-model.ts";
+import { defineModel } from "../src/multi-collection-model.ts";
 
 // Mock MongoDB setup for testing
 let client: MongoClient;
@@ -28,7 +28,7 @@ Deno.test("MultiCollection: undefined behavior remove (default)", async () => {
     await setupTestDb();
     
     try {
-        const catalogModel = createMultiCollectionModel("catalog_remove", {
+        const catalogModel = defineModel("catalog_remove", {
             schema:{
                 product: {
                     name: v.string(),
@@ -80,7 +80,7 @@ Deno.test("MultiCollection: undefined behavior error", async () => {
     await setupTestDb();
     
     try {
-        const model = createMultiCollectionModel("catalog_error", {
+        const model = defineModel("catalog_error", {
             schema: {
                 product: {
                     name: v.string(),
@@ -148,7 +148,7 @@ Deno.test("MultiCollection: insertMany with undefined behavior", async () => {
     
     try {
         // Test remove behavior
-        const model = createMultiCollectionModel("catalog_many_remove", {
+        const model = defineModel("catalog_many_remove", {
             schema: {
                 product: {
                     name: v.string(),
@@ -192,7 +192,7 @@ Deno.test("MultiCollection: insertMany with undefined behavior", async () => {
         assert(!("category" in product2));
         
         // Test error behavior
-        const modelError = createMultiCollectionModel("catalog_many_error", {
+        const modelError = defineModel("catalog_many_error", {
             schema: {
                 product: {
                     name: v.string(),
@@ -231,7 +231,7 @@ Deno.test("MultiCollection: Mixed document types with different undefined values
     await setupTestDb();
     
     try {
-        const model = createMultiCollectionModel("catalog_mixed", {
+        const model = defineModel("catalog_mixed", {
             schema: {
                 product: {
                     name: v.string(),
@@ -310,7 +310,7 @@ Deno.test("MultiCollection: Multiple collections with different undefined behavi
     
     try {
         // Collection 1: Remove undefined (default)
-        const model = createMultiCollectionModel("catalog", {
+        const model = defineModel("catalog", {
             schema: {
                 product: {
                     name: v.string(),
@@ -384,7 +384,7 @@ Deno.test("MultiCollection: Nested undefined values", async () => {
             preferences: v.optional(v.array(v.string()))
         };
 
-        const model = createMultiCollectionModel("nested_docs", {
+        const model = defineModel("nested_docs", {
             schema: {
                 profiles: nestedSchema
             }
@@ -433,7 +433,7 @@ Deno.test("MultiCollection: Ignore undefined behavior", async () => {
     await setupTestDb();
     
     try {
-        const model = createMultiCollectionModel("ignore_docs", {
+        const model = defineModel("ignore_docs", {
             schema: {
                 products: {
                     name: v.string(),
@@ -476,7 +476,7 @@ Deno.test("MultiCollection: Performance with undefined sanitization", async () =
     await setupTestDb();
     
     try {
-        const model = createMultiCollectionModel("perf_docs", {
+        const model = defineModel("perf_docs", {
             schema: {
                 items: {
                     id: v.string(),
@@ -554,7 +554,7 @@ Deno.test("MultiCollection: Array sanitization with undefined values", async () 
     await setupTestDb();
     
     try {
-        const model = createMultiCollectionModel("array_docs", {
+        const model = defineModel("array_docs", {
             schema: {
                 posts: {
                     title: v.string(),

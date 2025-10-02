@@ -10,7 +10,6 @@
 import { parseArgs } from "@std/cli/parse-args";
 import { blue, bold, green, red, yellow, dim } from "@std/fmt/colors";
 import * as path from "@std/path";
-import { existsSync } from "@std/fs";
 
 import { generateCommand } from "./commands/generate.ts";
 import { applyCommand } from "./commands/apply.ts";
@@ -18,7 +17,6 @@ import { rollbackCommand } from "./commands/rollback.ts";
 import { statusCommand } from "./commands/status.ts";
 import { historyCommand } from "./commands/history.ts";
 import { initCommand } from "./commands/init.ts";
-import { loadConfig } from "../config/loader.ts";
 
 import packageInfo from "../../../deno.json" with { type: "json" };
 
@@ -53,8 +51,8 @@ const commands = [
     handler: statusCommand,
   },
   {
-    name: "revert",
-    description: "Revert the last applied migration",
+    name: "rollback",
+    description: "Rollback the last applied migration",
     handler: rollbackCommand,
   },
   {
@@ -105,7 +103,7 @@ ${yellow("COMMANDS:")}
   ${green("apply")}     Apply pending migrations
   ${green("status")}    Show migration status
   ${green("history")}   Show migration operation history
-  ${green("revert")}    Revert the last applied migration
+  ${green("rollback")}  Rollback the last applied migration
 
 ${yellow("GLOBAL OPTIONS:")}
   -h, --help     Show this help message
@@ -143,86 +141,7 @@ async function main(): Promise<void> {
     Deno.exit(1);
   }
 
-  await cmd.handler(args);
-
-  // try {
-  //   // Resolve config path - either from args or discover automatically
-  //   let configPath: string;
-  //   if (args.config) {
-  //     configPath = path.isAbsolute(args.config)
-  //       ? args.config
-  //       : path.resolve(args.config);
-  //   } else {
-  //     const discoveredPath = await discoverConfigFile();
-  //     if (!discoveredPath) {
-  //       console.error(red("Error: No configuration file found."));
-  //       console.error(dim("Expected files: mongodbee.config.ts, mongodbee.config.js, mongodbee.config.json"));
-  //       console.error(dim("Run 'mongodbee init' to create a configuration file."));
-  //       Deno.exit(1);
-  //     }
-  //     configPath = discoveredPath;
-  //   }
-
-  //   switch (command) {
-  //     case "init":
-  //       await initCommand({
-  //         configPath,
-  //         force: args.force,
-  //       });
-  //       break;
-
-  //     case "generate":
-  //       if (!args.name) {
-  //         console.error(red("Error: --name is required for generate command"));
-  //         Deno.exit(1);
-  //       }
-
-  //       await generateCommand({
-  //         configPath,
-  //         environment: args.env,
-  //         name: args.name,
-  //         template: args.template || "empty",
-  //       });
-  //       break;
-
-  //     case "apply":
-  //       await applyCommand({
-  //         configPath,
-  //         environment: args.env,
-  //         target: args.target,
-  //         dryRun: args["dry-run"],
-  //       });
-  //       break;
-
-  //     case "rollback":
-  //       await rollbackCommand({
-  //         configPath,
-  //         environment: args.env,
-  //         target: args.target,
-  //         dryRun: args["dry-run"],
-  //       });
-  //       break;
-
-  //     case "status":
-  //       await statusCommand({
-  //         configPath,
-  //         environment: args.env,
-  //       });
-  //       break;
-
-  //     default:
-  //       console.error(red(`Error: Unknown command "${command}"`));
-  //       showHelp();
-  //       Deno.exit(1);
-  //   }
-  // } catch (error) {
-  //   const errorMessage = error instanceof Error ? error.message : String(error);
-  //   console.error(red("Error:"), errorMessage);
-  //   if (args.verbose || Deno.env.get("DEBUG")) {
-  //     console.error(error instanceof Error ? error.stack : error);
-  //   }
-  //   Deno.exit(1);
-  // }
+  await cmd.handler(args as any);
 }
 
 // Run main function if this is the main module

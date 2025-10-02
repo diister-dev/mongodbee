@@ -112,7 +112,7 @@ export type CreateMultiCollectionModelOptions<T extends MultiCollectionSchema> =
  * const orsay = await multiCollection(db, "catalog_orsay", catalogModel);
  * ```
  */
-export function createMultiCollectionModel<const T extends MultiCollectionSchema>(
+export function defineModel<const T extends MultiCollectionSchema>(
   name: string,
   options: CreateMultiCollectionModelOptions<T>
 ): MultiCollectionModel<T> {
@@ -154,46 +154,4 @@ export function createMultiCollectionModel<const T extends MultiCollectionSchema
   };
 
   return Object.freeze(model);
-}
-
-/**
- * Type guard to check if a value is a MultiCollectionModel
- *
- * @param value - Value to check
- * @returns True if value is a MultiCollectionModel
- */
-export function isMultiCollectionModel(value: unknown): value is MultiCollectionModel {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'name' in value &&
-    'schema' in value &&
-    'version' in value &&
-    'expose' in value &&
-    typeof (value as MultiCollectionModel).expose === 'function'
-  );
-}
-
-/**
- * Validates that a schema matches a model definition
- *
- * @param schema - Schema to validate
- * @param model - Model to validate against
- * @returns True if schema matches model structure
- */
-export function validateSchemaMatchesModel<T extends MultiCollectionSchema>(
-  schema: MultiCollectionSchema,
-  model: MultiCollectionModel<T>
-): boolean {
-  const modelTypes = Object.keys(model.schema);
-  const schemaTypes = Object.keys(schema);
-
-  // Check all model types are present
-  for (const type of modelTypes) {
-    if (!schemaTypes.includes(type)) {
-      return false;
-    }
-  }
-
-  return true;
 }

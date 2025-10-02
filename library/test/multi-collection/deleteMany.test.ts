@@ -2,11 +2,11 @@ import * as v from "../../src/schema.ts";
 import { assertEquals, assertRejects, assert } from "@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
-import { createMultiCollectionModel } from "../../src/multi-collection-model.ts";
+import { defineModel } from "../../src/multi-collection-model.ts";
 
 Deno.test("deleteMany - basic functionality", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const model = createMultiCollectionModel("test", {
+        const model = defineModel("test", {
             schema: {
                 user: {
                     name: v.string(),
@@ -45,7 +45,7 @@ Deno.test("deleteMany - basic functionality", async (t) => {
 
 Deno.test("deleteMany - multiple matches", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const model = createMultiCollectionModel("test", {
+        const model = defineModel("test", {
             schema: {
                 user: {
                     name: v.string(),
@@ -75,7 +75,7 @@ Deno.test("deleteMany - multiple matches", async (t) => {
 
 Deno.test("deleteMany - no matches", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const model = createMultiCollectionModel("test", {
+        const model = defineModel("test", {
             schema: {
                 user: {
                     name: v.string(),
@@ -101,7 +101,7 @@ Deno.test("deleteMany - no matches", async (t) => {
 
 Deno.test("deleteMany - only affects specified type", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const model = createMultiCollectionModel("test", {
+        const model = defineModel("test", {
             schema: {
                 user: {
                     name: v.string(),

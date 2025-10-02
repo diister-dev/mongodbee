@@ -3,11 +3,11 @@ import { assertEquals, assertRejects } from "@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import assert from "node:assert";
-import { createMultiCollectionModel } from "../../src/multi-collection-model.ts";
+import { defineModel } from "../../src/multi-collection-model.ts";
 
 Deno.test("UpdateOne: Basic update test", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const testModel = createMultiCollectionModel("test", {
+        const testModel = defineModel("test", {
             schema: {
                 user: {
                     name: v.string(),
@@ -72,7 +72,7 @@ Deno.test("UpdateOne: Basic update test", async (t) => {
 
 Deno.test("UpdateOne: Array updates test", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const testModel = createMultiCollectionModel("test", {
+        const testModel = defineModel("test", {
             schema: {
                 group: {
                     name: v.string(),
@@ -135,7 +135,7 @@ Deno.test("UpdateOne: Array updates test", async (t) => {
 
 Deno.test("UpdateOne: Non-existent document", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const testModel = createMultiCollectionModel("test", {
+        const testModel = defineModel("test", {
             schema: {
                 user: {
                     name: v.string(),
@@ -161,7 +161,7 @@ Deno.test("UpdateOne: Non-existent document", async (t) => {
 
 Deno.test("UpdateOne: Invalid id format test", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const testModel = createMultiCollectionModel("test", {
+        const testModel = defineModel("test", {
             schema: {
                 user: {
                     name: v.string(),
@@ -200,7 +200,7 @@ Deno.test("UpdateOne: Invalid id format test", async (t) => {
 
 Deno.test("UpdateOne: Support optional object entry", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const testModel = createMultiCollectionModel("test", {
+        const testModel = defineModel("test", {
             schema: {
                 user: {
                     name: v.string(),
@@ -241,7 +241,7 @@ Deno.test("UpdateOne: Support optional object entry", async (t) => {
 
 Deno.test("UpdateOne: Multiple updates at once", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const testModel = createMultiCollectionModel("test", {
+        const testModel = defineModel("test", {
             schema: {
                 user: {
                     name: v.string(),
@@ -297,7 +297,7 @@ Deno.test("UpdateOne: Multiple updates at once", async (t) => {
 
 Deno.test("UpdateOne: Update Complex array", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const testModel = createMultiCollectionModel("test", {
+        const testModel = defineModel("test", {
             schema: {
                 user: {
                     name: v.string(),

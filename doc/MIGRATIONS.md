@@ -268,7 +268,7 @@ deno task mongodbee status
 deno task mongodbee apply
 
 # 8. Rollback if needed
-deno task mongodbee revert
+deno task mongodbee rollback
 
 # 9. View history
 deno task mongodbee status
@@ -460,6 +460,57 @@ migrate(migration) {
 - `up`: function to migrate from old to new format
 - `down`: function to rollback from new to old format
 - Both are required for bidirectional migrations
+
+### Marking Existing Collections as Multi-Collections
+
+In some migration scenarios, you may have an **existing collection** that already follows the multi-collection structure (documents with `_type` fields) but is missing the metadata documents that identify it as a multi-collection instance.
+
+The `.markAsMultiCollection()` method allows you to convert such collections during a migration:
+
+```typescript
+migrate(migration) {
+  return migration
+    // Mark an existing collection as a multi-collection instance
+    .markAsMultiCollection("legacy_catalog", "catalog")
+    .compile();
+}
+```
+
+**What it does**:
+- **Apply**: Creates the required metadata documents (`_information` and `_migrations`) in the collection
+- **Reverse**: Removes the metadata documents, effectively unmarking the collection
+
+**Use Cases**:
+1. **Data Migration**: You manually created a collection with multi-collection structure before migrations existed
+2. **Legacy Import**: Importing data from another system that uses a similar pattern
+3. **Manual Fixes**: Recovering from accidental metadata deletion
+
+**Important Notes**:
+- The operation is **idempotent** - running it multiple times won't cause errors
+- The collection must exist before marking (will throw an error if it doesn't)
+- Only marks the collection; doesn't validate or transform existing documents
+- After marking, the collection can be used with `newMultiCollection()` in your application code
+
+**Example Scenario**:
+
+```typescript
+// Before migration: Collection "user_events" exists with documents like:
+// { _type: "login", userId: "123", timestamp: "..." }
+// { _type: "purchase", userId: "456", amount: 100 }
+// But missing metadata documents
+
+export async function migrate(migration: MigrationBuilder) {
+  return migration
+    .markAsMultiCollection("user_events", "events")
+    .compile();
+}
+
+// After migration: Now you can use it in your app:
+import { newMultiCollection } from "@diister/mongodbee";
+
+const events = await newMultiCollection(db, "user_events", eventsModel);
+// Works correctly because metadata now exists
+```
 
 ### Advanced Operations
 
@@ -790,6 +841,49 @@ Warning: No instances found for multi-collection type comments. Transform operat
 - ✅ If you later add instances created at an earlier migration, transforms will be applied correctly based on version tracking
 
 **No action needed** - this warning is informational only.
+
+## Test Coverage
+
+The migration system is thoroughly tested with **165+ automated tests** covering:
+
+### Core Functionality ✅
+- Migration chain validation and discovery
+- Builder API (collections, multi-collections, transforms)
+- Forward and reverse operations
+- Schema inheritance between parent-child migrations
+- CLI commands (init, generate, apply, status)
+
+### Multi-Collection Features ✅
+- **Real MongoDB transforms** across multiple instances
+- **Version tracking** - instances created before/after migrations
+- **Rollback operations** - reverse transforms on real databases
+- **Metadata management** - `_information` and `_migrations` documents
+- **Instance discovery** - finding all instances of a collection type
+- **Automatic _type injection** - seeding documents with correct type field
+
+### Edge Cases & Error Handling ✅
+- Transform on non-existent types (graceful handling)
+- Empty instance collections
+- Metadata preservation during transforms
+- Type isolation (only specified types transform)
+- Multiple documents per instance
+- Mixed version scenarios
+
+### Validation & Safety ✅
+- Simulation with mock data generation
+- Chain integrity validation
+- Operation reversibility checks
+- Timeout and retry logic
+- Error handling with automatic rollback
+
+**Test Files**: See `library/test/migration/` for the complete test suite, including:
+- `multicollection-advanced.test.ts` - Comprehensive multi-collection scenarios with real MongoDB
+- `mongodb-applier.test.ts` - Database operation tests
+- `simulation-applier.test.ts` - In-memory simulation tests
+- `runners.test.ts` - Migration execution and rollback
+- `validators.test.ts` - Chain and integrity validation
+
+For test coverage details, see `library/test/migration/TEST_COVERAGE_REPORT.md`.
 
 ## Summary
 

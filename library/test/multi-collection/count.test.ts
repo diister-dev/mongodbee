@@ -2,11 +2,11 @@ import * as v from "../../src/schema.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { assertEquals } from "@std/assert";
 import { withDatabase } from "../+shared.ts";
-import { createMultiCollectionModel } from "../../src/multi-collection-model.ts";
+import { defineModel } from "../../src/multi-collection-model.ts";
 
 Deno.test("MultiCollection: countDocuments functionality", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const model = createMultiCollectionModel("catalog", {
+        const model = defineModel("catalog", {
             schema: {
                 product: {
                     name: v.string(),

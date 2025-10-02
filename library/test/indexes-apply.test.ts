@@ -4,7 +4,7 @@ import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { withIndex } from "../src/indexes.ts";
 import { withDatabase } from "./+shared.ts";
-import { createMultiCollectionModel } from "../src/multi-collection-model.ts";
+import { defineModel } from "../src/multi-collection-model.ts";
 
 Deno.test("applyIndexes - skip recreate when index spec and options identical", async (t) => {
   await withDatabase(t.name, async (db) => {
@@ -73,7 +73,7 @@ Deno.test("multiCollection - index is created with partialFilterExpression scope
       }
     };
 
-    const _mc = await multiCollection(db, "catalog", createMultiCollectionModel("catalog", { schema }));
+    const _mc = await multiCollection(db, "catalog", defineModel("catalog", { schema }));
     const indexes = await db.collection("catalog").listIndexes().toArray();
 
     // find product sku index by key

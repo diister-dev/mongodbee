@@ -2,11 +2,11 @@ import * as v from "../../src/schema.ts";
 import { assertEquals, assertExists } from "@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
-import { createMultiCollectionModel } from "../../src/multi-collection-model.ts";
+import { defineModel } from "../../src/multi-collection-model.ts";
 
 Deno.test("Multi-collection paginate basic functionality", async (t) => {
   await withDatabase(t.name, async (db) => {
-    const catalogModel = createMultiCollectionModel("catalog", {
+    const catalogModel = defineModel("catalog", {
       schema: {
         product: {
           name: v.string(),
@@ -76,7 +76,7 @@ Deno.test("Multi-collection paginate basic functionality", async (t) => {
 
 Deno.test("Multi-collection paginate with afterId", async (t) => {
   await withDatabase(t.name, async (db) => {
-    const catalogModel = createMultiCollectionModel("catalog", {
+    const catalogModel = defineModel("catalog", {
       schema: {
         product: {
           name: v.string(),
@@ -150,7 +150,7 @@ Deno.test("Multi-collection paginate with afterId", async (t) => {
 
 Deno.test("Multi-collection paginate with beforeId", async (t) => {
   await withDatabase(t.name, async (db) => {
-    const catalogModel = createMultiCollectionModel("catalog", {
+    const catalogModel = defineModel("catalog", {
       schema: {
         product: {
           name: v.string(),
@@ -192,7 +192,7 @@ Deno.test("Multi-collection paginate with beforeId", async (t) => {
 
 Deno.test("Multi-collection paginate with filter", async (t) => {
   await withDatabase(t.name, async (db) => {
-    const catalogModel = createMultiCollectionModel("catalog", {
+    const catalogModel = defineModel("catalog", {
       schema: {
         product: {
           name: v.string(),
@@ -248,7 +248,7 @@ Deno.test("Multi-collection paginate with filter", async (t) => {
 
 Deno.test("Multi-collection paginate with sorting", async (t) => {
   await withDatabase(t.name, async (db) => {
-    const catalogModel = createMultiCollectionModel("catalog", {
+    const catalogModel = defineModel("catalog", {
       schema: {
         product: {
           name: v.string(),
@@ -296,7 +296,7 @@ Deno.test("Multi-collection paginate with sorting", async (t) => {
 
 Deno.test("Multi-collection paginate with invalid ID format", async (t) => {
   await withDatabase(t.name, async (db) => {
-    const catalogModel = createMultiCollectionModel("catalog", {
+    const catalogModel = defineModel("catalog", {
       schema: {
         product: {
           name: v.string(),
@@ -335,7 +335,7 @@ Deno.test("Multi-collection paginate with invalid ID format", async (t) => {
 
 Deno.test("Multi-collection paginate with empty results", async (t) => {
   await withDatabase(t.name, async (db) => {
-    const catalogModel = createMultiCollectionModel("catalog", {
+    const catalogModel = defineModel("catalog", {
       schema: {
         product: {
           name: v.string(),
@@ -369,7 +369,7 @@ Deno.test("Multi-collection paginate with empty results", async (t) => {
 
 Deno.test("Multi-collection paginate with limit boundary conditions", async (t) => {
   await withDatabase(t.name, async (db) => {
-    const catalogModel = createMultiCollectionModel("catalog", {
+    const catalogModel = defineModel("catalog", {
       schema: {
         product: {
           name: v.string(),

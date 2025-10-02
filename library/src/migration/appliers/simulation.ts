@@ -37,6 +37,7 @@ import type {
   SeedMultiCollectionInstanceRule,
   TransformMultiCollectionTypeRule,
   UpdateIndexesRule,
+  MarkAsMultiCollectionRule,
 } from '../types.ts';
 import { createMockGenerator } from '@diister/valibot-mock';
 
@@ -171,6 +172,10 @@ export class SimulationApplier implements SimulationMigrationApplier {
     update_indexes: {
       apply: (state, operation) => this.applyUpdateIndexes(state, operation),
       reverse: (state, operation) => this.reverseUpdateIndexes(state, operation),
+    },
+    mark_as_multicollection: {
+      apply: (state, operation) => this.applyMarkAsMultiCollection(state, operation),
+      reverse: (state, operation) => this.reverseMarkAsMultiCollection(state, operation),
     },
   };
 
@@ -748,9 +753,71 @@ export class SimulationApplier implements SimulationMigrationApplier {
   }
 
   /**
-   * Reverses an update indexes operation
-   * Note: In simulation mode, this is a no-op since indexes don't affect in-memory data
-   * 
+   * Applies a mark as multi-collection operation in simulation
+   *
+   * @private
+   * @param state - Current database state
+   * @param operation - Mark as multi-collection operation
+   * @returns Updated database state with collection marked
+   */
+  private applyMarkAsMultiCollection(state: SimulationDatabaseState, operation: MarkAsMultiCollectionRule): SimulationDatabaseState {
+    // Validate that collection exists (either as regular or multi-collection)
+    const collectionExists = 
+      state.collections && state.collections[operation.collectionName] ||
+      state.multiCollections && state.multiCollections[operation.collectionName];
+
+    if (this.options.strictValidation && !collectionExists) {
+      throw new Error(`Collection ${operation.collectionName} does not exist to mark as multi-collection`);
+    }
+
+    // In simulation, we mark by ensuring the collection is in multiCollections
+    // If it's in regular collections, we move it to multiCollections
+    if (state.collections && state.collections[operation.collectionName]) {
+      // Move from regular to multi-collection
+      if (!state.multiCollections) {
+        state.multiCollections = {};
+      }
+      state.multiCollections[operation.collectionName] = {
+        content: state.collections[operation.collectionName].content || []
+      };
+      delete state.collections[operation.collectionName];
+    } else if (!state.multiCollections || !state.multiCollections[operation.collectionName]) {
+      // Create as empty multi-collection if it doesn't exist
+      if (!state.multiCollections) {
+        state.multiCollections = {};
+      }
+      state.multiCollections[operation.collectionName] = {
+        content: []
+      };
+    }
+
+    this.trackOperation(state, operation, 'apply');
+    return state;
+  }
+
+  /**
+   * Reverses a mark as multi-collection operation in simulation
+   *
+   * @private
+   * @param state - Current database state
+   * @param operation - Mark as multi-collection operation to reverse
+   * @returns Database state (validation only, no actual change needed)
+   */
+  private reverseMarkAsMultiCollection(state: SimulationDatabaseState, operation: MarkAsMultiCollectionRule): SimulationDatabaseState {
+    // In simulation, reversing just validates the collection exists
+    // We don't actually move it back since the simulation doesn't track metadata
+    if (this.options.strictValidation && 
+        (!state.multiCollections || !state.multiCollections[operation.collectionName])) {
+      throw new Error(`Multi-collection ${operation.collectionName} does not exist for reversing mark operation`);
+    }
+
+    this.trackOperation(state, operation, 'reverse');
+    return state;
+  }
+
+  /**
+   * Reverses an update indexes operation (no-op in simulation)
+   *
    * @private
    * @param state - Current database state
    * @param operation - Update indexes operation

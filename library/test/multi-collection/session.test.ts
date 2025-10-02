@@ -4,10 +4,10 @@ import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import { ulid } from "../../src/schema.ts";
 import assert from "node:assert";
-import { createMultiCollectionModel } from "../../src/multi-collection-model.ts";
+import { defineModel } from "../../src/multi-collection-model.ts";
 
 // Helper function for creating test schemas
-const createTestSchema = () => createMultiCollectionModel("test", {
+const createTestSchema = () => defineModel("test", {
   schema: {
     user: {
       name: v.string(),

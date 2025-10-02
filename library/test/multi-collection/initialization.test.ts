@@ -3,11 +3,11 @@ import { assertEquals, assertRejects, assert } from "@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import { withIndex } from "@diister/mongodbee";
-import { createMultiCollectionModel } from "../../src/multi-collection-model.ts";
+import { defineModel } from "../../src/multi-collection-model.ts";
 
 Deno.test("Ensure Schema are not recreated", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const model = createMultiCollectionModel("test", {
+        const model = defineModel("test", {
             schema: {
                 user: {
                     name: v.string(),
@@ -41,7 +41,7 @@ Deno.test("Ensure Schema are not recreated", async (t) => {
 
 Deno.test("Ensure Schema are updated if changed", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const model = createMultiCollectionModel("test", {
+        const model = defineModel("test", {
             schema: {
                 user: {
                     name: v.string(),
@@ -61,7 +61,7 @@ Deno.test("Ensure Schema are updated if changed", async (t) => {
         assertEquals(users.length, 1);
 
         // Close connection
-        const model2 = createMultiCollectionModel("test", {
+        const model2 = defineModel("test", {
             schema: {
                 user: {
                     name: v.string(),
@@ -93,7 +93,7 @@ Deno.test("Ensure Schema are updated if changed", async (t) => {
 
 Deno.test("Ensure indexes are not recreated if already exist", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const model = createMultiCollectionModel("test", {
+        const model = defineModel("test", {
             schema: {
                 user: {
                     name: withIndex(v.string(), { unique: true }),
@@ -138,7 +138,7 @@ Deno.test("Ensure indexes are not recreated if already exist", async (t) => {
 
 Deno.test("Ensure indexes are updated if changed", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const model = createMultiCollectionModel("test", {
+        const model = defineModel("test", {
             schema: {
                 user: {
                     name: withIndex(v.string(), { unique: true }),
@@ -161,7 +161,7 @@ Deno.test("Ensure indexes are updated if changed", async (t) => {
         }, Error, "E11000 duplicate key error collection");
 
         // Close connection
-        const model2 = createMultiCollectionModel("test", {
+        const model2 = defineModel("test", {
             schema: {
                 user: {
                     name: withIndex(v.string(), { unique: false }), // Change index to non-unique

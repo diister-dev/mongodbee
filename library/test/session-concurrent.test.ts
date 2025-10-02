@@ -4,7 +4,7 @@ import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { withDatabase } from "./+shared.ts";
 import { ObjectId } from "mongodb";
-import { createMultiCollectionModel } from "../src/multi-collection-model.ts";
+import { defineModel } from "../src/multi-collection-model.ts";
 
 // Simple test schemas
 const userSchema = {
@@ -35,7 +35,7 @@ const storeSchema = {
   }
 };
 
-const storeModel = createMultiCollectionModel("store", { schema: storeSchema });
+const storeModel = defineModel("store", { schema: storeSchema });
 
 /**
  * This test set validates the behavior when operations occur both inside and outside

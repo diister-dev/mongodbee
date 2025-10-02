@@ -32,6 +32,7 @@ import type {
   SeedMultiCollectionInstanceRule,
   TransformMultiCollectionTypeRule,
   UpdateIndexesRule,
+  MarkAsMultiCollectionRule,
 } from '../types.ts';
 import type { Db } from '../../mongodb.ts';
 import { ulid } from "@std/ulid";
@@ -131,6 +132,10 @@ export class MongodbApplier implements MigrationApplier {
     update_indexes: {
       apply: (operation) => this.applyUpdateIndexes(operation),
       reverse: (operation) => this.reverseUpdateIndexes(operation),
+    },
+    mark_as_multicollection: {
+      apply: (operation) => this.applyMarkAsMultiCollection(operation),
+      reverse: (operation) => this.reverseMarkAsMultiCollection(operation),
     },
   };
 
@@ -1031,6 +1036,78 @@ export class MongodbApplier implements MigrationApplier {
     } catch (error) {
       throw new Error(
         `Failed to update indexes for collection ${operation.collectionName}: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
+      );
+    }
+  }
+
+  /**
+   * Applies a mark as multi-collection operation
+   *
+   * @private
+   * @param operation - Mark as multi-collection operation
+   */
+  private async applyMarkAsMultiCollection(operation: MarkAsMultiCollectionRule): Promise<void> {
+    try {
+      const collection = this.db.collection(operation.collectionName);
+
+      // Check if collection exists
+      const collectionNames = await this.db.listCollections().map((c: { name: string }) => c.name).toArray();
+      if (!collectionNames.includes(operation.collectionName)) {
+        throw new Error(`Collection ${operation.collectionName} does not exist`);
+      }
+
+      // Check if already marked
+      const existing = await collection.findOne({
+        _type: MULTI_COLLECTION_INFO_TYPE
+      });
+
+      if (existing) {
+        console.warn(`[WARN] Collection ${operation.collectionName} is already marked as a multi-collection instance`);
+        return; // Idempotent: already marked, no-op
+      }
+
+      // Get current migration ID or use 'current' as fallback
+      const migrationId = this.currentMigrationId || 'current';
+
+      // Create the metadata documents
+      await createMultiCollectionInfo(
+        this.db,
+        operation.collectionName,
+        operation.collectionType,
+        migrationId
+      );
+
+      console.log(`[DEBUG] Marked collection ${operation.collectionName} as multi-collection (type: ${operation.collectionType})`);
+    } catch (error) {
+      throw new Error(
+        `Failed to mark collection ${operation.collectionName} as multi-collection: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
+      );
+    }
+  }
+
+  /**
+   * Reverses a mark as multi-collection operation
+   *
+   * @private
+   * @param operation - Mark as multi-collection operation to reverse
+   */
+  private async reverseMarkAsMultiCollection(operation: MarkAsMultiCollectionRule): Promise<void> {
+    try {
+      const collection = this.db.collection(operation.collectionName);
+
+      // Remove the metadata documents
+      await collection.deleteMany({
+        _type: { $in: [MULTI_COLLECTION_INFO_TYPE, MULTI_COLLECTION_MIGRATIONS_TYPE] }
+      });
+
+      console.log(`[DEBUG] Removed multi-collection metadata from ${operation.collectionName}`);
+    } catch (error) {
+      throw new Error(
+        `Failed to reverse mark as multi-collection for ${operation.collectionName}: ${
           error instanceof Error ? error.message : 'Unknown error'
         }`
       );

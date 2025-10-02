@@ -4,7 +4,7 @@ import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { withDatabase } from "./+shared.ts";
 import assert from "node:assert";
-import { createMultiCollectionModel } from "../src/multi-collection-model.ts";
+import { defineModel } from "../src/multi-collection-model.ts";
 
 // Test schemas
 const userSchema = {
@@ -38,7 +38,7 @@ const catalogSchema = {
   }
 };
 
-const modelCatalog = createMultiCollectionModel("catalog", { schema: catalogSchema });
+const modelCatalog = defineModel("catalog", { schema: catalogSchema });
 
 Deno.test("Combined Session: Collection and Multi-Collection in same transaction", async (t) => {
   await withDatabase(t.name, async (db) => {

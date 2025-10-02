@@ -2,7 +2,7 @@ import { assert } from "@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import * as v from "../../src/schema.ts";
-import { createMultiCollectionModel } from "../../src/multi-collection-model.ts";
+import { defineModel } from "../../src/multi-collection-model.ts";
 
 // Test schemas for multi-collection
 const userSchema = {
@@ -24,7 +24,7 @@ const collectionSchema = {
     products: productSchema,
 } as const;
 
-const collectionModel = createMultiCollectionModel("multi_test", {
+const collectionModel = defineModel("multi_test", {
     schema: collectionSchema
 });
 

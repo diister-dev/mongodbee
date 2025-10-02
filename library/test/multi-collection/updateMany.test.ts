@@ -3,11 +3,11 @@ import { assertEquals, assertRejects } from "@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import assert from "node:assert";
-import { createMultiCollectionModel } from "../../src/multi-collection-model.ts";
+import { defineModel } from "../../src/multi-collection-model.ts";
 
 Deno.test("updateMany: Basic multiple update", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const testModel = createMultiCollectionModel("test", {
+        const testModel = defineModel("test", {
             schema: {
                 user: {
                     name: v.string(),
@@ -48,7 +48,7 @@ Deno.test("updateMany: Basic multiple update", async (t) => {
 
 Deno.test("updateMany: Update nested and array fields", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const testModel = createMultiCollectionModel("test", {
+        const testModel = defineModel("test", {
             schema: {
                 user: {
                     name: v.string(),
@@ -88,7 +88,7 @@ Deno.test("updateMany: Update nested and array fields", async (t) => {
 
 Deno.test("updateMany: Error on wrong id or type", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const testModel = createMultiCollectionModel("test", {
+        const testModel = defineModel("test", {
             schema: {
                 user: {
                     name: v.string(),

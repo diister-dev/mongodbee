@@ -2,7 +2,7 @@ import * as v from "../../src/schema.ts";
 import { assertEquals, assertRejects, assert } from "@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
-import { createMultiCollectionModel } from "../../src/multi-collection-model.ts";
+import { defineModel } from "../../src/multi-collection-model.ts";
 
 const multiSchema = {
     user: {
@@ -15,7 +15,7 @@ const multiSchema = {
     }
 }
 
-const userGroupModel = createMultiCollectionModel("test", {
+const userGroupModel = defineModel("test", {
     schema: multiSchema,
 });
 
@@ -243,7 +243,7 @@ Deno.test("DeleteIds: Ensure delete correct type", async (t) => {
 
 Deno.test("RANDOM TEST - TO DELETE", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const model = createMultiCollectionModel("test", {
+        const model = defineModel("test", {
             schema: {
                 user: {
                     name: v.string(),
@@ -301,7 +301,7 @@ Deno.test("RANDOM TEST - TO DELETE", async (t) => {
 
 Deno.test("Date fields: Insert and query with dates", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const model = createMultiCollectionModel("test", {
+        const model = defineModel("test", {
             schema: {
                 event: {
                     name: v.string(),
@@ -358,7 +358,7 @@ Deno.test("Date fields: Insert and query with dates", async (t) => {
 
 Deno.test("Date fields: Date comparisons and sorting", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const model = createMultiCollectionModel("test", {
+        const model = defineModel("test", {
             schema: {
                 task: {
                     title: v.string(),
@@ -418,7 +418,7 @@ Deno.test("Date fields: Date comparisons and sorting", async (t) => {
 
 Deno.test("Date fields: Current date and date updates", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const model = createMultiCollectionModel("test", {
+        const model = defineModel("test", {
             schema: {
                 document: {
                     title: v.string(),
@@ -458,7 +458,7 @@ Deno.test("Date fields: Current date and date updates", async (t) => {
 
 Deno.test("Date fields: Date edge cases", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const model = createMultiCollectionModel("test", {
+        const model = defineModel("test", {
             schema: {
                 appointment: {
                     title: v.string(),
@@ -509,7 +509,7 @@ Deno.test("Date fields: Date edge cases", async (t) => {
 
 Deno.test("Literal id must have valid type", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const model = createMultiCollectionModel("test", {
+        const model = defineModel("test", {
             schema: {
                 item: {
                     _id: v.literal("item-id"),

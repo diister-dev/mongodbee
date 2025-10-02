@@ -2,11 +2,11 @@ import * as v from "../../src/schema.ts";
 import { assertEquals } from "@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
-import { createMultiCollectionModel } from "../../src/multi-collection-model.ts";
+import { defineModel } from "../../src/multi-collection-model.ts";
 
 Deno.test("deleteAny - basic functionality", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const model = createMultiCollectionModel("test", {
+        const model = defineModel("test", {
             schema: {
                 user: { name: v.string(), active: v.boolean() },
                 group: { name: v.string(), active: v.boolean() },
@@ -38,7 +38,7 @@ Deno.test("deleteAny - basic functionality", async (t) => {
 
 Deno.test("deleteAny - by _type field", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const model = createMultiCollectionModel("test", {
+        const model = defineModel("test", {
             schema: {
                 user: { name: v.string() },
                 group: { name: v.string() },
@@ -67,7 +67,7 @@ Deno.test("deleteAny - by _type field", async (t) => {
 
 Deno.test("deleteAny - complex filter", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const model = createMultiCollectionModel("test", {
+        const model = defineModel("test", {
             schema: {
                 user: { name: v.string(), age: v.number() },
                 group: { name: v.string(), memberCount: v.number() },
@@ -104,7 +104,7 @@ Deno.test("deleteAny - complex filter", async (t) => {
 
 Deno.test("deleteAny - no matches", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const model = createMultiCollectionModel("test", {
+        const model = defineModel("test", {
             schema: {
                 user: { name: v.string() },
             }
