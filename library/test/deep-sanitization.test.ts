@@ -1,8 +1,9 @@
 import * as v from "../src/schema.ts";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
-import { assert, assertEquals } from "jsr:@std/assert";
+import { assert, assertEquals } from "@std/assert";
 import { MongoClient } from "../src/mongodb.ts";
+import { createMultiCollectionModel } from "../src/multi-collection-model.ts";
 
 // Mock MongoDB setup for testing
 let client: MongoClient;
@@ -143,11 +144,15 @@ Deno.test("Deep sanitization: Collection removes nested undefined values", async
 
 Deno.test("Deep sanitization: MultiCollection removes nested undefined values", async () => {
     await setupTestDb();
+
+    const model = createMultiCollectionModel("deep_docs", {
+        schema: {
+            users: deepSchema
+        }
+    })
     
     try {
-        const mc = await multiCollection(db, "deep_docs", {
-            users: deepSchema
-        }, {
+        const mc = await multiCollection(db, "deep_docs", model, {
             undefinedBehavior: 'remove'
         });
         

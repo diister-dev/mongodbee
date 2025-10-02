@@ -1,20 +1,27 @@
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertRejects, assert } from "jsr:@std/assert";
+import { assertEquals, assertRejects, assert } from "@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
+import { createMultiCollectionModel } from "../../src/multi-collection-model.ts";
+
+const multiSchema = {
+    user: {
+        name: v.string(),
+        mail: v.string(),
+    },
+    group: {
+        name: v.string(),
+        members: v.array(v.string()),
+    }
+}
+
+const userGroupModel = createMultiCollectionModel("test", {
+    schema: multiSchema,
+});
 
 Deno.test("Basic test", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-                mail: v.string(),
-            },
-            group: {
-                name: v.string(),
-                members: v.array(v.string()),
-            }
-        });
+        const collection = await multiCollection(db, "test", userGroupModel);
 
         const userA = await collection.insertOne("user", {
             name: "John",
@@ -52,16 +59,7 @@ Deno.test("Basic test", async (t) => {
 
 Deno.test("FindOne: Ensure find correct type", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-                mail: v.string(),
-            },
-            group: {
-                name: v.string(),
-                members: v.array(v.string()),
-            }
-        });
+        const collection = await multiCollection(db, "test", userGroupModel);
 
         const usersId = await collection.insertMany("user", [{
             name: "John",
@@ -108,16 +106,7 @@ Deno.test("FindOne: Ensure find correct type", async (t) => {
 
 Deno.test("find: Ensure find correct type", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-                mail: v.string(),
-            },
-            group: {
-                name: v.string(),
-                members: v.array(v.string()),
-            }
-        });
+        const collection = await multiCollection(db, "test", userGroupModel);
 
         const usersId = await collection.insertMany("user", [{
             name: "John",
@@ -170,16 +159,7 @@ Deno.test("find: Ensure find correct type", async (t) => {
 
 Deno.test("DeleteId: Ensure delete correct type", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-                mail: v.string(),
-            },
-            group: {
-                name: v.string(),
-                members: v.array(v.string()),
-            }
-        });
+        const collection = await multiCollection(db, "test", userGroupModel);
 
         const usersId = await collection.insertMany("user", [{
             name: "John",
@@ -219,16 +199,7 @@ Deno.test("DeleteId: Ensure delete correct type", async (t) => {
 
 Deno.test("DeleteIds: Ensure delete correct type", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-                mail: v.string(),
-            },
-            group: {
-                name: v.string(),
-                members: v.array(v.string()),
-            }
-        });
+        const collection = await multiCollection(db, "test", userGroupModel);
 
         const usersId = await collection.insertMany("user", [{
             name: "John",
@@ -272,17 +243,21 @@ Deno.test("DeleteIds: Ensure delete correct type", async (t) => {
 
 Deno.test("RANDOM TEST - TO DELETE", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-                mail: v.string(),
-                age: v.number(),
-            },
-            group: {
-                name: v.string(),
-                members: v.array(v.string()),
+        const model = createMultiCollectionModel("test", {
+            schema: {
+                user: {
+                    name: v.string(),
+                    mail: v.string(),
+                    age: v.number(),
+                },
+                group: {
+                    name: v.string(),
+                    members: v.array(v.string()),
+                }
             }
         });
+
+        const collection = await multiCollection(db, "test", model);
 
         const usersId = await collection.insertMany("user", [{
             name: "John",
@@ -326,18 +301,22 @@ Deno.test("RANDOM TEST - TO DELETE", async (t) => {
 
 Deno.test("Date fields: Insert and query with dates", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            event: {
-                name: v.string(),
-                startDate: v.date(),
-                endDate: v.date(),
-            },
-            user: {
-                name: v.string(),
-                birthDate: v.date(),
-                lastLogin: v.date(),
+        const model = createMultiCollectionModel("test", {
+            schema: {
+                event: {
+                    name: v.string(),
+                    startDate: v.date(),
+                    endDate: v.date(),
+                },
+                user: {
+                    name: v.string(),
+                    birthDate: v.date(),
+                    lastLogin: v.date(),
+                }
             }
         });
+
+        const collection = await multiCollection(db, "test", model);
 
         const now = new Date();
         const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
@@ -379,13 +358,17 @@ Deno.test("Date fields: Insert and query with dates", async (t) => {
 
 Deno.test("Date fields: Date comparisons and sorting", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            task: {
-                title: v.string(),
-                dueDate: v.date(),
-                createdAt: v.date(),
+        const model = createMultiCollectionModel("test", {
+            schema: {
+                task: {
+                    title: v.string(),
+                    dueDate: v.date(),
+                    createdAt: v.date(),
+                }
             }
         });
+
+        const collection = await multiCollection(db, "test", model);
 
         const baseDate = new Date("2025-01-01");
         const tasks = [
@@ -435,13 +418,17 @@ Deno.test("Date fields: Date comparisons and sorting", async (t) => {
 
 Deno.test("Date fields: Current date and date updates", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            document: {
-                title: v.string(),
-                createdAt: v.date(),
-                updatedAt: v.date(),
+        const model = createMultiCollectionModel("test", {
+            schema: {
+                document: {
+                    title: v.string(),
+                    createdAt: v.date(),
+                    updatedAt: v.date(),
+                }
             }
         });
+
+        const collection = await multiCollection(db, "test", model);
 
         const startTime = new Date();
         
@@ -470,13 +457,18 @@ Deno.test("Date fields: Current date and date updates", async (t) => {
 });
 
 Deno.test("Date fields: Date edge cases", async (t) => {
-    await withDatabase(t.name, async (db) => {        const collection = await multiCollection(db, "test", {
-            appointment: {
-                title: v.string(),
-                scheduledFor: v.date(),
-                reminderDate: v.optional(v.date()),
+    await withDatabase(t.name, async (db) => {
+        const model = createMultiCollectionModel("test", {
+            schema: {
+                appointment: {
+                    title: v.string(),
+                    scheduledFor: v.date(),
+                    reminderDate: v.optional(v.date()),
+                }
             }
         });
+        
+        const collection = await multiCollection(db, "test", model);
 
         // Test with very old date
         const oldDate = new Date("1900-01-01");
@@ -517,13 +509,17 @@ Deno.test("Date fields: Date edge cases", async (t) => {
 
 Deno.test("Literal id must have valid type", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            item: {
-                _id: v.literal("item-id"),
-                name: v.string(),
-                createdAt: v.date(),
+        const model = createMultiCollectionModel("test", {
+            schema: {
+                item: {
+                    _id: v.literal("item-id"),
+                    name: v.string(),
+                    createdAt: v.date(),
+                }
             }
         });
+
+        const collection = await multiCollection(db, "test", model);
 
         // Insert an item with a valid _id
         const itemId = await collection.insertOne("item", {
@@ -542,16 +538,7 @@ Deno.test("Literal id must have valid type", async (t) => {
 
 Deno.test("getById: retrieve by id and error cases", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-                mail: v.string(),
-            },
-            group: {
-                name: v.string(),
-                members: v.array(v.string()),
-            }
-        });
+        const collection = await multiCollection(db, "test", userGroupModel);
 
         const userId = await collection.insertOne("user", {
             name: "John",

@@ -156,6 +156,10 @@ export async function applyCommand(options: ApplyCommandOptions = {}): Promise<v
           await applier.applyOperation(operation);
         }
 
+        // Step 3: Synchronize validators and indexes with migration schemas
+        console.log(dim("  🔧 Synchronizing validators and indexes..."));
+        await applier.synchronizeSchemas(migration.schemas);
+
         const duration = Date.now() - startTime;
 
         // Mark as applied

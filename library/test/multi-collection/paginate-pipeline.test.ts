@@ -1,7 +1,8 @@
-import { assert } from "jsr:@std/assert";
+import { assert } from "@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import * as v from "../../src/schema.ts";
+import { createMultiCollectionModel } from "../../src/multi-collection-model.ts";
 
 // Test schemas for multi-collection
 const userSchema = {
@@ -23,9 +24,13 @@ const collectionSchema = {
     products: productSchema,
 } as const;
 
+const collectionModel = createMultiCollectionModel("multi_test", {
+    schema: collectionSchema
+});
+
 Deno.test("Multi-Collection: Basic prepare → filter → format", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const mc = await multiCollection(db, "multi_test", collectionSchema);
+        const mc = await multiCollection(db, "multi_test", collectionModel);
         
         // Insert test data
         await mc.insertOne("users", { name: "Alice", age: 25, email: "alice@test.com", isActive: true });
@@ -64,7 +69,7 @@ Deno.test("Multi-Collection: Basic prepare → filter → format", async (t) => 
 
 Deno.test("Multi-Collection: Products with pricing logic", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const mc = await multiCollection(db, "multi_test", collectionSchema);
+        const mc = await multiCollection(db, "multi_test", collectionModel);
         
         // Insert test products
         await mc.insertOne("products", { name: "Laptop", price: 999, category: "electronics", inStock: true });
@@ -104,7 +109,7 @@ Deno.test("Multi-Collection: Products with pricing logic", async (t) => {
 
 Deno.test("Multi-Collection: Cross-type isolation", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const mc = await multiCollection(db, "multi_test", collectionSchema);
+        const mc = await multiCollection(db, "multi_test", collectionModel);
         
         // Insert mixed data
         await mc.insertOne("users", { name: "Alice", age: 25, email: "alice@test.com", isActive: true });
@@ -142,7 +147,7 @@ Deno.test("Multi-Collection: Cross-type isolation", async (t) => {
 
 Deno.test("Multi-Collection: External API enrichment", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const mc = await multiCollection(db, "multi_test", collectionSchema);
+        const mc = await multiCollection(db, "multi_test", collectionModel);
         
         await mc.insertOne("users", { name: "Alice", age: 25, email: "alice@test.com", isActive: true });
         await mc.insertOne("products", { name: "Laptop", price: 999, category: "electronics", inStock: true });
@@ -210,7 +215,7 @@ Deno.test("Multi-Collection: External API enrichment", async (t) => {
 
 Deno.test("Multi-Collection: Type safety with generics", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const mc = await multiCollection(db, "multi_test", collectionSchema);
+        const mc = await multiCollection(db, "multi_test", collectionModel);
         
         await mc.insertOne("users", { name: "Alice", age: 25, email: "alice@test.com", isActive: true });
 
@@ -255,7 +260,7 @@ Deno.test("Multi-Collection: Type safety with generics", async (t) => {
 
 Deno.test("Multi-Collection: Error handling", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const mc = await multiCollection(db, "multi_test", collectionSchema);
+        const mc = await multiCollection(db, "multi_test", collectionModel);
         
         await mc.insertOne("users", { name: "Alice", age: 25, email: "alice@test.com", isActive: true });
         await mc.insertOne("users", { name: "Bob", age: 30, email: "bob@test.com", isActive: false });

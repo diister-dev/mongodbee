@@ -1,4 +1,4 @@
-import { assertEquals, assert } from "jsr:@std/assert";
+import { assertEquals, assert } from "@std/assert";
 import { keyEqual, normalizeIndexOptions } from "../src/indexes.ts";
 
 Deno.test("keyEqual returns true for identical simple specs", () => {

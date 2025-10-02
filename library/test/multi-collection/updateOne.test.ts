@@ -1,26 +1,31 @@
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { assertEquals, assertRejects } from "@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import assert from "node:assert";
+import { createMultiCollectionModel } from "../../src/multi-collection-model.ts";
 
 Deno.test("UpdateOne: Basic update test", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-                mail: v.string(),
-                age: v.number(),
-            },
-            group: {
-                name: v.string(),
-                members: v.array(v.string()),
-                metadata: v.object({
-                    createdAt: v.string(),
-                    type: v.string(),
-                }),
+        const testModel = createMultiCollectionModel("test", {
+            schema: {
+                user: {
+                    name: v.string(),
+                    mail: v.string(),
+                    age: v.number(),
+                },
+                group: {
+                    name: v.string(),
+                    members: v.array(v.string()),
+                    metadata: v.object({
+                        createdAt: v.string(),
+                        type: v.string(),
+                    }),
+                }
             }
         });
+
+        const collection = await multiCollection(db, "test", testModel);
 
         // Insert a user to update later
         const userId = await collection.insertOne("user", {
@@ -67,21 +72,25 @@ Deno.test("UpdateOne: Basic update test", async (t) => {
 
 Deno.test("UpdateOne: Array updates test", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            group: {
-                name: v.string(),
-                members: v.array(v.string()),
-                tags: v.array(v.string()),
-                nested: v.object({
-                    key: v.string(),
-                    value: v.string()
-                }),
-                nestedData: v.array(v.object({
-                    key: v.string(),
-                    value: v.string()
-                }))
+        const testModel = createMultiCollectionModel("test", {
+            schema: {
+                group: {
+                    name: v.string(),
+                    members: v.array(v.string()),
+                    tags: v.array(v.string()),
+                    nested: v.object({
+                        key: v.string(),
+                        value: v.string()
+                    }),
+                    nestedData: v.array(v.object({
+                        key: v.string(),
+                        value: v.string()
+                    }))
+                }
             }
         });
+
+        const collection = await multiCollection(db, "test", testModel);
 
         // Create test users
         const members = [
@@ -126,12 +135,16 @@ Deno.test("UpdateOne: Array updates test", async (t) => {
 
 Deno.test("UpdateOne: Non-existent document", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-                age: v.number(),
+        const testModel = createMultiCollectionModel("test", {
+            schema: {
+                user: {
+                    name: v.string(),
+                    age: v.number(),
+                }
             }
         });
+
+        const collection = await multiCollection(db, "test", testModel);
 
         // Try to update non-existent document
         await assertRejects(
@@ -148,12 +161,16 @@ Deno.test("UpdateOne: Non-existent document", async (t) => {
 
 Deno.test("UpdateOne: Invalid id format test", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-                age: v.number(),
+        const testModel = createMultiCollectionModel("test", {
+            schema: {
+                user: {
+                    name: v.string(),
+                    age: v.number(),
+                }
             }
         });
+        
+        const collection = await multiCollection(db, "test", testModel);
 
         // Insert test user
         const userId = await collection.insertOne("user", {
@@ -183,16 +200,20 @@ Deno.test("UpdateOne: Invalid id format test", async (t) => {
 
 Deno.test("UpdateOne: Support optional object entry", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-                age: v.number(),
-                address: v.optional(v.object({
-                    city: v.string(),
-                    country: v.string()
-                }))
+        const testModel = createMultiCollectionModel("test", {
+            schema: {
+                user: {
+                    name: v.string(),
+                    age: v.number(),
+                    address: v.optional(v.object({
+                        city: v.string(),
+                        country: v.string()
+                    }))
+                }
             }
         });
+
+        const collection = await multiCollection(db, "test", testModel);
 
         // Insert test user
         const userId = await collection.insertOne("user", {
@@ -220,20 +241,24 @@ Deno.test("UpdateOne: Support optional object entry", async (t) => {
 
 Deno.test("UpdateOne: Multiple updates at once", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-                email: v.string(),
-                profile: v.object({
-                    age: v.number(),
-                    address: v.object({
-                        city: v.string(),
-                        country: v.string(),
-                    })
-                }),
-                tags: v.array(v.string())
+        const testModel = createMultiCollectionModel("test", {
+            schema: {
+                user: {
+                    name: v.string(),
+                    email: v.string(),
+                    profile: v.object({
+                        age: v.number(),
+                        address: v.object({
+                            city: v.string(),
+                            country: v.string(),
+                        })
+                    }),
+                    tags: v.array(v.string())
+                }
             }
         });
+
+        const collection = await multiCollection(db, "test", testModel);
 
         // Insert test user with nested structure
         const userId = await collection.insertOne("user", {
@@ -272,16 +297,20 @@ Deno.test("UpdateOne: Multiple updates at once", async (t) => {
 
 Deno.test("UpdateOne: Update Complex array", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-                email: v.string(),
-                tags: v.array(v.object({
+        const testModel = createMultiCollectionModel("test", {
+            schema: {
+                user: {
                     name: v.string(),
-                    value: v.string()
-                }))
+                    email: v.string(),
+                    tags: v.array(v.object({
+                        name: v.string(),
+                        value: v.string()
+                    }))
+                }
             }
         });
+
+        const collection = await multiCollection(db, "test", testModel);
 
         // Insert test user with nested structure
         const userId = await collection.insertOne("user", {

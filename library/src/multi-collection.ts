@@ -12,7 +12,13 @@ import type { Db } from "./mongodb.ts";
 import { dirtyEquivalent } from "./utils/object.ts";
 import { mongoOperationQueue } from "./operation.ts";
 import type { MultiCollectionModel } from './multi-collection-model.ts';
-import { isMultiCollectionModel } from './multi-collection-model.ts';
+import {
+    MULTI_COLLECTION_INFO_TYPE,
+    MULTI_COLLECTION_MIGRATIONS_TYPE,
+    multiCollectionInstanceExists,
+    createMultiCollectionInfo,
+} from './migration/multicollection-registry.ts';
+import { getLastAppliedMigration } from './migration/state.ts';
 
 type CollectionOptions = {
     safeDelete?: boolean,
@@ -136,27 +142,22 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
  *
  * @param db - MongoDB database instance
  * @param collectionName - Name of the collection to create or use
- * @param collectionSchemaOrModel - Either a record mapping document type names to their Valibot schemas, or a MultiCollectionModel
+ * @param model - MultiCollectionModel defining the schema
  * @param options - Additional options for the collection
  * @returns A Promise resolving to an enhanced MongoDB collection with multi-document-type support
  *
  * @example
  * ```typescript
- * // Using a raw schema
- * const catalog = await multiCollection(db, "catalog", {
+ * const catalogModel = createMultiCollectionModel("catalog", {
  *   product: {
  *     name: v.string(),
  *     price: v.number(),
- *     category: v.string()
  *   },
  *   category: {
  *     name: v.string(),
- *     parentId: v.optional(v.string())
  *   }
  * });
  *
- * // Using a model
- * const catalogModel = createMultiCollectionModel("catalog", { schema: { ... } });
  * const catalog = await multiCollection(db, "catalog_louvre", catalogModel);
  *
  * const categoryId = await catalog.insertOne("category", { name: "Electronics" });
@@ -166,13 +167,11 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
 export async function multiCollection<const T extends MultiCollectionSchema>(
     db: Db,
     collectionName: string,
-    collectionSchemaOrModel: T | MultiCollectionModel<T>,
+    model: MultiCollectionModel<T>,
     options?: m.CollectionOptions & CollectionOptions
 ): Promise<MultiCollectionResult<T>> {
-    // Extract schema from model if provided
-    const collectionSchema: T = isMultiCollectionModel(collectionSchemaOrModel)
-        ? collectionSchemaOrModel.schema
-        : collectionSchemaOrModel;
+    // Extract schema from model
+    const collectionSchema: T = model.schema;
     type TInput = Input<T>;
     type TOutput = Output<T>;
 
@@ -215,14 +214,32 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
     async function applyValidator() {
         const collections = await db.listCollections({ name: collectionName }).toArray();
+
         const validator = toMongoValidator(
             v.union([
+                // User-defined types
                 ...Object.entries(schemaWithId).map(([key, value]) => {
                     return v.object({
                         ...value,
                         _type: v.literal(key as string)
                     })
-                })
+                }),
+                // Metadata types
+                v.object({
+                    _id: v.literal(MULTI_COLLECTION_INFO_TYPE),
+                    _type: v.literal(MULTI_COLLECTION_INFO_TYPE),
+                    collectionType: v.string(),
+                    createdAt: v.date(),
+                }),
+                v.object({
+                    _id: v.literal(MULTI_COLLECTION_MIGRATIONS_TYPE),
+                    _type: v.literal(MULTI_COLLECTION_MIGRATIONS_TYPE),
+                    fromMigrationId: v.string(),
+                    appliedMigrations: v.array(v.object({
+                        id: v.string(),
+                        appliedAt: v.date(),
+                    })),
+                }),
             ])
         );
 
@@ -362,10 +379,29 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     }
 
     let sessionContext: Awaited<ReturnType<typeof getSessionContext>>;
-    
+
     async function init() {
         await applyValidator();
         await applyIndexes();
+
+        // Auto-initialize metadata for multi-collection model
+        // Check if metadata already exists
+        const exists = await multiCollectionInstanceExists(db, collectionName);
+
+        if (!exists) {
+            // Get the current migration version
+            const lastMigration = await getLastAppliedMigration(db);
+            const currentMigrationId = lastMigration?.id || 'current';
+
+            // Create metadata for this instance
+            await createMultiCollectionInfo(
+                db,
+                collectionName,
+                model.name,
+                currentMigrationId
+            );
+        }
+
         sessionContext = await getSessionContext(db.client);
     }
 
@@ -818,7 +854,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
  * 3. Return a fully functional multi-collection instance
  *
  * @param db - MongoDB database instance
- * @param collectionName - Name of the new collection (typically `{modelName}_{instanceName}`)
+ * @param collectionName - Name of the collection to create
  * @param model - The multi-collection model to use as template
  * @param options - Additional options for the collection
  * @returns A Promise resolving to an enhanced MongoDB collection
@@ -854,12 +890,6 @@ export async function newMultiCollection<const T extends MultiCollectionSchema>(
     model: MultiCollectionModel<T>,
     options?: m.CollectionOptions & CollectionOptions
 ): Promise<MultiCollectionResult<T>> {
-    // Import the registry functions here to avoid circular dependencies
-    const { createMultiCollectionInfo, getLastAppliedMigration } = await import('./migration/state.ts');
-
-    // Extract instance name from collection name (format: {modelName}_{instanceName})
-    const instanceName = collectionName.replace(`${model.name}_`, '');
-
     // Get the current migration version
     const lastMigration = await getLastAppliedMigration(db);
     const currentMigrationId = lastMigration?.id || 'current';
@@ -867,10 +897,9 @@ export async function newMultiCollection<const T extends MultiCollectionSchema>(
     // Create metadata for this new instance
     await createMultiCollectionInfo(
         db,
+        collectionName,
         model.name,
-        instanceName,
-        currentMigrationId,
-        model.schema as Record<string, unknown>
+        currentMigrationId
     );
 
     // Create and return the multi-collection instance

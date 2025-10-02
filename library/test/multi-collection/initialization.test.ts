@@ -1,17 +1,22 @@
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertRejects, assert } from "jsr:@std/assert";
+import { assertEquals, assertRejects, assert } from "@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import { withIndex } from "@diister/mongodbee";
+import { createMultiCollectionModel } from "../../src/multi-collection-model.ts";
 
 Deno.test("Ensure Schema are not recreated", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-                mail: v.string(),
-            },
+        const model = createMultiCollectionModel("test", {
+            schema: {
+                user: {
+                    name: v.string(),
+                    mail: v.string(),
+                },
+            }
         });
+
+        const collection = await multiCollection(db, "test", model);
 
         const userA = await collection.insertOne("user", {
             name: "John",
@@ -27,12 +32,7 @@ Deno.test("Ensure Schema are not recreated", async (t) => {
         assertEquals(users.length, 2);
 
         // Close connection
-        const collection2 = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-                mail: v.string(),
-            },
-        });
+        const collection2 = await multiCollection(db, "test", model);
 
         const users2 = await collection2.find("user");
         assertEquals(users2.length, 2);
@@ -41,12 +41,16 @@ Deno.test("Ensure Schema are not recreated", async (t) => {
 
 Deno.test("Ensure Schema are updated if changed", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-                mail: v.string(),
-            },
+        const model = createMultiCollectionModel("test", {
+            schema: {
+                user: {
+                    name: v.string(),
+                    mail: v.string(),
+                },
+            }
         });
+
+        const collection = await multiCollection(db, "test", model);
 
         const userA = await collection.insertOne("user", {
             name: "John",
@@ -57,13 +61,17 @@ Deno.test("Ensure Schema are updated if changed", async (t) => {
         assertEquals(users.length, 1);
 
         // Close connection
-        const collection2 = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-                mail: v.string(),
-                age: v.optional(v.number()),
-            },
+        const model2 = createMultiCollectionModel("test", {
+            schema: {
+                user: {
+                    name: v.string(),
+                    mail: v.string(),
+                    age: v.optional(v.number()),
+                },
+            }
         });
+
+        const collection2 = await multiCollection(db, "test", model2);
 
         // Existing user should still be there
         const users2 = await collection2.find("user");
@@ -85,12 +93,16 @@ Deno.test("Ensure Schema are updated if changed", async (t) => {
 
 Deno.test("Ensure indexes are not recreated if already exist", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: withIndex(v.string(), { unique: true }),
-                mail: v.string(),
-            },
+        const model = createMultiCollectionModel("test", {
+            schema: {
+                user: {
+                    name: withIndex(v.string(), { unique: true }),
+                    mail: v.string(),
+                },
+            }
         });
+
+        const collection = await multiCollection(db, "test", model);
 
         const userA = await collection.insertOne("user", {
             name: "John",
@@ -105,12 +117,7 @@ Deno.test("Ensure indexes are not recreated if already exist", async (t) => {
         }, Error, "E11000 duplicate key error collection");
 
         // Close connection
-        const collection2 = await multiCollection(db, "test", {
-            user: {
-                name: withIndex(v.string(), { unique: true }),
-                mail: v.string(),
-            },
-        });
+        const collection2 = await multiCollection(db, "test", model);
 
         await assertRejects(async () => {
             await collection2.insertOne("user", {
@@ -131,12 +138,15 @@ Deno.test("Ensure indexes are not recreated if already exist", async (t) => {
 
 Deno.test("Ensure indexes are updated if changed", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: withIndex(v.string(), { unique: true }),
-                mail: v.string(),
-            },
+        const model = createMultiCollectionModel("test", {
+            schema: {
+                user: {
+                    name: withIndex(v.string(), { unique: true }),
+                    mail: v.string(),
+                },
+            }
         });
+        const collection = await multiCollection(db, "test", model);
 
         const userA = await collection.insertOne("user", {
             name: "John",
@@ -151,12 +161,15 @@ Deno.test("Ensure indexes are updated if changed", async (t) => {
         }, Error, "E11000 duplicate key error collection");
 
         // Close connection
-        const collection2 = await multiCollection(db, "test", {
-            user: {
-                name: withIndex(v.string(), { unique: false }), // Change index to non-unique
-                mail: v.string(),
-            },
+        const model2 = createMultiCollectionModel("test", {
+            schema: {
+                user: {
+                    name: withIndex(v.string(), { unique: false }), // Change index to non-unique
+                    mail: v.string(),
+                },
+            }
         });
+        const collection2 = await multiCollection(db, "test", model2);
 
         // Should be able to insert user with same name now
         const userB = await collection2.insertOne("user", {

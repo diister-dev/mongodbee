@@ -1,27 +1,30 @@
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { assertEquals, assertRejects } from "@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import { ulid } from "../../src/schema.ts";
 import assert from "node:assert";
+import { createMultiCollectionModel } from "../../src/multi-collection-model.ts";
 
 // Helper function for creating test schemas
-const createTestSchema = () => ({
-  user: {
-    name: v.string(),
-    email: v.string(),
-    age: v.number()
-  },
-  product: {
-    name: v.string(),
-    price: v.number(),
-    stock: v.number()
-  },
-  order: {
-    userId: v.string(),
-    productIds: v.array(v.string()),
-    total: v.number(),
-    status: v.string()
+const createTestSchema = () => createMultiCollectionModel("test", {
+  schema: {
+    user: {
+      name: v.string(),
+      email: v.string(),
+      age: v.number()
+    },
+    product: {
+      name: v.string(),
+      price: v.number(),
+      stock: v.number()
+    },
+    order: {
+      userId: v.string(),
+      productIds: v.array(v.string()),
+      total: v.number(),
+      status: v.string()
+    }
   }
 });
 

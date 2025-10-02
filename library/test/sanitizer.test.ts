@@ -1,5 +1,5 @@
 import { removeUndefined, undefinedToNull, sanitizeDocument, removeField, sanitizeForMongoDB } from "../src/sanitizer.ts";
-import { assert, assertEquals } from "jsr:@std/assert";
+import { assert, assertEquals } from "@std/assert";
 
 Deno.test("removeUndefined - simple object", () => {
     const input = {

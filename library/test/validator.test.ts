@@ -1,6 +1,6 @@
 import { toMongoValidator } from "../src/validator.ts"
 import * as v from "../src/schema.ts";
-import { assert, assertEquals } from "jsr:@std/assert";
+import { assert, assertEquals } from "@std/assert";
 
 Deno.test("Simple schema test", () => {
     const schema = v.object({

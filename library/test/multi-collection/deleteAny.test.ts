@@ -1,20 +1,19 @@
 import * as v from "../../src/schema.ts";
-import { assertEquals } from "jsr:@std/assert";
+import { assertEquals } from "@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
+import { createMultiCollectionModel } from "../../src/multi-collection-model.ts";
 
 Deno.test("deleteAny - basic functionality", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-                active: v.boolean(),
-            },
-            group: {
-                name: v.string(),
-                active: v.boolean(),
+        const model = createMultiCollectionModel("test", {
+            schema: {
+                user: { name: v.string(), active: v.boolean() },
+                group: { name: v.string(), active: v.boolean() },
             }
-        });
+        })
+
+        const collection = await multiCollection(db, "test", model);
 
         // Insert test data
         await collection.insertOne("user", { name: "John", active: false });
@@ -39,14 +38,14 @@ Deno.test("deleteAny - basic functionality", async (t) => {
 
 Deno.test("deleteAny - by _type field", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-            },
-            group: {
-                name: v.string(),
+        const model = createMultiCollectionModel("test", {
+            schema: {
+                user: { name: v.string() },
+                group: { name: v.string() },
             }
-        });
+        })
+
+        const collection = await multiCollection(db, "test", model);
 
         // Insert test data
         await collection.insertOne("user", { name: "John" });
@@ -68,16 +67,14 @@ Deno.test("deleteAny - by _type field", async (t) => {
 
 Deno.test("deleteAny - complex filter", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-                age: v.number(),
-            },
-            group: {
-                name: v.string(),
-                memberCount: v.number(),
+        const model = createMultiCollectionModel("test", {
+            schema: {
+                user: { name: v.string(), age: v.number() },
+                group: { name: v.string(), memberCount: v.number() },
             }
-        });
+        })
+
+        const collection = await multiCollection(db, "test", model);
 
         // Insert test data
         await collection.insertOne("user", { name: "John", age: 25 });
@@ -107,11 +104,13 @@ Deno.test("deleteAny - complex filter", async (t) => {
 
 Deno.test("deleteAny - no matches", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
+        const model = createMultiCollectionModel("test", {
+            schema: {
+                user: { name: v.string() },
             }
-        });
+        })
+
+        const collection = await multiCollection(db, "test", model);
 
         // Insert test data
         await collection.insertOne("user", { name: "John" });

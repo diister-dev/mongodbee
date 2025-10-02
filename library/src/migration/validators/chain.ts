@@ -167,8 +167,8 @@ export class ChainValidator {
       }
 
       if (this.options.strictIdFormat && migration.id) {
-        if (!/^[a-zA-Z0-9_-]+$/.test(migration.id)) {
-          errors.push(`Migration ID "${migration.id}" contains invalid characters. Use only letters, numbers, underscores, and hyphens`);
+        if (!/^[a-zA-Z0-9_@-]+$/.test(migration.id)) {
+          errors.push(`Migration ID "${migration.id}" contains invalid characters. Use only letters, numbers, underscores, hyphens, and @`);
         }
       }
 

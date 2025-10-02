@@ -1,5 +1,5 @@
 import * as v from "../src/schema.ts";
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { assertEquals, assertRejects } from "@std/assert";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
 

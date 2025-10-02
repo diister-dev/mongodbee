@@ -1,6 +1,6 @@
 import * as v from "../src/schema.ts";
 import { removeField } from "../src/sanitizer.ts";
-import { assert, assertEquals } from "jsr:@std/assert";
+import { assert, assertEquals } from "@std/assert";
 
 // Mock collection behavior to test without MongoDB
 class MockCollection {

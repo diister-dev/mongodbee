@@ -31,17 +31,22 @@ import type {
   CreateMultiCollectionInstanceRule,
   SeedMultiCollectionInstanceRule,
   TransformMultiCollectionTypeRule,
+  UpdateIndexesRule,
 } from '../types.ts';
 import type { Db } from '../../mongodb.ts';
 import { ulid } from "@std/ulid";
 import * as v from 'valibot';
 import { toMongoValidator } from '../../validator.ts';
+import { extractIndexes } from '../../indexes.ts';
+import { sanitizePathName } from '../../schema-navigator.ts';
 import {
   discoverMultiCollectionInstances,
   createMultiCollectionInfo,
   recordMultiCollectionMigration,
   multiCollectionInstanceExists,
   shouldInstanceReceiveMigration,
+  MULTI_COLLECTION_INFO_TYPE,
+  MULTI_COLLECTION_MIGRATIONS_TYPE,
 } from '../multicollection-registry.ts';
 
 /**
@@ -123,6 +128,10 @@ export class MongodbApplier implements MigrationApplier {
       apply: (operation) => this.applyTransformMultiCollectionType(operation),
       reverse: (operation) => this.reverseTransformMultiCollectionType(operation),
     },
+    update_indexes: {
+      apply: (operation) => this.applyUpdateIndexes(operation),
+      reverse: (operation) => this.reverseUpdateIndexes(operation),
+    },
   };
 
   constructor(
@@ -149,6 +158,156 @@ export class MongodbApplier implements MigrationApplier {
    */
   setCurrentMigrationId(migrationId: string): void {
     this.currentMigrationId = migrationId;
+  }
+
+  /**
+   * Synchronizes validators and indexes for all collections in the migration schemas
+   *
+   * This method ensures that all collections have the correct JSON Schema validators
+   * and indexes as defined in the migration schemas. It's called automatically after
+   * applying migration operations to keep the database schema in sync.
+   *
+   * @param schemas - Migration schemas containing collection and multi-collection definitions
+   */
+  async synchronizeSchemas(schemas?: { collections?: Record<string, Record<string, any>>, multiCollections?: Record<string, Record<string, Record<string, any>>> }): Promise<void> {
+    if (!schemas) {
+      return;
+    }
+
+    // Synchronize regular collections
+    if (schemas.collections) {
+      for (const [collectionName, schema] of Object.entries(schemas.collections)) {
+        await this.synchronizeCollectionSchema(collectionName, schema);
+      }
+    }
+
+    // Synchronize multi-collections
+    if (schemas.multiCollections) {
+      for (const [multiCollectionName, multiCollectionSchema] of Object.entries(schemas.multiCollections)) {
+        await this.synchronizeMultiCollectionSchema(multiCollectionName, multiCollectionSchema);
+      }
+    }
+  }
+
+  /**
+   * Synchronizes validator and indexes for a single collection
+   *
+   * @private
+   * @param collectionName - Name of the collection
+   * @param schema - Valibot schema for the collection
+   */
+  private async synchronizeCollectionSchema(collectionName: string, schema: Record<string, any>): Promise<void> {
+    // Check if collection exists
+    const exists = await this.collectionExists(collectionName);
+    if (!exists) {
+      // Skip non-existent collections (they might not have been created yet)
+      return;
+    }
+
+    // Apply validator
+    const wrappedSchema = v.object(schema);
+    const validator = toMongoValidator(wrappedSchema);
+
+    await this.db.command({
+      collMod: collectionName,
+      validator,
+    });
+
+    // Apply indexes
+    await this.applyIndexesForCollection(collectionName, schema);
+  }
+
+  /**
+   * Synchronizes validator and indexes for a multi-collection
+   *
+   * @private
+   * @param multiCollectionName - Base name of the multi-collection
+   * @param multiCollectionSchema - Schema containing all type schemas
+   */
+  private async synchronizeMultiCollectionSchema(multiCollectionName: string, multiCollectionSchema: Record<string, Record<string, any>>): Promise<void> {
+    // Discover all instances of this multi-collection
+    const instances = await discoverMultiCollectionInstances(this.db, multiCollectionName);
+
+    if (instances.length === 0) {
+      // No instances to synchronize
+      return;
+    }
+
+    // Create union validator for all types (including metadata types)
+    const typeSchemas = Object.entries(multiCollectionSchema).map(([typeName, typeSchema]) => {
+      return v.object({
+        _type: v.literal(typeName),
+        ...typeSchema,
+      });
+    });
+
+    // Add metadata schemas
+    const metadataSchemas = [
+      v.object({
+        _id: v.literal(MULTI_COLLECTION_INFO_TYPE),
+        _type: v.literal(MULTI_COLLECTION_INFO_TYPE),
+        collectionType: v.string(),
+        createdAt: v.date(),
+      }),
+      v.object({
+        _id: v.literal(MULTI_COLLECTION_MIGRATIONS_TYPE),
+        _type: v.literal(MULTI_COLLECTION_MIGRATIONS_TYPE),
+        fromMigrationId: v.string(),
+        appliedMigrations: v.array(v.object({
+          id: v.string(),
+          appliedAt: v.date(),
+        })),
+      }),
+    ];
+
+    const allSchemas = [...typeSchemas, ...metadataSchemas];
+    const unionSchema = allSchemas.length > 0 ? v.union(allSchemas as any) : v.object({ _type: v.string() });
+    const validator = toMongoValidator(unionSchema);
+
+    // Apply validator and indexes to each instance
+    for (const collectionName of instances) {
+      const exists = await this.collectionExists(collectionName);
+
+      if (!exists) {
+        continue;
+      }
+
+      // Apply validator
+      await this.db.command({
+        collMod: collectionName,
+        validator,
+      });
+
+      // Apply indexes for each type schema
+      const collection = this.db.collection(collectionName);
+      for (const [typeName, typeSchema] of Object.entries(multiCollectionSchema)) {
+        const typeSchemaWithType = {
+          _type: v.literal(typeName),
+          ...typeSchema,
+        };
+        const wrappedTypeSchema = v.object(typeSchemaWithType);
+        const indexes = extractIndexes(wrappedTypeSchema);
+
+        for (const index of indexes) {
+          const indexName = sanitizePathName(index.path);
+          const keySpec: Record<string, number> = {};
+          keySpec[index.path] = 1;
+
+          try {
+            await collection.createIndex(keySpec, {
+              name: indexName,
+              unique: index.metadata.unique || false,
+              sparse: false,
+            });
+          } catch (error) {
+            // Tolerate duplicate index errors
+            if (error instanceof Error && !error.message.includes('already exists')) {
+              throw error;
+            }
+          }
+        }
+      }
+    }
   }
 
   /**
@@ -236,6 +395,11 @@ export class MongodbApplier implements MigrationApplier {
       await this.db.createCollection(operation.collectionName, options);
 
       console.log(`[DEBUG] Collection ${operation.collectionName} created successfully`);
+
+      // Apply indexes if schema is provided
+      if (operation.schema) {
+        await this.applyIndexesForCollection(operation.collectionName, operation.schema);
+      }
     } catch (error) {
       throw new Error(
         `Failed to create collection ${operation.collectionName}: ${
@@ -246,8 +410,50 @@ export class MongodbApplier implements MigrationApplier {
   }
 
   /**
+   * Applies indexes to a collection from its Valibot schema
+   *
+   * @private
+   * @param collectionName - Name of the collection
+   * @param schema - Valibot schema containing index definitions
+   */
+  private async applyIndexesForCollection(collectionName: string, schema: Record<string, any>): Promise<void> {
+    const collection = this.db.collection(collectionName);
+    const wrappedSchema = v.object(schema);
+    const indexes = extractIndexes(wrappedSchema);
+
+    if (indexes.length === 0) {
+      console.log(`[DEBUG] No indexes found for collection ${collectionName}`);
+      return;
+    }
+
+    console.log(`[DEBUG] Creating ${indexes.length} index(es) for collection ${collectionName}`);
+
+    for (const index of indexes) {
+      const indexName = sanitizePathName(index.path);
+      const keySpec: Record<string, number> = {};
+      keySpec[index.path] = 1; // Ascending index
+
+      try {
+        await collection.createIndex(keySpec, {
+          name: indexName,
+          unique: index.metadata.unique || false,
+          sparse: false,
+        });
+        console.log(`[DEBUG] Created index ${indexName} on ${collectionName}.${index.path}`);
+      } catch (error) {
+        // Tolerate duplicate index errors
+        if (error instanceof Error && error.message.includes('already exists')) {
+          console.log(`[DEBUG] Index ${indexName} already exists, skipping`);
+        } else {
+          throw error;
+        }
+      }
+    }
+  }
+
+  /**
    * Reverses a create collection operation by dropping the collection
-   * 
+   *
    * @private
    * @param operation - Create collection operation to reverse
    */
@@ -540,28 +746,25 @@ export class MongodbApplier implements MigrationApplier {
    */
   private async applyCreateMultiCollectionInstance(operation: CreateMultiCollectionInstanceRule): Promise<void> {
     try {
-      const collectionName = `${operation.multiCollectionName}_${operation.instanceName}`;
-
       // Check if instance already exists
       if (this.options.strictValidation) {
-        const exists = await multiCollectionInstanceExists(this.db, operation.multiCollectionName, operation.instanceName);
+        const exists = await multiCollectionInstanceExists(this.db, operation.collectionName);
         if (exists) {
-          throw new Error(`Multi-collection instance ${collectionName} already exists`);
+          throw new Error(`Multi-collection instance ${operation.collectionName} already exists`);
         }
       }
 
       // Insert metadata document to create collection and mark it as multi-collection instance
       await createMultiCollectionInfo(
         this.db,
-        operation.multiCollectionName,
-        operation.instanceName,
-        'migration-id-placeholder', // TODO: Pass actual migration ID from context
-        {} // Empty schemas for now, will be populated by subsequent operations
+        operation.collectionName,
+        operation.collectionType,
+        'migration-id-placeholder' // TODO: Pass actual migration ID from context
       );
 
     } catch (error) {
       throw new Error(
-        `Failed to create multi-collection instance ${operation.multiCollectionName}_${operation.instanceName}: ${
+        `Failed to create multi-collection instance ${operation.collectionName}: ${
           error instanceof Error ? error.message : 'Unknown error'
         }`
       );
@@ -576,23 +779,21 @@ export class MongodbApplier implements MigrationApplier {
    */
   private async reverseCreateMultiCollectionInstance(operation: CreateMultiCollectionInstanceRule): Promise<void> {
     try {
-      const collectionName = `${operation.multiCollectionName}_${operation.instanceName}`;
-
       // Check if instance exists
       if (this.options.strictValidation) {
-        const exists = await multiCollectionInstanceExists(this.db, operation.multiCollectionName, operation.instanceName);
+        const exists = await multiCollectionInstanceExists(this.db, operation.collectionName);
         if (!exists) {
-          throw new Error(`Multi-collection instance ${collectionName} does not exist for dropping`);
+          throw new Error(`Multi-collection instance ${operation.collectionName} does not exist for dropping`);
         }
       }
 
       // Drop the entire collection
-      const collection = this.db.collection(collectionName);
+      const collection = this.db.collection(operation.collectionName);
       await collection.drop();
 
     } catch (error) {
       throw new Error(
-        `Failed to drop multi-collection instance ${operation.multiCollectionName}_${operation.instanceName}: ${
+        `Failed to drop multi-collection instance ${operation.collectionName}: ${
           error instanceof Error ? error.message : 'Unknown error'
         }`
       );
@@ -607,17 +808,15 @@ export class MongodbApplier implements MigrationApplier {
    */
   private async applySeedMultiCollectionInstance(operation: SeedMultiCollectionInstanceRule): Promise<void> {
     try {
-      const collectionName = `${operation.multiCollectionName}_${operation.instanceName}`;
-
       // Check if instance exists
       if (this.options.strictValidation) {
-        const exists = await multiCollectionInstanceExists(this.db, operation.multiCollectionName, operation.instanceName);
+        const exists = await multiCollectionInstanceExists(this.db, operation.collectionName);
         if (!exists) {
-          throw new Error(`Multi-collection instance ${collectionName} does not exist for seeding`);
+          throw new Error(`Multi-collection instance ${operation.collectionName} does not exist for seeding`);
         }
       }
 
-      const collection = this.db.collection(collectionName);
+      const collection = this.db.collection(operation.collectionName);
 
       // Convert documents to proper format and add _type field with auto-generated _id
       const documents = operation.documents.map(doc => {
@@ -644,7 +843,7 @@ export class MongodbApplier implements MigrationApplier {
 
     } catch (error) {
       throw new Error(
-        `Failed to seed multi-collection instance ${operation.multiCollectionName}_${operation.instanceName} with type ${operation.typeName}: ${
+        `Failed to seed multi-collection instance ${operation.collectionName} with type ${operation.typeName}: ${
           error instanceof Error ? error.message : 'Unknown error'
         }`
       );
@@ -659,17 +858,15 @@ export class MongodbApplier implements MigrationApplier {
    */
   private async reverseSeedMultiCollectionInstance(operation: SeedMultiCollectionInstanceRule): Promise<void> {
     try {
-      const collectionName = `${operation.multiCollectionName}_${operation.instanceName}`;
-
       // Check if instance exists
       if (this.options.strictValidation) {
-        const exists = await multiCollectionInstanceExists(this.db, operation.multiCollectionName, operation.instanceName);
+        const exists = await multiCollectionInstanceExists(this.db, operation.collectionName);
         if (!exists) {
-          throw new Error(`Multi-collection instance ${collectionName} does not exist for unseeding`);
+          throw new Error(`Multi-collection instance ${operation.collectionName} does not exist for unseeding`);
         }
       }
 
-      const collection = this.db.collection(collectionName);
+      const collection = this.db.collection(operation.collectionName);
 
       // Extract document IDs from the seed operation
       const documentIds = operation.documents
@@ -691,14 +888,14 @@ export class MongodbApplier implements MigrationApplier {
         }
       } else {
         console.warn(
-          `Warning: Cannot reverse seed operation for multi-collection instance ${collectionName} type ${operation.typeName} - ` +
+          `Warning: Cannot reverse seed operation for multi-collection instance ${operation.collectionName} type ${operation.typeName} - ` +
           'no documents with _id fields found. This may leave orphaned data.'
         );
       }
 
     } catch (error) {
       throw new Error(
-        `Failed to reverse seed operation for multi-collection instance ${operation.multiCollectionName}_${operation.instanceName} type ${operation.typeName}: ${
+        `Failed to reverse seed operation for multi-collection instance ${operation.collectionName} type ${operation.typeName}: ${
           error instanceof Error ? error.message : 'Unknown error'
         }`
       );
@@ -714,35 +911,33 @@ export class MongodbApplier implements MigrationApplier {
   private async applyTransformMultiCollectionType(operation: TransformMultiCollectionTypeRule): Promise<void> {
     try {
       // Discover all instances of this multi-collection type
-      const instances = await discoverMultiCollectionInstances(this.db, operation.multiCollectionName);
+      const instances = await discoverMultiCollectionInstances(this.db, operation.collectionType);
 
       if (instances.length === 0) {
         console.warn(
-          `Warning: No instances found for multi-collection ${operation.multiCollectionName}. ` +
+          `Warning: No instances found for multi-collection type ${operation.collectionType}. ` +
           'Transform operation will have no effect.'
         );
         return;
       }
 
       // Apply transformation to each instance (with version filtering)
-      for (const instanceName of instances) {
+      for (const collectionName of instances) {
         // ✅ VERSION TRACKING: Check if this instance should receive this migration
         if (this.currentMigrationId) {
           const shouldReceive = await shouldInstanceReceiveMigration(
             this.db,
-            operation.multiCollectionName,
-            instanceName,
+            collectionName,
             this.currentMigrationId
           );
 
           if (!shouldReceive) {
             console.log(
-              `Skipping instance ${instanceName} - created after migration ${this.currentMigrationId}`
+              `Skipping collection ${collectionName} - created after migration ${this.currentMigrationId}`
             );
             continue;
           }
         }
-        const collectionName = `${operation.multiCollectionName}_${instanceName}`;
         const collection = this.db.collection(collectionName);
 
         // Process documents of the specified type in batches
@@ -799,19 +994,60 @@ export class MongodbApplier implements MigrationApplier {
         // Record migration for this instance
         await recordMultiCollectionMigration(
           this.db,
-          operation.multiCollectionName,
-          instanceName,
+          collectionName,
           'migration-id-placeholder' // TODO: Pass actual migration ID from context
         );
       }
 
     } catch (error) {
       throw new Error(
-        `Failed to transform multi-collection type ${operation.multiCollectionName}.${operation.typeName}: ${
+        `Failed to transform multi-collection type ${operation.collectionType}.${operation.typeName}: ${
           error instanceof Error ? error.message : 'Unknown error'
         }`
       );
     }
+  }
+
+  /**
+   * Applies an update indexes operation to synchronize indexes with the schema
+   *
+   * @private
+   * @param operation - Update indexes operation
+   */
+  private async applyUpdateIndexes(operation: UpdateIndexesRule): Promise<void> {
+    try {
+      // Check if collection exists
+      if (this.options.strictValidation) {
+        const exists = await this.collectionExists(operation.collectionName);
+        if (!exists) {
+          throw new Error(`Collection ${operation.collectionName} does not exist for updating indexes`);
+        }
+      }
+
+      // Apply indexes using the existing helper method
+      await this.applyIndexesForCollection(operation.collectionName, operation.schema as Record<string, any>);
+
+      console.log(`[DEBUG] Successfully updated indexes for collection ${operation.collectionName}`);
+    } catch (error) {
+      throw new Error(
+        `Failed to update indexes for collection ${operation.collectionName}: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
+      );
+    }
+  }
+
+  /**
+   * Reverses an update indexes operation (no-op, as index updates are idempotent)
+   *
+   * @private
+   * @param operation - Update indexes operation to reverse
+   */
+  private async reverseUpdateIndexes(operation: UpdateIndexesRule): Promise<void> {
+    // Index updates are idempotent and don't need reversal
+    // If we wanted to be more strict, we could drop indexes that were added,
+    // but this would require tracking which indexes existed before the migration
+    console.log(`[DEBUG] Reverse update_indexes is a no-op for collection ${operation.collectionName}`);
   }
 
   /**
@@ -823,35 +1059,33 @@ export class MongodbApplier implements MigrationApplier {
   private async reverseTransformMultiCollectionType(operation: TransformMultiCollectionTypeRule): Promise<void> {
     try {
       // Discover all instances of this multi-collection type
-      const instances = await discoverMultiCollectionInstances(this.db, operation.multiCollectionName);
+      const instances = await discoverMultiCollectionInstances(this.db, operation.collectionType);
 
       if (instances.length === 0) {
         console.warn(
-          `Warning: No instances found for multi-collection ${operation.multiCollectionName}. ` +
+          `Warning: No instances found for multi-collection type ${operation.collectionType}. ` +
           'Reverse transform operation will have no effect.'
         );
         return;
       }
 
       // Apply reverse transformation to each instance (with version filtering)
-      for (const instanceName of instances) {
+      for (const collectionName of instances) {
         // ✅ VERSION TRACKING: Check if this instance should receive this migration reversal
         if (this.currentMigrationId) {
           const shouldReceive = await shouldInstanceReceiveMigration(
             this.db,
-            operation.multiCollectionName,
-            instanceName,
+            collectionName,
             this.currentMigrationId
           );
 
           if (!shouldReceive) {
             console.log(
-              `Skipping instance ${instanceName} - created after migration ${this.currentMigrationId}`
+              `Skipping collection ${collectionName} - created after migration ${this.currentMigrationId}`
             );
             continue;
           }
         }
-        const collectionName = `${operation.multiCollectionName}_${instanceName}`;
         const collection = this.db.collection(collectionName);
 
         // Process documents of the specified type in batches
@@ -908,15 +1142,14 @@ export class MongodbApplier implements MigrationApplier {
         // Record reverse migration for this instance
         await recordMultiCollectionMigration(
           this.db,
-          operation.multiCollectionName,
-          instanceName,
+          collectionName,
           'migration-id-placeholder' // TODO: Pass actual migration ID from context
         );
       }
 
     } catch (error) {
       throw new Error(
-        `Failed to reverse transform multi-collection type ${operation.multiCollectionName}.${operation.typeName}: ${
+        `Failed to reverse transform multi-collection type ${operation.collectionType}.${operation.typeName}: ${
           error instanceof Error ? error.message : 'Unknown error'
         }`
       );

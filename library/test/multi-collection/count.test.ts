@@ -1,21 +1,26 @@
 import * as v from "../../src/schema.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
-import { assertEquals } from "jsr:@std/assert";
+import { assertEquals } from "@std/assert";
 import { withDatabase } from "../+shared.ts";
+import { createMultiCollectionModel } from "../../src/multi-collection-model.ts";
 
 Deno.test("MultiCollection: countDocuments functionality", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const catalog = await multiCollection(db, "catalog", {
-            product: {
-                name: v.string(),
-                price: v.number(),
-                category: v.string()
-            },
-            category: {
-                name: v.string(),
-                description: v.optional(v.string())
+        const model = createMultiCollectionModel("catalog", {
+            schema: {
+                product: {
+                    name: v.string(),
+                    price: v.number(),
+                    category: v.string()
+                },
+                category: {
+                    name: v.string(),
+                    description: v.optional(v.string())
+                }
             }
-        });
+        })
+
+        const catalog = await multiCollection(db, "catalog", model);
 
         // Insert test data
         await catalog.insertOne("category", { name: "Electronics", description: "Electronic devices" });

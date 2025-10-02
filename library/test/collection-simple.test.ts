@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
 import * as v from "../src/schema.ts";

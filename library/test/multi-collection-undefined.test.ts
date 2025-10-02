@@ -1,7 +1,8 @@
 import * as v from "../src/schema.ts";
 import { multiCollection } from "../src/multi-collection.ts";
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { MongoClient } from "../src/mongodb.ts";
+import { createMultiCollectionModel } from "../src/multi-collection-model.ts";
 
 // Mock MongoDB setup for testing
 let client: MongoClient;
@@ -27,18 +28,22 @@ Deno.test("MultiCollection: undefined behavior remove (default)", async () => {
     await setupTestDb();
     
     try {
-        const catalog = await multiCollection(db, "catalog_remove", {
-            product: {
-                name: v.string(),
-                price: v.number(),
-                description: v.optional(v.string()),
-                category: v.optional(v.string())
-            },
-            category: {
-                name: v.string(),
-                parentId: v.optional(v.string())
+        const catalogModel = createMultiCollectionModel("catalog_remove", {
+            schema:{
+                product: {
+                    name: v.string(),
+                    price: v.number(),
+                    description: v.optional(v.string()),
+                    category: v.optional(v.string())
+                },
+                category: {
+                    name: v.string(),
+                    parentId: v.optional(v.string())
+                }
             }
         });
+
+        const catalog = await multiCollection(db, "catalog_remove", catalogModel);
         
         // Insert product with undefined values (should be removed)
         const productId = await catalog.insertOne("product", {
@@ -75,18 +80,22 @@ Deno.test("MultiCollection: undefined behavior error", async () => {
     await setupTestDb();
     
     try {
-        const catalog = await multiCollection(db, "catalog_error", {
-            product: {
-                name: v.string(),
-                price: v.number(),
-                description: v.optional(v.string()),
-                category: v.optional(v.string())
-            },
-            category: {
-                name: v.string(),
-                parentId: v.optional(v.string())
+        const model = createMultiCollectionModel("catalog_error", {
+            schema: {
+                product: {
+                    name: v.string(),
+                    price: v.number(),
+                    description: v.optional(v.string()),
+                    category: v.optional(v.string())
+                },
+                category: {
+                    name: v.string(),
+                    parentId: v.optional(v.string())
+                }
             }
-        }, {
+        });
+
+        const catalog = await multiCollection(db, "catalog_error", model, {
             undefinedBehavior: 'error'
         });
         
@@ -139,14 +148,18 @@ Deno.test("MultiCollection: insertMany with undefined behavior", async () => {
     
     try {
         // Test remove behavior
-        const catalogRemove = await multiCollection(db, "catalog_many_remove", {
-            product: {
-                name: v.string(),
-                price: v.number(),
-                description: v.optional(v.string()),
-                category: v.optional(v.string())
+        const model = createMultiCollectionModel("catalog_many_remove", {
+            schema: {
+                product: {
+                    name: v.string(),
+                    price: v.number(),
+                    description: v.optional(v.string()),
+                    category: v.optional(v.string())
+                }
             }
-        }, {
+        });
+
+        const catalogRemove = await multiCollection(db, "catalog_many_remove", model, {
             undefinedBehavior: 'remove'
         });
         
@@ -179,14 +192,18 @@ Deno.test("MultiCollection: insertMany with undefined behavior", async () => {
         assert(!("category" in product2));
         
         // Test error behavior
-        const catalogError = await multiCollection(db, "catalog_many_error", {
-            product: {
-                name: v.string(),
-                price: v.number(),
-                description: v.optional(v.string()),
-                category: v.optional(v.string())
+        const modelError = createMultiCollectionModel("catalog_many_error", {
+            schema: {
+                product: {
+                    name: v.string(),
+                    price: v.number(),
+                    description: v.optional(v.string()),
+                    category: v.optional(v.string())
+                }
             }
-        }, {
+        });
+
+        const catalogError = await multiCollection(db, "catalog_many_error", modelError, {
             undefinedBehavior: 'error'
         });
         
@@ -214,24 +231,28 @@ Deno.test("MultiCollection: Mixed document types with different undefined values
     await setupTestDb();
     
     try {
-        const catalog = await multiCollection(db, "catalog_mixed", {
-            product: {
-                name: v.string(),
-                price: v.number(),
-                description: v.optional(v.string()),
-                categoryId: v.optional(v.string())
-            },
-            category: {
-                name: v.string(),
-                parentId: v.optional(v.string()),
-                description: v.optional(v.string())
-            },
-            brand: {
-                name: v.string(),
-                website: v.optional(v.string()),
-                country: v.optional(v.string())
+        const model = createMultiCollectionModel("catalog_mixed", {
+            schema: {
+                product: {
+                    name: v.string(),
+                    price: v.number(),
+                    description: v.optional(v.string()),
+                    categoryId: v.optional(v.string())
+                },
+                category: {
+                    name: v.string(),
+                    parentId: v.optional(v.string()),
+                    description: v.optional(v.string())
+                },
+                brand: {
+                    name: v.string(),
+                    website: v.optional(v.string()),
+                    country: v.optional(v.string())
+                }
             }
-        }, {
+        });
+
+        const catalog = await multiCollection(db, "catalog_mixed", model, {
             undefinedBehavior: 'remove'
         });
         
@@ -289,24 +310,22 @@ Deno.test("MultiCollection: Multiple collections with different undefined behavi
     
     try {
         // Collection 1: Remove undefined (default)
-        const catalogRemove = await multiCollection(db, "catalog_remove_multi", {
-            product: {
-                name: v.string(),
-                price: v.number(),
-                description: v.optional(v.string())
+        const model = createMultiCollectionModel("catalog", {
+            schema: {
+                product: {
+                    name: v.string(),
+                    price: v.number(),
+                    description: v.optional(v.string())
+                }
             }
-        }, {
+        });
+
+        const catalogRemove = await multiCollection(db, "catalog_remove_multi", model, {
             undefinedBehavior: 'remove'
         });
         
         // Collection 2: Error on undefined
-        const catalogError = await multiCollection(db, "catalog_error_multi", {
-            product: {
-                name: v.string(),
-                price: v.number(),
-                description: v.optional(v.string())
-            }
-        }, {
+        const catalogError = await multiCollection(db, "catalog_error_multi", model, {
             undefinedBehavior: 'error'
         });
         
@@ -364,10 +383,14 @@ Deno.test("MultiCollection: Nested undefined values", async () => {
             })),
             preferences: v.optional(v.array(v.string()))
         };
+
+        const model = createMultiCollectionModel("nested_docs", {
+            schema: {
+                profiles: nestedSchema
+            }
+        });
         
-        const mc = await multiCollection(db, "nested_docs", {
-            profiles: nestedSchema
-        }, {
+        const mc = await multiCollection(db, "nested_docs", model, {
             undefinedBehavior: 'remove'
         });
         
@@ -410,13 +433,17 @@ Deno.test("MultiCollection: Ignore undefined behavior", async () => {
     await setupTestDb();
     
     try {
-        const mc = await multiCollection(db, "ignore_docs", {
-            products: {
-                name: v.string(),
-                price: v.number(),
-                description: v.optional(v.string())
+        const model = createMultiCollectionModel("ignore_docs", {
+            schema: {
+                products: {
+                    name: v.string(),
+                    price: v.number(),
+                    description: v.optional(v.string())
+                }
             }
-        }, {
+        });
+
+        const mc = await multiCollection(db, "ignore_docs", model, {
             undefinedBehavior: 'ignore'
         });
         
@@ -449,16 +476,20 @@ Deno.test("MultiCollection: Performance with undefined sanitization", async () =
     await setupTestDb();
     
     try {
-        const mc = await multiCollection(db, "perf_docs", {
-            items: {
-                id: v.string(),
-                data: v.optional(v.string()),
-                metadata: v.optional(v.object({
-                    created: v.optional(v.string()),
-                    updated: v.optional(v.string())
-                }))
+        const model = createMultiCollectionModel("perf_docs", {
+            schema: {
+                items: {
+                    id: v.string(),
+                    data: v.optional(v.string()),
+                    metadata: v.optional(v.object({
+                        created: v.optional(v.string()),
+                        updated: v.optional(v.string())
+                    }))
+                }
             }
-        }, {
+        });
+
+        const mc = await multiCollection(db, "perf_docs", model, {
             undefinedBehavior: 'remove'
         });
         
@@ -523,17 +554,21 @@ Deno.test("MultiCollection: Array sanitization with undefined values", async () 
     await setupTestDb();
     
     try {
-        const mc = await multiCollection(db, "array_docs", {
-            posts: {
-                title: v.string(),
-                tags: v.optional(v.array(v.string())),
-                comments: v.optional(v.array(v.object({
-                    author: v.string(),
-                    text: v.optional(v.string()),
-                    timestamp: v.optional(v.string())
-                })))
+        const model = createMultiCollectionModel("array_docs", {
+            schema: {
+                posts: {
+                    title: v.string(),
+                    tags: v.optional(v.array(v.string())),
+                    comments: v.optional(v.array(v.object({
+                        author: v.string(),
+                        text: v.optional(v.string()),
+                        timestamp: v.optional(v.string())
+                    })))
+                }
             }
-        }, {
+        });
+        
+        const mc = await multiCollection(db, "array_docs", model, {
             undefinedBehavior: 'remove'
         });
         

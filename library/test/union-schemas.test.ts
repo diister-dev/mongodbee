@@ -1,9 +1,10 @@
 import * as v from "../src/schema.ts";
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { assertEquals, assertRejects } from "@std/assert";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { withIndex } from "../src/indexes.ts";
 import { withDatabase } from "./+shared.ts";
+import { createMultiCollectionModel } from "../src/multi-collection-model.ts";
 
 /**
  * Tests for union schemas with indexes
@@ -156,7 +157,11 @@ Deno.test("withIndex - Multi-collection with union schemas", async (t) => {
       }
     };
 
-    const multiColl = await multiCollection(db, "multi_union_test", catalogSchema);
+    const catalogModel = createMultiCollectionModel("multi_union_test", {
+      schema: catalogSchema
+    });
+
+    const multiColl = await multiCollection(db, "multi_union_test", catalogModel);
 
     // Insert user with string ID
     await multiColl.insertOne("user", {

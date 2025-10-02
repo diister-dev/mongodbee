@@ -1,4 +1,4 @@
-import { assertEquals, assert } from "jsr:@std/assert";
+import { assertEquals, assert } from "@std/assert";
 import * as v from '../src/schema.ts';
 import { toMongoValidator } from '../src/validator.ts';
 import { withDatabase } from './+shared.ts';

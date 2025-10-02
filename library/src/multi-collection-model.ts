@@ -41,7 +41,7 @@ export type MultiCollectionModel<T extends MultiCollectionSchema = MultiCollecti
    * Expose the schema in the format expected by schemas.ts
    * Returns an object with the model name as key and schema as value
    */
-  expose(): { [K in typeof this.name]: T };
+  expose(): { [K in typeof name]: T };
 
   /**
    * Get a summary of the model structure

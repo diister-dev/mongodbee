@@ -1,6 +1,6 @@
 import * as v from "../src/schema.ts";
 import { collection } from "../src/collection.ts";
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { MongoClient, type Db } from "../src/mongodb.ts";
 
 // Mock MongoDB setup for testing

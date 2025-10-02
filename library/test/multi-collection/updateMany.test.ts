@@ -1,21 +1,26 @@
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { assertEquals, assertRejects } from "@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import assert from "node:assert";
+import { createMultiCollectionModel } from "../../src/multi-collection-model.ts";
 
 Deno.test("updateMany: Basic multiple update", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-                age: v.number(),
-            },
-            group: {
-                name: v.string(),
-                members: v.array(v.string()),
+        const testModel = createMultiCollectionModel("test", {
+            schema: {
+                user: {
+                    name: v.string(),
+                    age: v.number(),
+                },
+                group: {
+                    name: v.string(),
+                    members: v.array(v.string()),
+                }
             }
         });
+
+        const collection = await multiCollection(db, "test", testModel);
 
         // Insert users
         const userIds = await collection.insertMany("user", [
@@ -43,16 +48,20 @@ Deno.test("updateMany: Basic multiple update", async (t) => {
 
 Deno.test("updateMany: Update nested and array fields", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-                tags: v.array(v.string()),
-                profile: v.object({
-                    age: v.number(),
-                    city: v.string(),
-                })
+        const testModel = createMultiCollectionModel("test", {
+            schema: {
+                user: {
+                    name: v.string(),
+                    tags: v.array(v.string()),
+                    profile: v.object({
+                        age: v.number(),
+                        city: v.string(),
+                    })
+                }
             }
         });
+
+        const collection = await multiCollection(db, "test", testModel);
 
         const userIds = await collection.insertMany("user", [
             { name: "A", tags: ["x"], profile: { age: 10, city: "Paris" } },
@@ -79,16 +88,20 @@ Deno.test("updateMany: Update nested and array fields", async (t) => {
 
 Deno.test("updateMany: Error on wrong id or type", async (t) => {
     await withDatabase(t.name, async (db) => {
-        const collection = await multiCollection(db, "test", {
-            user: {
-                name: v.string(),
-                age: v.number(),
-            },
-            group: {
-                name: v.string(),
-                members: v.array(v.string()),
+        const testModel = createMultiCollectionModel("test", {
+            schema: {
+                user: {
+                    name: v.string(),
+                    age: v.number(),
+                },
+                group: {
+                    name: v.string(),
+                    members: v.array(v.string()),
+                }
             }
         });
+
+        const collection = await multiCollection(db, "test", testModel);
         const userIds = await collection.insertMany("user", [
             { name: "A", age: 1 },
             { name: "B", age: 2 },

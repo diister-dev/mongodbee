@@ -36,6 +36,7 @@ import type {
   CreateMultiCollectionInstanceRule,
   SeedMultiCollectionInstanceRule,
   TransformMultiCollectionTypeRule,
+  UpdateIndexesRule,
 } from '../types.ts';
 import { createMockGenerator } from '@diister/valibot-mock';
 
@@ -116,13 +117,14 @@ function generateTestDocumentFromSchema(schema: unknown): Record<string, unknown
 
   try {
     // Use valibot-mock to generate realistic test data from schema
+    // deno-lint-ignore no-explicit-any
     const generator = createMockGenerator(schema as any);
     const mockData = generator.generate();
     return {
       _id: 'test_simulation_id',
       ...(typeof mockData === 'object' && mockData !== null ? mockData : {})
     };
-  } catch (error) {
+  } catch (_error) {
     // If mock generation fails, return minimal document
     return {
       _id: 'test_simulation_id'
@@ -165,6 +167,10 @@ export class SimulationApplier implements SimulationMigrationApplier {
     transform_multicollection_type: {
       apply: (state, operation) => this.applyTransformMultiCollectionType(state, operation),
       reverse: (state, operation) => this.reverseTransformMultiCollectionType(state, operation),
+    },
+    update_indexes: {
+      apply: (state, operation) => this.applyUpdateIndexes(state, operation),
+      reverse: (state, operation) => this.reverseUpdateIndexes(state, operation),
     },
   };
 
@@ -421,22 +427,29 @@ export class SimulationApplier implements SimulationMigrationApplier {
       state.multiCollections = {};
     }
 
-    const collectionName = `${operation.multiCollectionName}_${operation.instanceName}`;
-    
-    if (this.options.strictValidation && state.multiCollections[collectionName]) {
-      throw new Error(`Multi-collection instance ${collectionName} already exists`);
+    if (this.options.strictValidation && state.multiCollections[operation.collectionName]) {
+      throw new Error(`Multi-collection instance ${operation.collectionName} already exists`);
     }
 
-    // Create the multi-collection instance with metadata document
-    state.multiCollections[collectionName] = {
+    // Create the multi-collection instance with metadata documents
+    state.multiCollections[operation.collectionName] = {
       content: [
         {
+          _id: '_information',
           _type: '_information',
-          multiCollectionType: operation.multiCollectionName,
-          instanceName: operation.instanceName,
+          collectionType: operation.collectionType,
           createdAt: new Date(),
-          createdByMigration: 'simulation',
-          schemas: {}
+        },
+        {
+          _id: '_migrations',
+          _type: '_migrations',
+          fromMigrationId: 'simulation',
+          appliedMigrations: [
+            {
+              id: 'simulation',
+              appliedAt: new Date(),
+            }
+          ]
         }
       ]
     };
@@ -458,13 +471,11 @@ export class SimulationApplier implements SimulationMigrationApplier {
       state.multiCollections = {};
     }
 
-    const collectionName = `${operation.multiCollectionName}_${operation.instanceName}`;
-    
-    if (this.options.strictValidation && !state.multiCollections[collectionName]) {
-      throw new Error(`Multi-collection instance ${collectionName} does not exist for dropping`);
+    if (this.options.strictValidation && !state.multiCollections[operation.collectionName]) {
+      throw new Error(`Multi-collection instance ${operation.collectionName} does not exist for dropping`);
     }
 
-    delete state.multiCollections[collectionName];
+    delete state.multiCollections[operation.collectionName];
     this.trackOperation(state, operation, 'reverse');
     return state;
   }
@@ -482,35 +493,33 @@ export class SimulationApplier implements SimulationMigrationApplier {
       state.multiCollections = {};
     }
 
-    const collectionName = `${operation.multiCollectionName}_${operation.instanceName}`;
-    
-    if (this.options.strictValidation && !state.multiCollections[collectionName]) {
-      throw new Error(`Multi-collection instance ${collectionName} does not exist for seeding`);
+    if (this.options.strictValidation && !state.multiCollections[operation.collectionName]) {
+      throw new Error(`Multi-collection instance ${operation.collectionName} does not exist for seeding`);
     }
 
     // Ensure collection exists (create if not in strict mode)
-    if (!state.multiCollections[collectionName]) {
-      state.multiCollections[collectionName] = { content: [] };
+    if (!state.multiCollections[operation.collectionName]) {
+      state.multiCollections[operation.collectionName] = { content: [] };
     }
 
     // Add documents to the multi-collection with _type field
     const documents = operation.documents.map(doc => {
-      const docObj: Record<string, unknown> = typeof doc === 'object' && doc !== null 
-        ? { ...doc as Record<string, unknown> } 
+      const docObj: Record<string, unknown> = typeof doc === 'object' && doc !== null
+        ? { ...doc as Record<string, unknown> }
         : { value: doc };
-      
+
       // Add _type field
       docObj._type = operation.typeName;
-      
+
       // Generate _id if missing (simple simulation)
       if (!docObj._id) {
         docObj._id = `${operation.typeName}:sim_${Math.random().toString(36).substring(2)}`;
       }
-      
+
       return docObj;
     });
-    
-    state.multiCollections[collectionName].content.push(...documents);
+
+    state.multiCollections[operation.collectionName].content.push(...documents);
     this.trackOperation(state, operation, 'apply');
     return state;
   }
@@ -528,8 +537,7 @@ export class SimulationApplier implements SimulationMigrationApplier {
       return state;
     }
 
-    const collectionName = `${operation.multiCollectionName}_${operation.instanceName}`;
-    const collection = state.multiCollections[collectionName];
+    const collection = state.multiCollections[operation.collectionName];
     
     if (!collection) return state;
 
@@ -570,22 +578,28 @@ export class SimulationApplier implements SimulationMigrationApplier {
       return state;
     }
 
-    // Find all instances of this multi-collection type
-    const instancePattern = `${operation.multiCollectionName}_`;
-    const matchingCollections = Object.keys(state.multiCollections).filter(name =>
-      name.startsWith(instancePattern)
-    );
+    // Find all instances of this multi-collection type by checking metadata
+    const matchingCollections = Object.keys(state.multiCollections).filter(name => {
+      const collection = state.multiCollections![name];
+      const infoDoc = collection.content.find((doc: Record<string, unknown>) => doc._type === '_information');
+      return infoDoc && infoDoc.collectionType === operation.collectionType;
+    });
 
     if (matchingCollections.length === 0) {
       // No instances found - create a test instance with mock data to validate the transform
-      const testInstanceName = `${operation.multiCollectionName}_test_simulation`;
+      const testInstanceName = `${operation.collectionType}_test_simulation`;
       const testDocument = {
         ...generateTestDocumentFromSchema(operation.schema),
         _type: operation.typeName,
       };
 
       state.multiCollections[testInstanceName] = {
-        content: [testDocument]
+        content: [{
+          _id: '_information',
+          _type: '_information',
+          collectionType: operation.collectionType,
+          createdAt: new Date(),
+        }, testDocument]
       };
 
       // Test the transformation with the mock document
@@ -646,15 +660,16 @@ export class SimulationApplier implements SimulationMigrationApplier {
       return state;
     }
 
-    // Find all instances of this multi-collection type
-    const instancePattern = `${operation.multiCollectionName}_`;
-    const matchingCollections = Object.keys(state.multiCollections).filter(name =>
-      name.startsWith(instancePattern)
-    );
+    // Find all instances of this multi-collection type by checking metadata
+    const matchingCollections = Object.keys(state.multiCollections).filter(name => {
+      const collection = state.multiCollections![name];
+      const infoDoc = collection.content.find((doc: Record<string, unknown>) => doc._type === '_information');
+      return infoDoc && infoDoc.collectionType === operation.collectionType;
+    });
 
     if (matchingCollections.length === 0) {
       // No instances found - create a test instance with mock data to validate the reverse transform
-      const testInstanceName = `${operation.multiCollectionName}_test_simulation`;
+      const testInstanceName = `${operation.collectionType}_test_simulation`;
 
       // First apply the forward transform to create a "new" document, then reverse it
       const originalTestDocument = {
@@ -706,6 +721,46 @@ export class SimulationApplier implements SimulationMigrationApplier {
         // Return other documents unchanged
         return doc;
       });
+    }
+
+    this.trackOperation(state, operation, 'reverse');
+    return state;
+  }
+
+  /**
+   * Applies an update indexes operation
+   * Note: In simulation mode, this is a no-op since indexes don't affect in-memory data
+   * 
+   * @private
+   * @param state - Current database state
+   * @param operation - Update indexes operation
+   * @returns Database state (unchanged)
+   */
+  private applyUpdateIndexes(state: SimulationDatabaseState, operation: UpdateIndexesRule): SimulationDatabaseState {
+    // In simulation mode, indexes don't affect the in-memory state
+    // We just validate that the collection exists
+    if (this.options.strictValidation && !state.collections[operation.collectionName]) {
+      throw new Error(`Collection ${operation.collectionName} does not exist for updating indexes`);
+    }
+
+    this.trackOperation(state, operation, 'apply');
+    return state;
+  }
+
+  /**
+   * Reverses an update indexes operation
+   * Note: In simulation mode, this is a no-op since indexes don't affect in-memory data
+   * 
+   * @private
+   * @param state - Current database state
+   * @param operation - Update indexes operation
+   * @returns Database state (unchanged)
+   */
+  private reverseUpdateIndexes(state: SimulationDatabaseState, operation: UpdateIndexesRule): SimulationDatabaseState {
+    // In simulation mode, reversing index operations is a no-op
+    // We just validate that the collection exists
+    if (this.options.strictValidation && !state.collections[operation.collectionName]) {
+      throw new Error(`Collection ${operation.collectionName} does not exist for reversing index update`);
     }
 
     this.trackOperation(state, operation, 'reverse');

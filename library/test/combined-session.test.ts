@@ -1,9 +1,10 @@
 import * as v from "../src/schema.ts";
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { assertEquals, assertRejects } from "@std/assert";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { withDatabase } from "./+shared.ts";
 import assert from "node:assert";
+import { createMultiCollectionModel } from "../src/multi-collection-model.ts";
 
 // Test schemas
 const userSchema = {
@@ -37,6 +38,8 @@ const catalogSchema = {
   }
 };
 
+const modelCatalog = createMultiCollectionModel("catalog", { schema: catalogSchema });
+
 Deno.test("Combined Session: Collection and Multi-Collection in same transaction", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create regular collections
@@ -44,7 +47,7 @@ Deno.test("Combined Session: Collection and Multi-Collection in same transaction
     const orders = await collection(db, "orders", orderSchema);
     
     // Create multi-collection
-    const catalog = await multiCollection(db, "catalog", catalogSchema);
+    const catalog = await multiCollection(db, "catalog", modelCatalog);
     
     // Use a transaction across all collections
     const results = await users.withSession(async () => {
@@ -116,7 +119,7 @@ Deno.test("Combined Session: Transaction rollback across collection types", asyn
     const orders = await collection(db, "orders", orderSchema);
     
     // Create multi-collection
-    const catalog = await multiCollection(db, "catalog", catalogSchema);
+    const catalog = await multiCollection(db, "catalog", modelCatalog);
     
     // Insert an initial product outside the transaction
     const existingProductId = await catalog.insertOne("product", {
@@ -196,7 +199,7 @@ Deno.test("Combined Session: Update operations across collection types", async (
     const orders = await collection(db, "orders", orderSchema);
     
     // Create multi-collection
-    const catalog = await multiCollection(db, "catalog", catalogSchema);
+    const catalog = await multiCollection(db, "catalog", modelCatalog);
     
     // Insert initial test data
     const initialData = await users.withSession(async () => {
@@ -277,7 +280,7 @@ Deno.test("Combined Session: Shared session context", async (t) => {
     const orders = await collection(db, "orders", orderSchema);
     
     // Create multi-collection
-    const catalog = await multiCollection(db, "catalog", catalogSchema);
+    const catalog = await multiCollection(db, "catalog", modelCatalog);
     
     // Test that the sessionContext is properly shared
     await users.withSession(async () => {

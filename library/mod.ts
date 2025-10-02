@@ -30,3 +30,4 @@ export * from "./src/multi-collection-model.ts";
 export * from "./src/mongodb.ts";
 export * from "./src/indexes.ts";
 export * from "./src/config.ts";
+export * from "./src/security.ts";

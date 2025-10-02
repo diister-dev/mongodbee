@@ -19,19 +19,19 @@ export const MULTI_COLLECTION_MIGRATIONS_TYPE = '_migrations';
  * Information document stored in each multi-collection instance
  */
 export type MultiCollectionInfo = {
+  _id: typeof MULTI_COLLECTION_INFO_TYPE;
   _type: typeof MULTI_COLLECTION_INFO_TYPE;
-  multiCollectionType: string;
-  instanceName: string;
+  collectionType: string;
   createdAt: Date;
-  createdByMigration: string;
-  schemas: Record<string, unknown>;
 };
 
 /**
  * Migrations document stored in each multi-collection instance
  */
 export type MultiCollectionMigrations = {
+  _id: typeof MULTI_COLLECTION_MIGRATIONS_TYPE;
   _type: typeof MULTI_COLLECTION_MIGRATIONS_TYPE;
+  fromMigrationId: string;
   appliedMigrations: Array<{
     id: string;
     appliedAt: Date;
@@ -42,12 +42,12 @@ export type MultiCollectionMigrations = {
  * Discovers all instances of a specific multi-collection type
  *
  * @param db - Database instance
- * @param multiCollectionType - The type of multi-collection to discover
- * @returns Array of instance names
+ * @param collectionType - The type/model of multi-collection to discover
+ * @returns Array of collection names
  */
 export async function discoverMultiCollectionInstances(
   db: Db,
-  multiCollectionType: string
+  collectionType: string
 ): Promise<string[]> {
   // List all collections in the database
   const collections = await db.listCollections().toArray();
@@ -70,8 +70,8 @@ export async function discoverMultiCollectionInstances(
         _type: MULTI_COLLECTION_INFO_TYPE,
       }) as MultiCollectionInfo | null;
 
-      if (info && info.multiCollectionType === multiCollectionType) {
-        instances.push(info.instanceName);
+      if (info && info.collectionType === collectionType) {
+        instances.push(collName); // Return the full collection name
       }
     } catch (_error) {
       // Silently skip collections that can't be read
@@ -86,16 +86,13 @@ export async function discoverMultiCollectionInstances(
  * Gets information about a multi-collection instance
  *
  * @param db - Database instance
- * @param multiCollectionName - Name of the multi-collection template
- * @param instanceName - Name of the specific instance
+ * @param collectionName - Full name of the collection
  * @returns The information document or null if not found
  */
 export async function getMultiCollectionInfo(
   db: Db,
-  multiCollectionName: string,
-  instanceName: string
+  collectionName: string
 ): Promise<MultiCollectionInfo | null> {
-  const collectionName = `${multiCollectionName}_${instanceName}`;
   const collection = db.collection(collectionName);
 
   return await collection.findOne({
@@ -107,36 +104,32 @@ export async function getMultiCollectionInfo(
  * Creates information document for a new multi-collection instance
  *
  * @param db - Database instance
- * @param multiCollectionName - Name of the multi-collection template
- * @param instanceName - Name of the specific instance
+ * @param collectionName - Full name of the collection
+ * @param collectionType - Type/model name of the multi-collection
  * @param migrationId - ID of the migration creating this instance (optional, defaults to 'unknown')
- * @param schemas - Schema snapshot
  */
 export async function createMultiCollectionInfo(
   db: Db,
-  multiCollectionName: string,
-  instanceName: string,
-  migrationId: string = 'unknown',
-  schemas: Record<string, unknown> = {}
+  collectionName: string,
+  collectionType: string,
+  migrationId: string = 'unknown'
 ): Promise<void> {
-  // Build collection name from multi-collection name and instance name
-  const collectionName = `${multiCollectionName}_${instanceName}`;
   const collection = db.collection(collectionName);
 
   const info: MultiCollectionInfo = {
+    _id: MULTI_COLLECTION_INFO_TYPE,
     _type: MULTI_COLLECTION_INFO_TYPE,
-    multiCollectionType: multiCollectionName,
-    instanceName,
+    collectionType,
     createdAt: new Date(),
-    createdByMigration: migrationId,
-    schemas,
   };
 
   await collection.insertOne(info as Record<string, unknown>);
 
   // Also create the migrations tracking document
   const migrations: MultiCollectionMigrations = {
+    _id: MULTI_COLLECTION_MIGRATIONS_TYPE,
     _type: MULTI_COLLECTION_MIGRATIONS_TYPE,
+    fromMigrationId: migrationId,
     appliedMigrations: [
       {
         id: migrationId,
@@ -152,18 +145,14 @@ export async function createMultiCollectionInfo(
  * Records a migration as applied to a multi-collection instance
  *
  * @param db - Database instance
- * @param multiCollectionName - Name of the multi-collection template
- * @param instanceName - Name of the specific instance
+ * @param collectionName - Full name of the collection
  * @param migrationId - ID of the migration
  */
 export async function recordMultiCollectionMigration(
   db: Db,
-  multiCollectionName: string,
-  instanceName: string,
+  collectionName: string,
   migrationId: string
 ): Promise<void> {
-  // Build collection name from multi-collection name and instance name
-  const collectionName = `${multiCollectionName}_${instanceName}`;
   const collection = db.collection(collectionName);
 
   await collection.updateOne(
@@ -183,16 +172,13 @@ export async function recordMultiCollectionMigration(
  * Gets all migrations applied to a multi-collection instance
  *
  * @param db - Database instance
- * @param multiCollectionName - Name of the multi-collection template
- * @param instanceName - Name of the specific instance
+ * @param collectionName - Full name of the collection
  * @returns The migrations document or null
  */
 export async function getMultiCollectionMigrations(
   db: Db,
-  multiCollectionName: string,
-  instanceName: string
+  collectionName: string
 ): Promise<MultiCollectionMigrations | null> {
-  const collectionName = `${multiCollectionName}_${instanceName}`;
   const collection = db.collection(collectionName);
 
   return await collection.findOne({
@@ -204,17 +190,22 @@ export async function getMultiCollectionMigrations(
  * Checks if a multi-collection instance exists
  *
  * @param db - Database instance
- * @param multiCollectionName - Name of the multi-collection template
- * @param instanceName - Name of the specific instance
+ * @param collectionName - Full name of the collection
  * @returns True if the instance exists
  */
 export async function multiCollectionInstanceExists(
   db: Db,
-  multiCollectionName: string,
-  instanceName: string
+  collectionName: string
 ): Promise<boolean> {
-  const info = await getMultiCollectionInfo(db, multiCollectionName, instanceName);
-  return info !== null;
+  try {
+    const collection = db.collection(collectionName);
+    const info = await collection.findOne({
+      _type: MULTI_COLLECTION_INFO_TYPE,
+    }) as MultiCollectionInfo | null;
+    return info !== null;
+  } catch (_error) {
+    return false;
+  }
 }
 
 /**
@@ -271,26 +262,31 @@ export function isInstanceCreatedAfterMigration(
  * Instances created AFTER a migration don't need it (they already have that schema).
  *
  * @param db - Database instance
- * @param multiCollectionName - Name of the multi-collection template
- * @param instanceName - Name of the specific instance
+ * @param collectionName - Full name of the collection
  * @param migrationId - Migration ID to check
  * @returns True if the instance should receive this migration
  */
 export async function shouldInstanceReceiveMigration(
   db: Db,
-  multiCollectionName: string,
-  instanceName: string,
+  collectionName: string,
   migrationId: string
 ): Promise<boolean> {
-  const info = await getMultiCollectionInfo(db, multiCollectionName, instanceName);
+  try {
+    const collection = db.collection(collectionName);
+    const migrations = await collection.findOne({
+      _type: MULTI_COLLECTION_MIGRATIONS_TYPE,
+    }) as MultiCollectionMigrations | null;
 
-  if (!info) {
-    // Instance doesn't exist, can't receive migration
+    if (!migrations) {
+      // No migrations document, can't receive migration
+      return false;
+    }
+
+    // Instance should receive migration if it was created before or at this migration
+    return !isInstanceCreatedAfterMigration(migrations.fromMigrationId, migrationId);
+  } catch (_error) {
     return false;
   }
-
-  // Instance should receive migration if it was created before or at this migration
-  return !isInstanceCreatedAfterMigration(info.createdByMigration, migrationId);
 }
 /**
  * Marks an existing collection as a multi-collection instance
@@ -302,12 +298,10 @@ export async function shouldInstanceReceiveMigration(
  * Make sure the collection already contains documents with `_type` fields.
  * 
  * @param db - Database instance
- * @param collectionName - Full name of the existing collection (e.g., "library_central")
- * @param multiCollectionName - Name of the multi-collection template (e.g., "library")
- * @param instanceName - Instance name (e.g., "central")
- * @param createdByMigrationId - The migration ID to mark as creation point (defaults to last applied migration)
- * @param schemas - Optional schemas to store in metadata
- * 
+ * @param collectionName - Full name of the existing collection
+ * @param collectionType - Type/model name of the multi-collection
+ * @param fromMigrationId - The migration ID to mark as creation point (defaults to last applied migration)
+ *
  * @example
  * ```typescript
  * // Adopt an existing collection that was created manually
@@ -315,18 +309,15 @@ export async function shouldInstanceReceiveMigration(
  *   db,
  *   "library_central",
  *   "library",
- *   "central",
- *   "2025_10_02_0201_H3KFNKY03S@initial"  // Mark as created at M1
+ *   "2025_10_02_0201_H3KFNKY03S@initial"
  * );
  * ```
  */
 export async function markAsMultiCollection(
   db: Db,
   collectionName: string,
-  multiCollectionName: string,
-  instanceName: string,
-  createdByMigrationId?: string,
-  schemas: Record<string, unknown> = {}
+  collectionType: string,
+  fromMigrationId?: string
 ): Promise<void> {
   const collection = db.collection(collectionName);
 
@@ -337,13 +328,12 @@ export async function markAsMultiCollection(
 
   if (existing) {
     throw new Error(
-      `Collection ${collectionName} is already marked as a multi-collection instance. ` +
-      `Use updateMultiCollectionInfo() to update metadata.`
+      `Collection ${collectionName} is already marked as a multi-collection instance.`
     );
   }
 
   // Get migration ID if not provided
-  let migrationId = createdByMigrationId;
+  let migrationId = fromMigrationId;
   if (!migrationId) {
     const { getLastAppliedMigration } = await import('./state.ts');
     const lastMigration = await getLastAppliedMigration(db);
@@ -353,9 +343,8 @@ export async function markAsMultiCollection(
   // Create the metadata
   await createMultiCollectionInfo(
     db,
-    multiCollectionName,
-    instanceName,
-    migrationId,
-    schemas
+    collectionName,
+    collectionType,
+    migrationId
   );
 }

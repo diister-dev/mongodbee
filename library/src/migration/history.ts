@@ -8,7 +8,8 @@
  * @module
  */
 
-import type { Db, Collection } from '../mongodb.ts';
+import { Collection } from "mongodb";
+import type { Db } from '../mongodb.ts';
 
 /**
  * Type of migration operation

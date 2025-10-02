@@ -1,9 +1,10 @@
 import * as v from "../src/schema.ts";
-import { assertEquals, assert, assertRejects } from "jsr:@std/assert";
+import { assertEquals, assert, assertRejects } from "@std/assert";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { withDatabase } from "./+shared.ts";
 import { ObjectId } from "mongodb";
+import { createMultiCollectionModel } from "../src/multi-collection-model.ts";
 
 // Simple test schemas
 const userSchema = {
@@ -33,6 +34,8 @@ const storeSchema = {
     productCount: v.number()
   }
 };
+
+const storeModel = createMultiCollectionModel("store", { schema: storeSchema });
 
 /**
  * This test set validates the behavior when operations occur both inside and outside
@@ -126,7 +129,7 @@ Deno.test("Session Concurrent: Regular collection operations inside and outside 
 Deno.test("Session Concurrent: MultiCollection operations inside and outside session", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create multi-collection
-    const store = await multiCollection(db, "store", storeSchema);
+    const store = await multiCollection(db, "store", storeModel);
     
     // Insert initial data outside any session
     const productId = await store.insertOne("product", {
@@ -209,7 +212,7 @@ Deno.test("Session Concurrent: Mixed collection types with concurrent operations
   await withDatabase(t.name, async (db) => {
     // Create regular collection and multi-collection
     const users = await collection(db, "users", userSchema);
-    const store = await multiCollection(db, "store", storeSchema);
+    const store = await multiCollection(db, "store", storeModel);
     
     // Insert initial data outside any session
     const userId = await users.insertOne({
@@ -300,7 +303,7 @@ Deno.test("Session Concurrent: Rollback shouldn't affect outside operations", as
   await withDatabase(t.name, async (db) => {
     // Create regular collection and multi-collection
     const users = await collection(db, "users", userSchema);
-    const store = await multiCollection(db, "store", storeSchema);
+    const store = await multiCollection(db, "store", storeModel);
     
     // Insert initial data outside any session
     const userId = await users.insertOne({

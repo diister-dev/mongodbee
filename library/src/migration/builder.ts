@@ -42,6 +42,7 @@ import type {
   CreateMultiCollectionInstanceRule,
   SeedMultiCollectionInstanceRule,
   TransformMultiCollectionTypeRule,
+  UpdateIndexesRule,
 } from './types.ts';
 
 /**
@@ -136,7 +137,7 @@ function createCollectionBuilder(
  */
 function createMultiCollectionTypeBuilder(
   state: MigrationState,
-  multiCollectionName: string,
+  collectionType: string,
   typeName: string,
   parentBuilder: MultiCollectionBuilder,
   options: MigrationBuilderOptions
@@ -144,11 +145,11 @@ function createMultiCollectionTypeBuilder(
   return {
     transform(rule: TransformRule): MultiCollectionTypeBuilder {
       // Extract schema for this specific type from options
-      const typeSchema = options.schemas?.multiCollections?.[multiCollectionName]?.[typeName];
+      const typeSchema = options.schemas?.multiCollections?.[collectionType]?.[typeName];
 
       const transformRule: TransformMultiCollectionTypeRule = {
         type: 'transform_multicollection_type',
-        multiCollectionName,
+        collectionType,
         typeName,
         up: rule.up,
         down: rule.down,
@@ -170,13 +171,13 @@ function createMultiCollectionTypeBuilder(
  */
 function createMultiCollectionBuilder(
   state: MigrationState,
-  multiCollectionName: string,
+  collectionType: string,
   mainBuilder: MigrationBuilder,
   options: MigrationBuilderOptions
 ): MultiCollectionBuilder {
   const builder: MultiCollectionBuilder = {
     type(typeName: string): MultiCollectionTypeBuilder {
-      return createMultiCollectionTypeBuilder(state, multiCollectionName, typeName, builder, options);
+      return createMultiCollectionTypeBuilder(state, collectionType, typeName, builder, options);
     },
 
     end(): MigrationBuilder {
@@ -192,23 +193,23 @@ function createMultiCollectionBuilder(
  */
 function createMultiCollectionInstanceBuilder(
   state: MigrationState,
-  multiCollectionName: string,
-  instanceName: string,
+  collectionName: string,
+  collectionType: string,
   mainBuilder: MigrationBuilder,
   options: MigrationBuilderOptions
 ): MultiCollectionInstanceBuilder {
   return {
     seedType(typeName: string, documents: readonly unknown[]): MultiCollectionInstanceBuilder {
       // Validate documents against schema if available, similar to collection seed
-      const schema = options.schemas.multiCollections?.[multiCollectionName]?.[typeName];
+      const schema = options.schemas.multiCollections?.[collectionType]?.[typeName];
       let validatedDocs: readonly unknown[] = documents;
-      
+
       if (schema) {
         validatedDocs = documents.map(doc => {
           const parseResult = v.safeParse(v.object(schema), doc);
           if (!parseResult.success) {
             throw new Error(
-              `Document in multi-collection ${multiCollectionName}.${typeName} failed schema validation: ${parseResult.issues.map(i => i.message).join(', ')}`
+              `Document in multi-collection ${collectionName}.${typeName} failed schema validation: ${parseResult.issues.map(i => i.message).join(', ')}`
             );
           }
           return parseResult.output;
@@ -217,8 +218,7 @@ function createMultiCollectionInstanceBuilder(
 
       const seedRule: SeedMultiCollectionInstanceRule = {
         type: 'seed_multicollection_instance',
-        multiCollectionName,
-        instanceName,
+        collectionName,
         typeName,
         documents: validatedDocs,
       };
@@ -268,11 +268,11 @@ function createMigrationBuilder(
       return createMultiCollectionBuilder(state, name, builder, options);
     },
 
-    createMultiCollectionInstance(multiCollectionName: string, instanceName: string): MultiCollectionInstanceBuilder {
+    newMultiCollection(collectionName: string, collectionType: string): MultiCollectionInstanceBuilder {
       const createRule: CreateMultiCollectionInstanceRule = {
         type: 'create_multicollection_instance',
-        multiCollectionName,
-        instanceName,
+        collectionName,
+        collectionType,
       };
 
       state.operations.push(createRule);
@@ -280,11 +280,50 @@ function createMigrationBuilder(
       // Creating a multi-collection instance makes the migration irreversible
       state.mark({ type: 'irreversible' });
 
-      return createMultiCollectionInstanceBuilder(state, multiCollectionName, instanceName, builder, options);
+      return createMultiCollectionInstanceBuilder(state, collectionName, collectionType, builder, options);
     },
 
-    multiCollectionInstance(multiCollectionName: string, instanceName: string): MultiCollectionInstanceBuilder {
-      return createMultiCollectionInstanceBuilder(state, multiCollectionName, instanceName, builder, options);
+    multiCollectionInstance(collectionName: string): MultiCollectionInstanceBuilder {
+      // Need to infer collection type from schemas - find which multi-collection model this belongs to
+      let collectionType: string | undefined;
+
+      if (options.schemas?.multiCollections) {
+        // Try to match collection name pattern with model names
+        for (const modelName of Object.keys(options.schemas.multiCollections)) {
+          // Simple heuristic: if collection name starts with model name, it's probably that type
+          if (collectionName.startsWith(modelName + '_') || collectionName === modelName) {
+            collectionType = modelName;
+            break;
+          }
+        }
+      }
+
+      if (!collectionType) {
+        // Fallback: use collection name itself as type
+        collectionType = collectionName;
+      }
+
+      return createMultiCollectionInstanceBuilder(state, collectionName, collectionType, builder, options);
+    },
+
+    updateIndexes(collectionName: string): MigrationBuilder {
+      // Extract schema for this collection from options
+      const collectionSchema = options.schemas?.collections?.[collectionName];
+
+      if (!collectionSchema) {
+        throw new Error(`Cannot update indexes for ${collectionName}: schema not found in migration.schemas.collections`);
+      }
+
+      const updateRule: UpdateIndexesRule = {
+        type: 'update_indexes',
+        collectionName,
+        schema: collectionSchema,
+      };
+
+      state.operations.push(updateRule);
+
+      // Updating indexes is reversible (can drop and recreate)
+      return builder;
     },
 
     compile(): MigrationState {

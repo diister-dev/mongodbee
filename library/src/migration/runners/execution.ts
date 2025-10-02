@@ -27,22 +27,9 @@ import type {
   MigrationState,
   MigrationApplier,
   MigrationRule,
-  MigrationBuilder,
 } from '../types.ts';
 import type { MigrationSystemConfig } from '../config/types.ts';
-
-/**
- * Creates a mock migration builder for executing existing migration definitions
- * Since we're executing pre-defined migrations, we need a builder that can be passed
- * to the migrate function but doesn't actually build anything new.
- */
-function createMockBuilder(): MigrationBuilder {
-  return {
-    createCollection: () => { throw new Error('Cannot create collections during execution'); },
-    collection: () => { throw new Error('Cannot modify collections during execution'); },
-    compile: () => { throw new Error('Cannot compile during execution'); },
-  } as MigrationBuilder;
-}
+import { migrationBuilder } from '../builder.ts';
 
 /**
  * Context for migration execution
@@ -324,16 +311,24 @@ async function executeOperationWithRetry(
       logger?.debug(`Executing operation ${operation.type}`, { attempt, maxAttempts });
       
       if (config.operationTimeout) {
-        // Create a timeout promise
-        const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`Operation timeout after ${config.operationTimeout}ms`)), config.operationTimeout)
-        );
+        // Create a timeout promise with cleanup
+        let timeoutId: number | undefined;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => reject(new Error(`Operation timeout after ${config.operationTimeout}ms`)), config.operationTimeout);
+        });
         
-        // Race between operation and timeout
-        await Promise.race([
-          applier.applyOperation(operation),
-          timeoutPromise,
-        ]);
+        try {
+          // Race between operation and timeout
+          await Promise.race([
+            applier.applyOperation(operation),
+            timeoutPromise,
+          ]);
+        } finally {
+          // Always clear the timeout to prevent leaks
+          if (timeoutId !== undefined) {
+            clearTimeout(timeoutId);
+          }
+        }
       } else {
         await applier.applyOperation(operation);
       }
@@ -396,8 +391,9 @@ export function createMigrationRunner(
       logger.info(`Starting migration: ${definition.name}`, { id: definition.id });
       
       try {
-        // Build migration state
-        const state = definition.migrate(createMockBuilder());
+        // Build migration state by calling migrate with a real builder
+        const builder = migrationBuilder({ schemas: definition.schemas });
+        const state = definition.migrate(builder);
         const operations = state.operations;
         
         // Create progress tracker
@@ -413,7 +409,7 @@ export function createMigrationRunner(
         if (mergedConfig.validateBeforeExecution && context.validator) {
           logger.info('Validating migration before execution');
           progress.phase = 'validation';
-          context.onProgress?.(progress);
+          context.onProgress?.({ ...progress });
           
           const validation = await context.validator.validateMigration(definition);
           
@@ -438,7 +434,7 @@ export function createMigrationRunner(
         
         // Execution phase
         progress.phase = 'execution';
-        context.onProgress?.(progress);
+        context.onProgress?.({ ...progress });
         
         if (!mergedConfig.dryRun) {
           logger.info(`Executing ${operations.length} operations`);
@@ -447,7 +443,7 @@ export function createMigrationRunner(
             const operation = operations[i];
             progress.currentOperation = operation;
             progress.completedOperations = i;
-            context.onProgress?.(progress);
+            context.onProgress?.({ ...progress });
             
             // Pre-operation callback
             await context.onOperation?.(operation, 'before', context);
@@ -500,7 +496,7 @@ export function createMigrationRunner(
         
         progress.phase = errors.length > 0 ? 'error' : 'completed';
         progress.completedOperations = appliedOperations;
-        context.onProgress?.(progress);
+        context.onProgress?.({ ...progress });
         
         const success = errors.length === 0;
         const executionTime = Date.now() - startTime;
@@ -532,10 +528,12 @@ export function createMigrationRunner(
         errors.push(`Migration execution failed: ${executionError.message}`);
         logger.error('Migration execution failed', executionError);
         
+        const builder = migrationBuilder({ schemas: definition.schemas });
+        
         return {
           success: false,
           migration: definition,
-          finalState: definition.migrate(createMockBuilder()),
+          finalState: definition.migrate(builder),
           appliedOperations,
           executionTime: Date.now() - startTime,
           validation: { success: false, errors, warnings },
@@ -574,7 +572,8 @@ export function createMigrationRunner(
       logger.info(`Starting rollback of migration: ${definition.name}`);
       
       // Build the migration state to get operations
-      const state = definition.migrate(createMockBuilder());
+      const builder = migrationBuilder({ schemas: definition.schemas });
+      const state = definition.migrate(builder);
       const operations = state.operations.slice().reverse(); // Reverse order for rollback
       
       // Create a temporary definition for rollback

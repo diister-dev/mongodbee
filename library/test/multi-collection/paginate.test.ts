@@ -1,21 +1,26 @@
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertExists } from "jsr:@std/assert";
+import { assertEquals, assertExists } from "@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
+import { createMultiCollectionModel } from "../../src/multi-collection-model.ts";
 
 Deno.test("Multi-collection paginate basic functionality", async (t) => {
   await withDatabase(t.name, async (db) => {
-    const catalog = await multiCollection(db, "catalog", {
-      product: {
-        name: v.string(),
-        price: v.number(),
-        category: v.string()
-      },
-      category: {
-        name: v.string(),
-        description: v.string()
+    const catalogModel = createMultiCollectionModel("catalog", {
+      schema: {
+        product: {
+          name: v.string(),
+          price: v.number(),
+          category: v.string()
+        },
+        category: {
+          name: v.string(),
+          description: v.string()
+        }
       }
     });
+
+    const catalog = await multiCollection(db, "catalog", catalogModel);
 
     // Insert test categories
     const categoriesData = [];
@@ -71,16 +76,20 @@ Deno.test("Multi-collection paginate basic functionality", async (t) => {
 
 Deno.test("Multi-collection paginate with afterId", async (t) => {
   await withDatabase(t.name, async (db) => {
-    const catalog = await multiCollection(db, "catalog", {
-      product: {
-        name: v.string(),
-        price: v.number()
-      },
-      user: {
-        name: v.string(),
-        email: v.string()
+    const catalogModel = createMultiCollectionModel("catalog", {
+      schema: {
+        product: {
+          name: v.string(),
+          price: v.number()
+        },
+        user: {
+          name: v.string(),
+          email: v.string()
+        }
       }
     });
+
+    const catalog = await multiCollection(db, "catalog", catalogModel);
 
     // Insert products
     const productIds = [];
@@ -141,12 +150,16 @@ Deno.test("Multi-collection paginate with afterId", async (t) => {
 
 Deno.test("Multi-collection paginate with beforeId", async (t) => {
   await withDatabase(t.name, async (db) => {
-    const catalog = await multiCollection(db, "catalog", {
-      product: {
-        name: v.string(),
-        price: v.number()
+    const catalogModel = createMultiCollectionModel("catalog", {
+      schema: {
+        product: {
+          name: v.string(),
+          price: v.number()
+        }
       }
     });
+
+    const catalog = await multiCollection(db, "catalog", catalogModel);
 
     // Insert products
     for (let i = 1; i <= 10; i++) {
@@ -179,13 +192,17 @@ Deno.test("Multi-collection paginate with beforeId", async (t) => {
 
 Deno.test("Multi-collection paginate with filter", async (t) => {
   await withDatabase(t.name, async (db) => {
-    const catalog = await multiCollection(db, "catalog", {
-      product: {
-        name: v.string(),
-        price: v.number(),
-        category: v.string()
+    const catalogModel = createMultiCollectionModel("catalog", {
+      schema: {
+        product: {
+          name: v.string(),
+          price: v.number(),
+          category: v.string()
+        }
       }
     });
+
+    const catalog = await multiCollection(db, "catalog", catalogModel);
 
     // Insert products with different categories
     for (let i = 1; i <= 20; i++) {
@@ -231,12 +248,16 @@ Deno.test("Multi-collection paginate with filter", async (t) => {
 
 Deno.test("Multi-collection paginate with sorting", async (t) => {
   await withDatabase(t.name, async (db) => {
-    const catalog = await multiCollection(db, "catalog", {
-      product: {
-        name: v.string(),
-        price: v.number()
+    const catalogModel = createMultiCollectionModel("catalog", {
+      schema: {
+        product: {
+          name: v.string(),
+          price: v.number()
+        }
       }
     });
+
+    const catalog = await multiCollection(db, "catalog", catalogModel);
 
     // Insert products in random order
     const products = [
@@ -275,16 +296,20 @@ Deno.test("Multi-collection paginate with sorting", async (t) => {
 
 Deno.test("Multi-collection paginate with invalid ID format", async (t) => {
   await withDatabase(t.name, async (db) => {
-    const catalog = await multiCollection(db, "catalog", {
-      product: {
-        name: v.string(),
-        price: v.number()
-      },
-      user: {
-        name: v.string(),
-        email: v.string()
+    const catalogModel = createMultiCollectionModel("catalog", {
+      schema: {
+        product: {
+          name: v.string(),
+          price: v.number()
+        },
+        user: {
+          name: v.string(),
+          email: v.string()
+        }
       }
     });
+
+    const catalog = await multiCollection(db, "catalog", catalogModel);
 
     // Insert some data
     await catalog.insertOne("product", { name: "Product 1", price: 100 });
@@ -310,16 +335,20 @@ Deno.test("Multi-collection paginate with invalid ID format", async (t) => {
 
 Deno.test("Multi-collection paginate with empty results", async (t) => {
   await withDatabase(t.name, async (db) => {
-    const catalog = await multiCollection(db, "catalog", {
-      product: {
-        name: v.string(),
-        price: v.number()
-      },
-      user: {
-        name: v.string(),
-        email: v.string()
+    const catalogModel = createMultiCollectionModel("catalog", {
+      schema: {
+        product: {
+          name: v.string(),
+          price: v.number()
+        },
+        user: {
+          name: v.string(),
+          email: v.string()
+        }
       }
     });
+
+    const catalog = await multiCollection(db, "catalog", catalogModel);
 
     // Test empty collection
     const emptyProducts = await catalog.paginate("product", {}, { limit: 10 });
@@ -340,12 +369,16 @@ Deno.test("Multi-collection paginate with empty results", async (t) => {
 
 Deno.test("Multi-collection paginate with limit boundary conditions", async (t) => {
   await withDatabase(t.name, async (db) => {
-    const catalog = await multiCollection(db, "catalog", {
-      product: {
-        name: v.string(),
-        price: v.number()
+    const catalogModel = createMultiCollectionModel("catalog", {
+      schema: {
+        product: {
+          name: v.string(),
+          price: v.number()
+        }
       }
     });
+
+    const catalog = await multiCollection(db, "catalog", catalogModel);
 
     // Insert 5 products
     for (let i = 1; i <= 5; i++) {

@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { assertEquals, assertRejects } from "@std/assert";
 import { createQueueSystem } from "../src/utils/queue.ts";
 
 Deno.test("MongoOperationQueue - Basic functionality", async () => {

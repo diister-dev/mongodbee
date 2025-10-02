@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertExists } from "jsr:@std/assert";
+import { assert, assertEquals, assertExists } from "@std/assert";
 import { SchemaNavigator, type SchemaVisitor, type NavigationNode, type VisitResult } from "../src/schema-navigator.ts";
 import * as v from "../src/schema.ts";
 

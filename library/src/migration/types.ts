@@ -56,8 +56,8 @@ export type TransformCollectionRule<T = Record<string, unknown>, U = Record<stri
  */
 export type CreateMultiCollectionInstanceRule = {
   type: 'create_multicollection_instance';
-  multiCollectionName: string;
-  instanceName: string;
+  collectionName: string;
+  collectionType: string;
 };
 
 /**
@@ -65,8 +65,7 @@ export type CreateMultiCollectionInstanceRule = {
  */
 export type SeedMultiCollectionInstanceRule = {
   type: 'seed_multicollection_instance';
-  multiCollectionName: string;
-  instanceName: string;
+  collectionName: string;
   typeName: string;
   documents: readonly unknown[];
 };
@@ -76,12 +75,22 @@ export type SeedMultiCollectionInstanceRule = {
  */
 export type TransformMultiCollectionTypeRule<T = Record<string, unknown>, U = Record<string, unknown>> = {
   type: 'transform_multicollection_type';
-  multiCollectionName: string;
+  collectionType: string;
   typeName: string;
   up: (doc: T) => U;
   down: (doc: U) => T;
   /** Optional Valibot schema for the type - used to generate mock data for simulation */
   schema?: unknown;
+};
+
+/**
+ * Rule for updating indexes on an existing collection
+ */
+export type UpdateIndexesRule = {
+  type: 'update_indexes';
+  collectionName: string;
+  /** Valibot schema containing index definitions */
+  schema: unknown;
 };
 
 /**
@@ -93,7 +102,8 @@ export type MigrationRule =
   | TransformCollectionRule
   | CreateMultiCollectionInstanceRule
   | SeedMultiCollectionInstanceRule
-  | TransformMultiCollectionTypeRule;
+  | TransformMultiCollectionTypeRule
+  | UpdateIndexesRule;
 
 /**
  * Transformation rule for bidirectional document changes
@@ -249,19 +259,25 @@ export interface MigrationBuilder {
 
   /**
    * Creates a new instance of a multi-collection
-   * @param multiCollectionName - The name of the multi-collection template
-   * @param instanceName - The name for this specific instance
+   * @param collectionName - The full name of the collection
+   * @param collectionType - The type/model of the multi-collection
    * @returns An instance builder for the new instance
    */
-  createMultiCollectionInstance(multiCollectionName: string, instanceName: string): MultiCollectionInstanceBuilder;
+  newMultiCollection(collectionName: string, collectionType: string): MultiCollectionInstanceBuilder;
 
   /**
    * Configures an existing multi-collection instance
-   * @param multiCollectionName - The name of the multi-collection template
-   * @param instanceName - The name of the instance
+   * @param collectionName - The full name of the collection
    * @returns An instance builder for the existing instance
    */
-  multiCollectionInstance(multiCollectionName: string, instanceName: string): MultiCollectionInstanceBuilder;
+  multiCollectionInstance(collectionName: string): MultiCollectionInstanceBuilder;
+
+  /**
+   * Updates indexes on an existing collection to match the schema
+   * @param collectionName - The name of the collection
+   * @returns The main migration builder for method chaining
+   */
+  updateIndexes(collectionName: string): MigrationBuilder;
 
   /**
    * Compiles the migration into its final executable state

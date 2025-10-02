@@ -1,11 +1,12 @@
 import * as v from "../src/schema.ts";
-import { assertEquals, assertExists, assertRejects } from "jsr:@std/assert";
+import { assertEquals, assertExists, assertRejects } from "@std/assert";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { withIndex } from "../src/indexes.ts";
 import { withDatabase } from "./+shared.ts";
 import { MongoServerError } from "mongodb";
 import { slug } from "@diister/mongodbee/schema";
+import { createMultiCollectionModel } from "../src/multi-collection-model.ts";
 
 Deno.test("withIndex - Basic index creation", async (t) => {
   await withDatabase(t.name, async (db) => {
@@ -171,7 +172,9 @@ Deno.test("withIndex - Multi-collection with type scoped indexes", async (t) => 
     };
 
     // Create multi-collection with unique indexes on different fields per type
-    const catalog = await multiCollection(db, "catalog", catalogSchema);
+    const catalog = await multiCollection(db, "catalog", createMultiCollectionModel("catalog", {
+      schema: catalogSchema
+    }));
 
     // Insert products with unique SKUs
     await catalog.insertOne("product", {
@@ -246,7 +249,7 @@ Deno.test("withIndex - Multi-collection with scoped indexes by type", async (e) 
       }
     };
 
-    const catalog = await multiCollection(db, "catalog", catalogSchema);
+    const catalog = await multiCollection(db, "catalog", createMultiCollectionModel("catalog", { schema: catalogSchema }));
 
     // Insert product with unique slug
     await catalog.insertOne("products", {
@@ -327,7 +330,7 @@ Deno.test("withIndex - Multi-collection with scoped deep indexes by type", async
       }
     };
 
-    const catalog = await multiCollection(db, "catalog", catalogSchema);
+    const catalog = await multiCollection(db, "catalog", createMultiCollectionModel("catalog", { schema: catalogSchema }));
 
     // Insert product with unique slug
     await catalog.insertOne("products", {
@@ -411,7 +414,7 @@ Deno.test("withIndex - Automatic type field in multi-collection", async (t) => {
       }
     };
 
-    const catalog = await multiCollection(db, "catalog", catalogSchema);
+    const catalog = await multiCollection(db, "catalog", createMultiCollectionModel("catalog", { schema: catalogSchema }));
 
     // Insert documents
     await catalog.insertOne("product", {

@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { checkTransactionEnabled, getSessionContext, createSessionContext } from "../src/session.ts";
 import { withDatabase } from "./+shared.ts";
 import type { ClientSession as _ClientSession } from "../mod.ts";
