@@ -139,8 +139,10 @@ function loadFromEnvironment(prefix = 'MONGODBEE_'): Partial<MigrationSystemConf
   
   if (dbUri && dbName) {
     config.database = {
-      uri: dbUri,
-      database: dbName,
+      connection: {
+        uri: dbUri,
+      },
+      name: dbName,
     };
     
     // Optional database options
@@ -148,7 +150,7 @@ function loadFromEnvironment(prefix = 'MONGODBEE_'): Partial<MigrationSystemConf
     const maxPoolSize = Deno.env.get(`${prefix}DB_MAX_POOL_SIZE`);
     
     if (connectTimeout || maxPoolSize) {
-      config.database.options = {
+      config.database.connection.options = {
         ...(connectTimeout && { connectTimeoutMS: parseInt(connectTimeout, 10) }),
         ...(maxPoolSize && { maxPoolSize: parseInt(maxPoolSize, 10) }),
       };

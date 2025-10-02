@@ -7,13 +7,14 @@
     <strong>A type-safe MongoDB wrapper with built-in validation powered by Valibot</strong>
   </p>
   <p align="center">
-    <a href="#key-features">Features</a> •
-    <a href="#installation">Installation</a> •
-    <a href="#usage">Usage</a> •
-    <a href="#indexes-with-withindex">Indexing</a> •
-    <a href="#examples">Examples</a> •
-    <a href="#transactions">Transactions</a> •
-    <a href="#project-status">Status</a>
+    <a href="#-vision--philosophy">Vision</a> •
+    <a href="#-key-features">Features</a> •
+    <a href="#-installation">Installation</a> •
+    <a href="#-usage">Usage</a> •
+    <a href="#-migration-system">Migrations</a> •
+    <a href="#-transactions">Transactions</a> •
+    <a href="#-indexes-with-withindex">Indexing</a> •
+    <a href="#-project-status">Status</a>
   </p>
   
   <p align="center">
@@ -26,16 +27,49 @@
   </p>
 </div>
 
-> ⚠️ **Project Under Development**: MongoDBee is in early development. The MultiCollection API is stable, but other features may be incomplete. See the [Project Status](#project-status) section for details.
+> ✅ **Stable Core Features**: The MultiCollection API, Multi-Collection Models, and Migration System are production-ready. Other features are in active development. See the [Project Status](#-project-status) section for details.
+
+## 💡 Vision & Philosophy
+
+MongoDBee is built around a simple but powerful philosophy: **schemas are your source of truth, and migrations are how you evolve them over time**.
+
+### The MongoDBee Mindset
+
+**Schema-First Design**: Define your data structure with Valibot schemas before writing any database code. Your TypeScript types are automatically inferred from these schemas, ensuring perfect alignment between runtime validation and compile-time type checking.
+
+**Multi-Collection Pattern**: Instead of creating dozens of MongoDB collections, group related document types into logical multi-collections. This reduces collection sprawl, simplifies queries, and maintains type safety across different document types in the same collection.
+
+**Migration-Driven Evolution**: Never modify your database structure manually. Use migrations to track every schema change, making your database evolution reproducible, reversible, and auditable. Rollback any migration with confidence.
+
+**Type Safety Everywhere**: From queries to updates, from aggregations to transactions - every operation is type-checked. If it compiles, it's type-safe. No more runtime surprises from typos or wrong field types.
+
+**Protection by Default**: MongoDBee protects you from common mistakes. Accidental `deleteMany()` without filters? Blocked. Unique constraint violations? Caught at the schema level. The library is designed to prevent data loss and maintain integrity.
+
+### When to Use MongoDBee
+
+✅ **Perfect For**:
+- Applications that need strong type safety with MongoDB
+- Projects that value schema validation and data integrity
+- Teams that want reproducible database changes through migrations
+- Systems that benefit from grouping related document types
+- Codebases that prefer declarative schemas over imperative code
+
+❌ **Not Ideal For**:
+- Completely schema-less, dynamic data structures
+- Projects that never need to track database evolution
+- Simple scripts or prototypes where type safety isn't critical
+- Applications that require maximum MongoDB driver flexibility
 
 ## 🌟 Key Features
 
 - **🔒 Type-Safe**: Strong TypeScript support with automatic type inference
 - **✅ Validation**: Define schemas with Valibot for runtime and database-level validation
 - **🏗️ Multi-Collection**: Store different document types in a single MongoDB collection with type-safety
+- **🔄 Migration System**: Built-in migration framework with CLI for schema evolution and rollbacks
+- **📦 Multi-Collection Models**: Reusable model definitions for consistent multi-collection structures
 - **⚡ Transactions**: Built-in transaction support with AsyncLocalStorage
 - **🛡️ Data Protection**: Built-in safeguards against accidental data deletion
-- **🔄 Change Streams**: Type-safe event listeners for collection changes
+- **� Change Streams**: Type-safe event listeners for collection changes
 - **🔗 Dot Notation**: Support for nested object operations (MultiCollection API)
 - **📊 Indexing**: Declarative index creation with `withIndex()` for performance optimization
 
@@ -47,6 +81,9 @@
 // Import from JSR
 import { collection, multiCollection, withIndex } from "jsr:@diister/mongodbee";
 import * as v from "jsr:@diister/mongodbee/schema";
+
+// For migrations
+import { migrationBuilder } from "jsr:@diister/mongodbee/migration";
 ```
 
 ### Node.js
@@ -59,6 +96,9 @@ npm install mongodbee mongodb
 // Import in Node.js
 import { collection, multiCollection, withIndex } from "mongodbee";
 import * as v from "mongodbee/schema";
+
+// For migrations
+import { migrationBuilder } from "mongodbee/migration";
 ```
 
 ## 🚀 Usage
@@ -134,7 +174,287 @@ const electronics = await catalog.findOne("category", { name: "Electronics" });
 const products = await catalog.find("product", { category: electronics._id });
 ```
 
-> ⚠️ **Important Note**: MultiCollection uses a single MongoDB collection to store different document types, not multiple collections. This provides a more efficient storage model while maintaining type safety. Each document automatically gets a `type` field to identify its document type.
+> ⚠️ **Important Note**: MultiCollection uses a single MongoDB collection to store different document types, not multiple collections. This provides a more efficient storage model while maintaining type safety. Each document automatically gets a `_type` field to identify its document type.
+
+## 🔄 Migration System
+
+MongoDBee includes a **powerful migration framework** that lets you evolve your database schema over time with full type safety and rollback support. Migrations are the recommended way to manage schema changes in production.
+
+### Why Migrations?
+
+- **Reproducible**: Same migrations produce the same database state across environments
+- **Reversible**: Every migration can be rolled back with confidence
+- **Auditable**: Full history of all schema changes
+- **Type-Safe**: Migrations are validated before applying to catch errors early
+- **Multi-Collection Native**: First-class support for multi-collection operations
+
+### Quick Start
+
+Initialize migrations in your project:
+
+```bash
+# Deno
+deno task migrate:init
+
+# Or directly
+deno run --allow-read --allow-write --allow-net --allow-env jsr:@diister/mongodbee/migration/cli init
+```
+
+This creates a `migrations/` folder and `mongodbee.config.ts` configuration file.
+
+### Creating Migrations
+
+Generate a new migration file:
+
+```bash
+deno task migrate:generate add_user_fields
+```
+
+Edit the generated migration file:
+
+```typescript
+import { migrationBuilder } from "@diister/mongodbee/migration";
+import * as v from "@diister/mongodbee/schema";
+
+export async function migrate(migration: ReturnType<typeof migrationBuilder>) {
+  return migration
+    // Create a new collection
+    .createCollection("users", {
+      username: v.string(),
+      email: v.string(),
+      createdAt: v.date()
+    })
+    
+    // Create a multi-collection with multiple document types
+    .newMultiCollection("catalog", "product")
+      .seedType("product", [
+        { name: "Laptop", price: 999.99, stock: 10 }
+      ])
+      .end()
+    
+    // Transform all documents of a specific type across all instances
+    .multiCollection("product")
+      .type("product")
+        .transform({
+          up: (doc) => ({ ...doc, featured: false }),
+          down: (doc) => {
+            const { featured, ...rest } = doc;
+            return rest;
+          }
+        })
+        .end()
+      .end()
+    
+    .compile();
+}
+```
+
+### Applying Migrations
+
+```bash
+# Apply all pending migrations
+deno task migrate:apply
+
+# Check migration status
+deno task migrate:status
+
+# View migration history
+deno task migrate:history
+
+# Rollback the last migration
+deno task migrate:rollback
+```
+
+### Multi-Collection Models
+
+For consistency across your application, define reusable multi-collection models:
+
+```typescript
+// models/comments.ts
+import { createMultiCollectionModel } from "@diister/mongodbee";
+import * as v from "@diister/mongodbee/schema";
+
+export const commentsModel = createMultiCollectionModel({
+  user_comment: {
+    content: v.string(),
+    userId: v.string(),
+    createdAt: v.date()
+  },
+  admin_comment: {
+    content: v.string(),
+    adminId: v.string(),
+    pinned: v.boolean()
+  }
+});
+```
+
+Use the model in migrations:
+
+```typescript
+import { commentsModel } from "./models/comments.ts";
+
+export async function migrate(migration) {
+  return migration
+    .newMultiCollectionFromModel("comments_main", commentsModel)
+    .compile();
+}
+```
+
+Use the model in your application:
+
+```typescript
+import { newMultiCollection } from "@diister/mongodbee";
+import { commentsModel } from "./models/comments.ts";
+
+// Create instances with the same schema
+const blogComments = await newMultiCollection(db, "blog_comments", commentsModel);
+const forumComments = await newMultiCollection(db, "forum_comments", commentsModel);
+
+// Both instances share the same type-safe schema
+await blogComments.insertOne("user_comment", {
+  content: "Great post!",
+  userId: "user123",
+  createdAt: new Date()
+});
+```
+
+### Migration Operations
+
+MongoDBee supports a comprehensive set of migration operations:
+
+**Collections**:
+- `createCollection(name, schema)` - Create a new collection
+- `dropCollection(name)` - Remove a collection
+- `renameCollection(oldName, newName)` - Rename a collection
+
+**Multi-Collections**:
+- `newMultiCollection(name, type)` - Create a multi-collection instance
+- `markAsMultiCollection(name, type)` - Convert existing collection to multi-collection
+- `multiCollection(type).type(name).transform()` - Transform documents across ALL instances
+
+**Data**:
+- `seedCollection(name, docs)` - Insert seed data
+- `seedType(type, docs)` - Insert seed data for a specific document type
+- `transform({ up, down })` - Bidirectional data transformation
+
+**Schema**:
+- `updateIndexes(name, schema)` - Update collection indexes
+- `customOperation({ apply, reverse })` - Custom migration logic
+
+### Advanced: Marking Existing Collections
+
+If you have an existing collection that follows multi-collection structure but lacks metadata:
+
+```typescript
+export async function migrate(migration) {
+  return migration
+    // Mark existing collection as multi-collection
+    .markAsMultiCollection("legacy_events", "events")
+    .compile();
+}
+```
+
+This creates the necessary metadata documents without modifying existing data.
+
+### Application Startup Validation
+
+MongoDBee provides validation functions to check your database state at application startup. This is **critical for production** to ensure everything is in sync.
+
+#### Complete Validation (Recommended)
+
+The simplest and most comprehensive approach - validates both migrations and schemas:
+
+```typescript
+import { validateDatabaseState } from "@diister/mongodbee/migration";
+
+// At application startup
+const db = client.db("myapp");
+const env = Deno.env.get("ENV") || "development";
+
+const result = await validateDatabaseState(db, { env });
+
+if (!result.isValid) {
+  console.error("❌ Database validation failed!");
+  console.error(result.message);
+  
+  // Log specific issues
+  for (const issue of result.issues) {
+    console.error(`  - ${issue}`);
+  }
+  
+  if (env === "production") {
+    throw new Error("Database validation failed - cannot start application");
+  }
+} else {
+  console.log("✓ Database validation passed");
+}
+```
+
+This single function checks:
+- ✅ All migrations are applied
+- ✅ Application schemas match database structure
+- ✅ Environment-aware error reporting
+
+#### Individual Validation Functions
+
+For more granular control, you can use individual validation functions:
+
+**Migration Status Validation**:
+
+```typescript
+import { 
+  checkMigrationStatus,
+  isLastMigrationApplied,
+  validateMigrationsForEnv 
+} from "@diister/mongodbee/migration";
+
+// Option 1: Check detailed migration status
+const status = await checkMigrationStatus(db);
+if (!status.isUpToDate) {
+  console.warn(`⚠️ ${status.message}`);
+  console.warn(`Pending migrations: [${status.pendingMigrations.join(', ')}]`);
+}
+
+// Option 2: Simple boolean check
+const upToDate = await isLastMigrationApplied(db);
+if (!upToDate) {
+  throw new Error("Latest migration not applied");
+}
+
+// Option 3: Environment-aware (warns in dev, throws in prod)
+await validateMigrationsForEnv(db, env);
+```
+
+**Schema Alignment Validation**:
+
+```typescript
+import { checkSchemaAlignment } from "@diister/mongodbee/migration";
+
+const schemaCheck = await checkSchemaAlignment(db);
+
+if (!schemaCheck.isAligned) {
+  console.error(`❌ ${schemaCheck.message}`);
+  
+  for (const error of schemaCheck.errors) {
+    console.error(
+      `  ${error.collection}.${error.field}: ` +
+      `expected ${error.expected}, got ${error.actual}`
+    );
+  }
+}
+```
+
+#### Why This Matters
+
+- **Prevents runtime errors** from schema mismatches
+- **Catches forgotten migrations** before production issues
+- **Detects schema drift** when schemas.ts changed without migrations
+- **Enforces deployment discipline** - no deploys without proper database state
+- **Clear feedback** to developers about what's wrong
+
+### Learn More
+
+For complete migration documentation, see [MIGRATIONS.md](./doc/MIGRATIONS.md).
 
 ## 📊 Indexes with `withIndex`
 
@@ -380,27 +700,33 @@ Current implementation status by feature:
 
 | Feature | Status | Notes |
 |---------|--------|-------|
+| Migration System | ✅ Complete | Full CLI with apply/rollback, multi-collection transforms, version tracking |
 | MultiCollection API | ✅ Complete | Full implementation with multiple document types in a single collection |
+| MultiCollection Models | ✅ Complete | Reusable model definitions with `createMultiCollectionModel()` |
 | Transactions | ✅ Complete | Session-based transaction support with AsyncLocalStorage |
 | Change Streams | ✅ Complete | Real-time data change events and listeners |
-| Index Management | ⚠️ Partial | `withIndex()` function implemented, automatic index creation works |
+| Index Management | ✅ Complete | `withIndex()` with automatic index creation and multi-collection scoping |
 | Basic Collection API | ⚠️ Partial | Core functionality works, some operations need improved validation |
 | Type Inference | ⚠️ Partial | Good typing for basic operations, limited for advanced operations |
 | Dot Notation (Collection) | ⚠️ In Development | Full support in MultiCollection, partial in regular Collection |
 
 ### Implementation Details
 
-- **Full Support**: 
-  - `insertOne`, `insertMany` - Fully implemented with validation
-  - MultiCollection API - Complete implementation with automatic `type` field
-  - Transaction support - Complete implementation
-  - Change streams - Complete implementation
+- **Complete Features**: 
+  - **Migration System** - Full CLI with init, generate, apply, rollback, status, history commands
+  - **Multi-Collection Transforms** - Transform documents across ALL instances with version tracking
+  - **Multi-Collection Models** - Define once, use everywhere with `createMultiCollectionModel()`
+  - **Insert Operations** - `insertOne`, `insertMany` with full validation
+  - **MultiCollection API** - Complete implementation with automatic `_type` field
+  - **Transaction Support** - Full session management with AsyncLocalStorage
+  - **Change Streams** - Real-time event listeners with type safety
+  - **Index Management** - Declarative indexes with automatic creation and cleanup
   
 - **Partial Support**:
-  - Index Management - `withIndex()` works, advanced indexing features in development
-  - `updateOne`, `updateMany` (Collection API) - Needs improved type validation
-  - `findOneAndDelete`, `findOneAndReplace`, `findOneAndUpdate` - Basic implementation
-  - `aggregate`, `bulkWrite` - Limited type safety
+  - **Update Operations** - `updateOne`, `updateMany` need improved type validation
+  - **Find and Modify** - `findOneAndDelete`, `findOneAndReplace`, `findOneAndUpdate` basic implementation
+  - **Advanced Queries** - `aggregate`, `bulkWrite` with limited type safety
+  - **Dot Notation** - Full support in MultiCollection, partial in regular Collection
 
 ## 🤝 Contributing
 

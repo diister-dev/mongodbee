@@ -885,6 +885,182 @@ The migration system is thoroughly tested with **165+ automated tests** covering
 
 For test coverage details, see `library/test/migration/TEST_COVERAGE_REPORT.md`.
 
+## Application Startup Validation
+
+### Why Validate Migrations at Startup?
+
+In production, it's critical to ensure that:
+1. All pending migrations have been applied
+2. The database schema matches your application code
+3. You catch issues early, before users experience errors
+
+MongoDBee provides validation helpers specifically designed for application startup checks.
+
+### Available Functions
+
+#### `checkMigrationStatus(db, migrationsDir?)`
+
+Returns detailed migration status information:
+
+```typescript
+import { checkMigrationStatus } from "@diister/mongodbee/migration";
+
+const db = client.db("myapp");
+const status = await checkMigrationStatus(db);
+
+console.log(status);
+// {
+//   isUpToDate: false,
+//   pendingMigrations: ["mig_003", "mig_004"],
+//   totalMigrations: 4,
+//   appliedCount: 2,
+//   lastAppliedMigration: "mig_002",
+//   message: "⚠️ Database is outdated. 2 pending migration(s) need to be applied."
+// }
+```
+
+#### `isLastMigrationApplied(db, migrationsDir?)`
+
+Simple boolean check - is the latest migration applied?
+
+```typescript
+import { isLastMigrationApplied } from "@diister/mongodbee/migration";
+
+const upToDate = await isLastMigrationApplied(db);
+
+if (!upToDate) {
+  throw new Error("Database schema is outdated");
+}
+```
+
+#### `assertMigrationsApplied(db, migrationsDir?)`
+
+Throws an error if any migrations are pending. Perfect for production startup:
+
+```typescript
+import { assertMigrationsApplied } from "@diister/mongodbee/migration";
+
+// Will throw if migrations are pending
+await assertMigrationsApplied(db);
+
+console.log("✓ Database is up-to-date");
+```
+
+#### `validateMigrationsForEnv(db, env, migrationsDir?)`
+
+Environment-aware validation - warns in development, throws in production:
+
+```typescript
+import { validateMigrationsForEnv } from "@diister/mongodbee/migration";
+
+const env = Deno.env.get("ENV") || "development";
+
+// Warns in development, throws in production
+await validateMigrationsForEnv(db, env);
+```
+
+### Recommended Startup Pattern
+
+Here's the recommended pattern for application startup:
+
+```typescript
+// app.ts or main.ts
+import { MongoClient } from "mongodb";
+import { validateMigrationsForEnv, checkMigrationStatus } from "@diister/mongodbee/migration";
+
+// Connect to database
+const client = new MongoClient(process.env.MONGO_URI);
+await client.connect();
+const db = client.db("myapp");
+
+// Validate migrations before starting the application
+const env = process.env.NODE_ENV || "development";
+
+try {
+  // Option 1: Simple environment-aware check (recommended)
+  await validateMigrationsForEnv(db, env);
+  
+  // Option 2: Custom logic based on detailed status
+  const status = await checkMigrationStatus(db);
+  if (!status.isUpToDate) {
+    const message = `Database needs ${status.pendingMigrations.length} migration(s)`;
+    
+    if (env === "production") {
+      // Block production startup
+      throw new Error(`${message}. Pending: [${status.pendingMigrations.join(', ')}]`);
+    } else {
+      // Warn in development but allow startup
+      console.warn(`⚠️  ${message}`);
+      console.warn(`   Run: deno task migrate:apply`);
+    }
+  }
+  
+  console.log("✓ Database schema is up-to-date");
+  
+} catch (error) {
+  console.error("Migration validation failed:", error.message);
+  if (env === "production") {
+    process.exit(1); // Stop production deployment
+  }
+}
+
+// Start your application
+await startServer();
+```
+
+### Integration with CI/CD
+
+Add migration validation to your deployment pipeline:
+
+```bash
+# In your CI/CD script
+#!/bin/bash
+
+# Apply pending migrations
+deno task migrate:apply
+
+# Validate all migrations are applied (will exit with code 1 if not)
+deno run --allow-all scripts/validate-migrations.ts
+
+# Deploy application only if validation passes
+deploy-application
+```
+
+```typescript
+// scripts/validate-migrations.ts
+import { MongoClient } from "mongodb";
+import { assertMigrationsApplied } from "@diister/mongodbee/migration";
+
+const client = new MongoClient(Deno.env.get("MONGO_URI")!);
+await client.connect();
+
+try {
+  const db = client.db("myapp");
+  await assertMigrationsApplied(db);
+  console.log("✓ All migrations applied");
+  Deno.exit(0);
+} catch (error) {
+  console.error("❌ Migration validation failed:", error.message);
+  Deno.exit(1);
+} finally {
+  await client.close();
+}
+```
+
+### Best Practices
+
+1. **Always validate in production** - Use `assertMigrationsApplied()` or `validateMigrationsForEnv()` in production environments
+
+2. **Fail fast** - Don't let the application start if migrations are missing. It will only lead to runtime errors.
+
+3. **Warn in development** - Use `validateMigrationsForEnv()` to warn developers without blocking local development
+
+4. **Check before each deployment** - Add migration validation to your CI/CD pipeline
+
+5. **Log migration status** - Use `checkMigrationStatus()` to log detailed information about migration state
+
+6. **Separate migration from app code** - Run migrations in a separate step before deploying your application
+
 ## Summary
 
 - **Migrations** = autonomous, frozen files that define their own schema

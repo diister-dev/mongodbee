@@ -134,7 +134,6 @@ export * from './runners/mod.ts';
 export {
   createIntegrityValidator,
   createChainValidator,
-  validateMigrationState,
 } from './validators/mod.ts';
 
 // Multi-collection registry
@@ -151,6 +150,21 @@ export {
   MULTI_COLLECTION_INFO_TYPE,
   MULTI_COLLECTION_MIGRATIONS_TYPE,
 } from './multicollection-registry.ts';
+
+// Application startup validation helpers
+export {
+  checkMigrationStatus,
+  isLastMigrationApplied,
+  assertMigrationsApplied,
+  validateMigrationsForEnv,
+  checkSchemaAlignment,
+  validateDatabaseState,
+} from './validation-helpers.ts';
+export type {
+  MigrationValidationResult,
+  SchemaAlignmentResult,
+  DatabaseStateValidationResult,
+} from './validation-helpers.ts';
 
 /**
  * Version information for the migration system
