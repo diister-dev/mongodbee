@@ -142,9 +142,12 @@ export {
   discoverMultiCollectionInstances,
   getMultiCollectionInfo,
   createMultiCollectionInfo,
+  markAsMultiCollection,
   recordMultiCollectionMigration,
   getMultiCollectionMigrations,
   multiCollectionInstanceExists,
+  isInstanceCreatedAfterMigration,
+  shouldInstanceReceiveMigration,
   MULTI_COLLECTION_INFO_TYPE,
   MULTI_COLLECTION_MIGRATIONS_TYPE,
 } from './multicollection-registry.ts';

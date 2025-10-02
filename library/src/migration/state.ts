@@ -209,3 +209,6 @@ export async function getLastAppliedMigration(db: Db): Promise<MigrationStateRec
 export async function clearMigrationState(db: Db): Promise<void> {
   await clearAllOperations(db);
 }
+
+// Re-export multi-collection functions for convenience
+export { createMultiCollectionInfo } from './multicollection-registry.ts';

@@ -34,11 +34,14 @@ import type {
 } from '../types.ts';
 import type { Db } from '../../mongodb.ts';
 import { ulid } from "@std/ulid";
+import * as v from 'valibot';
+import { toMongoValidator } from '../../validator.ts';
 import {
   discoverMultiCollectionInstances,
   createMultiCollectionInfo,
   recordMultiCollectionMigration,
   multiCollectionInstanceExists,
+  shouldInstanceReceiveMigration,
 } from '../multicollection-registry.ts';
 
 /**
@@ -86,6 +89,12 @@ type MongoOperationHandlers = {
  */
 export class MongodbApplier implements MigrationApplier {
   /**
+   * Current migration ID being applied (used for version tracking)
+   * Set this before applying a migration to enable proper version filtering
+   */
+  private currentMigrationId?: string;
+
+  /**
    * Type-safe bidirectional operation handlers - TypeScript enforces that all operation types
    * have both apply and reverse implementations
    */
@@ -128,6 +137,18 @@ export class MongodbApplier implements MigrationApplier {
       operationTimeout: 30000,
       ...options,
     };
+  }
+
+  /**
+   * Sets the current migration ID for version tracking
+   *
+   * This should be called before applying a migration to enable proper
+   * filtering of multi-collection instances based on their creation version.
+   *
+   * @param migrationId - The ID of the migration being applied
+   */
+  setCurrentMigrationId(migrationId: string): void {
+    this.currentMigrationId = migrationId;
   }
 
   /**
@@ -197,15 +218,24 @@ export class MongodbApplier implements MigrationApplier {
         }
       }
 
-      // Create collection by accessing it (MongoDB creates collections on first write)
-      const collection = this.db.collection(operation.collectionName);
-      
-      // Insert a dummy document and then remove it to ensure collection creation
-      // This is needed because MongoDB creates collections lazily
-      const result = await collection.insertOne({ _temp: true });
-      if (result.insertedId) {
-        await collection.deleteOne({ _id: result.insertedId });
+      // Prepare collection options with JSON Schema validator if schema is provided
+      const options: Record<string, unknown> = {};
+      if (operation.schema) {
+        // The schema is a Record<string, ValibotSchema>, wrap it in v.object()
+        const wrappedSchema = v.object(operation.schema as Record<string, any>);
+        // Convert Valibot schema to MongoDB JSON Schema validator
+        const validator = toMongoValidator(wrappedSchema);
+        options.validator = validator;
+
+        console.log(`[DEBUG] Creating collection ${operation.collectionName} with validator:`, JSON.stringify(validator, null, 2));
+      } else {
+        console.log(`[DEBUG] Creating collection ${operation.collectionName} WITHOUT schema`);
       }
+
+      // Create collection with validator
+      await this.db.createCollection(operation.collectionName, options);
+
+      console.log(`[DEBUG] Collection ${operation.collectionName} created successfully`);
     } catch (error) {
       throw new Error(
         `Failed to create collection ${operation.collectionName}: ${
@@ -694,8 +724,24 @@ export class MongodbApplier implements MigrationApplier {
         return;
       }
 
-      // Apply transformation to each instance
+      // Apply transformation to each instance (with version filtering)
       for (const instanceName of instances) {
+        // ✅ VERSION TRACKING: Check if this instance should receive this migration
+        if (this.currentMigrationId) {
+          const shouldReceive = await shouldInstanceReceiveMigration(
+            this.db,
+            operation.multiCollectionName,
+            instanceName,
+            this.currentMigrationId
+          );
+
+          if (!shouldReceive) {
+            console.log(
+              `Skipping instance ${instanceName} - created after migration ${this.currentMigrationId}`
+            );
+            continue;
+          }
+        }
         const collectionName = `${operation.multiCollectionName}_${instanceName}`;
         const collection = this.db.collection(collectionName);
 
@@ -787,8 +833,24 @@ export class MongodbApplier implements MigrationApplier {
         return;
       }
 
-      // Apply reverse transformation to each instance
+      // Apply reverse transformation to each instance (with version filtering)
       for (const instanceName of instances) {
+        // ✅ VERSION TRACKING: Check if this instance should receive this migration reversal
+        if (this.currentMigrationId) {
+          const shouldReceive = await shouldInstanceReceiveMigration(
+            this.db,
+            operation.multiCollectionName,
+            instanceName,
+            this.currentMigrationId
+          );
+
+          if (!shouldReceive) {
+            console.log(
+              `Skipping instance ${instanceName} - created after migration ${this.currentMigrationId}`
+            );
+            continue;
+          }
+        }
         const collectionName = `${operation.multiCollectionName}_${instanceName}`;
         const collection = this.db.collection(collectionName);
 

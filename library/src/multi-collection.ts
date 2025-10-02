@@ -11,6 +11,8 @@ import type { FlatType } from "../types/flat.ts";
 import type { Db } from "./mongodb.ts";
 import { dirtyEquivalent } from "./utils/object.ts";
 import { mongoOperationQueue } from "./operation.ts";
+import type { MultiCollectionModel } from './multi-collection-model.ts';
+import { isMultiCollectionModel } from './multi-collection-model.ts';
 
 type CollectionOptions = {
     safeDelete?: boolean,
@@ -128,18 +130,19 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
 
 /**
  * Creates a single MongoDB collection that can store multiple document types with validation
- * 
+ *
  * This function creates or updates a MongoDB collection that can store different document types
  * in a single collection while maintaining type safety and validation for each type.
- * 
+ *
  * @param db - MongoDB database instance
  * @param collectionName - Name of the collection to create or use
- * @param collectionSchema - Record mapping document type names to their Valibot schemas
+ * @param collectionSchemaOrModel - Either a record mapping document type names to their Valibot schemas, or a MultiCollectionModel
  * @param options - Additional options for the collection
  * @returns A Promise resolving to an enhanced MongoDB collection with multi-document-type support
- * 
+ *
  * @example
  * ```typescript
+ * // Using a raw schema
  * const catalog = await multiCollection(db, "catalog", {
  *   product: {
  *     name: v.string(),
@@ -151,7 +154,11 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
  *     parentId: v.optional(v.string())
  *   }
  * });
- * 
+ *
+ * // Using a model
+ * const catalogModel = createMultiCollectionModel("catalog", { schema: { ... } });
+ * const catalog = await multiCollection(db, "catalog_louvre", catalogModel);
+ *
  * const categoryId = await catalog.insertOne("category", { name: "Electronics" });
  * await catalog.insertOne("product", { name: "Phone", price: 499, category: categoryId });
  * ```
@@ -159,9 +166,13 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
 export async function multiCollection<const T extends MultiCollectionSchema>(
     db: Db,
     collectionName: string,
-    collectionSchema: T,
+    collectionSchemaOrModel: T | MultiCollectionModel<T>,
     options?: m.CollectionOptions & CollectionOptions
 ): Promise<MultiCollectionResult<T>> {
+    // Extract schema from model if provided
+    const collectionSchema: T = isMultiCollectionModel(collectionSchemaOrModel)
+        ? collectionSchemaOrModel.schema
+        : collectionSchemaOrModel;
     type TInput = Input<T>;
     type TOutput = Output<T>;
 
@@ -785,11 +796,83 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             };
 
             const session = sessionContext.getSession();
-            
+
             const pipeline = stageBuilder(stage);
             const cursor = collection.aggregate(pipeline, { session });
-            
+
             return await cursor.toArray();
         },
     }
+}
+
+/**
+ * Creates a NEW instance of a multi-collection from a model
+ *
+ * This function creates a brand new multi-collection instance with metadata tracking
+ * for migrations. Use this when you want to create a new instance in production that
+ * should start with the current schema state.
+ *
+ * The function will:
+ * 1. Create the physical MongoDB collection
+ * 2. Register it with metadata linking to the model and current migration version
+ * 3. Return a fully functional multi-collection instance
+ *
+ * @param db - MongoDB database instance
+ * @param collectionName - Name of the new collection (typically `{modelName}_{instanceName}`)
+ * @param model - The multi-collection model to use as template
+ * @param options - Additional options for the collection
+ * @returns A Promise resolving to an enhanced MongoDB collection
+ *
+ * @example
+ * ```typescript
+ * import { createMultiCollectionModel, newMultiCollection } from "@diister/mongodbee";
+ * import * as v from "valibot";
+ *
+ * // Define a reusable model
+ * const catalogModel = createMultiCollectionModel("catalog", {
+ *   schema: {
+ *     product: {
+ *       name: v.string(),
+ *       price: v.number(),
+ *     },
+ *     category: {
+ *       name: v.string(),
+ *     }
+ *   }
+ * });
+ *
+ * // Create a new instance in production
+ * const catalogLouvre = await newMultiCollection(db, "catalog_louvre", catalogModel);
+ *
+ * // This instance is now tracked and will only receive future migrations
+ * await catalogLouvre.insertOne("category", { name: "Paintings" });
+ * ```
+ */
+export async function newMultiCollection<const T extends MultiCollectionSchema>(
+    db: Db,
+    collectionName: string,
+    model: MultiCollectionModel<T>,
+    options?: m.CollectionOptions & CollectionOptions
+): Promise<MultiCollectionResult<T>> {
+    // Import the registry functions here to avoid circular dependencies
+    const { createMultiCollectionInfo, getLastAppliedMigration } = await import('./migration/state.ts');
+
+    // Extract instance name from collection name (format: {modelName}_{instanceName})
+    const instanceName = collectionName.replace(`${model.name}_`, '');
+
+    // Get the current migration version
+    const lastMigration = await getLastAppliedMigration(db);
+    const currentMigrationId = lastMigration?.id || 'current';
+
+    // Create metadata for this new instance
+    await createMultiCollectionInfo(
+        db,
+        model.name,
+        instanceName,
+        currentMigrationId,
+        model.schema as Record<string, unknown>
+    );
+
+    // Create and return the multi-collection instance
+    return await multiCollection(db, collectionName, model, options);
 }

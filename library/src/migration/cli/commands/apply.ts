@@ -126,7 +126,7 @@ export async function applyCommand(options: ApplyCommandOptions = {}): Promise<v
         // Step 1: Validate migration with simulation
         console.log(dim("  🧪 Validating with simulation..."));
         const validationResult = await simulationValidator.validateMigration(migration);
-        
+
         if (!validationResult.success) {
           console.error(red(`  ✗ Simulation validation failed:`));
           for (const error of validationResult.errors) {
@@ -147,6 +147,9 @@ export async function applyCommand(options: ApplyCommandOptions = {}): Promise<v
         console.log(dim("  📝 Executing migration..."));
         const builder = migrationBuilder({ schemas: migration.schemas });
         const state = migration.migrate(builder);
+
+        // ✅ Set migration ID for version tracking
+        applier.setCurrentMigrationId(migration.id);
 
         // Apply operations
         for (const operation of state.operations) {

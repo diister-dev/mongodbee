@@ -5,10 +5,11 @@
     "@std/ulid": "jsr:@std/ulid@^1.0.0",
     "@std/cli": "jsr:@std/cli@^1.0.8",
     "@std/fmt": "jsr:@std/fmt@^1.0.2",
-    "@std/path": "jsr:@std/path@^1.0.7", 
+    "@std/path": "jsr:@std/path@^1.0.7",
     "@std/fs": "jsr:@std/fs@^1.0.5",
     "valibot": "npm:valibot@^1.0.0",
-    "mongodb": "npm:mongodb@^6.16.0"
+    "mongodb": "npm:mongodb@^6.16.0",
+    "@diister/valibot-mock": "jsr:@diister/valibot-mock@^0.0.1"
   },
   "exports": {
     ".": "./mod.ts",

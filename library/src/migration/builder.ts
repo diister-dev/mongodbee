@@ -138,16 +138,21 @@ function createMultiCollectionTypeBuilder(
   state: MigrationState,
   multiCollectionName: string,
   typeName: string,
-  parentBuilder: MultiCollectionBuilder
+  parentBuilder: MultiCollectionBuilder,
+  options: MigrationBuilderOptions
 ): MultiCollectionTypeBuilder {
   return {
     transform(rule: TransformRule): MultiCollectionTypeBuilder {
+      // Extract schema for this specific type from options
+      const typeSchema = options.schemas?.multiCollections?.[multiCollectionName]?.[typeName];
+
       const transformRule: TransformMultiCollectionTypeRule = {
         type: 'transform_multicollection_type',
         multiCollectionName,
         typeName,
         up: rule.up,
         down: rule.down,
+        schema: typeSchema,
       };
 
       state.operations.push(transformRule);
@@ -166,11 +171,12 @@ function createMultiCollectionTypeBuilder(
 function createMultiCollectionBuilder(
   state: MigrationState,
   multiCollectionName: string,
-  mainBuilder: MigrationBuilder
+  mainBuilder: MigrationBuilder,
+  options: MigrationBuilderOptions
 ): MultiCollectionBuilder {
   const builder: MultiCollectionBuilder = {
     type(typeName: string): MultiCollectionTypeBuilder {
-      return createMultiCollectionTypeBuilder(state, multiCollectionName, typeName, builder);
+      return createMultiCollectionTypeBuilder(state, multiCollectionName, typeName, builder, options);
     },
 
     end(): MigrationBuilder {
@@ -236,9 +242,14 @@ function createMigrationBuilder(
 ): MigrationBuilder {
   const builder: MigrationBuilder = {
     createCollection(name: string): MigrationCollectionBuilder {
+      // Extract schema for this collection from options
+      const collectionSchema = options.schemas?.collections?.[name];
+
       const createRule: CreateCollectionRule = {
         type: 'create_collection',
         collectionName: name,
+        // Store the raw schema object (will be wrapped in v.object() by the applier)
+        schema: collectionSchema,
       };
 
       state.operations.push(createRule);
@@ -254,7 +265,7 @@ function createMigrationBuilder(
     },
 
     multiCollection(name: string): MultiCollectionBuilder {
-      return createMultiCollectionBuilder(state, name, builder);
+      return createMultiCollectionBuilder(state, name, builder, options);
     },
 
     createMultiCollectionInstance(multiCollectionName: string, instanceName: string): MultiCollectionInstanceBuilder {

@@ -99,7 +99,7 @@ export class SimulationValidator implements MigrationValidator {
     const warnings: string[] = [];
 
     try {
-      // Build migration state
+      // Build migration state for current migration
       const builder = migrationBuilder({ schemas: definition.schemas });
       const state = definition.migrate(builder);
       const operations = state.operations;
@@ -120,9 +120,48 @@ export class SimulationValidator implements MigrationValidator {
         });
       }
 
-      // Test forward execution
+      // Build initial state by simulating all parent migrations
       let currentState = createEmptyDatabaseState();
+      const parentSetupErrors: string[] = [];
+
+      // Apply all parent migrations to build the correct initial state
+      let currentMigration: MigrationDefinition | null = definition.parent;
+      const parentMigrations: MigrationDefinition[] = [];
+
+      while (currentMigration !== null) {
+        parentMigrations.unshift(currentMigration);
+        currentMigration = currentMigration.parent;
+      }
+
+      // Apply parent migrations in order
+      for (const parentMigration of parentMigrations) {
+        const parentBuilder = migrationBuilder({ schemas: parentMigration.schemas });
+        const parentState = parentMigration.migrate(parentBuilder);
+
+        for (const operation of parentState.operations) {
+          try {
+            currentState = this.applier.applyOperation(currentState, operation);
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            parentSetupErrors.push(`Parent migration ${parentMigration.name}: ${errorMessage}`);
+          }
+        }
+      }
+
+      if (parentSetupErrors.length > 0) {
+        errors.push('Failed to simulate parent migrations:');
+        errors.push(...parentSetupErrors.map(err => `  ${err}`));
+        return Promise.resolve({
+          success: false,
+          errors,
+          warnings,
+          data: { operationCount: operations.length, simulationCompleted: false }
+        });
+      }
+
+      // Test forward execution of current migration
       const forwardErrors: string[] = [];
+      const stateBeforeMigration = currentState; // Capture state before applying this migration
 
       for (let i = 0; i < operations.length; i++) {
         const operation = operations[i];
@@ -134,6 +173,8 @@ export class SimulationValidator implements MigrationValidator {
         }
       }
 
+      const stateAfterMigration = currentState; // Capture state after applying this migration
+
       if (forwardErrors.length > 0) {
         errors.push('Forward migration simulation failed:');
         errors.push(...forwardErrors.map(err => `  ${err}`));
@@ -141,7 +182,7 @@ export class SimulationValidator implements MigrationValidator {
 
       // Test reversibility if enabled and forward execution succeeded
       if (this.options.validateReversibility && forwardErrors.length === 0) {
-        const reverseErrors = this.validateReversibility(state, currentState);
+        const reverseErrors = this.validateReversibility(state, stateBeforeMigration, stateAfterMigration);
         if (reverseErrors.length > 0) {
           errors.push('Migration reversibility validation failed:');
           errors.push(...reverseErrors.map(err => `  ${err}`));
@@ -280,14 +321,14 @@ export class SimulationValidator implements MigrationValidator {
    * @param forwardState - The database state after forward execution
    * @returns Array of error messages (empty if validation passes)
    */
-  private validateReversibility(state: MigrationState, forwardState: SimulationDatabaseState): string[] {
+  private validateReversibility(state: MigrationState, initialState: SimulationDatabaseState, forwardState: SimulationDatabaseState): string[] {
     const errors: string[] = [];
     const operations = state.operations;
-    
+
     try {
       // Apply reverse operations in reverse order
       let reverseState = JSON.parse(JSON.stringify(forwardState)) as SimulationDatabaseState;
-      
+
       for (let i = operations.length - 1; i >= 0; i--) {
         const operation = operations[i];
         try {
@@ -299,8 +340,7 @@ export class SimulationValidator implements MigrationValidator {
         }
       }
 
-      // Compare final state with initial state
-      const initialState = createEmptyDatabaseState();
+      // Compare final state with initial state (the state BEFORE this migration)
       const statesMatch = compareDatabaseStates(reverseState, initialState);
       
       if (!statesMatch) {

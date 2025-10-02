@@ -25,6 +25,8 @@ export type MigrationProperty = {
 export type CreateCollectionRule = {
   type: 'create_collection';
   collectionName: string;
+  /** Valibot schema for the collection - used to create MongoDB JSON Schema validator */
+  schema?: unknown;
 };
 
 /**
@@ -78,6 +80,8 @@ export type TransformMultiCollectionTypeRule<T = Record<string, unknown>, U = Re
   typeName: string;
   up: (doc: T) => U;
   down: (doc: U) => T;
+  /** Optional Valibot schema for the type - used to generate mock data for simulation */
+  schema?: unknown;
 };
 
 /**

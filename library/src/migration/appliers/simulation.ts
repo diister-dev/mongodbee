@@ -37,6 +37,7 @@ import type {
   SeedMultiCollectionInstanceRule,
   TransformMultiCollectionTypeRule,
 } from '../types.ts';
+import { createMockGenerator } from '@diister/valibot-mock';
 
 /**
  * Configuration options for the simulation applier
@@ -102,8 +103,36 @@ type SimulationOperationHandlers = {
 };
 
 /**
+ * Generates a test document from a Valibot schema using mock data
+ * Used when creating test documents for transform validation
+ */
+function generateTestDocumentFromSchema(schema: unknown): Record<string, unknown> {
+  if (!schema) {
+    // No schema provided - return minimal test document
+    return {
+      _id: 'test_simulation_id'
+    };
+  }
+
+  try {
+    // Use valibot-mock to generate realistic test data from schema
+    const generator = createMockGenerator(schema as any);
+    const mockData = generator.generate();
+    return {
+      _id: 'test_simulation_id',
+      ...(typeof mockData === 'object' && mockData !== null ? mockData : {})
+    };
+  } catch (error) {
+    // If mock generation fails, return minimal document
+    return {
+      _id: 'test_simulation_id'
+    };
+  }
+}
+
+/**
  * Implementation of in-memory migration applier for simulation and testing
- * 
+ *
  * This class provides a complete implementation for working with in-memory database states,
  * making it perfect for validation and testing migration operations without affecting real databases.
  */
@@ -543,15 +572,37 @@ export class SimulationApplier implements SimulationMigrationApplier {
 
     // Find all instances of this multi-collection type
     const instancePattern = `${operation.multiCollectionName}_`;
-    const matchingCollections = Object.keys(state.multiCollections).filter(name => 
+    const matchingCollections = Object.keys(state.multiCollections).filter(name =>
       name.startsWith(instancePattern)
     );
 
     if (matchingCollections.length === 0) {
-      if (this.options.strictValidation) {
-        throw new Error(`No instances found for multi-collection type ${operation.multiCollectionName}`);
+      // No instances found - create a test instance with mock data to validate the transform
+      const testInstanceName = `${operation.multiCollectionName}_test_simulation`;
+      const testDocument = {
+        ...generateTestDocumentFromSchema(operation.schema),
+        _type: operation.typeName,
+      };
+
+      state.multiCollections[testInstanceName] = {
+        content: [testDocument]
+      };
+
+      // Test the transformation with the mock document
+      try {
+        const transformed = operation.up(testDocument);
+
+        // If transform succeeded, update state with transformed document
+        state.multiCollections[testInstanceName].content = [transformed];
+
+        this.trackOperation(state, operation, 'apply');
+        return state;
+      } catch (error) {
+        if (this.options.strictValidation) {
+          throw new Error(`Transform validation failed on test document: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+        return state;
       }
-      return state;
     }
 
     // Apply transformation to each instance
@@ -597,15 +648,40 @@ export class SimulationApplier implements SimulationMigrationApplier {
 
     // Find all instances of this multi-collection type
     const instancePattern = `${operation.multiCollectionName}_`;
-    const matchingCollections = Object.keys(state.multiCollections).filter(name => 
+    const matchingCollections = Object.keys(state.multiCollections).filter(name =>
       name.startsWith(instancePattern)
     );
 
     if (matchingCollections.length === 0) {
-      if (this.options.strictValidation) {
-        throw new Error(`No instances found for multi-collection type ${operation.multiCollectionName}`);
+      // No instances found - create a test instance with mock data to validate the reverse transform
+      const testInstanceName = `${operation.multiCollectionName}_test_simulation`;
+
+      // First apply the forward transform to create a "new" document, then reverse it
+      const originalTestDocument = {
+        ...generateTestDocumentFromSchema(operation.schema),
+        _type: operation.typeName,
+      };
+
+      try {
+        // Apply forward transform to get a transformed document
+        const transformedDocument = operation.up(originalTestDocument);
+
+        // Now test the reverse transform on the transformed document
+        const reversedDocument = operation.down(transformedDocument);
+
+        // Store the reversed document in a test instance
+        state.multiCollections[testInstanceName] = {
+          content: [reversedDocument]
+        };
+
+        this.trackOperation(state, operation, 'reverse');
+        return state;
+      } catch (error) {
+        if (this.options.strictValidation) {
+          throw new Error(`Reverse transform validation failed on test document: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+        return state;
       }
-      return state;
     }
 
     // Apply reverse transformation to each instance
@@ -731,11 +807,28 @@ export function compareDatabaseStates(
   state1: SimulationDatabaseState,
   state2: SimulationDatabaseState
 ): boolean {
-  // Compare excluding operation history
-  const clean1 = { ...state1 };
-  const clean2 = { ...state2 };
-  delete clean1.operationHistory;
-  delete clean2.operationHistory;
-  
+  // Helper to filter out test simulation instances
+  const filterTestInstances = (multiCollections?: Record<string, { content: Record<string, unknown>[] }>) => {
+    if (!multiCollections) return undefined;
+    const filtered: Record<string, { content: Record<string, unknown>[] }> = {};
+    for (const [name, collection] of Object.entries(multiCollections)) {
+      // Skip test simulation instances
+      if (!name.endsWith('_test_simulation')) {
+        filtered[name] = collection;
+      }
+    }
+    return Object.keys(filtered).length > 0 ? filtered : undefined;
+  };
+
+  // Compare excluding operation history and test simulation instances
+  const clean1 = {
+    collections: state1.collections,
+    multiCollections: filterTestInstances(state1.multiCollections)
+  };
+  const clean2 = {
+    collections: state2.collections,
+    multiCollections: filterTestInstances(state2.multiCollections)
+  };
+
   return JSON.stringify(clean1) === JSON.stringify(clean2);
 }
