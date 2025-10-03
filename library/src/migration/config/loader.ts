@@ -213,21 +213,23 @@ function loadFromEnvironment(prefix = 'MONGODBEE_'): Partial<MigrationSystemConf
  * Loads configuration from a JSON or YAML file
  * 
  * @param filePath - Path to the configuration file
+ * @param cwd - Current working directory for resolving relative paths
  * @returns The loaded configuration object
  */
-async function loadFromFile(filePath: string): Promise<Partial<MigrationSystemConfig>> {
+async function loadFromFile(filePath: string, cwd: string = Deno.cwd()): Promise<Partial<MigrationSystemConfig>> {
   try {
     if (filePath.endsWith('.json')) {
-      const content = await Deno.readTextFile(filePath);
+      const fullPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
+      const content = await Deno.readTextFile(fullPath);
       return JSON.parse(content);
     }
     if (filePath.endsWith('.ts') || filePath.endsWith('.js')) {
-      const fullPath = path.isAbsolute(filePath) ? filePath : path.resolve(Deno.cwd(), filePath);
+      const fullPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
       // Convert Windows path to file:// URL for dynamic import
       const importPath = Deno.build.os === 'windows' 
         ? `file:///${fullPath.replace(/\\/g, '/')}` 
         : fullPath;
-      const mod = await import(importPath + `?t=${Date.now()}`);
+      const mod = await import(importPath);
       if (mod.default) return mod.default;
       if (mod.config) return mod.config;
       throw new Error(`No default or named 'config' export found in ${filePath}`);
@@ -245,17 +247,18 @@ async function loadFromFile(filePath: string): Promise<Partial<MigrationSystemCo
 /**
  * Discovers configuration files in common locations
  * 
+ * @param cwd - Current working directory for resolving relative paths
  * @returns Array of potential configuration file paths
  */
-function discoverConfigFiles(): string[] {
+function discoverConfigFiles(cwd: string = Deno.cwd()): string[] {
   return [
-    './mongodbee.config.ts',
-    './mongodbee.config.js',
-    './mongodbee.config.json',
-    './mongodbee.json',
-    './.mongodbee.json',
-    './config/mongodbee.json',
-    './config/migrations.json',
+    path.resolve(cwd, './mongodbee.config.ts'),
+    path.resolve(cwd, './mongodbee.config.js'),
+    path.resolve(cwd, './mongodbee.config.json'),
+    path.resolve(cwd, './mongodbee.json'),
+    path.resolve(cwd, './.mongodbee.json'),
+    path.resolve(cwd, './config/mongodbee.json'),
+    path.resolve(cwd, './config/migrations.json'),
   ];
 }
 
@@ -304,16 +307,17 @@ export function createConfig(input: Partial<MigrationSystemConfig>): MigrationSy
 /**
  * Loads MongoDBee configuration from file or uses defaults
  *
- * @param options - Optional configuration path
+ * @param options - Optional configuration path and working directory
  * @returns The loaded configuration
  */
-export async function loadConfig(options: { configPath?: string } = {}): Promise<any> {
-  let config: any;
+export async function loadConfig(options: { configPath?: string; cwd?: string } = {}): Promise<Partial<MigrationSystemConfig>> {
+  const cwd = options.cwd || Deno.cwd();
+  let config: Partial<MigrationSystemConfig>;
 
   // If explicit config path provided, try to load it
   if (options.configPath) {
     try {
-      config = await loadFromFile(options.configPath);
+      config = await loadFromFile(options.configPath, cwd);
       return config;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -323,10 +327,10 @@ export async function loadConfig(options: { configPath?: string } = {}): Promise
   }
 
   // Otherwise, try to discover config files
-  const toCheck = discoverConfigFiles();
+  const toCheck = discoverConfigFiles(cwd);
   for (const configPath of toCheck) {
     try {
-      config = await loadFromFile(configPath);
+      config = await loadFromFile(configPath, cwd);
       return config;
     } catch {
       // Continue to next file

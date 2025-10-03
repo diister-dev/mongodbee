@@ -256,18 +256,24 @@ export async function getAppliedMigrationIds(db: Db): Promise<string[]> {
  * @returns The last applied migration operation or null
  */
 export async function getLastAppliedMigration(db: Db): Promise<MigrationOperation | null> {
-  const collection = getMigrationOperationsCollection(db);
-
-  const results = await collection
-    .find({
-      operation: 'applied',
-      status: 'success',
-    })
-    .sort({ executedAt: -1 })
-    .limit(1)
-    .toArray();
-
-  return results[0] ?? null;
+  const currentState = await getCurrentState(db);
+  
+  // Find all migrations that are currently applied
+  const appliedMigrations: MigrationOperation[] = [];
+  
+  for (const [_migrationId, state] of currentState.entries()) {
+    if (state.status === 'applied' && state.lastOperation) {
+      appliedMigrations.push(state.lastOperation);
+    }
+  }
+  
+  // Sort by execution time and return the most recent
+  if (appliedMigrations.length === 0) {
+    return null;
+  }
+  
+  appliedMigrations.sort((a, b) => b.executedAt.getTime() - a.executedAt.getTime());
+  return appliedMigrations[0];
 }
 
 /**

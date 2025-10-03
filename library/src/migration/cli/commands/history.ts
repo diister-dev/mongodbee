@@ -17,6 +17,7 @@ import { getMigrationHistory, getAllOperations } from "../../history.ts";
 export interface HistoryCommandOptions {
   configPath?: string;
   migrationId?: string;
+  cwd?: string;
 }
 
 /**
@@ -31,11 +32,12 @@ export async function historyCommand(options: HistoryCommandOptions = {}): Promi
   try {
     // Load configuration
     console.log(dim("Loading configuration..."));
-    const config = await loadConfig({ configPath: options.configPath });
+    const cwd = options.cwd || Deno.cwd();
+    const config = await loadConfig({ configPath: options.configPath, cwd });
 
-    const migrationsDir = path.resolve(config.paths?.migrationsDir || "./migrations");
-    const connectionUri = config.db?.uri || "mongodb://localhost:27017";
-    const dbName = config.db?.name || "myapp";
+    const migrationsDir = path.resolve(cwd, config.paths?.migrations || "./migrations");
+    const connectionUri = config.database?.connection?.uri || "mongodb://localhost:27017";
+    const dbName = config.database?.name || "myapp";
 
     console.log(dim(`Connection URI: ${connectionUri}`));
     console.log(dim(`Database: ${dbName}`));
@@ -63,8 +65,7 @@ export async function historyCommand(options: HistoryCommandOptions = {}): Promi
       const migration = allMigrations.find(m => m.id === options.migrationId);
 
       if (!migration) {
-        console.error(red(`Migration ${options.migrationId} not found`));
-        Deno.exit(1);
+        throw new Error(`Migration ${options.migrationId} not found`);
       }
 
       console.log(bold(`History for: ${blue(migration.name)}`));
@@ -150,7 +151,7 @@ export async function historyCommand(options: HistoryCommandOptions = {}): Promi
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(red(bold("Error:")), message);
-    Deno.exit(1);
+    throw error;
   } finally {
     if (client) {
       await client.close();

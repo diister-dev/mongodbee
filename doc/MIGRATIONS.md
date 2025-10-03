@@ -1083,7 +1083,6 @@ try {
   const db = client.db("myapp");
   await assertMigrationsApplied(db);
   console.log("✓ All migrations applied");
-  Deno.exit(0);
 } catch (error) {
   console.error("❌ Migration validation failed:", error.message);
   Deno.exit(1);

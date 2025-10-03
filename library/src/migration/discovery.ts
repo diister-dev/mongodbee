@@ -52,8 +52,7 @@ export async function loadMigrationFile(
     : `file://${fullPath}`;
 
   try {
-    // Add timestamp to bypass module cache
-    const module = await import(`${importPath}?t=${Date.now()}`);
+    const module = await import(importPath);
 
     if (!module.default) {
       throw new Error(`Migration file ${fileName} does not have a default export`);

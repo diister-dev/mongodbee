@@ -21,11 +21,11 @@
     "./migration/cli/bin": "./src/migration/cli/bin.ts"
   },
   "tasks": {
-    "test": "deno test -A --parallel",
+    "test": "deno test -A --parallel --quiet",
     "migrate": "deno run --allow-read --allow-write --allow-net --allow-env src/migration/cli/bin.ts",
     "migrate:init": "deno task migrate init",
     "migrate:generate": "deno task migrate generate",
-    "migrate:apply": "deno task migrate apply",
+    "migrate:up": "deno task migrate migrate",
     "migrate:status": "deno task migrate status",
     "migrate:rollback": "deno task migrate rollback"
   }

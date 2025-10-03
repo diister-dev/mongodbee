@@ -18,6 +18,7 @@ import { getMigrationHistory, getAllOperations } from "../../history.ts";
 export interface StatusCommandOptions {
   configPath?: string;
   history?: boolean;
+  cwd?: string;
 }
 
 /**
@@ -32,11 +33,12 @@ export async function statusCommand(options: StatusCommandOptions = {}): Promise
   try {
     // Load configuration
     console.log(dim("Loading configuration..."));
-    const config = await loadConfig({ configPath: options.configPath });
+    const cwd = options.cwd || Deno.cwd();
+    const config = await loadConfig({ configPath: options.configPath, cwd });
 
-    const migrationsDir = path.resolve(config.paths?.migrationsDir || "./migrations");
-    const connectionUri = config.db?.uri || "mongodb://localhost:27017";
-    const dbName = config.db?.name || "myapp";
+    const migrationsDir = path.resolve(cwd, config.paths?.migrations || "./migrations");
+    const connectionUri = config.database?.connection?.uri || "mongodb://localhost:27017";
+    const dbName = config.database?.name || "myapp";
 
     console.log(dim(`Migrations directory: ${migrationsDir}`));
     console.log(dim(`Connection URI: ${connectionUri}`));
@@ -201,7 +203,7 @@ export async function statusCommand(options: StatusCommandOptions = {}): Promise
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(red(bold("Error:")), message);
-    Deno.exit(1);
+    throw error;
   } finally {
     if (client) {
       await client.close();

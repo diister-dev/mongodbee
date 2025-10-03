@@ -11,7 +11,7 @@ import { parseArgs } from "@std/cli/parse-args";
 import { blue, bold, green, red, yellow } from "@std/fmt/colors";
 
 import { generateCommand } from "./commands/generate.ts";
-import { applyCommand } from "./commands/apply.ts";
+import { migrateCommand } from "./commands/migrate.ts";
 import { rollbackCommand } from "./commands/rollback.ts";
 import { statusCommand } from "./commands/status.ts";
 import { historyCommand } from "./commands/history.ts";
@@ -40,9 +40,9 @@ const commands = [
     handler: generateCommand,
   },
   {
-    name: "apply",
+    name: "migrate",
     description: "Apply pending migrations",
-    handler: applyCommand,
+    handler: migrateCommand,
   },
   {
     name: "status",
@@ -74,7 +74,7 @@ ${yellow("USAGE:")}
 ${yellow("COMMANDS:")}
   ${green("init")}      Initialize migration configuration
   ${green("generate")}  Generate a new migration file
-  ${green("apply")}     Apply pending migrations
+  ${green("migrate")}   Apply pending migrations
   ${green("status")}    Show migration status
   ${green("history")}   Show migration operation history
   ${green("rollback")}  Rollback the last applied migration
@@ -111,8 +111,7 @@ async function main(): Promise<void> {
 
   const cmd = commands.find(c => c.name === command);
   if(!cmd) {
-    console.error(`${red("Error:")} Unknown command "${command}"`);
-    Deno.exit(1);
+    throw new Error(`Unknown command "${command}"`);
   }
 
   await cmd.handler(args as any);
@@ -120,7 +119,13 @@ async function main(): Promise<void> {
 
 // Run main function if this is the main module
 if (import.meta.main) {
-  await main();
+  try {
+    await main();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Error: ${message}`);
+    Deno.exit(1);
+  }
 }
 
 export { main };

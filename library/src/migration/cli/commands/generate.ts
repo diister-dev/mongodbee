@@ -11,6 +11,7 @@ import * as path from "@std/path";
 import { existsSync } from "@std/fs";
 import { generateMigrationId } from "../../definition.ts";
 import { prettyText } from "../utils.ts";
+import { loadConfig } from "../../config/loader.ts";
 
 async function extractMigrationDefinitions(migrationsDir: string): Promise<any[]> {
   const migrations = Deno.readDirSync(migrationsDir);
@@ -18,8 +19,7 @@ async function extractMigrationDefinitions(migrationsDir: string): Promise<any[]
     .filter(name => name.endsWith(".ts"))
     .sort((a, b) => a.localeCompare(b))
     .map(async (name) => {
-      const migrationPath = new URL(`${migrationsDir}/${name}`, `file://${Deno.cwd()}/`).href;
-      console.log(migrationPath);
+      const migrationPath = path.toFileUrl(path.join(migrationsDir, name)).href;
       return [name, await import(migrationPath)];
     });
 
@@ -33,6 +33,8 @@ async function extractMigrationDefinitions(migrationsDir: string): Promise<any[]
 
 export type GenerateCommandOptions = {
   name?: string;
+  configPath?: string;
+  cwd?: string;
 }
 
 export const generateCommandOptions = {
@@ -47,19 +49,17 @@ export const generateCommandOptions = {
 export async function generateCommand(options: GenerateCommandOptions): Promise<void> {
   console.log(dim("Loading configuration..."));
   
-  const configPath = new URL("mongodbee.config.ts", `file://${Deno.cwd()}/`).href;
-
-  const importConfig = await import(configPath);
-  const config = importConfig.default;
+  const cwd = options.cwd || Deno.cwd();
+  const config = await loadConfig({ configPath: options.configPath, cwd });
   
-  const migrationsDir = config.paths.migrationsDir || "./migrations";
-  const migrationsDirPath = path.resolve(migrationsDir);
+  const migrationsDir = config.paths?.migrations || "./migrations";
+  const migrationsDirPath = path.resolve(cwd, migrationsDir);
   if (!existsSync(migrationsDirPath)) {
     console.log(red(`Migrations directory does not exist: ${migrationsDir}`));
     return;
   }
 
-  const migrationsDefinitions = await extractMigrationDefinitions(migrationsDir);
+  const migrationsDefinitions = await extractMigrationDefinitions(migrationsDirPath);
   const lastMigration = migrationsDefinitions[migrationsDefinitions.length - 1];
 
   // Ensure a parent is never used twice
@@ -108,7 +108,7 @@ export async function generateCommand(options: GenerateCommandOptions): Promise<
   `;
 
   const fileName = `${id.replace(/-/g, "_")}.ts`;
-  const filePath = path.join(migrationsDir, fileName);
+  const filePath = path.join(migrationsDirPath, fileName);
   await Deno.writeTextFile(filePath, prettyText(generation));
 
   console.log(`${green("Migration file created")}: ${filePath}`);

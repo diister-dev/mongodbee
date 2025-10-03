@@ -1,5 +1,5 @@
 /**
- * Apply command for MongoDBee Migration CLI
+ * Migrate command for MongoDBee Migration CLI
  *
  * Applies pending migrations to the database
  *
@@ -18,15 +18,16 @@ import { createSimulationValidator } from "../../validators/simulation.ts";
 import { migrationBuilder } from "../../builder.ts";
 import { validateMigrationChainWithProjectSchema } from "../../schema-validation.ts";
 
-export interface ApplyCommandOptions {
+export interface MigrateCommandOptions {
   configPath?: string;
   dryRun?: boolean;
+  cwd?: string;
 }
 
 /**
  * Apply pending migrations
  */
-export async function applyCommand(options: ApplyCommandOptions = {}): Promise<void> {
+export async function migrateCommand(options: MigrateCommandOptions = {}): Promise<void> {
   console.log(bold(blue("🐝 Applying migrations...")));
   console.log();
 
@@ -35,11 +36,12 @@ export async function applyCommand(options: ApplyCommandOptions = {}): Promise<v
   try {
     // Load configuration
     console.log(dim("Loading configuration..."));
-    const config = await loadConfig({ configPath: options.configPath });
+    const cwd = options.cwd || Deno.cwd();
+    const config = await loadConfig({ configPath: options.configPath, cwd });
 
-    const migrationsDir = path.resolve(config.paths?.migrationsDir || "./migrations");
-    const connectionUri = config.db?.uri || "mongodb://localhost:27017";
-    const dbName = config.db?.name || "myapp";
+    const migrationsDir = path.resolve(cwd, config.paths?.migrations || "./migrations");
+    const connectionUri = config.database?.connection?.uri || "mongodb://localhost:27017";
+    const dbName = config.database?.name || "myapp";
 
     console.log(dim(`Migrations directory: ${migrationsDir}`));
     console.log(dim(`Connection URI: ${connectionUri}`));
@@ -67,7 +69,7 @@ export async function applyCommand(options: ApplyCommandOptions = {}): Promise<v
     // Validate that last migration matches project schema
     if (allMigrations.length > 0) {
       console.log(dim("Validating schema consistency..."));
-      const schemaPath = path.resolve(config.schema || "./schemas.ts");
+      const schemaPath = path.resolve(cwd, config.paths?.schemas || "./schemas.ts");
       const schemaValidation = await validateMigrationChainWithProjectSchema(allMigrations, schemaPath);
 
       if (schemaValidation.warnings.length > 0) {
@@ -184,7 +186,7 @@ export async function applyCommand(options: ApplyCommandOptions = {}): Promise<v
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(red(bold("Error:")), message);
-    Deno.exit(1);
+    throw error;
   } finally {
     if (client) {
       await client.close();

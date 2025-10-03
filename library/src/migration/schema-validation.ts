@@ -25,7 +25,7 @@ export async function loadProjectSchema(schemaPath: string): Promise<SchemasDefi
     : `file://${fullPath}`;
 
   try {
-    const module = await import(`${importPath}?t=${Date.now()}`);
+    const module = await import(importPath);
 
     if (!module.schemas) {
       throw new Error(`Schema file ${schemaPath} does not export 'schemas'`);

@@ -13,6 +13,7 @@ import { prettyText } from "../utils.ts";
 
 export interface InitCommandOptions {
   force?: boolean;
+  cwd?: string;
 }
 
 /**
@@ -22,9 +23,10 @@ export async function initCommand(options: InitCommandOptions = {}): Promise<voi
   console.log(bold("🐝 Initializing MongoDBee configuration..."));
   console.log();
 
-  const configFilePath = path.resolve("./mongodbee.config.ts");
-  const schemasFilePath = path.resolve("./schemas.ts");
-  const migrationsDir = path.resolve("./migrations");
+  const cwd = options.cwd || Deno.cwd();
+  const configFilePath = path.resolve(cwd, "./mongodbee.config.ts");
+  const schemasFilePath = path.resolve(cwd, "./schemas.ts");
+  const migrationsDir = path.resolve(cwd, "./migrations");
 
   // Check if config already exists
   if (existsSync(configFilePath) && !options.force) {
@@ -82,21 +84,18 @@ export async function initCommand(options: InitCommandOptions = {}): Promise<voi
 
   // Write config file
   await Deno.writeTextFile(configFilePath, prettyText(`
-    import { defineConfig } from "@diister/mongodbee";
-    import { env } from "node:process";
-
-    export default defineConfig({
-      schema: "./schemas.ts",
-      db: {
-        uri: "mongodb://localhost:27017",
-        name: "myapp",
-        username: env.MONGODBEE_USERNAME,
-        password: env.MONGODBEE_PASSWORD,
+    export default {
+      database: {
+        connection: {
+          uri: "mongodb://localhost:27017"
+        },
+        name: "myapp"
       },
       paths: {
-        migrationsDir: "./migrations",
+        migrations: "./migrations",
+        schemas: "./schemas.ts"
       }
-    });
+    };
   `));
 
   console.log(green(`✓ Created configuration file`));
