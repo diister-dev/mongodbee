@@ -8,8 +8,7 @@
  */
 
 import { parseArgs } from "@std/cli/parse-args";
-import { blue, bold, green, red, yellow, dim } from "@std/fmt/colors";
-import * as path from "@std/path";
+import { blue, bold, green, red, yellow } from "@std/fmt/colors";
 
 import { generateCommand } from "./commands/generate.ts";
 import { applyCommand } from "./commands/apply.ts";
@@ -61,31 +60,6 @@ const commands = [
     handler: historyCommand,
   }
 ]
-
-/**
- * Discover the first existing config file
- */
-async function discoverConfigFile(): Promise<string | null> {
-  const configFiles = [
-    './mongodbee.config.ts',
-    './mongodbee.config.js', 
-    './mongodbee.config.json',
-    './mongodbee.json',
-    './.mongodbee.json',
-    './config/mongodbee.json',
-    './config/migrations.json',
-  ];
-
-  for (const configFile of configFiles) {
-    try {
-      await Deno.stat(configFile);
-      return path.resolve(configFile);
-    } catch {
-      // File doesn't exist, continue to next
-    }
-  }
-  return null;
-}
 
 /**
  * Display help information
