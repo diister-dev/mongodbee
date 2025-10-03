@@ -176,9 +176,18 @@ Each multi-collection instance stores two special metadata documents:
   _id: "_migrations",
   _type: "_migrations",
   fromMigrationId: "2025_10_01_1000_H0XWCWC4E6@initial",  // When created
+  mongodbeeVersion: "0.13.0",  // MongoDBee version at creation
   appliedMigrations: [
-    { id: "2025_10_01_1000_H0XWCWC4E6@initial", appliedAt: Date },
-    { id: "2025_10_02_1100_YYYYYYY@add_field", appliedAt: Date }
+    { 
+      id: "2025_10_01_1000_H0XWCWC4E6@initial", 
+      appliedAt: Date,
+      mongodbeeVersion: "0.13.0"  // Version that applied this migration
+    },
+    { 
+      id: "2025_10_02_1100_YYYYYYY@add_field", 
+      appliedAt: Date,
+      mongodbeeVersion: "0.13.0"  // Version that applied this migration
+    }
   ]
 }
 ```
@@ -228,6 +237,42 @@ migrate(migration) {
     .updateIndexes("users")  // Updates indexes to match schema
     .compile();
 }
+```
+
+### 7. MongoDBee Version Tracking
+
+**Global Migration History**: Every migration operation (apply, revert, fail) is recorded in the `__dbee_migration__` collection with the MongoDBee version that executed it:
+
+```javascript
+{
+  migrationId: "2025_10_01_1000_H0XWCWC4E6@initial",
+  migrationName: "initial",
+  operation: "applied",  // 'applied' | 'reverted' | 'failed'
+  executedAt: Date,
+  duration: 1500,  // milliseconds
+  status: "success",  // 'success' | 'failure'
+  mongodbeeVersion: "0.13.0"  // ✨ Version that executed this operation
+}
+```
+
+**Multi-Collection Instance Tracking**: Each multi-collection instance also tracks versions:
+- `mongodbeeVersion` at creation time
+- `mongodbeeVersion` for each applied migration
+
+**Why This Matters**:
+- 📊 **Audit Trail**: Know exactly which version performed each operation
+- 🐛 **Debugging**: "This bug appeared after upgrading to v0.14" → check which migrations ran with that version
+- 🔄 **Rollback Safety**: Understand compatibility when rolling back to older versions
+- 📈 **Analytics**: Track MongoDBee adoption and upgrade patterns across your infrastructure
+
+**Accessing Version Information**:
+```typescript
+import { getAllOperations } from "@diister/mongodbee/migration";
+
+const operations = await getAllOperations(db);
+operations.forEach(op => {
+  console.log(`${op.migrationName} executed with MongoDBee v${op.mongodbeeVersion}`);
+});
 ```
 
 ## CLI Commands

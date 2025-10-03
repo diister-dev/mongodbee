@@ -10,6 +10,7 @@
 
 import { Collection } from "mongodb";
 import type { Db } from '../mongodb.ts';
+import { getCurrentVersion } from "./utils/package-info.ts";
 
 /**
  * Type of migration operation
@@ -48,6 +49,9 @@ export type MigrationOperation = {
 
   /** Status of the operation */
   status: OperationStatus;
+
+  /** Version of MongoDBee that executed this operation */
+  mongodbeeVersion: string;
 };
 
 /**
@@ -81,6 +85,7 @@ export async function recordOperation(
   error?: string
 ): Promise<void> {
   const collection = getMigrationOperationsCollection(db);
+  const mongodbeeVersion = getCurrentVersion();
 
   const record: MigrationOperation = {
     migrationId,
@@ -90,6 +95,7 @@ export async function recordOperation(
     duration,
     error,
     status: error ? 'failure' : 'success',
+    mongodbeeVersion,
   };
 
   await collection.insertOne(record as any);

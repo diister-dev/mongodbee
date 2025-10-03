@@ -8,6 +8,7 @@
  */
 
 import type { Db } from '../mongodb.ts';
+import { getCurrentVersion } from './utils/package-info.ts';
 
 /**
  * Special document types reserved for multi-collection metadata
@@ -32,9 +33,11 @@ export type MultiCollectionMigrations = {
   _id: typeof MULTI_COLLECTION_MIGRATIONS_TYPE;
   _type: typeof MULTI_COLLECTION_MIGRATIONS_TYPE;
   fromMigrationId: string;
+  mongodbeeVersion: string;
   appliedMigrations: Array<{
     id: string;
     appliedAt: Date;
+    mongodbeeVersion: string;
   }>;
 };
 
@@ -115,6 +118,7 @@ export async function createMultiCollectionInfo(
   migrationId: string = 'unknown'
 ): Promise<void> {
   const collection = db.collection(collectionName);
+  const mongodbeeVersion = getCurrentVersion();
 
   const info: MultiCollectionInfo = {
     _id: MULTI_COLLECTION_INFO_TYPE,
@@ -130,10 +134,12 @@ export async function createMultiCollectionInfo(
     _id: MULTI_COLLECTION_MIGRATIONS_TYPE,
     _type: MULTI_COLLECTION_MIGRATIONS_TYPE,
     fromMigrationId: migrationId,
+    mongodbeeVersion,
     appliedMigrations: [
       {
         id: migrationId,
         appliedAt: new Date(),
+        mongodbeeVersion,
       }
     ],
   };
@@ -154,6 +160,7 @@ export async function recordMultiCollectionMigration(
   migrationId: string
 ): Promise<void> {
   const collection = db.collection(collectionName);
+  const mongodbeeVersion = getCurrentVersion();
 
   await collection.updateOne(
     { _type: MULTI_COLLECTION_MIGRATIONS_TYPE } as Record<string, unknown>,
@@ -162,6 +169,7 @@ export async function recordMultiCollectionMigration(
         appliedMigrations: {
           id: migrationId,
           appliedAt: new Date(),
+          mongodbeeVersion,
         }
       }
     } as Record<string, unknown>

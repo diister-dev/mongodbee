@@ -147,7 +147,6 @@ export async function markMigrationAsApplied(
   migrationId: string,
   name: string,
   duration?: number,
-  checksum?: string
 ): Promise<void> {
   await recordOperation(db, migrationId, name, 'applied', duration);
 }
