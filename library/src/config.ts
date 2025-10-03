@@ -3,25 +3,25 @@
  * Inspired by Drizzle's configuration style
  */
 export type MongodbeeConfig = {
-  /** Path to schema file (optional) */
-  schema?: string;
-
   /** Database connection and credentials */
-  db?: {
-    /** MongoDB connection URI */
-    uri?: string;
+  database?: {
+    /** Connection settings */
+    connection?: {
+      /** MongoDB connection URI */
+      uri?: string;
+      /** Connection options */
+      options?: Record<string, unknown>;
+    };
     /** Database name */
     name?: string;
-    /** Username for authentication */
-    username?: string;
-    /** Password for authentication */
-    password?: string;
   };
 
   /** Paths configuration */
   paths?: {
     /** Directory containing migration files (default: "./migrations") */
-    migrationsDir?: string;
+    migrations?: string;
+    /** Path to schemas file (default: "./schemas.ts") */
+    schemas?: string;
   };
 };
 
@@ -36,15 +36,15 @@ export type MongodbeeConfig = {
  * import { defineConfig } from "@diister/mongodbee";
  *
  * export default defineConfig({
- *   schema: "./schemas.ts",
- *   db: {
- *     uri: "mongodb://localhost:27017",
- *     name: "myapp",
- *     username: process.env.MONGODBEE_USERNAME,
- *     password: process.env.MONGODBEE_PASSWORD,
+ *   database: {
+ *     connection: {
+ *       uri: "mongodb://localhost:27017"
+ *     },
+ *     name: "myapp"
  *   },
  *   paths: {
- *     migrationsDir: "./migrations",
+ *     migrations: "./migrations",
+ *     schemas: "./schemas.ts"
  *   }
  * });
  * ```
@@ -56,15 +56,15 @@ export function defineConfig(config: MongodbeeConfig): MongodbeeConfig {
 /**
  * Default configuration values
  */
-export const DEFAULT_MONGODBEE_CONFIG: Required<MongodbeeConfig> = {
-  schema: "./schemas.ts",
-  db: {
-    uri: "mongodb://localhost:27017",
-    name: "myapp",
-    username: undefined,
-    password: undefined,
+export const DEFAULT_MONGODBEE_CONFIG: MongodbeeConfig = {
+  database: {
+    connection: {
+      uri: "mongodb://localhost:27017"
+    },
+    name: "myapp"
   },
   paths: {
-    migrationsDir: "./migrations",
+    migrations: "./migrations",
+    schemas: "./schemas.ts"
   },
 };

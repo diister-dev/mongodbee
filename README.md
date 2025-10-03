@@ -202,6 +202,8 @@ deno run --allow-read --allow-write --allow-net --allow-env jsr:@diister/mongodb
 
 This creates a `migrations/` folder and `mongodbee.config.ts` configuration file.
 
+**Configuration**: The generated `mongodbee.config.ts` uses a simple configuration structure with just `database` and `paths` settings. For advanced configuration options and environment-specific settings, see the [Migration Documentation](./doc/MIGRATIONS.md#configuration-file).
+
 ### Creating Migrations
 
 Generate a new migration file:

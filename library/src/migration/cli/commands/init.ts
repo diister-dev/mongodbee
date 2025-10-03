@@ -84,7 +84,9 @@ export async function initCommand(options: InitCommandOptions = {}): Promise<voi
 
   // Write config file
   await Deno.writeTextFile(configFilePath, prettyText(`
-    export default {
+    import { defineConfig } from "@diister/mongodbee";
+
+    export default defineConfig({
       database: {
         connection: {
           uri: "mongodb://localhost:27017"
@@ -95,7 +97,7 @@ export async function initCommand(options: InitCommandOptions = {}): Promise<voi
         migrations: "./migrations",
         schemas: "./schemas.ts"
       }
-    };
+    });
   `));
 
   console.log(green(`✓ Created configuration file`));

@@ -277,6 +277,102 @@ operations.forEach(op => {
 
 ## CLI Commands
 
+### Configuration File
+
+MongoDBee uses a configuration file (`mongodbee.config.ts`) to specify database connection and file paths. This file is automatically created by `mongodbee init`.
+
+#### Basic Configuration Structure
+
+```typescript
+// mongodbee.config.ts
+export default {
+  database: {
+    connection: {
+      uri: "mongodb://localhost:27017"
+    },
+    name: "myapp"
+  },
+  paths: {
+    migrations: "./migrations",
+    schemas: "./schemas.ts"
+  }
+};
+```
+
+#### Using `defineConfig()` for Type Safety
+
+For better TypeScript support and autocomplete, you can use the `defineConfig()` helper:
+
+```typescript
+import { defineConfig } from "@diister/mongodbee";
+
+export default defineConfig({
+  database: {
+    connection: {
+      uri: process.env.MONGODB_URI || "mongodb://localhost:27017",
+      options: {
+        maxPoolSize: 10,
+        connectTimeoutMS: 5000
+      }
+    },
+    name: process.env.MONGODB_DATABASE || "myapp"
+  },
+  paths: {
+    migrations: "./migrations",
+    schemas: "./schemas.ts"
+  }
+});
+```
+
+#### Configuration Options
+
+**Database Configuration**:
+- `database.connection.uri` - MongoDB connection URI (required)
+- `database.connection.options` - MongoDB driver options (optional)
+- `database.name` - Target database name (required)
+
+**Paths Configuration**:
+- `paths.migrations` - Directory containing migration files (default: `"./migrations"`)
+- `paths.schemas` - Path to schemas file (default: `"./schemas.ts"`)
+
+#### Environment Variables
+
+You can use environment variables in your configuration:
+
+```typescript
+// mongodbee.config.ts
+export default {
+  database: {
+    connection: {
+      uri: Deno.env.get("MONGODB_URI") || "mongodb://localhost:27017"
+    },
+    name: Deno.env.get("MONGODB_DATABASE") || "myapp"
+  },
+  paths: {
+    migrations: "./migrations",
+    schemas: "./schemas.ts"
+  }
+};
+```
+
+With a `.env` file:
+```env
+MONGODB_URI=mongodb://localhost:27017
+MONGODB_DATABASE=myapp
+```
+
+#### Advanced Configuration
+
+The CLI internally uses a more comprehensive configuration system (`MigrationSystemConfig`) with additional options for:
+- Migration execution settings (dry-run, backup, batch size)
+- Logging configuration (level, format, console/file output)
+- CLI behavior (colors, progress indicators, confirmations)
+- Environment-specific overrides
+
+These advanced options are automatically applied with sensible defaults. Users typically only need to configure `database` and `paths` in their `mongodbee.config.ts` file.
+
+**Note**: The simple `MongodbeeConfig` type (used in user config files) is a subset of the internal `MigrationSystemConfig` type. This keeps the user-facing API simple while allowing the system to have rich internal configuration.
+
 ### Complete Workflow
 
 ```bash

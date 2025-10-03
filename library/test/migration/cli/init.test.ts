@@ -23,6 +23,7 @@ Deno.test("init - creates config file and migrations directory", async () => {
     // Check config file was created
     const configPath = path.join(tempDir, "mongodbee.config.ts");
     assertExists(existsSync(configPath));
+    assert(await fileContains(configPath, "defineConfig"));
     assert(await fileContains(configPath, "database"));
 
     // Check schemas file was created
@@ -51,6 +52,7 @@ Deno.test("init - respects force flag to overwrite existing config", async () =>
 
     // Init with force should overwrite
     await initCommand({ force: true, cwd: tempDir });
+    assert(await fileContains(configPath, "defineConfig"));
     assert(await fileContains(configPath, "database"));
     assert(!await fileContains(configPath, "// Modified content"));
   });
@@ -64,6 +66,8 @@ Deno.test("init - creates config with correct structure", async () => {
     const content = await Deno.readTextFile(configPath);
 
     // Check for essential config sections
+    assert(content.includes("import"));
+    assert(content.includes("defineConfig"));
     assert(content.includes("database"));
     assert(content.includes("connection"));
     assert(content.includes("uri:"));
