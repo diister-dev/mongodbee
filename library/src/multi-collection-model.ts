@@ -57,7 +57,7 @@ export type MultiCollectionModel<T extends MultiCollectionSchema = MultiCollecti
 /**
  * Options for creating a multi-collection model
  */
-export type CreateMultiCollectionModelOptions<T extends MultiCollectionSchema> = {
+export type MultiCollectionModelOptions<T extends MultiCollectionSchema> = {
   /** Schema definition */
   schema: T;
 
@@ -80,11 +80,11 @@ export type CreateMultiCollectionModelOptions<T extends MultiCollectionSchema> =
  *
  * @example
  * ```typescript
- * import { createMultiCollectionModel } from "@diister/mongodbee";
+ * import { defineModel } from "@diister/mongodbee";
  * import * as v from "valibot";
  *
  * // Define a reusable catalog model
- * const catalogModel = createMultiCollectionModel("catalog", {
+ * const catalogModel = defineModel("catalog", {
  *   schema: {
  *     product: {
  *       name: v.string(),
@@ -114,7 +114,7 @@ export type CreateMultiCollectionModelOptions<T extends MultiCollectionSchema> =
  */
 export function defineModel<const T extends MultiCollectionSchema>(
   name: string,
-  options: CreateMultiCollectionModelOptions<T>
+  options: MultiCollectionModelOptions<T>
 ): MultiCollectionModel<T> {
   const { schema, version = '1.0.0', metadata } = options;
 

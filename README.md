@@ -273,10 +273,10 @@ For consistency across your application, define reusable multi-collection models
 
 ```typescript
 // models/comments.ts
-import { createMultiCollectionModel } from "@diister/mongodbee";
+import { defineModel } from "@diister/mongodbee";
 import * as v from "@diister/mongodbee/schema";
 
-export const commentsModel = createMultiCollectionModel({
+export const commentsModel = defineModel({
   user_comment: {
     content: v.string(),
     userId: v.string(),
@@ -704,7 +704,7 @@ Current implementation status by feature:
 |---------|--------|-------|
 | Migration System | ✅ Complete | Full CLI with apply/rollback, multi-collection transforms, version tracking |
 | MultiCollection API | ✅ Complete | Full implementation with multiple document types in a single collection |
-| MultiCollection Models | ✅ Complete | Reusable model definitions with `createMultiCollectionModel()` |
+| MultiCollection Models | ✅ Complete | Reusable model definitions with `defineModel()` |
 | Transactions | ✅ Complete | Session-based transaction support with AsyncLocalStorage |
 | Change Streams | ✅ Complete | Real-time data change events and listeners |
 | Index Management | ✅ Complete | `withIndex()` with automatic index creation and multi-collection scoping |
@@ -717,7 +717,7 @@ Current implementation status by feature:
 - **Complete Features**: 
   - **Migration System** - Full CLI with init, generate, apply, rollback, status, history commands
   - **Multi-Collection Transforms** - Transform documents across ALL instances with version tracking
-  - **Multi-Collection Models** - Define once, use everywhere with `createMultiCollectionModel()`
+  - **Multi-Collection Models** - Define once, use everywhere with `defineModel()`
   - **Insert Operations** - `insertOne`, `insertMany` with full validation
   - **MultiCollection API** - Complete implementation with automatic `_type` field
   - **Transaction Support** - Full session management with AsyncLocalStorage

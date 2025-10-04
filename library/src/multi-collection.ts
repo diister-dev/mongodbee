@@ -148,7 +148,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
  *
  * @example
  * ```typescript
- * const catalogModel = createMultiCollectionModel("catalog", {
+ * const catalogModel = defineModel("catalog", {
  *   product: {
  *     name: v.string(),
  *     price: v.number(),
@@ -861,11 +861,11 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
  *
  * @example
  * ```typescript
- * import { createMultiCollectionModel, newMultiCollection } from "@diister/mongodbee";
+ * import { defineModel, newMultiCollection } from "@diister/mongodbee";
  * import * as v from "valibot";
  *
  * // Define a reusable model
- * const catalogModel = createMultiCollectionModel("catalog", {
+ * const catalogModel = defineModel("catalog", {
  *   schema: {
  *     product: {
  *       name: v.string(),

@@ -116,11 +116,11 @@ multiCollections: {
 ```
 
 **Multi-Collection Model**:
-To avoid duplication, use `createMultiCollectionModel()` in `models.ts`:
+To avoid duplication, use `defineModel()` in `models.ts`:
 
 ```typescript
 // models.ts
-export const expositionModel = createMultiCollectionModel("exposition", {
+export const expositionModel = defineModel("exposition", {
   schema: {
     artwork: { ... },
     visitor: { ... }
@@ -385,7 +385,7 @@ deno task mongodbee init
 # - mongodbee.config.ts
 
 # 2. Define models (optional but recommended)
-# Create models.ts with createMultiCollectionModel()
+# Create models.ts with defineModel()
 
 # 3. Update schemas.ts
 # Use model.expose() to inject the schema

@@ -1,17 +1,4 @@
-/**
- *import { assertEquals, assertExists, assert, assertThrows } from "@std/assert";
-import { 
-  migrationDefinition,
-  validateMigrationChain,
-  generateMigrationId,
-  getMigrationAncestors,
-  getMigrationPath,
-  findCommonAncestor,
-  isMigrationAncestor,
-  createMigrationSummary,
-} from "../../src/migration/definition.ts";
-// Not importing migrationBuilder as it's not used in this test fileigration Definition
- * 
+/* 
  * Tests migration definition, parent-child relationships, and chain validation
  */
 
