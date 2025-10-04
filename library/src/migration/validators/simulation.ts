@@ -193,20 +193,28 @@ export class SimulationValidator implements MigrationValidator {
         errors.push(...forwardErrors.map((err) => `  ${err}`));
       }
 
-      // Validate that declared schema collections are actually created
+      // Validate that NEW collections (not from parent) are actually created
       if (definition.schemas.collections) {
         const declaredCollections = Object.keys(definition.schemas.collections);
+        const parentCollections = definition.parent?.schemas.collections
+          ? Object.keys(definition.parent.schemas.collections)
+          : [];
         const createdCollections = Object.keys(
           stateAfterMigration.collections || {},
         );
 
-        const missingCollections = declaredCollections.filter(
+        // Only check collections that are NEW in this migration (not inherited from parent)
+        const newCollections = declaredCollections.filter(
+          (name) => !parentCollections.includes(name),
+        );
+
+        const missingCollections = newCollections.filter(
           (name) => !createdCollections.includes(name),
         );
 
         if (missingCollections.length > 0) {
           errors.push(
-            `Schema declares ${missingCollections.length} collection(s) that are not created in migrate(): ${
+            `Schema declares ${missingCollections.length} NEW collection(s) that are not created in migrate(): ${
               missingCollections.join(", ")
             }`,
           );
@@ -216,22 +224,30 @@ export class SimulationValidator implements MigrationValidator {
         }
       }
 
-      // Warn about declared multi-collections (they are models, not required to be instantiated)
+      // Warn about NEW declared multi-collections (they are models, not required to be instantiated)
       if (definition.schemas.multiCollections) {
         const declaredMultiCollections = Object.keys(
           definition.schemas.multiCollections,
         );
+        const parentMultiCollections = definition.parent?.schemas.multiCollections
+          ? Object.keys(definition.parent.schemas.multiCollections)
+          : [];
         const createdMultiCollections = Object.keys(
           stateAfterMigration.multiCollections || {},
         );
 
-        const missingMultiCollections = declaredMultiCollections.filter(
+        // Only check multi-collections that are NEW in this migration (not inherited from parent)
+        const newMultiCollections = declaredMultiCollections.filter(
+          (name) => !parentMultiCollections.includes(name),
+        );
+
+        const missingMultiCollections = newMultiCollections.filter(
           (name) => !createdMultiCollections.includes(name),
         );
 
         if (missingMultiCollections.length > 0) {
           warnings.push(
-            `Schema declares ${missingMultiCollections.length} multi-collection model(s) that are not instantiated in migrate(): ${
+            `Schema declares ${missingMultiCollections.length} NEW multi-collection model(s) that are not instantiated in migrate(): ${
               missingMultiCollections.join(", ")
             }`,
           );
