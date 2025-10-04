@@ -38,6 +38,7 @@ import {
   type SimulationDatabaseState,
 } from "../appliers/simulation.ts";
 import { migrationBuilder } from "../builder.ts";
+import * as v from "valibot";
 
 /**
  * Configuration options for the simulation validator
@@ -261,6 +262,18 @@ export class SimulationValidator implements MigrationValidator {
         }
       }
 
+      // Validate that transformed documents match their target schemas
+      // This catches bad transformation logic (e.g., returning null instead of proper values)
+      if (forwardErrors.length === 0) {
+        const transformValidationErrors = this.validateTransformedDocuments(
+          definition,
+          stateAfterMigration,
+        );
+        if (transformValidationErrors.length > 0) {
+          errors.push(...transformValidationErrors);
+        }
+      }
+
       // Test reversibility if enabled and forward execution succeeded
       if (this.options.validateReversibility && forwardErrors.length === 0) {
         const reverseErrors = this.validateReversibility(
@@ -430,7 +443,83 @@ export class SimulationValidator implements MigrationValidator {
   ): string[] {
     const errors: string[] = [];
 
-    if (!definition.parent || !definition.schemas.multiCollections) {
+    if (!definition.parent) {
+      return errors;
+    }
+
+    // ========================================================================
+    // VALIDATE COLLECTION SCHEMA CHANGES
+    // ========================================================================
+    if (
+      definition.schemas.collections && definition.parent.schemas.collections
+    ) {
+      const parentCollections = definition.parent.schemas.collections;
+      const currentCollections = definition.schemas.collections;
+
+      for (const collectionName of Object.keys(currentCollections)) {
+        const parentSchema = parentCollections[collectionName];
+        const currentSchema = currentCollections[collectionName];
+
+        if (!parentSchema) {
+          // New collection, no validation needed
+          continue;
+        }
+
+        // Detect if schema has changed
+        const schemaChanged = JSON.stringify(parentSchema) !==
+          JSON.stringify(currentSchema);
+
+        if (schemaChanged) {
+          // Check if there are existing documents in this collection
+          const collectionData = stateBefore.collections?.[collectionName];
+          const documentCount = collectionData?.content.length || 0;
+
+          // If there are existing documents OR if collection was defined in parent,
+          // we need a transformation
+          const collectionWasDefinedInParent = parentSchema !== undefined;
+
+          if (documentCount > 0 || collectionWasDefinedInParent) {
+            // Check if there's a transform operation for this collection
+            const hasTransform = operations.some((op) => {
+              if (op.type === "transform_collection") {
+                return op.collectionName === collectionName;
+              }
+              return false;
+            });
+
+            if (!hasTransform) {
+              if (documentCount > 0) {
+                errors.push(
+                  `Schema for collection "${collectionName}" has changed but no transformation is provided.`,
+                );
+                errors.push(
+                  `  There are ${documentCount} existing document(s) in this collection that may not match the new schema.`,
+                );
+              } else {
+                // No existing documents, but collection was defined in parent schema
+                errors.push(
+                  `Schema for collection "${collectionName}" has changed but no transformation is provided.`,
+                );
+                errors.push(
+                  `  While no documents exist currently, the collection was defined in the parent schema.`,
+                );
+                errors.push(
+                  `  Future operations could have created documents with the old schema.`,
+                );
+              }
+              errors.push(
+                `  💡 Tip: Add a .collection("${collectionName}").transform({ up: (doc) => ({ ...doc, newField: defaultValue }), down: ... }) operation.`,
+              );
+            }
+          }
+        }
+      }
+    }
+
+    // ========================================================================
+    // VALIDATE MULTI-COLLECTION SCHEMA CHANGES
+    // ========================================================================
+    if (!definition.schemas.multiCollections) {
       return errors;
     }
 
@@ -594,6 +683,134 @@ export class SimulationValidator implements MigrationValidator {
           errors.push(
             `     3. Merge: Transform into another existing type with appropriate field mapping`,
           );
+        }
+      }
+    }
+
+    return errors;
+  }
+
+  /**
+   * Validates that transformed documents match their target schemas
+   *
+   * This catches transformations that return invalid values (e.g., null instead of boolean)
+   *
+   * @private
+   * @param definition - Migration definition with schemas
+   * @param stateAfter - Database state after transformation
+   * @returns Array of error messages (empty if validation passes)
+   */
+  private validateTransformedDocuments(
+    definition: MigrationDefinition,
+    stateAfter: SimulationDatabaseState,
+  ): string[] {
+    const errors: string[] = [];
+
+    // Validate collection documents
+    if (definition.schemas.collections) {
+      for (
+        const [collectionName, schema] of Object.entries(
+          definition.schemas.collections,
+        )
+      ) {
+        const collectionData = stateAfter.collections?.[collectionName];
+        if (!collectionData || collectionData.content.length === 0) continue;
+
+        // Validate each document against the schema
+        for (let i = 0; i < collectionData.content.length; i++) {
+          const doc = collectionData.content[i];
+          const validation = v.safeParse(v.object(schema), doc);
+
+          if (!validation.success) {
+            errors.push(
+              `Transformed document in collection "${collectionName}" (index ${i}) does not match schema:`,
+            );
+            // Get first validation issue for clarity
+            if (validation.issues && validation.issues.length > 0) {
+              const issue = validation.issues[0];
+              errors.push(
+                `  Field: ${
+                  issue.path?.map((p) => p.key).join(".") || "(root)"
+                }`,
+              );
+              errors.push(
+                `  Expected: ${issue.expected || "valid value"}`,
+              );
+              errors.push(
+                `  Received: ${issue.received || JSON.stringify(issue.input)}`,
+              );
+              errors.push(
+                `  Issue: ${issue.message}`,
+              );
+            }
+            errors.push(
+              `  💡 Tip: Check your transformation function - it may be returning invalid values.`,
+            );
+            // Only show first invalid document to avoid spam
+            break;
+          }
+        }
+      }
+    }
+
+    // Validate multi-collection documents
+    if (definition.schemas.multiCollections) {
+      for (
+        const [multiCollectionName, types] of Object.entries(
+          definition.schemas.multiCollections,
+        )
+      ) {
+        // Check all instances of this multi-collection type
+        for (
+          const [instanceName, instanceData] of Object.entries(
+            stateAfter.multiCollections || {},
+          )
+        ) {
+          // Match instance to multi-collection type
+          if (!instanceName.startsWith(`${multiCollectionName}@`)) continue;
+
+          // Validate each document
+          for (let i = 0; i < instanceData.content.length; i++) {
+            const doc = instanceData.content[i];
+            const docType = doc._type as string;
+
+            if (!docType || !types[docType]) {
+              continue; // Type might be removed, handled by schema change validation
+            }
+
+            const schema = types[docType];
+            const validation = v.safeParse(v.object(schema), doc);
+
+            if (!validation.success) {
+              errors.push(
+                `Transformed document in multi-collection "${instanceName}" type "${docType}" (index ${i}) does not match schema:`,
+              );
+              if (validation.issues && validation.issues.length > 0) {
+                const issue = validation.issues[0];
+                errors.push(
+                  `  Field: ${
+                    issue.path?.map((p) => p.key).join(".") || "(root)"
+                  }`,
+                );
+                errors.push(
+                  `  Expected: ${issue.expected || "valid value"}`,
+                );
+                errors.push(
+                  `  Received: ${
+                    issue.received || JSON.stringify(issue.input)
+                  }`,
+                );
+                errors.push(
+                  `  Issue: ${issue.message}`,
+                );
+              }
+              errors.push(
+                `  💡 Tip: Check your transformation function for type "${docType}" - it may be returning invalid values.`,
+              );
+              // Only show first invalid document per type to avoid spam
+              break;
+            }
+          }
         }
       }
     }
