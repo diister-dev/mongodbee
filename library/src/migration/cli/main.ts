@@ -122,7 +122,7 @@ async function main(): Promise<void> {
     const cause = (error as any).cause;
     if (cause) {
       // Errors:
-      for(const err of cause.errors ?? []) {
+      for (const err of cause.errors ?? []) {
         console.error(red(` - ${err}`));
       }
     }

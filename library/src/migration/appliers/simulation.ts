@@ -40,6 +40,7 @@ import type {
   UpdateIndexesRule,
 } from "../types.ts";
 import { createMockGenerator } from "@diister/valibot-mock";
+import * as v from "valibot";
 
 /**
  * Configuration options for the simulation applier
@@ -125,13 +126,50 @@ function generateTestDocumentFromSchema(
   }
 
   try {
+    // Wrap the schema in v.object() for valibot-mock
+    const schemaObject = v.object(
+      schema as Record<
+        string,
+        // deno-lint-ignore no-explicit-any
+        v.BaseSchema<any, any, any>
+      >,
+    );
+
     // Use valibot-mock to generate realistic test data from schema
     // deno-lint-ignore no-explicit-any
-    const generator = createMockGenerator(schema as any);
+    const generator = createMockGenerator(schemaObject as any);
     const mockData = generator.generate();
+
+    // Convert ISO date strings to Date objects
+    // valibot-mock generates ISO strings for dates, but validation expects Date objects
+    const convertDates = (obj: any): any => {
+      if (typeof obj !== "object" || obj === null) return obj;
+      if (Array.isArray(obj)) return obj.map(convertDates);
+
+      const result: any = {};
+      for (const [key, value] of Object.entries(obj)) {
+        if (
+          typeof value === "string" &&
+          /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value)
+        ) {
+          // Looks like an ISO date string
+          result[key] = new Date(value);
+        } else if (typeof value === "object" && value !== null) {
+          result[key] = convertDates(value);
+        } else {
+          result[key] = value;
+        }
+      }
+      return result;
+    };
+
+    const processedData = convertDates(mockData);
+
     return {
       _id: "test_simulation_id",
-      ...(typeof mockData === "object" && mockData !== null ? mockData : {}),
+      ...(typeof processedData === "object" && processedData !== null
+        ? processedData
+        : {}),
     };
   } catch (_error) {
     // If mock generation fails, return minimal document
@@ -720,8 +758,11 @@ export class SimulationApplier implements SimulationMigrationApplier {
     if (matchingCollections.length === 0) {
       // No instances found - create a test instance with mock data to validate the transform
       const testInstanceName = `${operation.collectionType}_test_simulation`;
+
+      // Generate test document from PARENT schema (before transformation)
+      const sourceSchema = operation.parentSchema || operation.schema;
       const testDocument = {
-        ...generateTestDocumentFromSchema(operation.schema),
+        ...generateTestDocumentFromSchema(sourceSchema),
         _type: operation.typeName,
       };
 
@@ -736,7 +777,49 @@ export class SimulationApplier implements SimulationMigrationApplier {
 
       // Test the transformation with the mock document
       try {
+        const original = structuredClone(testDocument);
         const transformed = operation.up(testDocument);
+
+        // Validate transformed document against schema
+        if (operation.schema && this.options.strictValidation) {
+          const schemaObject = v.object(
+            operation.schema as Record<
+              string,
+              // deno-lint-ignore no-explicit-any
+              v.BaseSchema<any, any, any>
+            >,
+          );
+          const result = v.safeParse(schemaObject, transformed);
+
+          if (!result.success) {
+            throw new Error(
+              `Transformed document does not match schema: ${
+                result.issues.map((
+                  issue: { path?: Array<{ key: string }>; message: string },
+                ) =>
+                  `${issue.path?.map((p) => p.key).join(".")}: ${issue.message}`
+                ).join(", ")
+              }`,
+            );
+          }
+        }
+
+        // Test reversibility: up -> down should return to original
+        if (operation.down && this.options.strictValidation) {
+          const reversed = operation.down(transformed);
+          const originalStr = JSON.stringify(original);
+          const reversedStr = JSON.stringify(reversed);
+
+          if (originalStr !== reversedStr) {
+            throw new Error(
+              `Transformation is not reversible: down(up(doc)) != doc. ` +
+                `Original had keys: ${Object.keys(original).join(", ")}. ` +
+                `After round-trip has keys: ${
+                  Object.keys(reversed).join(", ")
+                }.`,
+            );
+          }
+        }
 
         // If transform succeeded, update state with transformed document
         state.multiCollections[testInstanceName].content = [transformed];
@@ -760,6 +843,8 @@ export class SimulationApplier implements SimulationMigrationApplier {
       const collection = state.multiCollections[collectionName];
       if (!collection) continue;
 
+      let foundDocuments = false;
+
       // Transform documents of the specified type
       collection.content = collection.content.map((doc) => {
         // Only transform documents of the specified type
@@ -767,8 +852,56 @@ export class SimulationApplier implements SimulationMigrationApplier {
           typeof doc === "object" && doc !== null && "_type" in doc &&
           doc._type === operation.typeName
         ) {
+          foundDocuments = true;
           try {
-            return operation.up(doc);
+            const transformed = operation.up(doc);
+
+            // Validate transformed document against schema
+            if (operation.schema && this.options.strictValidation) {
+              const schemaObject = v.object(
+                operation.schema as Record<
+                  string,
+                  // deno-lint-ignore no-explicit-any
+                  v.BaseSchema<any, any, any>
+                >,
+              );
+
+              const result = v.safeParse(schemaObject, transformed);
+
+              if (!result.success) {
+                throw new Error(
+                  `Transformed document does not match schema in ${collectionName}: ${
+                    result.issues.map((
+                      issue: { path?: Array<{ key: string }>; message: string },
+                    ) =>
+                      `${
+                        issue.path?.map((p) => p.key).join(".")
+                      }: ${issue.message}`
+                    ).join(", ")
+                  }`,
+                );
+              }
+            }
+
+            // Test reversibility: up -> down should return to original
+            if (operation.down && this.options.strictValidation) {
+              const original = structuredClone(doc);
+              const reversed = operation.down(transformed);
+              const originalStr = JSON.stringify(original);
+              const reversedStr = JSON.stringify(reversed);
+
+              if (originalStr !== reversedStr) {
+                throw new Error(
+                  `Transformation is not reversible in ${collectionName}: down(up(doc)) != doc. ` +
+                    `Original had keys: ${Object.keys(original).join(", ")}. ` +
+                    `After round-trip has keys: ${
+                      Object.keys(reversed).join(", ")
+                    }.`,
+                );
+              }
+            }
+
+            return transformed;
           } catch (error) {
             if (this.options.strictValidation) {
               throw new Error(
@@ -784,6 +917,69 @@ export class SimulationApplier implements SimulationMigrationApplier {
         // Return other documents unchanged
         return doc;
       });
+
+      // If no documents of this type were found in this collection,
+      // still validate the transformation with a mock document
+      if (
+        !foundDocuments && operation.schema && this.options.strictValidation
+      ) {
+        // Generate test document from PARENT schema (before transformation)
+        const sourceSchema = operation.parentSchema || operation.schema;
+        const testDocument = {
+          ...generateTestDocumentFromSchema(sourceSchema),
+          _type: operation.typeName,
+        };
+
+        try {
+          const original = structuredClone(testDocument);
+          const transformed = operation.up(testDocument);
+
+          // Validate transformed document against schema
+          const schemaObject = v.object(
+            operation.schema as Record<
+              string,
+              // deno-lint-ignore no-explicit-any
+              v.BaseSchema<any, any, any>
+            >,
+          );
+          const result = v.safeParse(schemaObject, transformed);
+
+          if (!result.success) {
+            throw new Error(
+              `Transformed mock document does not match schema: ${
+                result.issues.map((
+                  issue: { path?: Array<{ key: string }>; message: string },
+                ) =>
+                  `${issue.path?.map((p) => p.key).join(".")}: ${issue.message}`
+                ).join(", ")
+              }`,
+            );
+          }
+
+          // Test reversibility: up -> down should return to original
+          if (operation.down) {
+            const reversed = operation.down(transformed);
+            const originalStr = JSON.stringify(original);
+            const reversedStr = JSON.stringify(reversed);
+
+            if (originalStr !== reversedStr) {
+              throw new Error(
+                `Transformation is not reversible with mock data: down(up(doc)) != doc. ` +
+                  `Original had keys: ${Object.keys(original).join(", ")}. ` +
+                  `After round-trip has keys: ${
+                    Object.keys(reversed).join(", ")
+                  }.`,
+              );
+            }
+          }
+        } catch (error) {
+          throw new Error(
+            `Transform validation failed on mock document for type "${operation.typeName}": ${
+              error instanceof Error ? error.message : "Unknown error"
+            }`,
+          );
+        }
+      }
     }
 
     this.trackOperation(state, operation, "apply");
@@ -1031,7 +1227,19 @@ export class SimulationApplier implements SimulationMigrationApplier {
    * @returns Deep cloned state
    */
   private deepClone(state: SimulationDatabaseState): SimulationDatabaseState {
-    return JSON.parse(JSON.stringify(state));
+    // Use structuredClone instead of JSON.parse(JSON.stringify()) to preserve Date objects
+    // However, exclude operationHistory as it contains operations with schemas (functions) that cannot be cloned
+    const { operationHistory, ...stateWithoutHistory } = state;
+    const cloned = structuredClone(
+      stateWithoutHistory,
+    ) as SimulationDatabaseState;
+
+    // Restore operation history reference (not cloned, shared across states)
+    if (operationHistory) {
+      cloned.operationHistory = operationHistory;
+    }
+
+    return cloned;
   }
 
   /**

@@ -835,7 +835,7 @@ export class MongodbApplier implements MigrationApplier {
         this.db,
         operation.collectionName,
         operation.collectionType,
-        "migration-id-placeholder", // TODO: Pass actual migration ID from context
+        this.currentMigrationId || "unknown",
       );
     } catch (error) {
       throw new Error(
@@ -1097,7 +1097,7 @@ export class MongodbApplier implements MigrationApplier {
         await recordMultiCollectionMigration(
           this.db,
           collectionName,
-          "migration-id-placeholder", // TODO: Pass actual migration ID from context
+          this.currentMigrationId || "unknown",
         );
       }
     } catch (error) {
@@ -1337,7 +1337,7 @@ export class MongodbApplier implements MigrationApplier {
         await recordMultiCollectionMigration(
           this.db,
           collectionName,
-          "migration-id-placeholder", // TODO: Pass actual migration ID from context
+          this.currentMigrationId || "unknown",
         );
       }
     } catch (error) {

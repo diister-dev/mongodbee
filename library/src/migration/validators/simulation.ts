@@ -103,7 +103,10 @@ export class SimulationValidator implements MigrationValidator {
 
     try {
       // Build migration state for current migration
-      const builder = migrationBuilder({ schemas: definition.schemas });
+      const builder = migrationBuilder({
+        schemas: definition.schemas,
+        parentSchemas: definition.parent?.schemas,
+      });
       const state = definition.migrate(builder);
       const operations = state.operations;
 
@@ -141,6 +144,7 @@ export class SimulationValidator implements MigrationValidator {
       for (const parentMigration of parentMigrations) {
         const parentBuilder = migrationBuilder({
           schemas: parentMigration.schemas,
+          parentSchemas: parentMigration.parent?.schemas,
         });
         const parentState = parentMigration.migrate(parentBuilder);
 
@@ -242,6 +246,18 @@ export class SimulationValidator implements MigrationValidator {
           warnings.push(
             "  💡 Note: Multi-collections are models and don't require instantiation in the migration.",
           );
+        }
+      }
+
+      // Validate schema changes require transformations for existing data
+      if (definition.parent && definition.schemas.multiCollections) {
+        const schemaChangeErrors = this.validateSchemaChanges(
+          definition,
+          stateBeforeMigration,
+          operations,
+        );
+        if (schemaChangeErrors.length > 0) {
+          errors.push(...schemaChangeErrors);
         }
       }
 
@@ -396,6 +412,193 @@ export class SimulationValidator implements MigrationValidator {
         data: { stateValidated: false },
       });
     }
+  }
+
+  /**
+   * Validates that schema changes for multi-collections have corresponding transformations
+   *
+   * @private
+   * @param definition - The migration definition
+   * @param stateBefore - Database state before this migration
+   * @param operations - Operations in this migration
+   * @returns Array of error messages (empty if validation passes)
+   */
+  private validateSchemaChanges(
+    definition: MigrationDefinition,
+    stateBefore: SimulationDatabaseState,
+    operations: MigrationRule[],
+  ): string[] {
+    const errors: string[] = [];
+
+    if (!definition.parent || !definition.schemas.multiCollections) {
+      return errors;
+    }
+
+    const parentSchemas = definition.parent.schemas.multiCollections || {};
+    const currentSchemas = definition.schemas.multiCollections;
+
+    // Check each multi-collection for schema changes
+    for (const multiCollectionName of Object.keys(currentSchemas)) {
+      const parentSchema = parentSchemas[multiCollectionName];
+      const currentSchema = currentSchemas[multiCollectionName];
+
+      if (!parentSchema) {
+        // New multi-collection, no validation needed
+        continue;
+      }
+
+      // Check each type within the multi-collection
+      for (const typeName of Object.keys(currentSchema)) {
+        const parentTypeSchema = parentSchema[typeName];
+        const currentTypeSchema = currentSchema[typeName];
+
+        if (!parentTypeSchema) {
+          // New type, no validation needed
+          continue;
+        }
+
+        // Detect if schema has changed
+        const schemaChanged = JSON.stringify(parentTypeSchema) !==
+          JSON.stringify(currentTypeSchema);
+
+        if (schemaChanged) {
+          // Check if there are instances of this multi-collection type in the state
+          // Multi-collections are stored by instance name (e.g., "comments@system_comments")
+          // We need to find all instances and check if they contain documents of this type
+          let totalDocumentsOfType = 0;
+          const instanceNames: string[] = [];
+
+          if (stateBefore.multiCollections) {
+            for (
+              const [instanceName, instanceData] of Object.entries(
+                stateBefore.multiCollections,
+              )
+            ) {
+              // Check if this instance belongs to our multi-collection type
+              // Instance names follow pattern: "{type}@{instance_name}"
+              if (instanceName.startsWith(`${multiCollectionName}@`)) {
+                // Count documents of this specific type
+                const docsOfType = instanceData.content.filter(
+                  (doc: Record<string, unknown>) => doc._type === typeName,
+                );
+                if (docsOfType.length > 0) {
+                  totalDocumentsOfType += docsOfType.length;
+                  instanceNames.push(instanceName);
+                }
+              }
+            }
+          }
+
+          // If there are existing documents OR if this type was defined in parent schema,
+          // we need a transformation
+          const typeWasDefinedInParent = parentTypeSchema !== undefined;
+
+          if (totalDocumentsOfType > 0 || typeWasDefinedInParent) {
+            // Check if there's a transform operation for this type
+            const hasTransform = operations.some((op) => {
+              if (op.type === "transform_multicollection_type") {
+                return op.collectionType === multiCollectionName &&
+                  op.typeName === typeName;
+              }
+              return false;
+            });
+
+            if (!hasTransform) {
+              if (totalDocumentsOfType > 0) {
+                errors.push(
+                  `Schema for multi-collection "${multiCollectionName}.${typeName}" has changed but no transformation is provided.`,
+                );
+                errors.push(
+                  `  There are ${totalDocumentsOfType} existing document(s) of type "${typeName}" across ${instanceNames.length} instance(s): ${
+                    instanceNames.join(", ")
+                  }`,
+                );
+              } else {
+                // No existing documents, but type was defined in parent schema
+                // This means future instances could be created with old data
+                errors.push(
+                  `Schema for multi-collection "${multiCollectionName}.${typeName}" has changed but no transformation is provided.`,
+                );
+                errors.push(
+                  `  While no documents of this type exist currently, the type was defined in the parent schema.`,
+                );
+                errors.push(
+                  `  Future multi-collection instances could contain documents with the old schema.`,
+                );
+              }
+              errors.push(
+                `  💡 Tip: Add a .multiCollection("${multiCollectionName}").transformType("${typeName}", {...}) operation.`,
+              );
+            }
+          }
+        }
+      }
+
+      // Check for REMOVED types (types in parent but not in current schema)
+      // This detects deletions or renames that need explicit migration
+      for (const removedTypeName of Object.keys(parentSchema)) {
+        if (!currentSchema[removedTypeName]) {
+          // Type was removed from schema - check if there are existing documents
+          let totalDocumentsOfType = 0;
+          const instanceNames: string[] = [];
+
+          if (stateBefore.multiCollections) {
+            for (
+              const [instanceName, instanceData] of Object.entries(
+                stateBefore.multiCollections,
+              )
+            ) {
+              if (instanceName.startsWith(`${multiCollectionName}@`)) {
+                const docsOfType = instanceData.content.filter(
+                  (doc: Record<string, unknown>) =>
+                    doc._type === removedTypeName,
+                );
+                if (docsOfType.length > 0) {
+                  totalDocumentsOfType += docsOfType.length;
+                  instanceNames.push(instanceName);
+                }
+              }
+            }
+          }
+
+          // Always error if type was removed, whether there are documents or not
+          // Because: 1) existing documents need migration, 2) future instances could have old data
+          errors.push(
+            `Type "${multiCollectionName}.${removedTypeName}" was removed from schema but no migration is provided.`,
+          );
+
+          if (totalDocumentsOfType > 0) {
+            errors.push(
+              `  There are ${totalDocumentsOfType} existing document(s) of this type across ${instanceNames.length} instance(s): ${
+                instanceNames.join(", ")
+              }`,
+            );
+            errors.push(
+              `  These documents will become orphaned without a transformation.`,
+            );
+          } else {
+            errors.push(
+              `  While no documents exist currently, future multi-collection instances could contain documents of this type.`,
+            );
+          }
+
+          errors.push(
+            `  💡 Options:`,
+          );
+          errors.push(
+            `     1. Rename: Add .multiCollection("${multiCollectionName}").type("${removedTypeName}").transform({ up: (doc) => ({ ...doc, _type: "new_name" }), down: ... })`,
+          );
+          errors.push(
+            `     2. Delete: Add .multiCollection("${multiCollectionName}").type("${removedTypeName}").transform({ up: () => null, down: ... })`,
+          );
+          errors.push(
+            `     3. Merge: Transform into another existing type with appropriate field mapping`,
+          );
+        }
+      }
+    }
+
+    return errors;
   }
 
   /**

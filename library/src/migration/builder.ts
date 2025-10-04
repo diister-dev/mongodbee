@@ -51,6 +51,9 @@ import type {
  */
 export const MigrationBuilderOptionsSchema = v.object({
   schemas: v.record(v.string(), v.record(v.string(), v.any())),
+  parentSchemas: v.optional(
+    v.record(v.string(), v.record(v.string(), v.any())),
+  ),
 });
 
 /**
@@ -156,6 +159,11 @@ function createMultiCollectionTypeBuilder(
       const typeSchema = options.schemas?.multiCollections?.[collectionType]
         ?.[typeName];
 
+      // Extract parent schema if available
+      const parentTypeSchema = options.parentSchemas?.multiCollections
+        ?.[collectionType]
+        ?.[typeName];
+
       const transformRule: TransformMultiCollectionTypeRule = {
         type: "transform_multicollection_type",
         collectionType,
@@ -163,6 +171,7 @@ function createMultiCollectionTypeBuilder(
         up: rule.up,
         down: rule.down,
         schema: typeSchema,
+        parentSchema: parentTypeSchema,
       };
 
       state.operations.push(transformRule);
@@ -233,7 +242,8 @@ function createMultiCollectionInstanceBuilder(
               }`,
             );
           }
-          return parseResult.output;
+          // Return original document instead of parseResult.output to preserve Date objects
+          return doc;
         });
       }
 

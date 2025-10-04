@@ -85,8 +85,10 @@ export type TransformMultiCollectionTypeRule<
   typeName: string;
   up: (doc: T) => U;
   down: (doc: U) => T;
-  /** Optional Valibot schema for the type - used to generate mock data for simulation */
+  /** Optional Valibot schema for the type (new schema) - used to validate transformed documents */
   schema?: unknown;
+  /** Optional Valibot schema from parent migration (old schema) - used to generate mock data for simulation */
+  parentSchema?: unknown;
 };
 
 /**

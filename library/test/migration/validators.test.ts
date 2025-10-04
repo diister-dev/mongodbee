@@ -548,6 +548,177 @@ Deno.test("SimulationValidator - detects schema without newMultiCollection", asy
   assert(result.warnings.some((w) => w.includes("model")));
 });
 
+Deno.test("SimulationValidator - detects schema change without transformation", async () => {
+  // Parent migration: defines user_comment with simple content
+  const parentSchemas = {
+    collections: {},
+    multiCollections: {
+      comments: {
+        user_comment: {
+          authorId: v.string(),
+          content: v.string(), // Simple string
+          createdAt: v.date(),
+        },
+      },
+    },
+  };
+
+  const parentMigration = migrationDefinition(
+    "2024_01_01_1200_PARENT@parent",
+    "Parent",
+    {
+      parent: null,
+      schemas: parentSchemas,
+      migrate(m) {
+        // Create an instance with old schema
+        m.newMultiCollection("comments@test", "comments")
+          .seedType("user_comment", [
+            {
+              authorId: "user1",
+              content: "Simple text content",
+              createdAt: new Date(),
+            },
+          ]);
+        return m.compile();
+      },
+    },
+  );
+
+  // Child migration: changes content to object WITHOUT transformation
+  const childSchemas = {
+    collections: {},
+    multiCollections: {
+      comments: {
+        user_comment: {
+          authorId: v.string(),
+          content: v.object({
+            type: v.literal("text"),
+            value: v.string(),
+          }), // Changed to object!
+          createdAt: v.date(),
+        },
+      },
+    },
+  };
+
+  const childMigration = migrationDefinition(
+    "2024_01_01_1300_CHILD@child",
+    "Child",
+    {
+      parent: parentMigration,
+      schemas: childSchemas,
+      migrate(m) {
+        // NO transformation provided!
+        return m.compile();
+      },
+    },
+  );
+
+  const validator = createSimulationValidator();
+  const result = await validator.validateMigration(childMigration);
+
+  // Should FAIL because schema changed but no transformation
+  assertEquals(result.success, false);
+  assert(result.errors.some((e) => e.includes("user_comment")));
+  assert(result.errors.some((e) => e.includes("transformation")));
+});
+
+Deno.test("SimulationValidator - accepts schema change WITH valid transformation", async () => {
+  // Parent migration: defines user_comment with simple content
+  const parentSchemas = {
+    collections: {},
+    multiCollections: {
+      comments: {
+        user_comment: {
+          authorId: v.string(),
+          content: v.string(),
+          createdAt: v.date(),
+        },
+      },
+    },
+  };
+
+  const parentMigration = migrationDefinition(
+    "2024_01_01_1200_PARENT@parent",
+    "Parent",
+    {
+      parent: null,
+      schemas: parentSchemas,
+      migrate(m) {
+        m.newMultiCollection("comments@test", "comments")
+          .seedType("user_comment", [
+            {
+              authorId: "user1",
+              content: "Simple text content",
+              createdAt: new Date(),
+            },
+          ]);
+        return m.compile();
+      },
+    },
+  );
+
+  // Child migration: changes content to object WITH transformation
+  const childSchemas = {
+    collections: {},
+    multiCollections: {
+      comments: {
+        user_comment: {
+          authorId: v.string(),
+          content: v.object({
+            type: v.literal("text"),
+            value: v.string(),
+          }),
+          createdAt: v.date(),
+        },
+      },
+    },
+  };
+
+  const childMigration = migrationDefinition(
+    "2024_01_01_1300_CHILD@child",
+    "Child",
+    {
+      parent: parentMigration,
+      schemas: childSchemas,
+      migrate(m) {
+        // Transform old string content to new object format
+        m.multiCollection("comments")
+          .type("user_comment")
+          .transform({
+            up: (doc: Record<string, unknown>) => ({
+              ...doc,
+              content: {
+                type: "text",
+                value: doc.content, // Wrap string in object
+              },
+            }),
+            down: (doc: Record<string, unknown>) => ({
+              ...doc,
+              content: (doc.content as { value: string }).value, // Extract string
+            }),
+          })
+          .end()
+          .end();
+        return m.compile();
+      },
+    },
+  );
+
+  const validator = createSimulationValidator();
+  const result = await validator.validateMigration(childMigration);
+
+  // DEBUG: Afficher les erreurs
+  if (!result.success) {
+    console.log("❌ Test failed! Errors:");
+    result.errors.forEach((err, i) => console.log(`  ${i + 1}. ${err}`));
+  }
+
+  // Should PASS because transformation is provided
+  assertEquals(result.success, true);
+  assertEquals(result.errors.length, 0);
+});
+
 Deno.test("validateMigrationWithSimulation - convenience function", async () => {
   const schemas = {
     collections: {
