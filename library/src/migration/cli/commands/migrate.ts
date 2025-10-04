@@ -22,6 +22,7 @@ import {
   markMigrationAsFailed,
 } from "../../state.ts";
 import { MongodbApplier } from "../../appliers/mongodb.ts";
+import { createSimulationApplier, createEmptyDatabaseState } from "../../appliers/simulation.ts";
 import { createSimulationValidator } from "../../validators/simulation.ts";
 import { migrationBuilder } from "../../builder.ts";
 import { validateMigrationChainWithProjectSchema } from "../../schema-validation.ts";
@@ -124,13 +125,80 @@ export async function migrateCommand(
     console.log(yellow(`⚡ Pending migrations: ${pendingMigrations.length}`));
     console.log();
 
-    // Apply each pending migration
+    // Create validators and applier
     const applier = new MongodbApplier(db);
     const simulationValidator = createSimulationValidator({
       validateReversibility: true,
       strictValidation: true,
       maxOperations: 1000,
     });
+
+    // STEP 1: Validate ALL pending migrations BEFORE applying any
+    console.log(bold(blue("🧪 Validating all pending migrations...")));
+    console.log();
+
+    // Create simulation applier to build state progressively
+    const simulationApplier = createSimulationApplier({
+      strictValidation: true,
+      trackHistory: false,
+    });
+    let simulationState = createEmptyDatabaseState();
+
+    for (const migration of pendingMigrations) {
+      console.log(
+        dim(`  → ${migration.name} ${dim(`(${migration.id})`)}`),
+      );
+
+      // Validate migration with current simulation state
+      const validationResult = await simulationValidator.validateMigration(
+        migration,
+        simulationState, // Pass current state (from previous migrations)
+      );
+
+      if (!validationResult.success) {
+        console.error(red(`    ✗ Simulation validation failed:`));
+        for (const error of validationResult.errors) {
+          console.error(red(`      ${error}`));
+        }
+        console.log();
+        throw new Error(
+          `Migration ${migration.name} failed validation. No migrations were applied.`,
+        );
+      }
+
+      if (validationResult.warnings.length > 0) {
+        for (const warning of validationResult.warnings) {
+          console.log(yellow(`    ⚠ ${warning}`));
+        }
+      }
+
+      console.log(
+        green(
+          `    ✓ Valid (${
+            validationResult.data?.operationCount || 0
+          } operations)`,
+        ),
+      );
+
+      // Apply migration to simulation state for next migration validation
+      const builder = migrationBuilder({
+        schemas: migration.schemas,
+        parentSchemas: migration.parent?.schemas,
+      });
+      const state = migration.migrate(builder);
+
+      for (const operation of state.operations) {
+        simulationState = simulationApplier.applyOperation(simulationState, operation);
+      }
+    }
+
+    console.log();
+    console.log(green(bold("✓ All migrations validated successfully!")));
+    console.log();
+
+    // STEP 2: Apply each pending migration
+    console.log(bold(blue("📝 Applying migrations...")));
+    console.log();
 
     for (const migration of pendingMigrations) {
       console.log(
@@ -145,36 +213,8 @@ export async function migrateCommand(
       try {
         const startTime = Date.now();
 
-        // Step 1: Validate migration with simulation
-        console.log(dim("  🧪 Validating with simulation..."));
-        const validationResult = await simulationValidator.validateMigration(
-          migration,
-        );
-
-        if (!validationResult.success) {
-          console.error(red(`  ✗ Simulation validation failed:`));
-          for (const error of validationResult.errors) {
-            console.error(red(`    ${error}`));
-          }
-          throw new Error(`Migration simulation validation failed`);
-        }
-
-        if (validationResult.warnings.length > 0) {
-          for (const warning of validationResult.warnings) {
-            console.log(yellow(`  ⚠ ${warning}`));
-          }
-        }
-
-        console.log(
-          green(
-            `  ✓ Simulation validation passed (${
-              validationResult.data?.operationCount || 0
-            } operations)`,
-          ),
-        );
-
-        // Step 2: Execute migration on real database
-        console.log(dim("  📝 Executing migration..."));
+        // Execute migration on real database
+        console.log(dim("  📝 Executing operations..."));
         const builder = migrationBuilder({ schemas: migration.schemas });
         const state = migration.migrate(builder);
 
@@ -186,7 +226,7 @@ export async function migrateCommand(
           await applier.applyOperation(operation);
         }
 
-        // Step 3: Synchronize validators and indexes with migration schemas
+        // Synchronize validators and indexes with migration schemas
         console.log(dim("  🔧 Synchronizing validators and indexes..."));
         await applier.synchronizeSchemas(migration.schemas);
 

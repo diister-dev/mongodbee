@@ -290,3 +290,150 @@ Deno.test("migrate - uses custom config path when provided", async () => {
     });
   });
 });
+
+Deno.test("migrate - validates all migrations before applying any", async () => {
+  await withTempDir(async (tempDir) => {
+    await withTestDb(async (db, _client, dbName) => {
+      // Initialize project
+      await initCommand({ cwd: tempDir, force: true });
+
+      // Update config with test database
+      const configContent = `
+export default {
+  database: {
+    connection: { uri: "${TEST_MONGODB_URI}" },
+    name: "${dbName}",
+  },
+  paths: {
+    migrations: "./migrations",
+    schemas: "./schemas.ts",
+  },
+};`;
+      await Deno.writeTextFile(`${tempDir}/mongodbee.config.ts`, configContent);
+
+      // Generate first migration (valid)
+      await generateCommand({ name: "create_users", cwd: tempDir });
+      await delay(10);
+
+      // Generate second migration (valid)
+      await generateCommand({ name: "add_posts", cwd: tempDir });
+      await delay(10);
+
+      // Generate third migration (we'll make it invalid)
+      await generateCommand({ name: "add_age_field", cwd: tempDir });
+
+      const migrationsDir = getMigrationsDir(tempDir);
+      const files = await listMigrationFiles(migrationsDir);
+      assertEquals(files.length, 3);
+
+      // Make first migration valid
+      const migration1Path = getMigrationPath(tempDir, files[0]);
+      const migration1Content = `
+import { migrationDefinition } from "@diister/mongodbee/migration";
+import { migrationBuilder } from "@diister/mongodbee/migration";
+import * as v from "valibot";
+
+const userSchema = {
+  name: v.pipe(v.string(), v.nonEmpty()),
+  email: v.pipe(v.string(), v.email()),
+};
+
+export default migrationDefinition({
+  id: "${files[0].replace(".ts", "")}",
+  name: "create_users",
+  parent: null,
+  schemas: { collections: { users: userSchema }, multiCollections: {} },
+  migrate: (b) => b.createCollection("users", userSchema).compile(),
+});`;
+      await Deno.writeTextFile(migration1Path, migration1Content);
+
+      // Make second migration valid
+      const migration2Path = getMigrationPath(tempDir, files[1]);
+      const migration2Content = `
+import { migrationDefinition } from "@diister/mongodbee/migration";
+import { migrationBuilder } from "@diister/mongodbee/migration";
+import * as v from "valibot";
+
+const userSchema = {
+  name: v.pipe(v.string(), v.nonEmpty()),
+  email: v.pipe(v.string(), v.email()),
+};
+
+const postSchema = {
+  title: v.pipe(v.string(), v.nonEmpty()),
+  content: v.string(),
+};
+
+export default migrationDefinition({
+  id: "${files[1].replace(".ts", "")}",
+  name: "add_posts",
+  parent: "${files[0].replace(".ts", "")}",
+  schemas: { collections: { users: userSchema, posts: postSchema }, multiCollections: {} },
+  migrate: (b) => b.createCollection("posts", postSchema).compile(),
+});`;
+      await Deno.writeTextFile(migration2Path, migration2Content);
+
+      // Make third migration INVALID (schema change without transformation)
+      const migration3Path = getMigrationPath(tempDir, files[2]);
+      const migration3Content = `
+import { migrationDefinition } from "@diister/mongodbee/migration";
+import { migrationBuilder } from "@diister/mongodbee/migration";
+import * as v from "valibot";
+
+const userSchema = {
+  name: v.pipe(v.string(), v.nonEmpty()),
+  email: v.pipe(v.string(), v.email()),
+  age: v.number(), // ❌ NEW REQUIRED FIELD without transformation
+};
+
+const postSchema = {
+  title: v.pipe(v.string(), v.nonEmpty()),
+  content: v.string(),
+};
+
+export default migrationDefinition({
+  id: "${files[2].replace(".ts", "")}",
+  name: "add_age_field",
+  parent: "${files[1].replace(".ts", "")}",
+  schemas: { collections: { users: userSchema, posts: postSchema }, multiCollections: {} },
+  migrate: (b) => b.compile(), // ❌ NO TRANSFORMATION - This should fail validation
+});`;
+      await Deno.writeTextFile(migration3Path, migration3Content);
+
+      // Try to apply migrations
+      let errorThrown = false;
+      let errorMessage = "";
+      try {
+        await migrateCommand({ cwd: tempDir });
+      } catch (error) {
+        errorThrown = true;
+        errorMessage = error instanceof Error ? error.message : String(error);
+      }
+
+      // Should fail during validation phase
+      assert(errorThrown, "Expected migration to throw an error");
+      assert(
+        errorMessage.includes("add_age_field") ||
+          errorMessage.includes("No migrations were applied"),
+        `Expected error about migration validation, got: ${errorMessage}`,
+      );
+
+      // CRITICAL: Check that NO migrations were applied
+      const appliedIds = await getAppliedMigrationIds(db);
+      assertEquals(
+        appliedIds.length,
+        0,
+        "No migrations should be applied when validation fails",
+      );
+
+      // Verify collections were not created
+      const collections = await db.listCollections().toArray();
+      const collectionNames = collections.map((c) => c.name);
+      assertEquals(
+        collectionNames.filter((n) => n === "users" || n === "posts").length,
+        0,
+        "No collections should be created when validation fails",
+      );
+    });
+  });
+});

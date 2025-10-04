@@ -16,6 +16,7 @@ import { rollbackCommand } from "./commands/rollback.ts";
 import { statusCommand } from "./commands/status.ts";
 import { historyCommand } from "./commands/history.ts";
 import { initCommand } from "./commands/init.ts";
+import { checkCommand } from "./commands/check.ts";
 
 import packageInfo from "../../../deno.json" with { type: "json" };
 
@@ -38,6 +39,11 @@ const commands = [
     name: "generate",
     description: "Generate a new migration file",
     handler: generateCommand,
+  },
+  {
+    name: "check",
+    description: "Check migrations validity without applying",
+    handler: checkCommand,
   },
   {
     name: "migrate",
@@ -74,6 +80,7 @@ ${yellow("USAGE:")}
 ${yellow("COMMANDS:")}
   ${green("init")}      Initialize migration configuration
   ${green("generate")}  Generate a new migration file
+  ${green("check")}     Check migrations validity without applying
   ${green("migrate")}   Apply pending migrations
   ${green("status")}    Show migration status
   ${green("history")}   Show migration operation history
@@ -115,10 +122,12 @@ async function main(): Promise<void> {
   }
 
   try {
+    // deno-lint-ignore no-explicit-any
     await cmd.handler(args as any);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(red(`Error: ${message}`));
+    // deno-lint-ignore no-explicit-any
     const cause = (error as any).cause;
     if (cause) {
       // Errors:
