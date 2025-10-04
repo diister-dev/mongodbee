@@ -6,13 +6,21 @@
  * @module
  */
 
-import { green, yellow, red, dim, blue, bold } from "@std/fmt/colors";
+import { blue, bold, dim, green, red, yellow } from "@std/fmt/colors";
 import { MongoClient } from "../../../mongodb.ts";
 import * as path from "@std/path";
 
 import { loadConfig } from "../../config/loader.ts";
-import { loadAllMigrations, buildMigrationChain, getPendingMigrations } from "../../discovery.ts";
-import { getAppliedMigrationIds, markMigrationAsApplied, markMigrationAsFailed } from "../../state.ts";
+import {
+  buildMigrationChain,
+  getPendingMigrations,
+  loadAllMigrations,
+} from "../../discovery.ts";
+import {
+  getAppliedMigrationIds,
+  markMigrationAsApplied,
+  markMigrationAsFailed,
+} from "../../state.ts";
 import { MongodbApplier } from "../../appliers/mongodb.ts";
 import { createSimulationValidator } from "../../validators/simulation.ts";
 import { migrationBuilder } from "../../builder.ts";
@@ -27,7 +35,9 @@ export interface MigrateCommandOptions {
 /**
  * Apply pending migrations
  */
-export async function migrateCommand(options: MigrateCommandOptions = {}): Promise<void> {
+export async function migrateCommand(
+  options: MigrateCommandOptions = {},
+): Promise<void> {
   console.log(bold(blue("🐝 Applying migrations...")));
   console.log();
 
@@ -39,8 +49,12 @@ export async function migrateCommand(options: MigrateCommandOptions = {}): Promi
     const cwd = options.cwd || Deno.cwd();
     const config = await loadConfig({ configPath: options.configPath, cwd });
 
-    const migrationsDir = path.resolve(cwd, config.paths?.migrations || "./migrations");
-    const connectionUri = config.database?.connection?.uri || "mongodb://localhost:27017";
+    const migrationsDir = path.resolve(
+      cwd,
+      config.paths?.migrations || "./migrations",
+    );
+    const connectionUri = config.database?.connection?.uri ||
+      "mongodb://localhost:27017";
     const dbName = config.database?.name || "myapp";
 
     console.log(dim(`Migrations directory: ${migrationsDir}`));
@@ -69,8 +83,14 @@ export async function migrateCommand(options: MigrateCommandOptions = {}): Promi
     // Validate that last migration matches project schema
     if (allMigrations.length > 0) {
       console.log(dim("Validating schema consistency..."));
-      const schemaPath = path.resolve(cwd, config.paths?.schemas || "./schemas.ts");
-      const schemaValidation = await validateMigrationChainWithProjectSchema(allMigrations, schemaPath);
+      const schemaPath = path.resolve(
+        cwd,
+        config.paths?.schemas || "./schemas.ts",
+      );
+      const schemaValidation = await validateMigrationChainWithProjectSchema(
+        allMigrations,
+        schemaPath,
+      );
 
       if (schemaValidation.warnings.length > 0) {
         for (const warning of schemaValidation.warnings) {
@@ -111,11 +131,13 @@ export async function migrateCommand(options: MigrateCommandOptions = {}): Promi
     const simulationValidator = createSimulationValidator({
       validateReversibility: true,
       strictValidation: true,
-      maxOperations: 1000
+      maxOperations: 1000,
     });
 
     for (const migration of pendingMigrations) {
-      console.log(bold(`Applying: ${blue(migration.name)} ${dim(`(${migration.id})`)}`));
+      console.log(
+        bold(`Applying: ${blue(migration.name)} ${dim(`(${migration.id})`)}`),
+      );
 
       if (options.dryRun) {
         console.log(dim("  [DRY RUN] Skipping actual execution"));
@@ -127,7 +149,9 @@ export async function migrateCommand(options: MigrateCommandOptions = {}): Promi
 
         // Step 1: Validate migration with simulation
         console.log(dim("  🧪 Validating with simulation..."));
-        const validationResult = await simulationValidator.validateMigration(migration);
+        const validationResult = await simulationValidator.validateMigration(
+          migration,
+        );
 
         if (!validationResult.success) {
           console.error(red(`  ✗ Simulation validation failed:`));
@@ -143,7 +167,13 @@ export async function migrateCommand(options: MigrateCommandOptions = {}): Promi
           }
         }
 
-        console.log(green(`  ✓ Simulation validation passed (${validationResult.data?.operationCount || 0} operations)`));
+        console.log(
+          green(
+            `  ✓ Simulation validation passed (${
+              validationResult.data?.operationCount || 0
+            } operations)`,
+          ),
+        );
 
         // Step 2: Execute migration on real database
         console.log(dim("  📝 Executing migration..."));
@@ -165,15 +195,29 @@ export async function migrateCommand(options: MigrateCommandOptions = {}): Promi
         const duration = Date.now() - startTime;
 
         // Mark as applied
-        await markMigrationAsApplied(db, migration.id, migration.name, duration);
+        await markMigrationAsApplied(
+          db,
+          migration.id,
+          migration.name,
+          duration,
+        );
 
-        console.log(green(`  ✓ Applied successfully ${dim(`(${duration}ms)`)}`));
+        console.log(
+          green(`  ✓ Applied successfully ${dim(`(${duration}ms)`)}`),
+        );
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage = error instanceof Error
+          ? error.message
+          : String(error);
         console.error(red(`  ✗ Failed: ${errorMessage}`));
 
         // Mark as failed
-        await markMigrationAsFailed(db, migration.id, migration.name, errorMessage);
+        await markMigrationAsFailed(
+          db,
+          migration.id,
+          migration.name,
+          errorMessage,
+        );
 
         throw new Error(`Migration ${migration.name} failed: ${errorMessage}`);
       }
@@ -182,7 +226,6 @@ export async function migrateCommand(options: MigrateCommandOptions = {}): Promi
     }
 
     console.log(green(bold("✓ All migrations applied successfully!")));
-
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(red(bold("Error:")), message);

@@ -6,13 +6,16 @@
  * @module
  */
 
-import { green, yellow, red, dim, blue, bold } from "@std/fmt/colors";
+import { blue, bold, dim, green, red, yellow } from "@std/fmt/colors";
 import { MongoClient } from "../../../mongodb.ts";
 import * as path from "@std/path";
 
 import { loadConfig } from "../../config/loader.ts";
-import { loadAllMigrations, buildMigrationChain } from "../../discovery.ts";
-import { getLastAppliedMigration, markMigrationAsReverted } from "../../state.ts";
+import { buildMigrationChain, loadAllMigrations } from "../../discovery.ts";
+import {
+  getLastAppliedMigration,
+  markMigrationAsReverted,
+} from "../../state.ts";
 import { MongodbApplier } from "../../appliers/mongodb.ts";
 import { migrationBuilder } from "../../builder.ts";
 
@@ -36,14 +39,17 @@ async function confirm(message: string): Promise<boolean> {
     return false;
   }
 
-  const answer = new TextDecoder().decode(buf.subarray(0, n)).trim().toLowerCase();
-  return answer === 'yes';
+  const answer = new TextDecoder().decode(buf.subarray(0, n)).trim()
+    .toLowerCase();
+  return answer === "yes";
 }
 
 /**
  * Rolls back the last applied migration
  */
-export async function rollbackCommand(options: RollbackCommandOptions = {}): Promise<void> {
+export async function rollbackCommand(
+  options: RollbackCommandOptions = {},
+): Promise<void> {
   console.log(bold(blue("🐝 Rolling back migration...")));
   console.log();
 
@@ -55,8 +61,12 @@ export async function rollbackCommand(options: RollbackCommandOptions = {}): Pro
     const cwd = options.cwd || Deno.cwd();
     const config = await loadConfig({ configPath: options.configPath, cwd });
 
-    const migrationsDir = path.resolve(cwd, config.paths?.migrations || "./migrations");
-    const connectionUri = config.database?.connection?.uri || "mongodb://localhost:27017";
+    const migrationsDir = path.resolve(
+      cwd,
+      config.paths?.migrations || "./migrations",
+    );
+    const connectionUri = config.database?.connection?.uri ||
+      "mongodb://localhost:27017";
     const dbName = config.database?.name || "myapp";
 
     console.log(dim(`Migrations directory: ${migrationsDir}`));
@@ -86,15 +96,19 @@ export async function rollbackCommand(options: RollbackCommandOptions = {}): Pro
     const migrationsWithFiles = await loadAllMigrations(migrationsDir);
     const allMigrations = buildMigrationChain(migrationsWithFiles);
 
-    const migrationToRollback = allMigrations.find(m => m.id === lastApplied.id);
+    const migrationToRollback = allMigrations.find((m) =>
+      m.id === lastApplied.id
+    );
 
     if (!migrationToRollback) {
       throw new Error(
-        `Migration ${lastApplied.id} is marked as applied but not found in filesystem`
+        `Migration ${lastApplied.id} is marked as applied but not found in filesystem`,
       );
     }
 
-    console.log(bold(`Last applied migration: ${blue(migrationToRollback.name)}`));
+    console.log(
+      bold(`Last applied migration: ${blue(migrationToRollback.name)}`),
+    );
     console.log(dim(`  ID: ${migrationToRollback.id}`));
     console.log(dim(`  Applied at: ${lastApplied.appliedAt?.toISOString()}`));
     console.log();
@@ -103,13 +117,15 @@ export async function rollbackCommand(options: RollbackCommandOptions = {}): Pro
     const builder = migrationBuilder({ schemas: migrationToRollback.schemas });
     const state = migrationToRollback.migrate(builder);
 
-    if (state.hasProperty('irreversible')) {
+    if (state.hasProperty("irreversible")) {
       console.log(red("⚠  This migration is marked as IRREVERSIBLE."));
       console.log(red("   Rolling it back may lead to data loss."));
       console.log();
 
       if (!options.force) {
-        const confirmed = await confirm("Are you sure you want to rollback this migration?");
+        const confirmed = await confirm(
+          "Are you sure you want to rollback this migration?",
+        );
 
         if (!confirmed) {
           console.log(yellow("Rollback cancelled."));
@@ -132,12 +148,24 @@ export async function rollbackCommand(options: RollbackCommandOptions = {}): Pro
         try {
           await applier.applyReverseOperation(operation);
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          console.log(yellow(`  ⚠ Could not reverse ${operation.type}: ${message}`));
+          const message = error instanceof Error
+            ? error.message
+            : String(error);
+          console.log(
+            yellow(`  ⚠ Could not reverse ${operation.type}: ${message}`),
+          );
 
-          if (operation.type === 'create_collection') {
-            console.log(dim("    Note: Collection creation cannot be automatically reversed."));
-            console.log(dim("    You may need to manually drop the collection if needed."));
+          if (operation.type === "create_collection") {
+            console.log(
+              dim(
+                "    Note: Collection creation cannot be automatically reversed.",
+              ),
+            );
+            console.log(
+              dim(
+                "    You may need to manually drop the collection if needed.",
+              ),
+            );
           }
         }
       }
@@ -148,14 +176,14 @@ export async function rollbackCommand(options: RollbackCommandOptions = {}): Pro
       console.log();
       console.log(green(bold("✓ Migration rolled back successfully!")));
       console.log();
-      console.log(dim("  Note: The migration file still exists in the filesystem."));
+      console.log(
+        dim("  Note: The migration file still exists in the filesystem."),
+      );
       console.log(dim("  To re-apply it, run `mongodbee apply`."));
-
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`Failed to rollback migration: ${message}`);
     }
-
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(red(bold("Error:")), message);

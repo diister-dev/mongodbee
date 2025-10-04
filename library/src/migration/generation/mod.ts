@@ -10,9 +10,9 @@ import { ulid } from "@std/ulid/ulid";
  * The format is `YYYY_MM_DD_<ULID>_<name>`, where `<ID>` is a zero-padded number to ensure uniqueness.
  */
 export function generateMigrationId(name?: string): string {
-    const date = new Date();
-    const datePart = date.toISOString().split('T')[0].replace(/-/g, '_');
-    const uniquePart = ulid();
-    const namePart = name ? `_${name.replace(/\s+/g, '_').toLowerCase()}` : '';
-    return `${datePart}_${uniquePart}${namePart}`;
+  const date = new Date();
+  const datePart = date.toISOString().split("T")[0].replace(/-/g, "_");
+  const uniquePart = ulid();
+  const namePart = name ? `_${name.replace(/\s+/g, "_").toLowerCase()}` : "";
+  return `${datePart}_${uniquePart}${namePart}`;
 }

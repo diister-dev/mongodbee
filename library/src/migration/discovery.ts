@@ -8,7 +8,7 @@
  */
 
 import * as path from "@std/path";
-import type { MigrationDefinition } from './types.ts';
+import type { MigrationDefinition } from "./types.ts";
 
 /**
  * Discovers all migration files in a directory
@@ -16,11 +16,13 @@ import type { MigrationDefinition } from './types.ts';
  * @param migrationsDir - Directory containing migration files
  * @returns Array of migration file names sorted alphabetically
  */
-export async function discoverMigrationFiles(migrationsDir: string): Promise<string[]> {
+export async function discoverMigrationFiles(
+  migrationsDir: string,
+): Promise<string[]> {
   try {
     const entries = [];
     for await (const entry of Deno.readDir(migrationsDir)) {
-      if (entry.isFile && entry.name.endsWith('.ts')) {
+      if (entry.isFile && entry.name.endsWith(".ts")) {
         entries.push(entry.name);
       }
     }
@@ -42,28 +44,33 @@ export async function discoverMigrationFiles(migrationsDir: string): Promise<str
  */
 export async function loadMigrationFile(
   migrationsDir: string,
-  fileName: string
+  fileName: string,
 ): Promise<MigrationDefinition> {
   const fullPath = path.resolve(migrationsDir, fileName);
 
   // Convert to file:// URL for dynamic import
-  const importPath = Deno.build.os === 'windows'
-    ? `file:///${fullPath.replace(/\\/g, '/')}`
+  const importPath = Deno.build.os === "windows"
+    ? `file:///${fullPath.replace(/\\/g, "/")}`
     : `file://${fullPath}`;
 
   try {
     const module = await import(importPath);
 
     if (!module.default) {
-      throw new Error(`Migration file ${fileName} does not have a default export`);
+      throw new Error(
+        `Migration file ${fileName} does not have a default export`,
+      );
     }
 
     const migration = module.default as MigrationDefinition;
 
     // Validate migration structure
-    if (!migration.id || !migration.name || typeof migration.migrate !== 'function') {
+    if (
+      !migration.id || !migration.name ||
+      typeof migration.migrate !== "function"
+    ) {
       throw new Error(
-        `Migration file ${fileName} is missing required properties (id, name, migrate)`
+        `Migration file ${fileName} is missing required properties (id, name, migrate)`,
       );
     }
 
@@ -81,7 +88,7 @@ export async function loadMigrationFile(
  * @returns Array of loaded migration definitions with their filenames
  */
 export async function loadAllMigrations(
-  migrationsDir: string
+  migrationsDir: string,
 ): Promise<Array<{ fileName: string; migration: MigrationDefinition }>> {
   const fileNames = await discoverMigrationFiles(migrationsDir);
 
@@ -89,7 +96,7 @@ export async function loadAllMigrations(
     fileNames.map(async (fileName) => {
       const migration = await loadMigrationFile(migrationsDir, fileName);
       return { fileName, migration };
-    })
+    }),
   );
 
   return migrations;
@@ -101,7 +108,9 @@ export async function loadAllMigrations(
  * @param migrations - Array of migrations to validate
  * @returns Validation errors (empty array if valid)
  */
-export function validateMigrationChain(migrations: MigrationDefinition[]): string[] {
+export function validateMigrationChain(
+  migrations: MigrationDefinition[],
+): string[] {
   const errors: string[] = [];
 
   if (migrations.length === 0) {
@@ -111,7 +120,9 @@ export function validateMigrationChain(migrations: MigrationDefinition[]): strin
   // Check first migration has no parent
   if (migrations[0].parent !== null) {
     errors.push(
-      `First migration "${migrations[0].name}" (${migrations[0].id}) should not have a parent`
+      `First migration "${migrations[0].name}" (${
+        migrations[0].id
+      }) should not have a parent`,
     );
   }
 
@@ -122,7 +133,9 @@ export function validateMigrationChain(migrations: MigrationDefinition[]): strin
 
     if (migration.parent?.id !== expectedParent.id) {
       errors.push(
-        `Migration "${migration.name}" (${migration.id}) has incorrect parent. Expected ${expectedParent.id}, got ${migration.parent?.id ?? 'null'}`
+        `Migration "${migration.name}" (${migration.id}) has incorrect parent. Expected ${expectedParent.id}, got ${
+          migration.parent?.id ?? "null"
+        }`,
       );
     }
   }
@@ -149,19 +162,19 @@ export function validateMigrationChain(migrations: MigrationDefinition[]): strin
  * @returns Ordered array of migrations forming a valid chain
  */
 export function buildMigrationChain(
-  migrations: Array<{ fileName: string; migration: MigrationDefinition }>
+  migrations: Array<{ fileName: string; migration: MigrationDefinition }>,
 ): MigrationDefinition[] {
   // Sort by filename (which should be timestamp-based)
   const sorted = migrations
     .slice()
     .sort((a, b) => a.fileName.localeCompare(b.fileName));
 
-  const chain = sorted.map(m => m.migration);
+  const chain = sorted.map((m) => m.migration);
 
   // Validate the chain
   const errors = validateMigrationChain(chain);
   if (errors.length > 0) {
-    throw new Error(`Migration chain validation failed:\n${errors.join('\n')}`);
+    throw new Error(`Migration chain validation failed:\n${errors.join("\n")}`);
   }
 
   return chain;
@@ -176,9 +189,9 @@ export function buildMigrationChain(
  */
 export function getPendingMigrations(
   allMigrations: MigrationDefinition[],
-  appliedMigrationIds: string[]
+  appliedMigrationIds: string[],
 ): MigrationDefinition[] {
   const appliedSet = new Set(appliedMigrationIds);
 
-  return allMigrations.filter(m => !appliedSet.has(m.id));
+  return allMigrations.filter((m) => !appliedSet.has(m.id));
 }

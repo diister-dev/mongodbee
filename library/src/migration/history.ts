@@ -9,18 +9,18 @@
  */
 
 import { Collection } from "mongodb";
-import type { Db } from '../mongodb.ts';
+import type { Db } from "../mongodb.ts";
 import { getCurrentVersion } from "./utils/package-info.ts";
 
 /**
  * Type of migration operation
  */
-export type MigrationOperationType = 'applied' | 'reverted' | 'failed';
+export type MigrationOperationType = "applied" | "reverted" | "failed";
 
 /**
  * Status of operation execution
  */
-export type OperationStatus = 'success' | 'failure';
+export type OperationStatus = "success" | "failure";
 
 /**
  * Record of a migration operation (event sourcing)
@@ -57,12 +57,14 @@ export type MigrationOperation = {
 /**
  * Name of the collection used to track migration operations
  */
-export const MIGRATION_OPERATIONS_COLLECTION = '__dbee_migration__';
+export const MIGRATION_OPERATIONS_COLLECTION = "__dbee_migration__";
 
 /**
  * Gets the migration operations collection
  */
-export function getMigrationOperationsCollection(db: Db): Collection<MigrationOperation> {
+export function getMigrationOperationsCollection(
+  db: Db,
+): Collection<MigrationOperation> {
   return db.collection(MIGRATION_OPERATIONS_COLLECTION);
 }
 
@@ -82,7 +84,7 @@ export async function recordOperation(
   migrationName: string,
   operation: MigrationOperationType,
   duration?: number,
-  error?: string
+  error?: string,
 ): Promise<void> {
   const collection = getMigrationOperationsCollection(db);
   const mongodbeeVersion = getCurrentVersion();
@@ -94,7 +96,7 @@ export async function recordOperation(
     executedAt: new Date(),
     duration,
     error,
-    status: error ? 'failure' : 'success',
+    status: error ? "failure" : "success",
     mongodbeeVersion,
   };
 
@@ -110,7 +112,7 @@ export async function recordOperation(
  */
 export async function getMigrationHistory(
   db: Db,
-  migrationId: string
+  migrationId: string,
 ): Promise<MigrationOperation[]> {
   const collection = getMigrationOperationsCollection(db);
 
@@ -129,7 +131,7 @@ export async function getMigrationHistory(
  */
 export async function getLastOperation(
   db: Db,
-  migrationId: string
+  migrationId: string,
 ): Promise<MigrationOperation | null> {
   const collection = getMigrationOperationsCollection(db);
 
@@ -164,32 +166,32 @@ export async function getAllOperations(db: Db): Promise<MigrationOperation[]> {
  * @returns Current status ('pending', 'applied', 'failed', 'reverted')
  */
 export function calculateMigrationState(
-  operations: MigrationOperation[]
-): 'pending' | 'applied' | 'failed' | 'reverted' {
+  operations: MigrationOperation[],
+): "pending" | "applied" | "failed" | "reverted" {
   if (operations.length === 0) {
-    return 'pending';
+    return "pending";
   }
 
   // Get last successful operation
   const lastSuccessful = operations
-    .filter(op => op.status === 'success')
+    .filter((op) => op.status === "success")
     .pop();
 
   if (!lastSuccessful) {
     // All operations failed
-    return 'failed';
+    return "failed";
   }
 
   // Return state based on last successful operation
   switch (lastSuccessful.operation) {
-    case 'applied':
-      return 'applied';
-    case 'reverted':
-      return 'reverted';
-    case 'failed':
-      return 'failed';
+    case "applied":
+      return "applied";
+    case "reverted":
+      return "reverted";
+    case "failed":
+      return "failed";
     default:
-      return 'pending';
+      return "pending";
   }
 }
 
@@ -199,10 +201,12 @@ export function calculateMigrationState(
  * @param db - Database instance
  * @returns Map of migration ID to current state
  */
-export async function getCurrentState(db: Db): Promise<Map<string, {
-  status: 'pending' | 'applied' | 'failed' | 'reverted';
-  lastOperation?: MigrationOperation;
-}>> {
+export async function getCurrentState(db: Db): Promise<
+  Map<string, {
+    status: "pending" | "applied" | "failed" | "reverted";
+    lastOperation?: MigrationOperation;
+  }>
+> {
   const allOperations = await getAllOperations(db);
 
   // Group operations by migration ID
@@ -241,7 +245,7 @@ export async function getAppliedMigrationIds(db: Db): Promise<string[]> {
   const applied: string[] = [];
 
   for (const [migrationId, state] of states.entries()) {
-    if (state.status === 'applied') {
+    if (state.status === "applied") {
       applied.push(migrationId);
     }
   }
@@ -255,24 +259,28 @@ export async function getAppliedMigrationIds(db: Db): Promise<string[]> {
  * @param db - Database instance
  * @returns The last applied migration operation or null
  */
-export async function getLastAppliedMigration(db: Db): Promise<MigrationOperation | null> {
+export async function getLastAppliedMigration(
+  db: Db,
+): Promise<MigrationOperation | null> {
   const currentState = await getCurrentState(db);
-  
+
   // Find all migrations that are currently applied
   const appliedMigrations: MigrationOperation[] = [];
-  
+
   for (const [_migrationId, state] of currentState.entries()) {
-    if (state.status === 'applied' && state.lastOperation) {
+    if (state.status === "applied" && state.lastOperation) {
       appliedMigrations.push(state.lastOperation);
     }
   }
-  
+
   // Sort by execution time and return the most recent
   if (appliedMigrations.length === 0) {
     return null;
   }
-  
-  appliedMigrations.sort((a, b) => b.executedAt.getTime() - a.executedAt.getTime());
+
+  appliedMigrations.sort((a, b) =>
+    b.executedAt.getTime() - a.executedAt.getTime()
+  );
   return appliedMigrations[0];
 }
 

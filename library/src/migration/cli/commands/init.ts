@@ -8,7 +8,7 @@
 
 import * as path from "@std/path";
 import { existsSync } from "@std/fs";
-import { green, yellow, red, dim, bold } from "@std/fmt/colors";
+import { bold, dim, green, yellow } from "@std/fmt/colors";
 import { prettyText } from "../utils.ts";
 
 export interface InitCommandOptions {
@@ -19,7 +19,9 @@ export interface InitCommandOptions {
 /**
  * Initialize migration configuration
  */
-export async function initCommand(options: InitCommandOptions = {}): Promise<void> {
+export async function initCommand(
+  options: InitCommandOptions = {},
+): Promise<void> {
   console.log(bold("🐝 Initializing MongoDBee configuration..."));
   console.log();
 
@@ -46,7 +48,9 @@ export async function initCommand(options: InitCommandOptions = {}): Promise<voi
 
   // Create schemas file
   if (!existsSync(schemasFilePath) || options.force) {
-    await Deno.writeTextFile(schemasFilePath, prettyText(`
+    await Deno.writeTextFile(
+      schemasFilePath,
+      prettyText(`
       /**
        * Current database schema
        *
@@ -76,14 +80,17 @@ export async function initCommand(options: InitCommandOptions = {}): Promise<voi
           // }
         }
       };
-    `));
+    `),
+    );
 
     console.log(green(`✓ Created schemas file`));
     console.log(dim(`  ${schemasFilePath}`));
   }
 
   // Write config file
-  await Deno.writeTextFile(configFilePath, prettyText(`
+  await Deno.writeTextFile(
+    configFilePath,
+    prettyText(`
     import { defineConfig } from "@diister/mongodbee";
 
     export default defineConfig({
@@ -98,14 +105,17 @@ export async function initCommand(options: InitCommandOptions = {}): Promise<voi
         schemas: "./schemas.ts"
       }
     });
-  `));
+  `),
+  );
 
   console.log(green(`✓ Created configuration file`));
   console.log(dim(`  ${configFilePath}`));
   console.log();
 
   console.log(bold("Next steps:"));
-  console.log(dim("  1. Update mongodbee.config.ts with your database details"));
+  console.log(
+    dim("  1. Update mongodbee.config.ts with your database details"),
+  );
   console.log(dim("  2. Define your schemas in schemas.ts"));
   console.log(dim("  3. Generate your first migration:"));
   console.log(dim("     mongodbee generate --name initial"));

@@ -1,9 +1,9 @@
 #!/usr/bin/env -S deno run --allow-read --allow-write --allow-net --allow-env
 /**
  * MongoDBee Migration CLI
- * 
+ *
  * CLI tool for managing MongoDB migrations with MongoDBee
- * 
+ *
  * @module
  */
 
@@ -27,7 +27,7 @@ const commands = [
     description: "Show help information",
     handler: () => {
       showHelp();
-    }
+    },
   },
   {
     name: "init",
@@ -58,8 +58,8 @@ const commands = [
     name: "history",
     description: "Show migration operation history",
     handler: historyCommand,
-  }
-]
+  },
+];
 
 /**
  * Display help information
@@ -109,8 +109,8 @@ async function main(): Promise<void> {
 
   const command = args._[0] || "help";
 
-  const cmd = commands.find(c => c.name === command);
-  if(!cmd) {
+  const cmd = commands.find((c) => c.name === command);
+  if (!cmd) {
     throw new Error(`Unknown command "${command}"`);
   }
 

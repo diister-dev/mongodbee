@@ -1,17 +1,17 @@
 /**
  * Tests for Migration Builder
- * 
+ *
  * Tests the migration builder API for creating migrations
  */
 
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertExists, assert } from "@std/assert";
-import { 
-  migrationBuilder,
+import { assert, assertEquals, assertExists } from "@std/assert";
+import {
   getMigrationSummary,
   isCreateCollectionRule,
   isSeedCollectionRule,
   isTransformCollectionRule,
+  migrationBuilder,
 } from "../../src/migration/builder.ts";
 
 // ============================================================================
@@ -181,7 +181,10 @@ Deno.test("MigrationBuilder - newMultiCollection creates instance", () => {
 
   assertEquals(state.operations.length, 1);
   assertEquals(state.operations[0].type, "create_multicollection_instance");
-  const op0 = state.operations[0] as { collectionName?: string; collectionType?: string };
+  const op0 = state.operations[0] as {
+    collectionName?: string;
+    collectionType?: string;
+  };
   assertEquals(op0.collectionName, "catalog_main");
   assertEquals(op0.collectionType, "catalog");
 });
@@ -212,7 +215,10 @@ Deno.test("MigrationBuilder - seedType adds seed for multi-collection", () => {
 
   assertEquals(state.operations.length, 2);
   assertEquals(state.operations[1].type, "seed_multicollection_instance");
-  const op1 = state.operations[1] as { collectionName?: string; typeName?: string };
+  const op1 = state.operations[1] as {
+    collectionName?: string;
+    typeName?: string;
+  };
   assertEquals(op1.collectionName, "catalog_main");
   assertEquals(op1.typeName, "product");
 });
@@ -247,7 +253,10 @@ Deno.test("MigrationBuilder - multiCollection type transform", () => {
 
   assertEquals(state.operations.length, 1);
   assertEquals(state.operations[0].type, "transform_multicollection_type");
-  const op0 = state.operations[0] as { collectionType?: string; typeName?: string };
+  const op0 = state.operations[0] as {
+    collectionType?: string;
+    typeName?: string;
+  };
   assertEquals(op0.collectionType, "catalog");
   assertEquals(op0.typeName, "product");
 });
@@ -287,7 +296,7 @@ Deno.test("MigrationBuilder - seed validates documents against schema", () => {
       .seed([invalidDoc])
       .done()
       .compile();
-    
+
     throw new Error("Should have thrown validation error");
   } catch (error) {
     assert(error instanceof Error);
@@ -328,7 +337,7 @@ Deno.test("MigrationBuilder - updateIndexes throws if collection schema not foun
     migrationBuilder({ schemas })
       .updateIndexes("users")
       .compile();
-    
+
     throw new Error("Should have thrown error");
   } catch (error) {
     assert(error instanceof Error);

@@ -1,4 +1,5 @@
-{  "name": "@diister/mongodbee",
+{
+  "name": "@diister/mongodbee",
   "version": "0.13.0",
   "license": "MIT",
   "imports": {

@@ -1,6 +1,6 @@
 /**
  * CLI exports for MongoDBee Migration system
- * 
+ *
  * @module
  */
 

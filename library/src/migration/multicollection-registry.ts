@@ -7,14 +7,14 @@
  * @module
  */
 
-import type { Db } from '../mongodb.ts';
-import { getCurrentVersion } from './utils/package-info.ts';
+import type { Db } from "../mongodb.ts";
+import { getCurrentVersion } from "./utils/package-info.ts";
 
 /**
  * Special document types reserved for multi-collection metadata
  */
-export const MULTI_COLLECTION_INFO_TYPE = '_information';
-export const MULTI_COLLECTION_MIGRATIONS_TYPE = '_migrations';
+export const MULTI_COLLECTION_INFO_TYPE = "_information";
+export const MULTI_COLLECTION_MIGRATIONS_TYPE = "_migrations";
 
 /**
  * Information document stored in each multi-collection instance
@@ -50,7 +50,7 @@ export type MultiCollectionMigrations = {
  */
 export async function discoverMultiCollectionInstances(
   db: Db,
-  collectionType: string
+  collectionType: string,
 ): Promise<string[]> {
   // List all collections in the database
   const collections = await db.listCollections().toArray();
@@ -61,7 +61,7 @@ export async function discoverMultiCollectionInstances(
     const collName = collInfo.name;
 
     // Skip system collections
-    if (collName.startsWith('system.') || collName.startsWith('mongodbee_')) {
+    if (collName.startsWith("system.") || collName.startsWith("mongodbee_")) {
       continue;
     }
 
@@ -82,7 +82,7 @@ export async function discoverMultiCollectionInstances(
     }
   }
 
-  return instances.sort();
+  return instances.sort((a, b) => a.localeCompare(b));
 }
 
 /**
@@ -94,7 +94,7 @@ export async function discoverMultiCollectionInstances(
  */
 export async function getMultiCollectionInfo(
   db: Db,
-  collectionName: string
+  collectionName: string,
 ): Promise<MultiCollectionInfo | null> {
   const collection = db.collection(collectionName);
 
@@ -115,7 +115,7 @@ export async function createMultiCollectionInfo(
   db: Db,
   collectionName: string,
   collectionType: string,
-  migrationId: string = 'unknown'
+  migrationId: string = "unknown",
 ): Promise<void> {
   const collection = db.collection(collectionName);
   const mongodbeeVersion = getCurrentVersion();
@@ -140,7 +140,7 @@ export async function createMultiCollectionInfo(
         id: migrationId,
         appliedAt: new Date(),
         mongodbeeVersion,
-      }
+      },
     ],
   };
 
@@ -157,7 +157,7 @@ export async function createMultiCollectionInfo(
 export async function recordMultiCollectionMigration(
   db: Db,
   collectionName: string,
-  migrationId: string
+  migrationId: string,
 ): Promise<void> {
   const collection = db.collection(collectionName);
   const mongodbeeVersion = getCurrentVersion();
@@ -170,9 +170,9 @@ export async function recordMultiCollectionMigration(
           id: migrationId,
           appliedAt: new Date(),
           mongodbeeVersion,
-        }
-      }
-    } as Record<string, unknown>
+        },
+      },
+    } as Record<string, unknown>,
   );
 }
 
@@ -185,7 +185,7 @@ export async function recordMultiCollectionMigration(
  */
 export async function getMultiCollectionMigrations(
   db: Db,
-  collectionName: string
+  collectionName: string,
 ): Promise<MultiCollectionMigrations | null> {
   const collection = db.collection(collectionName);
 
@@ -203,7 +203,7 @@ export async function getMultiCollectionMigrations(
  */
 export async function multiCollectionInstanceExists(
   db: Db,
-  collectionName: string
+  collectionName: string,
 ): Promise<boolean> {
   try {
     const collection = db.collection(collectionName);
@@ -238,21 +238,24 @@ export async function multiCollectionInstanceExists(
  */
 export function isInstanceCreatedAfterMigration(
   instanceCreatedAtMigrationId: string,
-  currentMigrationId: string
+  currentMigrationId: string,
 ): boolean {
   // Handle special cases
-  if (instanceCreatedAtMigrationId === 'unknown' || instanceCreatedAtMigrationId === 'current') {
+  if (
+    instanceCreatedAtMigrationId === "unknown" ||
+    instanceCreatedAtMigrationId === "current"
+  ) {
     // Unknown creation = assume old, needs all migrations
     return false;
   }
 
-  if (currentMigrationId === 'unknown') {
+  if (currentMigrationId === "unknown") {
     return false;
   }
 
   // Extract timestamp parts (format: YYYY_MM_DD_HHMM_ULID@name)
   const extractTimestamp = (migrationId: string): string => {
-    const parts = migrationId.split('@')[0];
+    const parts = migrationId.split("@")[0];
     return parts || migrationId;
   };
 
@@ -277,7 +280,7 @@ export function isInstanceCreatedAfterMigration(
 export async function shouldInstanceReceiveMigration(
   db: Db,
   collectionName: string,
-  migrationId: string
+  migrationId: string,
 ): Promise<boolean> {
   try {
     const collection = db.collection(collectionName);
@@ -291,20 +294,23 @@ export async function shouldInstanceReceiveMigration(
     }
 
     // Instance should receive migration if it was created before or at this migration
-    return !isInstanceCreatedAfterMigration(migrations.fromMigrationId, migrationId);
+    return !isInstanceCreatedAfterMigration(
+      migrations.fromMigrationId,
+      migrationId,
+    );
   } catch (_error) {
     return false;
   }
 }
 /**
  * Marks an existing collection as a multi-collection instance
- * 
+ *
  * Use this to retroactively register a collection that was created manually
  * or to "adopt" an existing collection into the multi-collection system.
- * 
+ *
  * ⚠️ WARNING: This does NOT validate that the collection has the correct structure!
  * Make sure the collection already contains documents with `_type` fields.
- * 
+ *
  * @param db - Database instance
  * @param collectionName - Full name of the existing collection
  * @param collectionType - Type/model name of the multi-collection
@@ -325,27 +331,27 @@ export async function markAsMultiCollection(
   db: Db,
   collectionName: string,
   collectionType: string,
-  fromMigrationId?: string
+  fromMigrationId?: string,
 ): Promise<void> {
   const collection = db.collection(collectionName);
 
   // Check if already marked
   const existing = await collection.findOne({
-    _type: MULTI_COLLECTION_INFO_TYPE
+    _type: MULTI_COLLECTION_INFO_TYPE,
   });
 
   if (existing) {
     throw new Error(
-      `Collection ${collectionName} is already marked as a multi-collection instance.`
+      `Collection ${collectionName} is already marked as a multi-collection instance.`,
     );
   }
 
   // Get migration ID if not provided
   let migrationId = fromMigrationId;
   if (!migrationId) {
-    const { getLastAppliedMigration } = await import('./state.ts');
+    const { getLastAppliedMigration } = await import("./state.ts");
     const lastMigration = await getLastAppliedMigration(db);
-    migrationId = lastMigration?.id || 'current';
+    migrationId = lastMigration?.id || "current";
   }
 
   // Create the metadata
@@ -353,6 +359,6 @@ export async function markAsMultiCollection(
     db,
     collectionName,
     collectionType,
-    migrationId
+    migrationId,
   );
 }

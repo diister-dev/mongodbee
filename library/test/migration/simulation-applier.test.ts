@@ -1,22 +1,22 @@
 /**
  * Tests for Simulation Migration Applier
- * 
+ *
  * Tests the simulation applier for in-memory migration validation
  */
 
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertExists, assert } from "@std/assert";
+import { assert, assertEquals, assertExists } from "@std/assert";
 import {
-  SimulationApplier,
-  createEmptyDatabaseState,
   compareDatabaseStates,
+  createEmptyDatabaseState,
+  SimulationApplier,
 } from "../../src/migration/appliers/simulation.ts";
 import type {
   CreateCollectionRule,
-  SeedCollectionRule,
-  TransformCollectionRule,
   CreateMultiCollectionInstanceRule,
+  SeedCollectionRule,
   SeedMultiCollectionInstanceRule,
+  TransformCollectionRule,
   TransformMultiCollectionTypeRule,
 } from "../../src/migration/types.ts";
 
@@ -43,7 +43,7 @@ Deno.test("SimulationApplier - compareDatabaseStates returns true for identical 
 Deno.test("SimulationApplier - compareDatabaseStates returns false for different states", () => {
   const state1 = createEmptyDatabaseState();
   const state2 = createEmptyDatabaseState();
-  
+
   state2.collections.users = { content: [] };
 
   assert(!compareDatabaseStates(state1, state2));
@@ -98,7 +98,7 @@ Deno.test("SimulationApplier - does not mutate original state", () => {
 
   // Original state should be unchanged
   assertEquals(Object.keys(originalState.collections).length, 0);
-  
+
   // New state should have the collection
   assertExists(newState.collections.users);
 });
@@ -133,12 +133,12 @@ Deno.test("SimulationApplier - seeds documents into collection", () => {
 Deno.test("SimulationApplier - reverse removes seeded documents", () => {
   const applier = new SimulationApplier();
   let state = createEmptyDatabaseState();
-  
+
   const documents = [
     { _id: "1", name: "Alice" },
     { _id: "2", name: "Bob" },
   ];
-  
+
   state.collections.users = {
     content: [...documents],
   };
@@ -161,7 +161,7 @@ Deno.test("SimulationApplier - reverse removes seeded documents", () => {
 Deno.test("SimulationApplier - transforms all documents", () => {
   const applier = new SimulationApplier();
   let state = createEmptyDatabaseState();
-  
+
   state.collections.users = {
     content: [
       { _id: "1", name: "Alice" },
@@ -185,14 +185,20 @@ Deno.test("SimulationApplier - transforms all documents", () => {
   state = applier.applyOperation(state, operation);
 
   assertEquals(state.collections.users.content.length, 2);
-  assertEquals((state.collections.users.content[0] as Record<string, unknown>).age, 25);
-  assertEquals((state.collections.users.content[1] as Record<string, unknown>).age, 25);
+  assertEquals(
+    (state.collections.users.content[0] as Record<string, unknown>).age,
+    25,
+  );
+  assertEquals(
+    (state.collections.users.content[1] as Record<string, unknown>).age,
+    25,
+  );
 });
 
 Deno.test("SimulationApplier - reverse transform restores original", () => {
   const applier = new SimulationApplier();
   let state = createEmptyDatabaseState();
-  
+
   state.collections.users = {
     content: [
       { _id: "1", name: "Alice", age: 25 },
@@ -216,8 +222,14 @@ Deno.test("SimulationApplier - reverse transform restores original", () => {
   state = applier.applyReverseOperation(state, operation);
 
   assertEquals(state.collections.users.content.length, 2);
-  assertEquals((state.collections.users.content[0] as Record<string, unknown>).age, undefined);
-  assertEquals((state.collections.users.content[1] as Record<string, unknown>).age, undefined);
+  assertEquals(
+    (state.collections.users.content[0] as Record<string, unknown>).age,
+    undefined,
+  );
+  assertEquals(
+    (state.collections.users.content[1] as Record<string, unknown>).age,
+    undefined,
+  );
 });
 
 // ============================================================================
@@ -238,13 +250,17 @@ Deno.test("SimulationApplier - creates multi-collection instance with metadata",
 
   assertExists(state.multiCollections);
   assertExists(state.multiCollections.catalog_main);
-  
+
   const content = state.multiCollections.catalog_main.content;
   assertEquals(content.length, 2); // _information and _migrations
-  
-  const infoDoc = content.find((doc: Record<string, unknown>) => doc._type === "_information");
-  const migrationsDoc = content.find((doc: Record<string, unknown>) => doc._type === "_migrations");
-  
+
+  const infoDoc = content.find((doc: Record<string, unknown>) =>
+    doc._type === "_information"
+  );
+  const migrationsDoc = content.find((doc: Record<string, unknown>) =>
+    doc._type === "_migrations"
+  );
+
   assertExists(infoDoc);
   assertExists(migrationsDoc);
   assertEquals((infoDoc as Record<string, unknown>).collectionType, "catalog");
@@ -253,7 +269,7 @@ Deno.test("SimulationApplier - creates multi-collection instance with metadata",
 Deno.test("SimulationApplier - seeds multi-collection type with _type field", () => {
   const applier = new SimulationApplier();
   let state = createEmptyDatabaseState();
-  
+
   state.multiCollections = {
     catalog_main: { content: [] },
   };
@@ -277,7 +293,11 @@ Deno.test("SimulationApplier - seeds multi-collection type with _type field", ()
   assertEquals(content.length, 2);
   assertEquals((content[0] as Record<string, unknown>)._type, "product");
   assertEquals((content[1] as Record<string, unknown>)._type, "product");
-  assert(((content[0] as Record<string, unknown>)._id as string).startsWith("product:"));
+  assert(
+    ((content[0] as Record<string, unknown>)._id as string).startsWith(
+      "product:",
+    ),
+  );
 });
 
 // ============================================================================
@@ -287,17 +307,27 @@ Deno.test("SimulationApplier - seeds multi-collection type with _type field", ()
 Deno.test("SimulationApplier - transforms type across all instances", () => {
   const applier = new SimulationApplier();
   let state = createEmptyDatabaseState();
-  
+
   state.multiCollections = {
     catalog_store1: {
       content: [
-        { _id: "_information", _type: "_information", collectionType: "catalog", createdAt: new Date() },
+        {
+          _id: "_information",
+          _type: "_information",
+          collectionType: "catalog",
+          createdAt: new Date(),
+        },
         { _id: "p1", _type: "product", name: "Product 1" },
       ],
     },
     catalog_store2: {
       content: [
-        { _id: "_information", _type: "_information", collectionType: "catalog", createdAt: new Date() },
+        {
+          _id: "_information",
+          _type: "_information",
+          collectionType: "catalog",
+          createdAt: new Date(),
+        },
         { _id: "p2", _type: "product", name: "Product 2" },
       ],
     },
@@ -322,10 +352,10 @@ Deno.test("SimulationApplier - transforms type across all instances", () => {
   // Check both instances were transformed
   assertExists(state.multiCollections);
   const product1 = state.multiCollections.catalog_store1.content.find(
-    (doc: Record<string, unknown>) => doc._type === "product"
+    (doc: Record<string, unknown>) => doc._type === "product",
   ) as Record<string, unknown>;
   const product2 = state.multiCollections.catalog_store2.content.find(
-    (doc: Record<string, unknown>) => doc._type === "product"
+    (doc: Record<string, unknown>) => doc._type === "product",
   ) as Record<string, unknown>;
 
   assertEquals(product1.price, 0);
@@ -335,7 +365,7 @@ Deno.test("SimulationApplier - transforms type across all instances", () => {
 Deno.test("SimulationApplier - generates mock data when no instances exist", () => {
   const applier = new SimulationApplier();
   let state = createEmptyDatabaseState();
-  
+
   state.multiCollections = {};
 
   const schema = v.object({
@@ -375,29 +405,30 @@ Deno.test("SimulationApplier - full forward and reverse cycle returns to origina
   const applier = new SimulationApplier();
   const initialState = createEmptyDatabaseState();
 
-  const operations: (CreateCollectionRule | SeedCollectionRule | TransformCollectionRule)[] = [
-    {
-      type: "create_collection",
-      collectionName: "users",
-    },
-    {
-      type: "seed_collection",
-      collectionName: "users",
-      documents: [
-        { _id: "1", name: "Alice" },
-        { _id: "2", name: "Bob" },
-      ],
-    },
-    {
-      type: "transform_collection",
-      collectionName: "users",
-      up: (doc: Record<string, unknown>) => ({ ...doc, active: true }),
-      down: (doc: Record<string, unknown>) => {
-        const { active: _active, ...rest } = doc;
-        return rest;
+  const operations:
+    (CreateCollectionRule | SeedCollectionRule | TransformCollectionRule)[] = [
+      {
+        type: "create_collection",
+        collectionName: "users",
       },
-    },
-  ];
+      {
+        type: "seed_collection",
+        collectionName: "users",
+        documents: [
+          { _id: "1", name: "Alice" },
+          { _id: "2", name: "Bob" },
+        ],
+      },
+      {
+        type: "transform_collection",
+        collectionName: "users",
+        up: (doc: Record<string, unknown>) => ({ ...doc, active: true }),
+        down: (doc: Record<string, unknown>) => {
+          const { active: _active, ...rest } = doc;
+          return rest;
+        },
+      },
+    ];
 
   // Apply all operations
   let state = initialState;

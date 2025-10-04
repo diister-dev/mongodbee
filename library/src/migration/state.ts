@@ -7,18 +7,18 @@
  * @module
  */
 
-import type { Db } from '../mongodb.ts';
+import type { Db } from "../mongodb.ts";
 import {
-  recordOperation,
-  getMigrationHistory,
-  getLastOperation,
-  getCurrentState,
-  getAppliedMigrationIds as getAppliedIdsFromHistory,
-  getLastAppliedMigration as getLastAppliedFromHistory,
   calculateMigrationState,
   clearAllOperations,
+  getAppliedMigrationIds as getAppliedIdsFromHistory,
+  getCurrentState,
+  getLastAppliedMigration as getLastAppliedFromHistory,
+  getLastOperation,
+  getMigrationHistory,
   type MigrationOperation,
-} from './history.ts';
+  recordOperation,
+} from "./history.ts";
 
 /**
  * State of a migration in the database (computed from history)
@@ -31,7 +31,7 @@ export type MigrationStateRecord = {
   name: string;
 
   /** Current status of the migration */
-  status: 'pending' | 'applied' | 'failed' | 'reverted';
+  status: "pending" | "applied" | "failed" | "reverted";
 
   /** When the migration was applied */
   appliedAt?: Date;
@@ -53,7 +53,7 @@ export type MigrationStateRecord = {
  * Name of the collection used to track migration state (deprecated, use history)
  * @deprecated Use history.ts instead
  */
-export const MIGRATION_STATE_COLLECTION = 'mongodbee_state';
+export const MIGRATION_STATE_COLLECTION = "mongodbee_state";
 
 /**
  * Converts a migration operation to a state record
@@ -61,24 +61,24 @@ export const MIGRATION_STATE_COLLECTION = 'mongodbee_state';
 function operationToStateRecord(
   migrationId: string,
   migrationName: string,
-  operations: MigrationOperation[]
+  operations: MigrationOperation[],
 ): MigrationStateRecord {
   const status = calculateMigrationState(operations);
   const lastOp = operations[operations.length - 1];
 
   // Find last applied operation
   const lastApplied = operations
-    .filter(op => op.operation === 'applied' && op.status === 'success')
+    .filter((op) => op.operation === "applied" && op.status === "success")
     .pop();
 
   // Find last reverted operation
   const lastReverted = operations
-    .filter(op => op.operation === 'reverted' && op.status === 'success')
+    .filter((op) => op.operation === "reverted" && op.status === "success")
     .pop();
 
   // Find last failed operation
   const lastFailed = operations
-    .filter(op => op.operation === 'failed')
+    .filter((op) => op.operation === "failed")
     .pop();
 
   return {
@@ -95,7 +95,9 @@ function operationToStateRecord(
 /**
  * Gets the current state of all migrations
  */
-export async function getAllMigrationStates(db: Db): Promise<MigrationStateRecord[]> {
+export async function getAllMigrationStates(
+  db: Db,
+): Promise<MigrationStateRecord[]> {
   const states = await getCurrentState(db);
   const records: MigrationStateRecord[] = [];
 
@@ -104,7 +106,7 @@ export async function getAllMigrationStates(db: Db): Promise<MigrationStateRecor
     const record = operationToStateRecord(
       migrationId,
       state.lastOperation?.migrationName || migrationId,
-      history
+      history,
     );
     records.push(record);
   }
@@ -120,7 +122,10 @@ export async function getAllMigrationStates(db: Db): Promise<MigrationStateRecor
 /**
  * Gets the state of a specific migration
  */
-export async function getMigrationState(db: Db, migrationId: string): Promise<MigrationStateRecord | null> {
+export async function getMigrationState(
+  db: Db,
+  migrationId: string,
+): Promise<MigrationStateRecord | null> {
   const history = await getMigrationHistory(db, migrationId);
 
   if (history.length === 0) {
@@ -134,9 +139,12 @@ export async function getMigrationState(db: Db, migrationId: string): Promise<Mi
 /**
  * Checks if a migration has been applied
  */
-export async function isMigrationApplied(db: Db, migrationId: string): Promise<boolean> {
+export async function isMigrationApplied(
+  db: Db,
+  migrationId: string,
+): Promise<boolean> {
   const state = await getMigrationState(db, migrationId);
-  return state?.status === 'applied';
+  return state?.status === "applied";
 }
 
 /**
@@ -148,7 +156,7 @@ export async function markMigrationAsApplied(
   name: string,
   duration?: number,
 ): Promise<void> {
-  await recordOperation(db, migrationId, name, 'applied', duration);
+  await recordOperation(db, migrationId, name, "applied", duration);
 }
 
 /**
@@ -158,9 +166,9 @@ export async function markMigrationAsFailed(
   db: Db,
   migrationId: string,
   name: string,
-  error: string
+  error: string,
 ): Promise<void> {
-  await recordOperation(db, migrationId, name, 'failed', undefined, error);
+  await recordOperation(db, migrationId, name, "failed", undefined, error);
 }
 
 /**
@@ -170,7 +178,7 @@ export async function markMigrationAsReverted(
   db: Db,
   migrationId: string,
   name?: string,
-  duration?: number
+  duration?: number,
 ): Promise<void> {
   // Get name from last operation if not provided
   if (!name) {
@@ -178,7 +186,7 @@ export async function markMigrationAsReverted(
     name = lastOp?.migrationName || migrationId;
   }
 
-  await recordOperation(db, migrationId, name, 'reverted', duration);
+  await recordOperation(db, migrationId, name, "reverted", duration);
 }
 
 /**
@@ -191,7 +199,9 @@ export async function getAppliedMigrationIds(db: Db): Promise<string[]> {
 /**
  * Gets the last applied migration
  */
-export async function getLastAppliedMigration(db: Db): Promise<MigrationStateRecord | null> {
+export async function getLastAppliedMigration(
+  db: Db,
+): Promise<MigrationStateRecord | null> {
   const lastOp = await getLastAppliedFromHistory(db);
 
   if (!lastOp) {
@@ -199,7 +209,11 @@ export async function getLastAppliedMigration(db: Db): Promise<MigrationStateRec
   }
 
   const history = await getMigrationHistory(db, lastOp.migrationId);
-  return operationToStateRecord(lastOp.migrationId, lastOp.migrationName, history);
+  return operationToStateRecord(
+    lastOp.migrationId,
+    lastOp.migrationName,
+    history,
+  );
 }
 
 /**
@@ -210,4 +224,4 @@ export async function clearMigrationState(db: Db): Promise<void> {
 }
 
 // Re-export multi-collection functions for convenience
-export { createMultiCollectionInfo } from './multicollection-registry.ts';
+export { createMultiCollectionInfo } from "./multicollection-registry.ts";

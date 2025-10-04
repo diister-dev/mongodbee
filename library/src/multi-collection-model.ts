@@ -9,7 +9,7 @@
  * @module
  */
 
-import type * as v from './schema.ts';
+import type * as v from "./schema.ts";
 
 /**
  * Base schema type constraint
@@ -24,7 +24,9 @@ export type MultiCollectionSchema = Record<string, Record<string, AnySchema>>;
 /**
  * Multi-collection model metadata
  */
-export type MultiCollectionModel<T extends MultiCollectionSchema = MultiCollectionSchema> = {
+export type MultiCollectionModel<
+  T extends MultiCollectionSchema = MultiCollectionSchema,
+> = {
   /** Unique name of the model (used as template identifier) */
   readonly name: string;
 
@@ -114,13 +116,13 @@ export type MultiCollectionModelOptions<T extends MultiCollectionSchema> = {
  */
 export function defineModel<const T extends MultiCollectionSchema>(
   name: string,
-  options: MultiCollectionModelOptions<T>
+  options: MultiCollectionModelOptions<T>,
 ): MultiCollectionModel<T> {
-  const { schema, version = '1.0.0', metadata } = options;
+  const { schema, version = "1.0.0", metadata } = options;
 
   // Validate model name
-  if (!name || typeof name !== 'string') {
-    throw new Error('Model name must be a non-empty string');
+  if (!name || typeof name !== "string") {
+    throw new Error("Model name must be a non-empty string");
   }
 
   // Validate schema has at least one type

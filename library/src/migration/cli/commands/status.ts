@@ -6,14 +6,17 @@
  * @module
  */
 
-import { green, yellow, red, dim, blue, bold, gray } from "@std/fmt/colors";
+import { blue, bold, dim, gray, green, red, yellow } from "@std/fmt/colors";
 import { MongoClient } from "../../../mongodb.ts";
 import * as path from "@std/path";
 
 import { loadConfig } from "../../config/loader.ts";
-import { loadAllMigrations, buildMigrationChain } from "../../discovery.ts";
-import { getAllMigrationStates, type MigrationStateRecord } from "../../state.ts";
-import { getMigrationHistory, getAllOperations } from "../../history.ts";
+import { buildMigrationChain, loadAllMigrations } from "../../discovery.ts";
+import {
+  getAllMigrationStates,
+  type MigrationStateRecord,
+} from "../../state.ts";
+import { getAllOperations } from "../../history.ts";
 
 export interface StatusCommandOptions {
   configPath?: string;
@@ -24,7 +27,9 @@ export interface StatusCommandOptions {
 /**
  * Show migration status
  */
-export async function statusCommand(options: StatusCommandOptions = {}): Promise<void> {
+export async function statusCommand(
+  options: StatusCommandOptions = {},
+): Promise<void> {
   console.log(bold(blue("🐝 Migration Status")));
   console.log();
 
@@ -36,8 +41,12 @@ export async function statusCommand(options: StatusCommandOptions = {}): Promise
     const cwd = options.cwd || Deno.cwd();
     const config = await loadConfig({ configPath: options.configPath, cwd });
 
-    const migrationsDir = path.resolve(cwd, config.paths?.migrations || "./migrations");
-    const connectionUri = config.database?.connection?.uri || "mongodb://localhost:27017";
+    const migrationsDir = path.resolve(
+      cwd,
+      config.paths?.migrations || "./migrations",
+    );
+    const connectionUri = config.database?.connection?.uri ||
+      "mongodb://localhost:27017";
     const dbName = config.database?.name || "myapp";
 
     console.log(dim(`Migrations directory: ${migrationsDir}`));
@@ -62,7 +71,7 @@ export async function statusCommand(options: StatusCommandOptions = {}): Promise
     // Get migration states from database
     const migrationStates = await getAllMigrationStates(db);
     const statesMap = new Map<string, MigrationStateRecord>(
-      migrationStates.map(s => [s.id, s])
+      migrationStates.map((s) => [s.id, s]),
     );
 
     // Display status table
@@ -76,14 +85,27 @@ export async function statusCommand(options: StatusCommandOptions = {}): Promise
     }
 
     // Calculate column widths for table
-    const maxIdLength = Math.max(...allMigrations.map(m => m.id.length), 10);
-    const maxNameLength = Math.max(...allMigrations.map(m => m.name.length), 15);
+    const maxIdLength = Math.max(...allMigrations.map((m) => m.id.length), 10);
+    const maxNameLength = Math.max(
+      ...allMigrations.map((m) => m.name.length),
+      15,
+    );
 
     // Header
     console.log(
-      gray(`  ${"ID".padEnd(maxIdLength)}  ${"Name".padEnd(maxNameLength)}  Status      Applied`)
+      gray(
+        `  ${"ID".padEnd(maxIdLength)}  ${
+          "Name".padEnd(maxNameLength)
+        }  Status      Applied`,
+      ),
     );
-    console.log(gray(`  ${"─".repeat(maxIdLength)}  ${"─".repeat(maxNameLength)}  ${"─".repeat(10)}  ${"─".repeat(20)}`));
+    console.log(
+      gray(
+        `  ${"─".repeat(maxIdLength)}  ${"─".repeat(maxNameLength)}  ${
+          "─".repeat(10)
+        }  ${"─".repeat(20)}`,
+      ),
+    );
 
     // Rows
     for (const migration of allMigrations) {
@@ -95,18 +117,18 @@ export async function statusCommand(options: StatusCommandOptions = {}): Promise
       if (!state) {
         statusDisplay = yellow("pending");
         appliedDisplay = dim("-");
-      } else if (state.status === 'applied') {
+      } else if (state.status === "applied") {
         statusDisplay = green("applied");
         appliedDisplay = state.appliedAt
-          ? dim(state.appliedAt.toISOString().split('T')[0])
+          ? dim(state.appliedAt.toISOString().split("T")[0])
           : dim("-");
-      } else if (state.status === 'failed') {
+      } else if (state.status === "failed") {
         statusDisplay = red("failed");
         appliedDisplay = dim(state.error?.slice(0, 20) || "error");
-      } else if (state.status === 'reverted') {
+      } else if (state.status === "reverted") {
         statusDisplay = blue("reverted");
         appliedDisplay = state.revertedAt
-          ? dim(state.revertedAt.toISOString().split('T')[0])
+          ? dim(state.revertedAt.toISOString().split("T")[0])
           : dim("-");
       } else {
         statusDisplay = yellow(state.status);
@@ -114,14 +136,18 @@ export async function statusCommand(options: StatusCommandOptions = {}): Promise
       }
 
       console.log(
-        `  ${dim(migration.id.padEnd(maxIdLength))}  ${migration.name.padEnd(maxNameLength)}  ${statusDisplay.padEnd(10)}  ${appliedDisplay}`
+        `  ${dim(migration.id.padEnd(maxIdLength))}  ${
+          migration.name.padEnd(maxNameLength)
+        }  ${statusDisplay.padEnd(10)}  ${appliedDisplay}`,
       );
     }
 
     console.log();
 
     // Summary
-    const appliedCount = migrationStates.filter(s => s.status === 'applied').length;
+    const appliedCount = migrationStates.filter((s) =>
+      s.status === "applied"
+    ).length;
     const pendingCount = allMigrations.length - appliedCount;
 
     console.log(bold("Summary:"));
@@ -168,28 +194,33 @@ export async function statusCommand(options: StatusCommandOptions = {}): Promise
           console.log(dim(`  ${migration.name} (${migration.id}):`));
 
           for (const op of ops) {
-            const dateStr = op.executedAt.toISOString().replace('T', ' ').split('.')[0];
-            const durationStr = op.duration ? dim(`(${op.duration}ms)`) : '';
+            const dateStr =
+              op.executedAt.toISOString().replace("T", " ").split(".")[0];
+            const durationStr = op.duration ? dim(`(${op.duration}ms)`) : "";
 
-            let icon = '  ';
+            let icon = "  ";
             let opColor = dim;
 
             switch (op.operation) {
-              case 'applied':
-                icon = op.status === 'success' ? '✅' : '❌';
-                opColor = op.status === 'success' ? green : red;
+              case "applied":
+                icon = op.status === "success" ? "✅" : "❌";
+                opColor = op.status === "success" ? green : red;
                 break;
-              case 'reverted':
-                icon = op.status === 'success' ? '🔄' : '❌';
-                opColor = op.status === 'success' ? blue : red;
+              case "reverted":
+                icon = op.status === "success" ? "🔄" : "❌";
+                opColor = op.status === "success" ? blue : red;
                 break;
-              case 'failed':
-                icon = '❌';
+              case "failed":
+                icon = "❌";
                 opColor = red;
                 break;
             }
 
-            console.log(`    ${icon} ${dim(dateStr)}  ${opColor(op.operation.padEnd(10))} ${durationStr}`);
+            console.log(
+              `    ${icon} ${dim(dateStr)}  ${
+                opColor(op.operation.padEnd(10))
+              } ${durationStr}`,
+            );
             if (op.error) {
               console.log(`       ${red(dim(op.error.slice(0, 60)))}`);
             }
@@ -199,7 +230,6 @@ export async function statusCommand(options: StatusCommandOptions = {}): Promise
         }
       }
     }
-
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(red(bold("Error:")), message);

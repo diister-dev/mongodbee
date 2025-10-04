@@ -1,27 +1,27 @@
 /**
  * Tests for MongoDB Migration Applier
- * 
+ *
  * Tests the MongoDB applier with real database operations
  */
 
 import { ObjectId } from "mongodb";
 
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertExists, assert } from "@std/assert";
+import { assert, assertEquals, assertExists } from "@std/assert";
 import { withDatabase } from "../+shared.ts";
 import { MongodbApplier } from "../../src/migration/appliers/mongodb.ts";
-import type { 
+import type {
   CreateCollectionRule,
-  SeedCollectionRule,
-  TransformCollectionRule,
   CreateMultiCollectionInstanceRule,
+  SeedCollectionRule,
   SeedMultiCollectionInstanceRule,
+  TransformCollectionRule,
   TransformMultiCollectionTypeRule,
 } from "../../src/migration/types.ts";
 import {
+  discoverMultiCollectionInstances,
   getMultiCollectionInfo,
   getMultiCollectionMigrations,
-  discoverMultiCollectionInstances,
 } from "../../src/migration/multicollection-registry.ts";
 
 // ============================================================================
@@ -86,7 +86,8 @@ Deno.test("MongodbApplier - creates collection with validator", async (t) => {
     await applier.applyOperation(operation);
 
     // Check validator was applied
-    const collections = await db.listCollections({ name: "users" }).toArray() as any[];
+    const collections = await db.listCollections({ name: "users" })
+      .toArray() as any[];
     assertExists(collections[0].options?.validator);
   });
 });
@@ -103,9 +104,9 @@ Deno.test("MongodbApplier - seed inserts documents", async (t) => {
     await db.createCollection("users");
 
     const documents = [
-      { _id: "1" as any, name: "Alice" },
-      { _id: "2" as any, name: "Bob" },
-      { _id: "3" as any, name: "Charlie" },
+      { _id: "1" as unknown as ObjectId, name: "Alice" },
+      { _id: "2" as unknown as ObjectId, name: "Bob" },
+      { _id: "3" as unknown as ObjectId, name: "Charlie" },
     ];
 
     const operation: SeedCollectionRule = {
@@ -166,8 +167,8 @@ Deno.test("MongodbApplier - transform updates all documents", async (t) => {
     // Create collection and insert documents
     const collection = db.collection("users");
     await collection.insertMany([
-      { _id: "1" as any, name: "Alice" },
-      { _id: "2" as any, name: "Bob" },
+      { _id: "1" as unknown as ObjectId, name: "Alice" },
+      { _id: "2" as unknown as ObjectId, name: "Bob" },
     ]);
 
     const operation: TransformCollectionRule = {
@@ -200,8 +201,8 @@ Deno.test("MongodbApplier - reverse transform restores original documents", asyn
     // Create collection with transformed documents
     const collection = db.collection("users");
     await collection.insertMany([
-      { _id: "1" as any, name: "Alice", age: 25 },
-      { _id: "2" as any, name: "Bob", age: 30 },
+      { _id: "1" as unknown as ObjectId, name: "Alice", age: 25 },
+      { _id: "2" as unknown as ObjectId, name: "Bob", age: 30 },
     ]);
 
     const operation: TransformCollectionRule = {
@@ -245,7 +246,8 @@ Deno.test("MongodbApplier - creates multi-collection instance with metadata", as
     await applier.applyOperation(operation);
 
     // Check collection was created
-    const collections = await db.listCollections({ name: "catalog_main" }).toArray();
+    const collections = await db.listCollections({ name: "catalog_main" })
+      .toArray();
     assertEquals(collections.length, 1);
 
     // Check metadata documents
@@ -266,7 +268,7 @@ Deno.test("MongodbApplier - reverse drops multi-collection instance", async (t) 
     // Create instance first
     const collection = db.collection("catalog_main");
     await collection.insertOne({
-      _id: "_information" as any,
+      _id: "_information" as unknown as ObjectId,
       _type: "_information",
       collectionType: "catalog",
       createdAt: new Date(),
@@ -281,7 +283,8 @@ Deno.test("MongodbApplier - reverse drops multi-collection instance", async (t) 
     await applier.applyReverseOperation(operation);
 
     // Check collection was dropped
-    const collections = await db.listCollections({ name: "catalog_main" }).toArray();
+    const collections = await db.listCollections({ name: "catalog_main" })
+      .toArray();
     assertEquals(collections.length, 0);
   });
 });
@@ -297,7 +300,7 @@ Deno.test("MongodbApplier - seeds multi-collection type with _type field", async
     // Create instance first
     const collection = db.collection("catalog_main");
     await collection.insertOne({
-      _id: "_information" as any,
+      _id: "_information" as unknown as ObjectId,
       _type: "_information",
       collectionType: "catalog",
       createdAt: new Date(),
@@ -338,35 +341,35 @@ Deno.test("MongodbApplier - transforms type across all instances", async (t) => 
     const instance1 = db.collection("catalog_store1");
     await instance1.insertMany([
       {
-        _id: "_information" as any,
+        _id: "_information" as unknown as ObjectId,
         _type: "_information",
         collectionType: "catalog",
         createdAt: new Date(),
       },
       {
-        _id: "_migrations" as any,
+        _id: "_migrations" as unknown as ObjectId,
         _type: "_migrations",
         fromMigrationId: "test_migration_000",
         appliedMigrations: [],
       },
-      { _id: "p1" as any, _type: "product", name: "Product 1" },
+      { _id: "p1" as unknown as ObjectId, _type: "product", name: "Product 1" },
     ]);
 
     const instance2 = db.collection("catalog_store2");
     await instance2.insertMany([
       {
-        _id: "_information" as any,
+        _id: "_information" as unknown as ObjectId,
         _type: "_information",
         collectionType: "catalog",
         createdAt: new Date(),
       },
       {
-        _id: "_migrations" as any,
+        _id: "_migrations" as unknown as ObjectId,
         _type: "_migrations",
         fromMigrationId: "test_migration_000",
         appliedMigrations: [],
       },
-      { _id: "p2" as any, _type: "product", name: "Product 2" },
+      { _id: "p2" as unknown as ObjectId, _type: "product", name: "Product 2" },
     ]);
 
     const operation: TransformMultiCollectionTypeRule = {
@@ -405,18 +408,18 @@ Deno.test("MongodbApplier - skips instances created after migration", async (t) 
     const instance = db.collection("catalog_new");
     await instance.insertMany([
       {
-        _id: "_information" as any,
+        _id: "_information" as unknown as ObjectId,
         _type: "_information",
         collectionType: "catalog",
         createdAt: new Date(),
       },
       {
-        _id: "_migrations" as any,
+        _id: "_migrations" as unknown as ObjectId,
         _type: "_migrations",
         fromMigrationId: "2025_12_31_2359_ZZZZZZZZ@future", // Created in the future
         appliedMigrations: [],
       },
-      { _id: "p1" as any, _type: "product", name: "Product 1" },
+      { _id: "p1" as unknown as ObjectId, _type: "product", name: "Product 1" },
     ]);
 
     const operation: TransformMultiCollectionTypeRule = {
@@ -454,7 +457,7 @@ Deno.test("MongodbApplier - discovers all instances of a type", async (t) => {
     for (const instanceName of instances) {
       const collection = db.collection(instanceName);
       await collection.insertOne({
-        _id: "_information" as any,
+        _id: "_information" as unknown as ObjectId,
         _type: "_information",
         collectionType: "catalog",
         createdAt: new Date(),
@@ -463,7 +466,7 @@ Deno.test("MongodbApplier - discovers all instances of a type", async (t) => {
 
     // Discover instances
     const discovered = await discoverMultiCollectionInstances(db, "catalog");
-    
+
     assertEquals(discovered.length, 3);
     assert(discovered.includes("catalog_store1"));
     assert(discovered.includes("catalog_store2"));
@@ -495,7 +498,8 @@ Deno.test("MongodbApplier - synchronizeSchemas updates validators", async (t) =>
     await applier.synchronizeSchemas(schemas);
 
     // Check validator was applied
-    const collections = await db.listCollections({ name: "users" }).toArray() as any[];
+    const collections = await db.listCollections({ name: "users" })
+      .toArray() as any[];
     assertExists(collections[0].options?.validator);
   });
 });

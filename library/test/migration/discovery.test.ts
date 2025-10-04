@@ -1,30 +1,31 @@
 /**
  * Tests for Migration Discovery
- * 
+ *
  * Tests discovery, loading, and validation of migration files
  */
 
-import { assertEquals, assertExists, assert } from "@std/assert";
+import { assert, assertEquals, assertExists } from "@std/assert";
 import * as path from "@std/path";
 import {
-  discoverMigrationFiles,
-  loadMigrationFile,
-  loadAllMigrations,
-  validateMigrationChain,
   buildMigrationChain,
+  discoverMigrationFiles,
   getPendingMigrations,
+  loadAllMigrations,
+  loadMigrationFile,
+  validateMigrationChain,
 } from "../../src/migration/discovery.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 
 // Get absolute path to the definition module for dynamic imports in temp files
-const DEFINITION_IMPORT_PATH = new URL("../../src/migration/definition.ts", import.meta.url).href;
+const DEFINITION_IMPORT_PATH =
+  new URL("../../src/migration/definition.ts", import.meta.url).href;
 
 // Helper to create temporary test directory with migrations
 async function withTempMigrations(
-  work: (tempDir: string) => Promise<void>
+  work: (tempDir: string) => Promise<void>,
 ) {
   const tempDir = await Deno.makeTempDir({ prefix: "mongodbee_migrations_" });
-  
+
   try {
     await work(tempDir);
   } finally {
@@ -36,7 +37,7 @@ async function withTempMigrations(
 async function createMigrationFile(
   dir: string,
   fileName: string,
-  content: string
+  content: string,
 ): Promise<void> {
   const filePath = path.join(dir, fileName);
   await Deno.writeTextFile(filePath, content);
@@ -52,7 +53,7 @@ Deno.test("discoverMigrationFiles - finds all .ts files", async () => {
     await createMigrationFile(tempDir, "001_initial.ts", "export default {}");
     await createMigrationFile(tempDir, "002_add_users.ts", "export default {}");
     await createMigrationFile(tempDir, "003_add_posts.ts", "export default {}");
-    
+
     // Create non-migration file (should be ignored)
     await createMigrationFile(tempDir, "README.md", "# Migrations");
 
@@ -104,8 +105,9 @@ Deno.test("discoverMigrationFiles - throws on non-existent directory", async () 
 Deno.test("loadMigrationFile - loads valid migration", async () => {
   await withTempMigrations(async (tempDir) => {
     // Get absolute path to the definition module
-    const definitionPath = new URL("../../src/migration/definition.ts", import.meta.url).href;
-    
+    const definitionPath =
+      new URL("../../src/migration/definition.ts", import.meta.url).href;
+
     const migrationContent = `
       import { migrationDefinition } from "${definitionPath}";
       
@@ -202,7 +204,8 @@ Deno.test("loadMigrationFile - throws on syntax errors", async () => {
 Deno.test("loadAllMigrations - loads multiple migrations", async () => {
   await withTempMigrations(async (tempDir) => {
     // Create first migration
-    const definitionPath = new URL("../../src/migration/definition.ts", import.meta.url).href;
+    const definitionPath =
+      new URL("../../src/migration/definition.ts", import.meta.url).href;
     const migration1 = `
       import { migrationDefinition } from "${definitionPath}";
       
@@ -353,7 +356,8 @@ Deno.test("validateMigrationChain - returns empty for empty array", () => {
 Deno.test("buildMigrationChain - builds valid chain from files", async () => {
   await withTempMigrations(async (tempDir) => {
     // Create migrations with proper parent-child relationship
-    const definitionPath = new URL("../../src/migration/definition.ts", import.meta.url).href;
+    const definitionPath =
+      new URL("../../src/migration/definition.ts", import.meta.url).href;
     const migration1 = `
       import { migrationDefinition } from "${definitionPath}";
       
@@ -583,8 +587,16 @@ Deno.test("Discovery - full workflow from files to chain", async () => {
       });
     `;
 
-    await createMigrationFile(tempDir, "2025_01_01_0000_AAA@initial.ts", migration1);
-    await createMigrationFile(tempDir, "2025_01_02_0000_BBB@add_email.ts", migration2);
+    await createMigrationFile(
+      tempDir,
+      "2025_01_01_0000_AAA@initial.ts",
+      migration1,
+    );
+    await createMigrationFile(
+      tempDir,
+      "2025_01_02_0000_BBB@add_email.ts",
+      migration2,
+    );
 
     // 1. Discover files
     const files = await discoverMigrationFiles(tempDir);

@@ -1,20 +1,20 @@
 /**
  * Tests for the init command
- * 
+ *
  * Tests initialization of MongoDBee migration system including:
  * - Config file creation
  * - Schema file creation
  * - Migrations directory creation
  * - Force flag behavior
- * 
+ *
  * @module
  */
 
-import { assertEquals, assertExists, assert } from "@std/assert";
+import { assert, assertEquals, assertExists } from "@std/assert";
 import * as path from "@std/path";
 import { existsSync } from "@std/fs";
 import { initCommand } from "../../../src/migration/cli/commands/init.ts";
-import { withTempDir, fileContains } from "./shared.ts";
+import { fileContains, withTempDir } from "./shared.ts";
 
 Deno.test("init - creates config file and migrations directory", async () => {
   await withTempDir(async (tempDir) => {

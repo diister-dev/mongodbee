@@ -15,7 +15,7 @@ Deno.test("withIndex - Union schemas with unique constraints", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create union schema similar to SIRET/SIREN
     const NumberOrString = v.union([v.string(), v.number()]);
-    
+
     const testSchema = {
       id: withIndex(v.string(), { unique: true }),
       value: withIndex(NumberOrString, { unique: true }),
@@ -31,9 +31,9 @@ Deno.test("withIndex - Union schemas with unique constraints", async (t) => {
       description: "String test",
     });
 
-    // Second document with number value  
+    // Second document with number value
     await coll.insertOne({
-      id: "test2", 
+      id: "test2",
       value: 42,
       description: "Number test",
     });
@@ -47,7 +47,7 @@ Deno.test("withIndex - Union schemas with unique constraints", async (t) => {
         });
       },
       Error,
-      "duplicate key"
+      "duplicate key",
     );
 
     // Should prevent duplicate number value
@@ -59,12 +59,14 @@ Deno.test("withIndex - Union schemas with unique constraints", async (t) => {
         });
       },
       Error,
-      "duplicate key"
+      "duplicate key",
     );
 
     // Verify indexes were created
     const indexes = await coll.collection.listIndexes().toArray();
-    const valueIndex = indexes.find((idx: Record<string, unknown>) => idx.key && (idx.key as Record<string, unknown>).value);
+    const valueIndex = indexes.find((idx: Record<string, unknown>) =>
+      idx.key && (idx.key as Record<string, unknown>).value
+    );
     assertEquals(valueIndex?.unique, true);
   });
 });
@@ -80,7 +82,7 @@ Deno.test("withIndex - Complex nested union schemas", async (t) => {
     );
 
     const SirenSchema = v.pipe(
-      v.string(), 
+      v.string(),
       v.regex(/^[0-9]+$/),
       v.minLength(9),
       v.maxLength(9),
@@ -103,7 +105,7 @@ Deno.test("withIndex - Complex nested union schemas", async (t) => {
       name: "Company with SIRET",
     });
 
-    // Insert company with SIREN (9 digits) 
+    // Insert company with SIREN (9 digits)
     await coll.insertOne({
       id: "company2",
       siretOrSiren: "123456789",
@@ -120,20 +122,20 @@ Deno.test("withIndex - Complex nested union schemas", async (t) => {
         });
       },
       Error,
-      "duplicate key"
+      "duplicate key",
     );
 
     // Should prevent duplicate SIREN
     await assertRejects(
       async () => {
         await coll.insertOne({
-          id: "company4", 
+          id: "company4",
           siretOrSiren: "123456789", // Same SIREN
           name: "Duplicate SIREN Company",
         });
       },
       Error,
-      "duplicate key"
+      "duplicate key",
     );
 
     // Verify unique constraint works
@@ -145,23 +147,27 @@ Deno.test("withIndex - Complex nested union schemas", async (t) => {
 Deno.test("withIndex - Multi-collection with union schemas", async (t) => {
   await withDatabase(t.name, async (db) => {
     const IdUnion = v.union([v.string(), v.number()]);
-    
+
     const catalogSchema = {
       user: {
         userId: withIndex(IdUnion, { unique: true }),
         name: v.string(),
       },
       product: {
-        productId: withIndex(IdUnion, { unique: true }), 
+        productId: withIndex(IdUnion, { unique: true }),
         title: v.string(),
-      }
+      },
     };
 
     const catalogModel = defineModel("multi_union_test", {
-      schema: catalogSchema
+      schema: catalogSchema,
     });
 
-    const multiColl = await multiCollection(db, "multi_union_test", catalogModel);
+    const multiColl = await multiCollection(
+      db,
+      "multi_union_test",
+      catalogModel,
+    );
 
     // Insert user with string ID
     await multiColl.insertOne("user", {
@@ -190,7 +196,7 @@ Deno.test("withIndex - Multi-collection with union schemas", async (t) => {
         });
       },
       Error,
-      "duplicate key"
+      "duplicate key",
     );
 
     // Should prevent duplicate user number ID
@@ -202,7 +208,7 @@ Deno.test("withIndex - Multi-collection with union schemas", async (t) => {
         });
       },
       Error,
-      "duplicate key"
+      "duplicate key",
     );
 
     // Should allow same ID across different types (scoped by type)
@@ -213,7 +219,7 @@ Deno.test("withIndex - Multi-collection with union schemas", async (t) => {
 
     const userCount = await multiColl.countDocuments("user");
     const productCount = await multiColl.countDocuments("product");
-    
+
     assertEquals(userCount, 2);
     assertEquals(productCount, 2);
   });

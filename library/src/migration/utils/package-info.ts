@@ -1,8 +1,8 @@
 /**
  * @fileoverview Package information utilities
- * 
+ *
  * Provides access to MongoDBee package metadata such as version number.
- * 
+ *
  * @module
  */
 
@@ -10,9 +10,9 @@ import packageInfo from "../../../deno.json" with { type: "json" };
 
 /**
  * Gets the current version of MongoDBee from deno.json
- * 
+ *
  * @returns The version string (e.g., "0.13.0")
- * 
+ *
  * @example
  * ```typescript
  * const version = getCurrentVersion();
@@ -26,9 +26,9 @@ export function getCurrentVersion(): string {
 
 /**
  * Gets package information including name and version
- * 
+ *
  * @returns Object with package name and version
- * 
+ *
  * @example
  * ```typescript
  * const info = getPackageInfo();

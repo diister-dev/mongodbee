@@ -6,13 +6,13 @@
  * @module
  */
 
-import { green, yellow, red, dim, blue, bold, gray } from "@std/fmt/colors";
+import { blue, bold, dim, gray, green, red } from "@std/fmt/colors";
 import { MongoClient } from "../../../mongodb.ts";
 import * as path from "@std/path";
 
 import { loadConfig } from "../../config/loader.ts";
-import { loadAllMigrations, buildMigrationChain } from "../../discovery.ts";
-import { getMigrationHistory, getAllOperations } from "../../history.ts";
+import { buildMigrationChain, loadAllMigrations } from "../../discovery.ts";
+import { getAllOperations, getMigrationHistory } from "../../history.ts";
 
 export interface HistoryCommandOptions {
   configPath?: string;
@@ -23,7 +23,9 @@ export interface HistoryCommandOptions {
 /**
  * Show migration operation history
  */
-export async function historyCommand(options: HistoryCommandOptions = {}): Promise<void> {
+export async function historyCommand(
+  options: HistoryCommandOptions = {},
+): Promise<void> {
   console.log(bold(blue("🐝 Migration History")));
   console.log();
 
@@ -35,8 +37,12 @@ export async function historyCommand(options: HistoryCommandOptions = {}): Promi
     const cwd = options.cwd || Deno.cwd();
     const config = await loadConfig({ configPath: options.configPath, cwd });
 
-    const migrationsDir = path.resolve(cwd, config.paths?.migrations || "./migrations");
-    const connectionUri = config.database?.connection?.uri || "mongodb://localhost:27017";
+    const migrationsDir = path.resolve(
+      cwd,
+      config.paths?.migrations || "./migrations",
+    );
+    const connectionUri = config.database?.connection?.uri ||
+      "mongodb://localhost:27017";
     const dbName = config.database?.name || "myapp";
 
     console.log(dim(`Connection URI: ${connectionUri}`));
@@ -62,7 +68,7 @@ export async function historyCommand(options: HistoryCommandOptions = {}): Promi
     if (options.migrationId) {
       // Show history for specific migration
       operations = await getMigrationHistory(db, options.migrationId);
-      const migration = allMigrations.find(m => m.id === options.migrationId);
+      const migration = allMigrations.find((m) => m.id === options.migrationId);
 
       if (!migration) {
         throw new Error(`Migration ${options.migrationId} not found`);
@@ -93,40 +99,45 @@ export async function historyCommand(options: HistoryCommandOptions = {}): Promi
 
     // Display operations timeline
     for (const op of operations) {
-      const dateStr = op.executedAt.toISOString().replace('T', ' ').split('.')[0];
-      const durationStr = op.duration ? dim(`(${op.duration}ms)`) : '';
+      const dateStr =
+        op.executedAt.toISOString().replace("T", " ").split(".")[0];
+      const durationStr = op.duration ? dim(`(${op.duration}ms)`) : "";
 
-      let icon = '  ';
+      let icon = "  ";
       let opColor = dim;
-      let statusIcon = '';
+      let statusIcon = "";
 
       switch (op.operation) {
-        case 'applied':
-          icon = '✅';
+        case "applied":
+          icon = "✅";
           opColor = green;
-          statusIcon = op.status === 'failure' ? red('✗') : '';
+          statusIcon = op.status === "failure" ? red("✗") : "";
           break;
-        case 'reverted':
-          icon = '🔄';
+        case "reverted":
+          icon = "🔄";
           opColor = blue;
-          statusIcon = op.status === 'failure' ? red('✗') : '';
+          statusIcon = op.status === "failure" ? red("✗") : "";
           break;
-        case 'failed':
-          icon = '❌';
+        case "failed":
+          icon = "❌";
           opColor = red;
           break;
       }
 
       // Format operation line
-      const migrationName = !options.migrationId ? gray(` → ${op.migrationName}`) : '';
+      const migrationName = !options.migrationId
+        ? gray(` → ${op.migrationName}`)
+        : "";
       console.log(
-        `${icon} ${dim(dateStr)}  ${opColor(op.operation.padEnd(10))} ${durationStr} ${statusIcon}${migrationName}`
+        `${icon} ${dim(dateStr)}  ${
+          opColor(op.operation.padEnd(10))
+        } ${durationStr} ${statusIcon}${migrationName}`,
       );
 
       // Show error if present
       if (op.error) {
-        const errorLines = op.error.split('\n');
-        console.log(`   ${red('Error:')} ${red(errorLines[0])}`);
+        const errorLines = op.error.split("\n");
+        console.log(`   ${red("Error:")} ${red(errorLines[0])}`);
         if (errorLines.length > 1) {
           for (let i = 1; i < Math.min(3, errorLines.length); i++) {
             console.log(`          ${dim(errorLines[i])}`);
@@ -138,16 +149,27 @@ export async function historyCommand(options: HistoryCommandOptions = {}): Promi
     console.log();
 
     // Summary
-    const appliedCount = operations.filter(op => op.operation === 'applied' && op.status === 'success').length;
-    const revertedCount = operations.filter(op => op.operation === 'reverted' && op.status === 'success').length;
-    const failedCount = operations.filter(op => op.status === 'failure').length;
+    const appliedCount = operations.filter((op) =>
+      op.operation === "applied" && op.status === "success"
+    ).length;
+    const revertedCount = operations.filter((op) =>
+      op.operation === "reverted" && op.status === "success"
+    ).length;
+    const failedCount = operations.filter((op) =>
+      op.status === "failure"
+    ).length;
 
     console.log(bold("Summary:"));
     console.log(dim(`  Total operations: ${operations.length}`));
-    if (appliedCount > 0) console.log(green(`  Applied: ${appliedCount}`));
-    if (revertedCount > 0) console.log(blue(`  Reverted: ${revertedCount}`));
-    if (failedCount > 0) console.log(red(`  Failed: ${failedCount}`));
-
+    if (appliedCount > 0) {
+      console.log(green(`  Applied: ${appliedCount}`));
+    }
+    if (revertedCount > 0) {
+      console.log(blue(`  Reverted: ${revertedCount}`));
+    }
+    if (failedCount > 0) {
+      console.log(red(`  Failed: ${failedCount}`));
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(red(bold("Error:")), message);

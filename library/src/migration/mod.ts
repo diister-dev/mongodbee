@@ -1,12 +1,12 @@
 /**
  * @fileoverview MongoDBee Migration System - Main Module
- * 
+ *
  * This is the main entry point for the MongoDBee migration system. It provides
  * a comprehensive, type-safe, and functional approach to MongoDB migrations
  * with schema validation, simulation capabilities, and robust error handling.
- * 
+ *
  * ## Features
- * 
+ *
  * - **Type-Safe Migrations**: Full TypeScript support with Valibot schema validation
  * - **Functional Design**: Pure functions and immutable data structures
  * - **Simulation Support**: Test migrations without touching your database
@@ -15,22 +15,22 @@
  * - **Template System**: Generate migrations from built-in or custom templates
  * - **Execution Runners**: Coordinate migration execution with logging and error handling
  * - **JSR Compatible**: Designed for the JavaScript Registry with proper documentation
- * 
+ *
  * ## Basic Usage
- * 
+ *
  * ### Creating a Migration
- * 
+ *
  * ```typescript
  * import { migrationBuilder } from "@diister/mongodbee/migration";
  * import * as v from "@diister/mongodbee/schema";
- * 
+ *
  * const userSchema = v.object({
  *   _id: v.string(),
  *   name: v.string(),
  *   email: v.pipe(v.string(), v.email()),
  *   createdAt: v.date(),
  * });
- * 
+ *
  * const migration = migrationBuilder({
  *   schemas: {
  *     collections: { users: userSchema }
@@ -43,141 +43,133 @@
  *     .done()
  *   .compile();
  * ```
- * 
+ *
  * ### Running Migrations
- * 
+ *
  * ```typescript
  * import { createMigrationRunner, MongodbApplier } from "@diister/mongodbee/migration";
- * 
+ *
  * // Create applier and runner
  * const applier = new MongodbApplier(mongoClient.db("myapp"));
  * const runner = createMigrationRunner({
  *   config: systemConfig,
  *   applier
  * });
- * 
+ *
  * // Execute migration
  * const result = await runner.executeMigration(migrationDefinition);
  * console.log(`Migration completed: ${result.success}`);
  * ```
- * 
+ *
  * @module
  */
 
 // Core types and interfaces
 export type {
-  // Migration definitions
-  MigrationDefinition,
-  MigrationState,
-  MigrationProperty,
+  CreateCollectionRule,
+  // Database state
+  DatabaseState,
+  // Applier interfaces
+  MigrationApplier,
   MigrationBuilder,
   MigrationCollectionBuilder,
-  
+  // Migration definitions
+  MigrationDefinition,
+  MigrationProperty,
   // Operation types
   MigrationRule,
-  CreateCollectionRule,
+  MigrationState,
+  // Schema types
+  SchemasDefinition,
   SeedCollectionRule,
   TransformCollectionRule,
   TransformRule,
-  
-  // Applier interfaces
-  MigrationApplier,
-  
-  // Schema types
-  SchemasDefinition,
-  
-  // Database state
-  DatabaseState,
-} from './types.ts';
+} from "./types.ts";
 
 // Builder system
 export {
-  migrationBuilder,
+  getMigrationSummary,
   isCreateCollectionRule,
   isSeedCollectionRule,
   isTransformCollectionRule,
-  getMigrationSummary,
-} from './builder.ts';
-export type {
-  MigrationBuilderOptions,
-} from './builder.ts';
+  migrationBuilder,
+} from "./builder.ts";
+export type { MigrationBuilderOptions } from "./builder.ts";
 
 // Import for default export
-import { migrationBuilder } from './builder.ts';
+import { migrationBuilder } from "./builder.ts";
 
 // Definition management
 export {
-  migrationDefinition,
-  validateMigrationChain,
+  createMigrationSummary,
+  findCommonAncestor,
   generateMigrationId,
   getMigrationAncestors,
   getMigrationPath,
-  findCommonAncestor,
   isMigrationAncestor,
-  createMigrationSummary,
-} from './definition.ts';
-export type {
-  MigrationDefinitionOptions,
-} from './definition.ts';
+  migrationDefinition,
+  validateMigrationChain,
+} from "./definition.ts";
+export type { MigrationDefinitionOptions } from "./definition.ts";
 
 // Appliers
-export { SimulationApplier } from './appliers/simulation.ts';
-export { MongodbApplier, createMongodbApplier } from './appliers/mongodb.ts';
+export { SimulationApplier } from "./appliers/simulation.ts";
+export { createMongodbApplier, MongodbApplier } from "./appliers/mongodb.ts";
 
 // Configuration
-export * from './config/mod.ts';
+export * from "./config/mod.ts";
 
-// Runners  
-export * from './runners/mod.ts';
+// Runners
+export * from "./runners/mod.ts";
 
 // Validators (partial export of working functions)
 export {
-  createIntegrityValidator,
   createChainValidator,
-} from './validators/mod.ts';
+  createIntegrityValidator,
+} from "./validators/mod.ts";
 
 // Multi-collection registry
 export {
+  createMultiCollectionInfo,
   discoverMultiCollectionInstances,
   getMultiCollectionInfo,
-  createMultiCollectionInfo,
-  markAsMultiCollection,
-  recordMultiCollectionMigration,
   getMultiCollectionMigrations,
-  multiCollectionInstanceExists,
   isInstanceCreatedAfterMigration,
-  shouldInstanceReceiveMigration,
+  markAsMultiCollection,
   MULTI_COLLECTION_INFO_TYPE,
   MULTI_COLLECTION_MIGRATIONS_TYPE,
-} from './multicollection-registry.ts';
+  multiCollectionInstanceExists,
+  recordMultiCollectionMigration,
+  shouldInstanceReceiveMigration,
+} from "./multicollection-registry.ts";
 
 // Application startup validation helpers
 export {
-  checkMigrationStatus,
-  isLastMigrationApplied,
   assertMigrationsApplied,
-  validateMigrationsForEnv,
+  checkMigrationStatus,
   checkSchemaAlignment,
+  isLastMigrationApplied,
   validateDatabaseState,
-} from './validation-helpers.ts';
+  validateMigrationsForEnv,
+} from "./validation-helpers.ts";
 export type {
+  DatabaseStateValidationResult,
   MigrationValidationResult,
   SchemaAlignmentResult,
-  DatabaseStateValidationResult,
-} from './validation-helpers.ts';
+} from "./validation-helpers.ts";
 
 /**
  * Version information for the migration system
  */
-export const VERSION = '1.0.0';
+export const VERSION = "1.0.0";
 
 /**
  * Default export providing the most commonly used functions
- * 
+ *
  * @example
  * ```typescript
  * import mongodbee from "@diister/mongodbee/migration";
- * 
+ *
  * // Build a migration
  * const migration = mongodbee.builder({ schemas: mySchemas })
  *   .createCollection("users")
@@ -188,7 +180,7 @@ export const VERSION = '1.0.0';
 export default {
   // Core functions
   builder: migrationBuilder,
-  
+
   // Version
   VERSION,
 };

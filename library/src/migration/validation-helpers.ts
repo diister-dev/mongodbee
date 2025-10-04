@@ -11,11 +11,19 @@
  * @module
  */
 
-import type { Db } from '../mongodb.ts';
-import { loadAllMigrations, buildMigrationChain, getPendingMigrations } from './discovery.ts';
-import { getAppliedMigrationIds } from './history.ts';
-import { loadSchemaFromFile, compareSchemas, type DatabaseSchema } from './schema.ts';
-import { loadConfig } from './config/loader.ts';
+import type { Db } from "../mongodb.ts";
+import {
+  buildMigrationChain,
+  getPendingMigrations,
+  loadAllMigrations,
+} from "./discovery.ts";
+import { getAppliedMigrationIds } from "./history.ts";
+import {
+  compareSchemas,
+  type DatabaseSchema,
+  loadSchemaFromFile,
+} from "./schema.ts";
+import { loadConfig } from "./config/loader.ts";
 import * as path from "@std/path";
 
 /**
@@ -69,7 +77,7 @@ export interface MigrationValidationResult {
  */
 export async function checkMigrationStatus(
   db: Db,
-  migrationsDir = "./migrations"
+  migrationsDir = "./migrations",
 ): Promise<MigrationValidationResult> {
   try {
     // Load all migrations from filesystem
@@ -84,7 +92,7 @@ export async function checkMigrationStatus(
     const pending = getPendingMigrations(allMigrations, appliedIds);
 
     // Get last applied migration
-    const lastAppliedMigration = appliedIds.length > 0 
+    const lastAppliedMigration = appliedIds.length > 0
       ? appliedIds[appliedIds.length - 1]
       : undefined;
 
@@ -93,14 +101,16 @@ export async function checkMigrationStatus(
     if (pending.length === 0) {
       message = "✓ Database is up-to-date. All migrations have been applied.";
     } else if (appliedIds.length === 0) {
-      message = `⚠️ No migrations applied yet. ${pending.length} migration(s) need to be run.`;
+      message =
+        `⚠️ No migrations applied yet. ${pending.length} migration(s) need to be run.`;
     } else {
-      message = `⚠️ Database is outdated. ${pending.length} pending migration(s) need to be applied.`;
+      message =
+        `⚠️ Database is outdated. ${pending.length} pending migration(s) need to be applied.`;
     }
 
     return {
       isUpToDate: pending.length === 0,
-      pendingMigrations: pending.map(m => m.id),
+      pendingMigrations: pending.map((m) => m.id),
       totalMigrations: allMigrations.length,
       appliedCount: appliedIds.length,
       lastAppliedMigration,
@@ -140,13 +150,13 @@ export async function checkMigrationStatus(
  */
 export async function isLastMigrationApplied(
   db: Db,
-  migrationsDir = "./migrations"
+  migrationsDir = "./migrations",
 ): Promise<boolean> {
   try {
     // Load all migrations from filesystem
     const resolvedDir = path.resolve(migrationsDir);
     const migrationsWithFiles = await loadAllMigrations(resolvedDir);
-    
+
     if (migrationsWithFiles.length === 0) {
       // No migrations exist, consider it "up-to-date"
       return true;
@@ -191,14 +201,16 @@ export async function isLastMigrationApplied(
  */
 export async function assertMigrationsApplied(
   db: Db,
-  migrationsDir = "./migrations"
+  migrationsDir = "./migrations",
 ): Promise<void> {
   const status = await checkMigrationStatus(db, migrationsDir);
 
   if (!status.isUpToDate) {
     throw new Error(
       `Migration validation failed: ${status.pendingMigrations.length} pending migration(s). ` +
-      `Run migrations before starting the application. Pending: [${status.pendingMigrations.join(', ')}]`
+        `Run migrations before starting the application. Pending: [${
+          status.pendingMigrations.join(", ")
+        }]`,
     );
   }
 }
@@ -225,7 +237,7 @@ export async function assertMigrationsApplied(
 export async function validateMigrationsForEnv(
   db: Db,
   env: string,
-  migrationsDir = "./migrations"
+  migrationsDir = "./migrations",
 ): Promise<void> {
   const status = await checkMigrationStatus(db, migrationsDir);
 
@@ -233,11 +245,15 @@ export async function validateMigrationsForEnv(
     if (env === "production" || env === "prod") {
       throw new Error(
         `🚨 Production startup blocked: ${status.pendingMigrations.length} pending migration(s). ` +
-        `Apply migrations before deploying. Pending: [${status.pendingMigrations.join(', ')}]`
+          `Apply migrations before deploying. Pending: [${
+            status.pendingMigrations.join(", ")
+          }]`,
       );
     } else {
       console.warn(`\n⚠️  Warning: ${status.message}`);
-      console.warn(`   Pending migrations: [${status.pendingMigrations.join(', ')}]`);
+      console.warn(
+        `   Pending migrations: [${status.pendingMigrations.join(", ")}]`,
+      );
       console.warn(`   Run: deno task migrate:apply\n`);
     }
   }
@@ -320,11 +336,11 @@ export interface DatabaseStateValidationResult {
  * if (!result.isAligned) {
  *   console.error("❌ Schema mismatch detected!");
  *   console.error(result.message);
- *   
+ *
  *   for (const error of result.errors) {
  *     console.error(`  - ${error.collection}.${error.field}: expected ${error.expected}, got ${error.actual}`);
  *   }
- *   
+ *
  *   if (Deno.env.get("ENV") === "production") {
  *     throw new Error("Schema alignment check failed");
  *   }
@@ -333,7 +349,7 @@ export interface DatabaseStateValidationResult {
  */
 export async function checkSchemaAlignment(
   db: Db,
-  configPath = "./mongodbee.config.ts"
+  configPath = "./mongodbee.config.ts",
 ): Promise<SchemaAlignmentResult> {
   try {
     // Load configuration to get paths
@@ -355,7 +371,7 @@ export async function checkSchemaAlignment(
     // Load application schemas from file
     const schemaFilePath = path.join(schemasPath, "database.json");
     let applicationSchema: DatabaseSchema;
-    
+
     try {
       applicationSchema = await loadSchemaFromFile(schemaFilePath);
     } catch (error) {
@@ -368,32 +384,36 @@ export async function checkSchemaAlignment(
           actual: `Schema file not found at ${schemaFilePath}`,
         }],
         warnings: [],
-        message: `⚠️ Application schema file not found. Expected at: ${schemaFilePath}`,
+        message:
+          `⚠️ Application schema file not found. Expected at: ${schemaFilePath}`,
       };
     }
 
     // Generate current database schema by inferring from actual collections
-    const mongoUri = config.database?.connection?.uri || Deno.env.get("MONGODB_URI") || "";
+    const mongoUri = config.database?.connection?.uri ||
+      Deno.env.get("MONGODB_URI") || "";
     const dbName = config.database?.name || db.databaseName;
-    
+
     if (!mongoUri) {
-      throw new Error("MongoDB URI not found in config or MONGODB_URI environment variable");
+      throw new Error(
+        "MongoDB URI not found in config or MONGODB_URI environment variable",
+      );
     }
 
-    const { generateDatabaseSchema } = await import('./schema.ts');
+    const { generateDatabaseSchema } = await import("./schema.ts");
     const actualSchema = await generateDatabaseSchema(mongoUri, dbName);
 
     // Compare application schema (expected) with actual database schema
     const comparisonResult = compareSchemas(actualSchema, applicationSchema);
 
-    const errors = comparisonResult.errors.map(e => ({
+    const errors = comparisonResult.errors.map((e) => ({
       collection: e.collection,
       field: e.field,
       expected: e.expected,
       actual: e.actual,
     }));
 
-    const warnings = comparisonResult.warnings.map(w => ({
+    const warnings = comparisonResult.warnings.map((w) => ({
       collection: w.collection,
       field: w.field,
       expected: w.expected,
@@ -404,10 +424,12 @@ export async function checkSchemaAlignment(
     if (errors.length === 0 && warnings.length === 0) {
       message = "✓ Application schemas match the database structure.";
     } else if (errors.length > 0) {
-      message = `❌ Schema misalignment detected: ${errors.length} error(s), ${warnings.length} warning(s). ` +
-                `Your schemas.ts file doesn't match the actual database structure.`;
+      message =
+        `❌ Schema misalignment detected: ${errors.length} error(s), ${warnings.length} warning(s). ` +
+        `Your schemas.ts file doesn't match the actual database structure.`;
     } else {
-      message = `⚠️ Schema differences detected: ${warnings.length} warning(s).`;
+      message =
+        `⚠️ Schema differences detected: ${warnings.length} warning(s).`;
     }
 
     return {
@@ -444,17 +466,17 @@ export async function checkSchemaAlignment(
  * // At application startup
  * const db = client.db("myapp");
  * const env = Deno.env.get("ENV") || "development";
- * 
+ *
  * const result = await validateDatabaseState(db, { env });
  *
  * if (!result.isValid) {
  *   console.error("❌ Database validation failed!");
  *   console.error(result.message);
- *   
+ *
  *   for (const issue of result.issues) {
  *     console.error(`  - ${issue}`);
  *   }
- *   
+ *
  *   if (env === "production") {
  *     throw new Error("Database validation failed - cannot start application");
  *   }
@@ -469,7 +491,7 @@ export async function validateDatabaseState(
     configPath?: string;
     migrationsDir?: string;
     env?: string;
-  }
+  },
 ): Promise<DatabaseStateValidationResult> {
   const configPath = options?.configPath || "./mongodbee.config.ts";
   const migrationsDir = options?.migrationsDir || "./migrations";
@@ -485,7 +507,11 @@ export async function validateDatabaseState(
 
   // Collect migration issues
   if (!migrations.isUpToDate) {
-    issues.push(`${migrations.pendingMigrations.length} pending migration(s): [${migrations.pendingMigrations.join(', ')}]`);
+    issues.push(
+      `${migrations.pendingMigrations.length} pending migration(s): [${
+        migrations.pendingMigrations.join(", ")
+      }]`,
+    );
   }
 
   // Collect schema issues
@@ -493,7 +519,9 @@ export async function validateDatabaseState(
     if (schemas.errors.length > 0) {
       issues.push(`${schemas.errors.length} schema error(s) detected`);
       for (const error of schemas.errors.slice(0, 3)) { // Show first 3 errors
-        issues.push(`  └─ ${error.collection}.${error.field}: expected ${error.expected}, got ${error.actual}`);
+        issues.push(
+          `  └─ ${error.collection}.${error.field}: expected ${error.expected}, got ${error.actual}`,
+        );
       }
       if (schemas.errors.length > 3) {
         issues.push(`  └─ ... and ${schemas.errors.length - 3} more error(s)`);
@@ -508,10 +536,12 @@ export async function validateDatabaseState(
 
   let message: string;
   if (isValid) {
-    message = "✓ Database validation passed - migrations applied and schemas aligned";
+    message =
+      "✓ Database validation passed - migrations applied and schemas aligned";
   } else {
     const envContext = env ? ` [${env}]` : "";
-    message = `❌ Database validation failed${envContext}: ${issues.length} issue(s) found`;
+    message =
+      `❌ Database validation failed${envContext}: ${issues.length} issue(s) found`;
   }
 
   return {

@@ -1,18 +1,18 @@
-/* 
+/*
  * Tests migration definition, parent-child relationships, and chain validation
  */
 
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertExists, assert } from "@std/assert";
+import { assert, assertEquals, assertExists } from "@std/assert";
 import {
-  migrationDefinition,
-  validateMigrationChain,
+  createMigrationSummary,
+  findCommonAncestor,
   generateMigrationId,
   getMigrationAncestors,
   getMigrationPath,
-  findCommonAncestor,
   isMigrationAncestor,
-  createMigrationSummary,
+  migrationDefinition,
+  validateMigrationChain,
 } from "../../src/migration/definition.ts";
 
 // ============================================================================

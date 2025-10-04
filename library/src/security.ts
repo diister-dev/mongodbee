@@ -14,12 +14,12 @@
  * @module
  */
 
-import type { Db } from './mongodb.ts';
-import * as v from 'valibot';
-import { toMongoValidator } from './validator.ts';
-import { extractIndexes } from './indexes.ts';
-import { sanitizePathName } from './schema-navigator.ts';
-import { mongoOperationQueue } from './operation.ts';
+import type { Db } from "./mongodb.ts";
+import * as v from "valibot";
+import { toMongoValidator } from "./validator.ts";
+import { extractIndexes } from "./indexes.ts";
+import { sanitizePathName } from "./schema-navigator.ts";
+import { mongoOperationQueue } from "./operation.ts";
 
 /**
  * Options for applying security (validators and indexes)
@@ -71,7 +71,7 @@ export async function applySecurityToCollection(
   db: Db,
   collectionName: string,
   schema: Record<string, any>,
-  options: ApplySecurityOptions = {}
+  options: ApplySecurityOptions = {},
 ): Promise<void> {
   const opts = {
     applyValidator: true,
@@ -88,18 +88,22 @@ export async function applySecurityToCollection(
     const validator = toMongoValidator(wrappedSchema);
 
     // Check if collection exists
-    const collections = await db.listCollections({ name: collectionName }).toArray();
+    const collections = await db.listCollections({ name: collectionName })
+      .toArray();
 
     if (collections.length === 0) {
-      throw new Error(`Collection ${collectionName} does not exist. Please create it first or use migrations.`);
+      throw new Error(
+        `Collection ${collectionName} does not exist. Please create it first or use migrations.`,
+      );
     }
 
     // Check existing validator
     const existingOptions = await db.command({
       listCollections: 1,
-      filter: { name: collectionName }
+      filter: { name: collectionName },
     });
-    const currentValidator = existingOptions.cursor?.firstBatch?.[0]?.options?.validator;
+    const currentValidator = existingOptions.cursor?.firstBatch?.[0]?.options
+      ?.validator;
 
     // Compare validators
     const needsUpdate = opts.force ||
@@ -123,7 +127,7 @@ export async function applySecurityToCollection(
       return;
     }
 
-    await Promise.all(indexes.map(index => {
+    await Promise.all(indexes.map((index) => {
       return mongoOperationQueue.add(async () => {
         const indexName = sanitizePathName(index.path);
         const keySpec: Record<string, number> = {};
@@ -136,7 +140,9 @@ export async function applySecurityToCollection(
             sparse: false,
           });
         } catch (error) {
-          if (error instanceof Error && error.message.includes('already exists')) {
+          if (
+            error instanceof Error && error.message.includes("already exists")
+          ) {
             // Index already exists, skip silently
           } else {
             throw error;
@@ -180,7 +186,7 @@ export async function applySecurityToMultiCollection(
   db: Db,
   collectionName: string,
   multiCollectionSchema: Record<string, Record<string, any>>,
-  options: ApplySecurityOptions = {}
+  options: ApplySecurityOptions = {},
 ): Promise<void> {
   const opts = {
     applyValidator: true,
@@ -193,28 +199,36 @@ export async function applySecurityToMultiCollection(
 
   // Apply union validator for all types
   if (opts.applyValidator) {
-    const schemas = Object.entries(multiCollectionSchema).map(([typeName, typeSchema]) => {
-      return v.object({
-        _type: v.literal(typeName),
-        ...typeSchema,
-      });
-    });
+    const schemas = Object.entries(multiCollectionSchema).map(
+      ([typeName, typeSchema]) => {
+        return v.object({
+          _type: v.literal(typeName),
+          ...typeSchema,
+        });
+      },
+    );
 
-    const validator = toMongoValidator(v.union(schemas as [any, any, ...any[]]));
+    const validator = toMongoValidator(
+      v.union(schemas as [any, any, ...any[]]),
+    );
 
     // Check if collection exists
-    const collections = await db.listCollections({ name: collectionName }).toArray();
+    const collections = await db.listCollections({ name: collectionName })
+      .toArray();
 
     if (collections.length === 0) {
-      throw new Error(`Collection ${collectionName} does not exist. Please create it first or use migrations.`);
+      throw new Error(
+        `Collection ${collectionName} does not exist. Please create it first or use migrations.`,
+      );
     }
 
     // Update validator
     const existingOptions = await db.command({
       listCollections: 1,
-      filter: { name: collectionName }
+      filter: { name: collectionName },
     });
-    const currentValidator = existingOptions.cursor?.firstBatch?.[0]?.options?.validator;
+    const currentValidator = existingOptions.cursor?.firstBatch?.[0]?.options
+      ?.validator;
 
     const needsUpdate = opts.force ||
       !currentValidator ||
@@ -231,8 +245,10 @@ export async function applySecurityToMultiCollection(
   // Apply indexes for each type
   if (opts.applyIndexes) {
     const indexOperations = [];
-    
-    for (const [typeName, typeSchema] of Object.entries(multiCollectionSchema)) {
+
+    for (
+      const [typeName, typeSchema] of Object.entries(multiCollectionSchema)
+    ) {
       const wrappedSchema = v.object(typeSchema);
       const indexes = extractIndexes(wrappedSchema);
 
@@ -253,17 +269,20 @@ export async function applySecurityToMultiCollection(
                 partialFilterExpression: { _type: typeName }, // Only index docs of this type
               });
             } catch (error) {
-              if (error instanceof Error && error.message.includes('already exists')) {
+              if (
+                error instanceof Error &&
+                error.message.includes("already exists")
+              ) {
                 // Index already exists, skip silently
               } else {
                 throw error;
               }
             }
-          })
+          }),
         );
       }
     }
-    
+
     await Promise.all(indexOperations);
   }
 }

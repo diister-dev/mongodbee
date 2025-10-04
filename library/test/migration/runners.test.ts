@@ -1,6 +1,6 @@
 /**
  * @fileoverview Tests for migration execution runners
- * 
+ *
  * Tests the high-level runner system that coordinates:
  * - Migration execution with validation
  * - Retry logic for failed operations
@@ -9,28 +9,25 @@
  * - Batch migration execution
  */
 
-import { assertEquals, assertExists, assert } from "@std/assert";
+import { assert, assertEquals, assertExists } from "@std/assert";
 import {
-  createMigrationRunner,
   createConsoleLogger,
+  createMigrationRunner,
   createNoOpLogger,
-  type MigrationRunner,
+  DEFAULT_RUNNER_CONFIG,
   type MigrationExecutionContext,
-  type MigrationExecutionResult,
   type MigrationLogger,
+  type MigrationProgress,
   type MigrationValidator,
   type ValidationResult,
-  type MigrationProgress,
-  DEFAULT_RUNNER_CONFIG,
 } from "../../src/migration/runners/execution.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
-import { migrationBuilder } from "../../src/migration/builder.ts";
 import type { MigrationSystemConfig } from "../../src/migration/config/types.ts";
-import type { 
-  MigrationApplier, 
-  MigrationRule, 
-  MigrationState, 
+import type {
+  MigrationApplier,
   MigrationDefinition,
+  MigrationRule,
+  MigrationState,
 } from "../../src/migration/types.ts";
 import * as v from "valibot";
 
@@ -38,34 +35,34 @@ import * as v from "valibot";
 // Mock Applier for Testing
 // ============================================================
 
-function createMockApplier(): MigrationApplier & { 
+function createMockApplier(): MigrationApplier & {
   appliedOperations: MigrationRule[];
   reversedOperations: MigrationRule[];
   shouldFail?: boolean;
 } {
   const appliedOperations: MigrationRule[] = [];
   const reversedOperations: MigrationRule[] = [];
-  
+
   return {
     appliedOperations,
     reversedOperations,
     shouldFail: false,
-    
+
     async applyOperation(operation: MigrationRule): Promise<void> {
       if (this.shouldFail) {
         throw new Error(`Mock failure for operation ${operation.type}`);
       }
       appliedOperations.push(operation);
       // Simulate some async work
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 10));
     },
-    
+
     async applyReverseOperation(operation: MigrationRule): Promise<void> {
       if (this.shouldFail) {
         throw new Error(`Mock failure for reverse operation ${operation.type}`);
       }
       reversedOperations.push(operation);
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 10));
     },
   };
 }
@@ -80,27 +77,38 @@ function createMockValidator(options: {
   warnings?: string[];
 } = {}): MigrationValidator {
   return {
-    async validateMigration(_definition: MigrationDefinition): Promise<ValidationResult> {
+    // deno-lint-ignore require-await
+    async validateMigration(
+      _definition: MigrationDefinition,
+    ): Promise<ValidationResult> {
       return {
         success: !options.shouldFail,
-        errors: options.errors || (options.shouldFail ? ['Mock validation error'] : []),
+        errors: options.errors ||
+          (options.shouldFail ? ["Mock validation error"] : []),
         warnings: options.warnings || [],
         data: { validated: true },
       };
     },
-    
-    async validateOperation(_operation: MigrationRule, _context: MigrationExecutionContext): Promise<ValidationResult> {
+
+    // deno-lint-ignore require-await
+    async validateOperation(
+      _operation: MigrationRule,
+      _context: MigrationExecutionContext,
+    ): Promise<ValidationResult> {
       return {
         success: !options.shouldFail,
-        errors: options.shouldFail ? ['Mock operation validation error'] : [],
+        errors: options.shouldFail ? ["Mock operation validation error"] : [],
         warnings: [],
       };
     },
-    
-    async validateState(_state: MigrationState, _context: MigrationExecutionContext): Promise<ValidationResult> {
+
+    async validateState(
+      _state: MigrationState,
+      _context: MigrationExecutionContext,
+    ): Promise<ValidationResult> {
       return {
         success: !options.shouldFail,
-        errors: options.shouldFail ? ['Mock state validation error'] : [],
+        errors: options.shouldFail ? ["Mock state validation error"] : [],
         warnings: [],
       };
     },
@@ -115,20 +123,24 @@ function createMockLogger(): MigrationLogger & {
   logs: Array<{ level: string; message: string; data?: any }>;
 } {
   const logs: Array<{ level: string; message: string; data?: any }> = [];
-  
+
   return {
     logs,
     debug: (message: string, data?: Record<string, unknown>) => {
-      logs.push({ level: 'debug', message, data });
+      logs.push({ level: "debug", message, data });
     },
     info: (message: string, data?: Record<string, unknown>) => {
-      logs.push({ level: 'info', message, data });
+      logs.push({ level: "info", message, data });
     },
     warn: (message: string, data?: Record<string, unknown>) => {
-      logs.push({ level: 'warn', message, data });
+      logs.push({ level: "warn", message, data });
     },
     error: (message: string, error?: Error, data?: Record<string, unknown>) => {
-      logs.push({ level: 'error', message, data: { ...data, error: error?.message } });
+      logs.push({
+        level: "error",
+        message,
+        data: { ...data, error: error?.message },
+      });
     },
   };
 }
@@ -138,7 +150,7 @@ function createMockLogger(): MigrationLogger & {
 // ============================================================
 
 Deno.test("createConsoleLogger - creates logger with correct level", () => {
-  const logger = createConsoleLogger('info');
+  const logger = createConsoleLogger("info");
   assertExists(logger);
   assertExists(logger.info);
   assertExists(logger.warn);
@@ -148,12 +160,12 @@ Deno.test("createConsoleLogger - creates logger with correct level", () => {
 
 Deno.test("createNoOpLogger - creates logger that does nothing", () => {
   const logger = createNoOpLogger();
-  
+
   // Should not throw
-  logger.debug('test');
-  logger.info('test');
-  logger.warn('test');
-  logger.error('test');
+  logger.debug("test");
+  logger.info("test");
+  logger.warn("test");
+  logger.error("test");
 });
 
 // ============================================================
@@ -192,7 +204,10 @@ Deno.test("createMigrationRunner - merges custom config with defaults", () => {
   assertEquals(runner.config.validateBeforeExecution, false);
   assertEquals(runner.config.maxRetries, 5);
   // Should keep defaults for other options
-  assertEquals(runner.config.continueOnWarnings, DEFAULT_RUNNER_CONFIG.continueOnWarnings);
+  assertEquals(
+    runner.config.continueOnWarnings,
+    DEFAULT_RUNNER_CONFIG.continueOnWarnings,
+  );
 });
 
 // ============================================================
@@ -217,12 +232,12 @@ Deno.test("executeMigration - executes simple migration successfully", async () 
         migration.createCollection("users");
         return migration.compile();
       },
-    }
+    },
   );
 
   const applier = createMockApplier();
   const logger = createMockLogger();
-  
+
   const context: MigrationExecutionContext = {
     config: {} as any,
     applier,
@@ -239,11 +254,11 @@ Deno.test("executeMigration - executes simple migration successfully", async () 
   assertEquals(result.success, true);
   assertEquals(result.appliedOperations, 1);
   assertEquals(applier.appliedOperations.length, 1);
-  assertEquals(applier.appliedOperations[0].type, 'create_collection');
-  
+  assertEquals(applier.appliedOperations[0].type, "create_collection");
+
   // Check logging
-  assert(logger.logs.some(log => log.message.includes('Starting migration')));
-  assert(logger.logs.some(log => log.message.includes('completed')));
+  assert(logger.logs.some((log) => log.message.includes("Starting migration")));
+  assert(logger.logs.some((log) => log.message.includes("completed")));
 });
 
 Deno.test("executeMigration - executes migration with multiple operations", async () => {
@@ -270,11 +285,11 @@ Deno.test("executeMigration - executes migration with multiple operations", asyn
           ]);
         return migration.compile();
       },
-    }
+    },
   );
 
   const applier = createMockApplier();
-  
+
   const context: MigrationExecutionContext = {
     config: {} as any,
     applier,
@@ -290,8 +305,8 @@ Deno.test("executeMigration - executes migration with multiple operations", asyn
   assertEquals(result.success, true);
   assertEquals(result.appliedOperations, 2);
   assertEquals(applier.appliedOperations.length, 2);
-  assertEquals(applier.appliedOperations[0].type, 'create_collection');
-  assertEquals(applier.appliedOperations[1].type, 'seed_collection');
+  assertEquals(applier.appliedOperations[0].type, "create_collection");
+  assertEquals(applier.appliedOperations[1].type, "seed_collection");
 });
 
 Deno.test("executeMigration - validates before execution when enabled", async () => {
@@ -301,34 +316,38 @@ Deno.test("executeMigration - validates before execution when enabled", async ()
     },
   };
 
-//   const migration = migrationDefinition({
-//     id: "2024_01_01_1200_test@users",
-//     name: "Create users",
-//     parent: null,
-//     schemas,
-//   }, {}, (builder: any) => {
-//     return builder
-//       .createCollection("users", schemas.users)
-//       .compile();
-//   });
-  const migration = migrationDefinition("2024_01_01_1200_test@users", "Create users", {
-    parent: null,
-    schemas: {
+  //   const migration = migrationDefinition({
+  //     id: "2024_01_01_1200_test@users",
+  //     name: "Create users",
+  //     parent: null,
+  //     schemas,
+  //   }, {}, (builder: any) => {
+  //     return builder
+  //       .createCollection("users", schemas.users)
+  //       .compile();
+  //   });
+  const migration = migrationDefinition(
+    "2024_01_01_1200_test@users",
+    "Create users",
+    {
+      parent: null,
+      schemas: {
         collections: {
-            users: schemas.users
+          users: schemas.users,
         },
         multiCollections: {},
+      },
+      migrate(migration) {
+        migration.createCollection("users");
+        return migration.compile();
+      },
     },
-    migrate(migration) {
-      migration.createCollection("users");
-      return migration.compile();
-    },
-});
+  );
 
   const applier = createMockApplier();
-  const validator = createMockValidator({ warnings: ['Test warning'] });
+  const validator = createMockValidator({ warnings: ["Test warning"] });
   const logger = createMockLogger();
-  
+
   const context: MigrationExecutionContext = {
     config: {} as any,
     applier,
@@ -345,8 +364,12 @@ Deno.test("executeMigration - validates before execution when enabled", async ()
 
   assertEquals(result.success, true);
   assertEquals(result.warnings.length, 1);
-  assert(result.warnings[0].includes('Test warning'));
-  assert(logger.logs.some(log => log.message.includes('Validating migration before execution')));
+  assert(result.warnings[0].includes("Test warning"));
+  assert(
+    logger.logs.some((log) =>
+      log.message.includes("Validating migration before execution")
+    ),
+  );
 });
 
 Deno.test("executeMigration - stops on validation error when continueOnErrors is false", async () => {
@@ -356,37 +379,41 @@ Deno.test("executeMigration - stops on validation error when continueOnErrors is
     },
   };
 
-//   const migration = migrationDefinition({
-//     id: "2024_01_01_1200_test@users",
-//     name: "Create users",
-//     parent: null,
-//     schemas,
-//   }, {}, (builder: any) => {
-//     return builder
-//       .createCollection("users", schemas.users)
-//       .compile();
-//   });
+  //   const migration = migrationDefinition({
+  //     id: "2024_01_01_1200_test@users",
+  //     name: "Create users",
+  //     parent: null,
+  //     schemas,
+  //   }, {}, (builder: any) => {
+  //     return builder
+  //       .createCollection("users", schemas.users)
+  //       .compile();
+  //   });
 
-  const migration = migrationDefinition("2024_01_01_1200_test@users", "Create users", {
-    parent: null,
-    schemas: {
-      collections: {
-        users: schemas.users
+  const migration = migrationDefinition(
+    "2024_01_01_1200_test@users",
+    "Create users",
+    {
+      parent: null,
+      schemas: {
+        collections: {
+          users: schemas.users,
+        },
+        multiCollections: {},
       },
-      multiCollections: {},
+      migrate(migration) {
+        migration.createCollection("users");
+        return migration.compile();
+      },
     },
-    migrate(migration) {
-      migration.createCollection("users");
-      return migration.compile();
-    },
-  });
+  );
 
   const applier = createMockApplier();
-  const validator = createMockValidator({ 
+  const validator = createMockValidator({
     shouldFail: true,
-    errors: ['Validation failed'],
+    errors: ["Validation failed"],
   });
-  
+
   const context: MigrationExecutionContext = {
     config: {} as any,
     applier,
@@ -403,7 +430,7 @@ Deno.test("executeMigration - stops on validation error when continueOnErrors is
   assertEquals(result.success, false);
   assertEquals(result.appliedOperations, 0);
   assertEquals(applier.appliedOperations.length, 0);
-  assert(result.errors.some(e => e.includes('Validation failed')));
+  assert(result.errors.some((e) => e.includes("Validation failed")));
 });
 
 Deno.test("executeMigration - tracks progress with callback", async () => {
@@ -425,24 +452,28 @@ Deno.test("executeMigration - tracks progress with callback", async () => {
   //       .seed([{ name: "Alice" }])
   //     .compile();
   // });
-  const migration = migrationDefinition("2024_01_01_1200_test@users", "Create users", {
-    parent: null,
-    schemas: {
-      collections: {
-        users: schemas.users
+  const migration = migrationDefinition(
+    "2024_01_01_1200_test@users",
+    "Create users",
+    {
+      parent: null,
+      schemas: {
+        collections: {
+          users: schemas.users,
+        },
+        multiCollections: {},
       },
-      multiCollections: {},
+      migrate(migration) {
+        migration.createCollection("users")
+          .seed([{ name: "Alice" }]);
+        return migration.compile();
+      },
     },
-    migrate(migration) {
-      migration.createCollection("users")
-        .seed([{ name: "Alice" }]);
-      return migration.compile();
-    }
-  });
+  );
 
   const applier = createMockApplier();
   const progressUpdates: MigrationProgress[] = [];
-  
+
   const context: MigrationExecutionContext = {
     config: {} as any,
     applier,
@@ -459,9 +490,22 @@ Deno.test("executeMigration - tracks progress with callback", async () => {
   await runner.executeMigration(migration);
 
   // Should have progress updates for: validation, execution phases
-  assert(progressUpdates.length > 0, `Expected progress updates, got ${progressUpdates.length}`);
-  assert(progressUpdates.some(p => p.phase === 'execution'), `Expected 'execution' phase, got: ${progressUpdates.map(p => p.phase).join(', ')}`);
-  assert(progressUpdates.some(p => p.phase === 'completed'), `Expected 'completed' phase, got: ${progressUpdates.map(p => p.phase).join(', ')}`);
+  assert(
+    progressUpdates.length > 0,
+    `Expected progress updates, got ${progressUpdates.length}`,
+  );
+  assert(
+    progressUpdates.some((p) => p.phase === "execution"),
+    `Expected 'execution' phase, got: ${
+      progressUpdates.map((p) => p.phase).join(", ")
+    }`,
+  );
+  assert(
+    progressUpdates.some((p) => p.phase === "completed"),
+    `Expected 'completed' phase, got: ${
+      progressUpdates.map((p) => p.phase).join(", ")
+    }`,
+  );
 });
 
 Deno.test("executeMigration - calls operation callbacks", async () => {
@@ -481,23 +525,28 @@ Deno.test("executeMigration - calls operation callbacks", async () => {
   //     .createCollection("users", schemas.users)
   //     .compile();
   // });
-  const migration = migrationDefinition("2024_01_01_1200_test@users", "Create users", {
-    parent: null,
-    schemas: {
-      collections: {
-        users: schemas.users
+  const migration = migrationDefinition(
+    "2024_01_01_1200_test@users",
+    "Create users",
+    {
+      parent: null,
+      schemas: {
+        collections: {
+          users: schemas.users,
+        },
+        multiCollections: {},
       },
-      multiCollections: {},
+      migrate(migration) {
+        migration.createCollection("users");
+        return migration.compile();
+      },
     },
-    migrate(migration) {
-      migration.createCollection("users");
-      return migration.compile();
-    }
-  });
+  );
 
   const applier = createMockApplier();
-  const operationCallbacks: Array<{ phase: string; operation: MigrationRule }> = [];
-  
+  const operationCallbacks: Array<{ phase: string; operation: MigrationRule }> =
+    [];
+
   const context: MigrationExecutionContext = {
     config: {} as any,
     applier,
@@ -514,9 +563,9 @@ Deno.test("executeMigration - calls operation callbacks", async () => {
   await runner.executeMigration(migration);
 
   // Should have before and after callbacks
-  assert(operationCallbacks.some(cb => cb.phase === 'before'));
-  assert(operationCallbacks.some(cb => cb.phase === 'after'));
-  assertEquals(operationCallbacks[0].operation.type, 'create_collection');
+  assert(operationCallbacks.some((cb) => cb.phase === "before"));
+  assert(operationCallbacks.some((cb) => cb.phase === "after"));
+  assertEquals(operationCallbacks[0].operation.type, "create_collection");
 });
 
 Deno.test("executeMigration - handles operation failure with retry", async () => {
@@ -536,23 +585,27 @@ Deno.test("executeMigration - handles operation failure with retry", async () =>
   //     .createCollection("users", schemas.users)
   //     .compile();
   // });
-  const migration = migrationDefinition("2024_01_01_1200_test@users", "Create users", {
-    parent: null,
-    schemas: {
-      collections: {
-        users: schemas.users
+  const migration = migrationDefinition(
+    "2024_01_01_1200_test@users",
+    "Create users",
+    {
+      parent: null,
+      schemas: {
+        collections: {
+          users: schemas.users,
+        },
+        multiCollections: {},
       },
-      multiCollections: {},
+      migrate(migration) {
+        migration.createCollection("users");
+        return migration.compile();
+      },
     },
-    migrate(migration) {
-      migration.createCollection("users");
-      return migration.compile();
-    }
-  });
+  );
 
   const applier = createMockApplier();
   applier.shouldFail = true;
-  
+
   const context: MigrationExecutionContext = {
     config: {} as any,
     applier,
@@ -569,7 +622,11 @@ Deno.test("executeMigration - handles operation failure with retry", async () =>
   assertEquals(result.success, false);
   // Should have attempted 1 + 2 retries = 3 times
   assertEquals(applier.appliedOperations.length, 0); // All failed
-  assert(result.errors.some(e => e.includes('failed after') && e.includes('attempts')));
+  assert(
+    result.errors.some((e) =>
+      e.includes("failed after") && e.includes("attempts")
+    ),
+  );
 });
 
 Deno.test("executeMigration - respects operation timeout", async () => {
@@ -590,19 +647,23 @@ Deno.test("executeMigration - respects operation timeout", async () => {
   //     .compile();
   // });
 
-  const migration = migrationDefinition("2024_01_01_1200_test@users", "Create users", {
-    parent: null,
-    schemas: {
-      collections: {
-        users: schemas.users
+  const migration = migrationDefinition(
+    "2024_01_01_1200_test@users",
+    "Create users",
+    {
+      parent: null,
+      schemas: {
+        collections: {
+          users: schemas.users,
+        },
+        multiCollections: {},
       },
-      multiCollections: {},
+      migrate(migration) {
+        migration.createCollection("users");
+        return migration.compile();
+      },
     },
-    migrate(migration) {
-      migration.createCollection("users");
-      return migration.compile();
-    }
-  });
+  );
 
   // Create an applier that takes too long
   let slowTimerId: number | undefined;
@@ -618,7 +679,7 @@ Deno.test("executeMigration - respects operation timeout", async () => {
       });
     },
   };
-  
+
   const context: MigrationExecutionContext = {
     config: {} as any,
     applier: slowApplier,
@@ -638,7 +699,7 @@ Deno.test("executeMigration - respects operation timeout", async () => {
   }
 
   assertEquals(result.success, false);
-  assert(result.errors.some(e => e.includes('timeout')));
+  assert(result.errors.some((e) => e.includes("timeout")));
 });
 
 Deno.test("executeMigration - runs in dry-run mode", async () => {
@@ -647,24 +708,28 @@ Deno.test("executeMigration - runs in dry-run mode", async () => {
       name: v.string(),
     },
   };
-  
-  const migration = migrationDefinition("2024_01_01_1200_test@users", "Create users", {
-    parent: null,
-    schemas: {
-      collections: {
-        users: schemas.users
+
+  const migration = migrationDefinition(
+    "2024_01_01_1200_test@users",
+    "Create users",
+    {
+      parent: null,
+      schemas: {
+        collections: {
+          users: schemas.users,
+        },
+        multiCollections: {},
       },
-      multiCollections: {},
+      migrate(migration) {
+        migration.createCollection("users");
+        return migration.compile();
+      },
     },
-    migrate(migration) {
-      migration.createCollection("users");
-      return migration.compile();
-    }
-  });
+  );
 
   const applier = createMockApplier();
   const logger = createMockLogger();
-  
+
   const context: MigrationExecutionContext = {
     config: {} as any,
     applier,
@@ -682,7 +747,7 @@ Deno.test("executeMigration - runs in dry-run mode", async () => {
   // In dry-run mode, operations are not actually applied
   assertEquals(applier.appliedOperations.length, 0);
   assertEquals(result.metadata?.dryRun, true);
-  assert(logger.logs.some(log => log.message.includes('Dry-run mode')));
+  assert(logger.logs.some((log) => log.message.includes("Dry-run mode")));
 });
 
 // ============================================================
@@ -691,10 +756,10 @@ Deno.test("executeMigration - runs in dry-run mode", async () => {
 
 Deno.test("executeMigrations - executes multiple migrations in sequence", async () => {
   const schemas = {
-    users:{
+    users: {
       name: v.string(),
     },
-    posts:{
+    posts: {
       title: v.string(),
     },
   };
@@ -725,33 +790,33 @@ Deno.test("executeMigrations - executes multiple migrations in sequence", async 
     parent: null,
     schemas: {
       collections: {
-        users: schemas.users
+        users: schemas.users,
       },
       multiCollections: {},
     },
     migrate(migration) {
       migration.createCollection("users");
       return migration.compile();
-    }
+    },
   });
 
   const m2 = migrationDefinition("2024_01_01_1300_m2@posts", "Create posts", {
     parent: m1,
     schemas: {
       collections: {
-        posts: schemas.posts
+        posts: schemas.posts,
       },
       multiCollections: {},
     },
     migrate(migration) {
       migration.createCollection("posts");
       return migration.compile();
-    }
+    },
   });
 
   const applier = createMockApplier();
   const logger = createMockLogger();
-  
+
   const context: MigrationExecutionContext = {
     config: {} as any,
     applier,
@@ -769,8 +834,8 @@ Deno.test("executeMigrations - executes multiple migrations in sequence", async 
   assertEquals(results[0].success, true);
   assertEquals(results[1].success, true);
   assertEquals(applier.appliedOperations.length, 2);
-  
-  assert(logger.logs.some(log => log.message.includes('batch migration')));
+
+  assert(logger.logs.some((log) => log.message.includes("batch migration")));
 });
 
 Deno.test("executeMigrations - stops on first failure when continueOnErrors is false", async () => {
@@ -806,43 +871,43 @@ Deno.test("executeMigrations - stops on first failure when continueOnErrors is f
     parent: null,
     schemas: {
       collections: {
-        users: schemas.users
+        users: schemas.users,
       },
       multiCollections: {},
     },
     migrate(migration) {
       migration.createCollection("users");
       return migration.compile();
-    }
+    },
   });
 
   const m2 = migrationDefinition("2024_01_01_1300_m2@posts", "Create posts", {
     parent: m1,
     schemas: {
       collections: {
-        users: schemas.users // Intentional error: using users schema for posts
+        users: schemas.users, // Intentional error: using users schema for posts
       },
       multiCollections: {},
     },
     migrate(migration) {
       migration.createCollection("posts");
       return migration.compile();
-    }
+    },
   });
 
   const applier = createMockApplier();
-  
+
   // Make the applier fail after first operation
   let callCount = 0;
   const originalApply = applier.applyOperation.bind(applier);
-  applier.applyOperation = async (op: MigrationRule) => {
+  applier.applyOperation = (op: MigrationRule) => {
     callCount++;
     if (callCount > 1) {
-      throw new Error('Simulated failure');
+      throw new Error("Simulated failure");
     }
     return originalApply(op);
   };
-  
+
   const context: MigrationExecutionContext = {
     config: {} as any,
     applier,
@@ -886,24 +951,28 @@ Deno.test("rollbackMigration - rolls back a migration", async () => {
   //     .compile();
   // });
 
-  const migration = migrationDefinition("2024_01_01_1200_test@users", "Create users", {
-    parent: null,
-    schemas: {
-      collections: {
-        users: schemas.users
+  const migration = migrationDefinition(
+    "2024_01_01_1200_test@users",
+    "Create users",
+    {
+      parent: null,
+      schemas: {
+        collections: {
+          users: schemas.users,
+        },
+        multiCollections: {},
       },
-      multiCollections: {},
+      migrate(migration) {
+        migration.createCollection("users")
+          .seed([{ name: "Alice" }]);
+        return migration.compile();
+      },
     },
-    migrate(migration) {
-      migration.createCollection("users")
-        .seed([{ name: "Alice" }]);
-      return migration.compile();
-    }
-  });
+  );
 
   const applier = createMockApplier();
   const logger = createMockLogger();
-  
+
   const context: MigrationExecutionContext = {
     config: {} as any,
     applier,
@@ -921,7 +990,7 @@ Deno.test("rollbackMigration - rolls back a migration", async () => {
   // Rollback should apply reverse operations
   assertEquals(applier.reversedOperations.length, 2);
   // Operations should be reversed in reverse order
-  assert(logger.logs.some(log => log.message.includes('rollback')));
+  assert(logger.logs.some((log) => log.message.includes("rollback")));
 });
 
 // ============================================================
@@ -946,23 +1015,27 @@ Deno.test("validateMigration - validates migration without executing", async () 
   //     .compile();
   // });
 
-  const migration = migrationDefinition("2024_01_01_1200_test@users", "Create users", {
-    parent: null,
-    schemas: {
-      collections: {
-        users: schemas.users
+  const migration = migrationDefinition(
+    "2024_01_01_1200_test@users",
+    "Create users",
+    {
+      parent: null,
+      schemas: {
+        collections: {
+          users: schemas.users,
+        },
+        multiCollections: {},
       },
-      multiCollections: {},
+      migrate(migration) {
+        migration.createCollection("users");
+        return migration.compile();
+      },
     },
-    migrate(migration) {
-      migration.createCollection("users");
-      return migration.compile();
-    }
-  });
+  );
 
   const applier = createMockApplier();
-  const validator = createMockValidator({ warnings: ['Test warning'] });
-  
+  const validator = createMockValidator({ warnings: ["Test warning"] });
+
   const context: MigrationExecutionContext = {
     config: {} as any,
     applier,
@@ -983,7 +1056,7 @@ Deno.test("validateMigration - returns warning when no validator configured", as
   const schemas = {
     users: {
       name: v.string(),
-    }
+    },
   };
 
   // const migration = migrationDefinition({
@@ -997,22 +1070,26 @@ Deno.test("validateMigration - returns warning when no validator configured", as
   //     .compile();
   // });
 
-  const migration = migrationDefinition("2024_01_01_1200_test@users", "Create users", {
-    parent: null,
-    schemas: {
-      collections: {
-        users: schemas.users
+  const migration = migrationDefinition(
+    "2024_01_01_1200_test@users",
+    "Create users",
+    {
+      parent: null,
+      schemas: {
+        collections: {
+          users: schemas.users,
+        },
+        multiCollections: {},
       },
-      multiCollections: {},
+      migrate(migration) {
+        migration.createCollection("users");
+        return migration.compile();
+      },
     },
-    migrate(migration) {
-      migration.createCollection("users");
-      return migration.compile();
-    }
-  });
+  );
 
   const applier = createMockApplier();
-  
+
   const context: MigrationExecutionContext = {
     config: {} as any,
     applier,
@@ -1024,7 +1101,7 @@ Deno.test("validateMigration - returns warning when no validator configured", as
   const result = await runner.validateMigration(migration);
 
   assertEquals(result.success, true);
-  assert(result.warnings.some(w => w.includes('No validator configured')));
+  assert(result.warnings.some((w) => w.includes("No validator configured")));
 });
 
 // ============================================================
@@ -1041,26 +1118,30 @@ Deno.test("executeMigration - executes successfully with proper tracking", async
     },
   };
 
-  const migration = migrationDefinition("2024_01_01_1200_test@users", "Create and seed users", {
-    parent: null,
-    schemas: {
-      collections: {
-        users: schemas.users
+  const migration = migrationDefinition(
+    "2024_01_01_1200_test@users",
+    "Create and seed users",
+    {
+      parent: null,
+      schemas: {
+        collections: {
+          users: schemas.users,
+        },
+        multiCollections: {},
       },
-      multiCollections: {},
+      migrate(migration) {
+        migration.createCollection("users")
+          .seed([
+            { name: "Alice", email: "alice@example.com" },
+          ]);
+        return migration.compile();
+      },
     },
-    migrate(migration) {
-      migration.createCollection("users")
-        .seed([
-          { name: "Alice", email: "alice@example.com" },
-        ]);
-      return migration.compile();
-    }
-  });
+  );
 
   const applier = createMockApplier();
   const logger = createMockLogger();
-  
+
   const context: MigrationExecutionContext = {
     config: {} as MigrationSystemConfig,
     applier,
@@ -1077,9 +1158,9 @@ Deno.test("executeMigration - executes successfully with proper tracking", async
   assertEquals(result.success, true);
   assertEquals(result.appliedOperations, 2);
   assertExists(result.executionTime);
-  
+
   // Verify operations were applied
   assertEquals(applier.appliedOperations.length, 2);
-  assertEquals(applier.appliedOperations[0].type, 'create_collection');
-  assertEquals(applier.appliedOperations[1].type, 'seed_collection');
+  assertEquals(applier.appliedOperations[0].type, "create_collection");
+  assertEquals(applier.appliedOperations[1].type, "seed_collection");
 });

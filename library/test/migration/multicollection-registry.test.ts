@@ -1,23 +1,23 @@
 /**
  * Tests for Multi-Collection Registry
- * 
+ *
  * Tests discovery, tracking, and version filtering of multi-collection instances
  */
 
-import { assertEquals, assertExists, assert } from "@std/assert";
+import { assert, assertEquals, assertExists } from "@std/assert";
 import { withDatabase } from "../+shared.ts";
 import {
+  createMultiCollectionInfo,
   discoverMultiCollectionInstances,
   getMultiCollectionInfo,
-  createMultiCollectionInfo,
-  markAsMultiCollection,
-  recordMultiCollectionMigration,
   getMultiCollectionMigrations,
-  multiCollectionInstanceExists,
   isInstanceCreatedAfterMigration,
-  shouldInstanceReceiveMigration,
+  markAsMultiCollection,
   MULTI_COLLECTION_INFO_TYPE,
   MULTI_COLLECTION_MIGRATIONS_TYPE,
+  multiCollectionInstanceExists,
+  recordMultiCollectionMigration,
+  shouldInstanceReceiveMigration,
 } from "../../src/migration/multicollection-registry.ts";
 
 // ============================================================================
@@ -31,14 +31,18 @@ Deno.test("createMultiCollectionInfo - creates metadata documents", async (t) =>
     const collection = db.collection("catalog_main");
 
     // Check _information document
-    const info = await collection.findOne({ _type: MULTI_COLLECTION_INFO_TYPE });
+    const info = await collection.findOne({
+      _type: MULTI_COLLECTION_INFO_TYPE,
+    });
     assertExists(info);
     assertEquals(info._id as any, MULTI_COLLECTION_INFO_TYPE);
     assertEquals(info.collectionType, "catalog");
     assertExists(info.createdAt);
 
     // Check _migrations document
-    const migrations = await collection.findOne({ _type: MULTI_COLLECTION_MIGRATIONS_TYPE });
+    const migrations = await collection.findOne({
+      _type: MULTI_COLLECTION_MIGRATIONS_TYPE,
+    });
     assertExists(migrations);
     assertEquals(migrations._id as any, MULTI_COLLECTION_MIGRATIONS_TYPE);
     assertEquals(migrations.fromMigrationId, "mig_001");
@@ -177,7 +181,10 @@ Deno.test("isInstanceCreatedAfterMigration - compares migration IDs correctly", 
   const currentMigration = "2025_02_01_0000_BBBBBBBB@add_field";
 
   // Instance was created BEFORE current migration
-  const result = isInstanceCreatedAfterMigration(instanceCreatedAt, currentMigration);
+  const result = isInstanceCreatedAfterMigration(
+    instanceCreatedAt,
+    currentMigration,
+  );
 
   assert(!result);
 });
@@ -190,7 +197,10 @@ Deno.test("isInstanceCreatedAfterMigration - detects future instances", () => {
   const currentMigration = "2025_01_01_0000_AAAAAAAA@initial";
 
   // Instance was created AFTER current migration
-  const result = isInstanceCreatedAfterMigration(instanceCreatedAt, currentMigration);
+  const result = isInstanceCreatedAfterMigration(
+    instanceCreatedAt,
+    currentMigration,
+  );
 
   assert(result);
 });
@@ -200,7 +210,10 @@ Deno.test("isInstanceCreatedAfterMigration - handles unknown migration IDs", () 
   const currentMigration = "2025_01_01_0000_AAAAAAAA@initial";
 
   // Unknown should be treated as old (needs all migrations)
-  const result = isInstanceCreatedAfterMigration(instanceCreatedAt, currentMigration);
+  const result = isInstanceCreatedAfterMigration(
+    instanceCreatedAt,
+    currentMigration,
+  );
 
   assert(!result);
 });
@@ -226,7 +239,7 @@ Deno.test("shouldInstanceReceiveMigration - returns true for old instances", asy
     const shouldReceive = await shouldInstanceReceiveMigration(
       db,
       "catalog_old",
-      "2025_12_31_2359_ZZZZZZZZ@current"
+      "2025_12_31_2359_ZZZZZZZZ@current",
     );
 
     assert(shouldReceive);
@@ -254,7 +267,7 @@ Deno.test("shouldInstanceReceiveMigration - returns false for new instances", as
     const shouldReceive = await shouldInstanceReceiveMigration(
       db,
       "catalog_new",
-      "2025_01_01_0000_AAAAAAAA@initial"
+      "2025_01_01_0000_AAAAAAAA@initial",
     );
 
     assert(!shouldReceive);
@@ -340,10 +353,18 @@ Deno.test("Multi-collection registry - full lifecycle", async (t) => {
     assertEquals(instances[0], "catalog_main");
 
     // 7. Check version filtering
-    const shouldReceiveOld = await shouldInstanceReceiveMigration(db, "catalog_main", "mig_004");
+    const shouldReceiveOld = await shouldInstanceReceiveMigration(
+      db,
+      "catalog_main",
+      "mig_004",
+    );
     assert(shouldReceiveOld); // Should receive newer migrations
 
-    const shouldReceiveVeryOld = await shouldInstanceReceiveMigration(db, "catalog_main", "mig_000");
+    const shouldReceiveVeryOld = await shouldInstanceReceiveMigration(
+      db,
+      "catalog_main",
+      "mig_000",
+    );
     assert(!shouldReceiveVeryOld); // Should not receive older migrations
   });
 });

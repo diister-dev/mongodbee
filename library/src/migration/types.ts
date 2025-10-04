@@ -1,29 +1,29 @@
 /**
  * @fileoverview Core types and interfaces for the MongoDBee migration system
- * 
+ *
  * This module defines all the fundamental types, interfaces, and schemas used
  * throughout the migration system. It provides type safety and clear contracts
  * for migration operations, builders, and configurations.
- * 
+ *
  * @module
  */
 
-import type * as v from '../schema.ts';
-import type { MongoClient } from '../mongodb.ts';
+import type * as v from "../schema.ts";
+import type { MongoClient } from "../mongodb.ts";
 
 /**
  * Represents the different properties that can be applied to a migration
  */
 export type MigrationProperty = {
   /** Indicates that this migration cannot be reversed */
-  type: 'irreversible';
+  type: "irreversible";
 };
 
 /**
  * Rule for creating a new collection
  */
 export type CreateCollectionRule = {
-  type: 'create_collection';
+  type: "create_collection";
   collectionName: string;
   /** Valibot schema for the collection - used to create MongoDB JSON Schema validator */
   schema?: unknown;
@@ -33,7 +33,7 @@ export type CreateCollectionRule = {
  * Rule for seeding a collection with initial data
  */
 export type SeedCollectionRule = {
-  type: 'seed_collection';
+  type: "seed_collection";
   collectionName: string;
   documents: readonly unknown[];
 };
@@ -44,8 +44,11 @@ export type SeedCollectionRule = {
  * @template T - Input document type
  * @template U - Output document type
  */
-export type TransformCollectionRule<T = Record<string, unknown>, U = Record<string, unknown>> = {
-  type: 'transform_collection';
+export type TransformCollectionRule<
+  T = Record<string, unknown>,
+  U = Record<string, unknown>,
+> = {
+  type: "transform_collection";
   collectionName: string;
   up: (doc: T) => U;
   down: (doc: U) => T;
@@ -55,7 +58,7 @@ export type TransformCollectionRule<T = Record<string, unknown>, U = Record<stri
  * Rule for creating a multi-collection instance
  */
 export type CreateMultiCollectionInstanceRule = {
-  type: 'create_multicollection_instance';
+  type: "create_multicollection_instance";
   collectionName: string;
   collectionType: string;
 };
@@ -64,7 +67,7 @@ export type CreateMultiCollectionInstanceRule = {
  * Rule for seeding a specific type in a multi-collection instance
  */
 export type SeedMultiCollectionInstanceRule = {
-  type: 'seed_multicollection_instance';
+  type: "seed_multicollection_instance";
   collectionName: string;
   typeName: string;
   documents: readonly unknown[];
@@ -73,8 +76,11 @@ export type SeedMultiCollectionInstanceRule = {
 /**
  * Rule for transforming a specific type across ALL instances of a multi-collection
  */
-export type TransformMultiCollectionTypeRule<T = Record<string, unknown>, U = Record<string, unknown>> = {
-  type: 'transform_multicollection_type';
+export type TransformMultiCollectionTypeRule<
+  T = Record<string, unknown>,
+  U = Record<string, unknown>,
+> = {
+  type: "transform_multicollection_type";
   collectionType: string;
   typeName: string;
   up: (doc: T) => U;
@@ -87,7 +93,7 @@ export type TransformMultiCollectionTypeRule<T = Record<string, unknown>, U = Re
  * Rule for updating indexes on an existing collection
  */
 export type UpdateIndexesRule = {
-  type: 'update_indexes';
+  type: "update_indexes";
   collectionName: string;
   /** Valibot schema containing index definitions */
   schema: unknown;
@@ -95,13 +101,13 @@ export type UpdateIndexesRule = {
 
 /**
  * Rule for marking an existing collection as a multi-collection
- * 
+ *
  * This is useful when migrating from a regular collection to a multi-collection structure,
  * or when adopting an existing collection that already has the multi-collection format
  * (documents with _type field) but lacks the metadata documents.
  */
 export type MarkAsMultiCollectionRule = {
-  type: 'mark_as_multicollection';
+  type: "mark_as_multicollection";
   collectionName: string;
   collectionType: string;
 };
@@ -121,11 +127,14 @@ export type MigrationRule =
 
 /**
  * Transformation rule for bidirectional document changes
- * 
+ *
  * @template T - Input document type
  * @template U - Output document type
  */
-export type TransformRule<T = Record<string, unknown>, U = Record<string, unknown>> = {
+export type TransformRule<
+  T = Record<string, unknown>,
+  U = Record<string, unknown>,
+> = {
   /** Function to transform from old to new format */
   readonly up: (doc: T) => U;
   /** Function to transform from new to old format */
@@ -134,34 +143,34 @@ export type TransformRule<T = Record<string, unknown>, U = Record<string, unknow
 
 /**
  * Represents the current state of a migration during execution
- * 
+ *
  * This interface tracks all operations, properties, and provides
  * utilities for querying migration state.
  */
 export interface MigrationState {
   /** Array of properties applied to this migration */
   properties: MigrationProperty[];
-  
+
   /** Array of operations to be executed */
   operations: MigrationRule[];
-  
+
   /**
    * Marks the migration with a specific property
    * @param props - The property to add to the migration
    */
   mark(props: MigrationProperty): void;
-  
+
   /**
    * Checks if the migration has a specific property type
    * @param type - The property type to check for
    * @returns True if the migration has this property
    */
-  hasProperty(type: MigrationProperty['type']): boolean;
+  hasProperty(type: MigrationProperty["type"]): boolean;
 }
 
 /**
  * Builder interface for configuring operations on a specific collection
- * 
+ *
  * This interface provides a fluent API for chaining operations on a single
  * collection during migration definition.
  */
@@ -172,14 +181,14 @@ export interface MigrationCollectionBuilder {
    * @returns The collection builder for method chaining
    */
   seed(documents: readonly unknown[]): MigrationCollectionBuilder;
-  
+
   /**
    * Applies a transformation to all documents in the collection
    * @param rule - The transformation rule with up/down functions
    * @returns The collection builder for method chaining
    */
   transform(rule: TransformRule): MigrationCollectionBuilder;
-  
+
   /**
    * Finishes configuring this collection and returns to the main builder
    * @returns The main migration builder
@@ -233,7 +242,10 @@ export interface MultiCollectionInstanceBuilder {
    * @param documents - Array of documents to insert
    * @returns The instance builder for method chaining
    */
-  seedType(typeName: string, documents: readonly unknown[]): MultiCollectionInstanceBuilder;
+  seedType(
+    typeName: string,
+    documents: readonly unknown[],
+  ): MultiCollectionInstanceBuilder;
 
   /**
    * Finishes configuring this instance and returns to the main builder
@@ -277,14 +289,19 @@ export interface MigrationBuilder {
    * @param collectionType - The type/model of the multi-collection
    * @returns An instance builder for the new instance
    */
-  newMultiCollection(collectionName: string, collectionType: string): MultiCollectionInstanceBuilder;
+  newMultiCollection(
+    collectionName: string,
+    collectionType: string,
+  ): MultiCollectionInstanceBuilder;
 
   /**
    * Configures an existing multi-collection instance
    * @param collectionName - The full name of the collection
    * @returns An instance builder for the existing instance
    */
-  multiCollectionInstance(collectionName: string): MultiCollectionInstanceBuilder;
+  multiCollectionInstance(
+    collectionName: string,
+  ): MultiCollectionInstanceBuilder;
 
   /**
    * Updates indexes on an existing collection to match the schema
@@ -295,14 +312,14 @@ export interface MigrationBuilder {
 
   /**
    * Marks an existing collection as a multi-collection instance
-   * 
+   *
    * This is useful when migrating from a regular collection to a multi-collection,
    * or when adopting an existing collection that already has the multi-collection format.
-   * 
+   *
    * @param collectionName - The full name of the collection to mark
    * @param collectionType - The type/model of the multi-collection
    * @returns The main migration builder for method chaining
-   * 
+   *
    * @example
    * ```typescript
    * migrate(migration) {
@@ -312,7 +329,10 @@ export interface MigrationBuilder {
    * }
    * ```
    */
-  markAsMultiCollection(collectionName: string, collectionType: string): MigrationBuilder;
+  markAsMultiCollection(
+    collectionName: string,
+    collectionType: string,
+  ): MigrationBuilder;
 
   /**
    * Compiles the migration into its final executable state
@@ -323,42 +343,53 @@ export interface MigrationBuilder {
 
 /**
  * Schema definition for collections and multi-collections
- * 
+ *
  * This type defines the structure expected for schema definitions
  * in migrations, supporting both regular collections and multi-collections.
  */
 export type SchemasDefinition = {
   /** Schema definitions for regular collections */
-  collections: Record<string, Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>>;
-  
+  collections: Record<
+    string,
+    Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>
+  >;
+
   /** Schema definitions for multi-collections (optional) */
-  multiCollections?: Record<string, // multi-collection schema name
-    Record<string, // type name within the multi-collection
-      Record<string, // field name
-        v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>>>;
+  multiCollections?: Record<
+    string, // multi-collection schema name
+    Record<
+      string, // type name within the multi-collection
+      Record<
+        string, // field name
+        v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+      >
+    >
+  >;
 };
 
 /**
  * Core migration definition type
- * 
+ *
  * This type represents a complete migration with its metadata, schema,
  * parent relationship, and migration function.
- * 
+ *
  * @template Schema - The schema type for this migration
  */
-export type MigrationDefinition<Schema extends SchemasDefinition = SchemasDefinition> = {
+export type MigrationDefinition<
+  Schema extends SchemasDefinition = SchemasDefinition,
+> = {
   /** Unique identifier for this migration */
   id: string;
-  
+
   /** Human-readable name describing what this migration does */
   name: string;
-  
+
   /** Reference to the parent migration (null for initial migration) */
   parent: MigrationDefinition | null;
-  
+
   /** Schema definitions for this migration */
   schemas: Schema;
-  
+
   /**
    * Function that defines the migration operations
    * @param migration - The migration builder instance
@@ -369,7 +400,7 @@ export type MigrationDefinition<Schema extends SchemasDefinition = SchemasDefini
 
 /**
  * Interface for applying migration operations
- * 
+ *
  * This interface defines the contract for migration appliers,
  * which can be implemented for different targets (simulation, MongoDB, etc.).
  */
@@ -379,7 +410,7 @@ export interface MigrationApplier {
    * @param operation - The migration operation to apply
    */
   applyOperation(operation: MigrationRule): Promise<void> | void;
-  
+
   /**
    * Reverses a single migration operation
    * @param operation - The migration operation to reverse
@@ -389,14 +420,14 @@ export interface MigrationApplier {
 
 /**
  * Represents the state of a database during simulation
- * 
+ *
  * This type is used for in-memory simulation of database operations
  * during migration validation and testing.
  */
 export type DatabaseState = {
   /** Collections and their document contents */
   collections: Record<string, { content: Record<string, unknown>[] }>;
-  
+
   /** Multi-collections and their contents (future feature) */
   multiCollections?: Record<string, { content: Record<string, unknown>[] }>;
 };
@@ -407,16 +438,16 @@ export type DatabaseState = {
 export type MockDataConfig = {
   /** Whether to enable mock data generation */
   enabled: boolean;
-  
+
   /** Locales to use for fake data generation */
   locale: string[];
-  
+
   /** Maximum length for generated strings */
   defaultStringMaxLength: number;
-  
+
   /** Number of documents to generate per collection */
   documentsPerCollection: number;
-  
+
   /** Optional seed for reproducible random data */
   seed?: number;
 };
@@ -427,10 +458,10 @@ export type MockDataConfig = {
 export type DatabaseConfig = {
   /** MongoDB connection URL */
   url: string;
-  
+
   /** Database name */
   name: string;
-  
+
   /** Whether to drop database on reset (useful for testing) */
   dropOnReset?: boolean;
 };
@@ -441,10 +472,10 @@ export type DatabaseConfig = {
 export type PathsConfig = {
   /** Directory containing migration files */
   migrations: string;
-  
+
   /** Directory containing schema files */
   schemas: string;
-  
+
   /** Optional path for generated final schemas */
   finalSchemas?: string;
 };
@@ -455,13 +486,13 @@ export type PathsConfig = {
 export type ValidationConfig = {
   /** Whether to validate migration chain integrity */
   chainValidation: boolean;
-  
+
   /** Whether to perform integrity checks */
   integrityCheck: boolean;
-  
+
   /** Whether to check schema consistency */
   schemaConsistency: boolean;
-  
+
   /** Whether to test migration reversibility */
   reversibilityCheck: boolean;
 };
@@ -472,30 +503,30 @@ export type ValidationConfig = {
 export type CLIConfig = {
   /** Path to custom migration templates */
   templatesPath?: string;
-  
+
   /** Whether to automatically import new migrations */
   autoImport: boolean;
 };
 
 /**
  * Complete configuration for the migration system
- * 
+ *
  * This interface defines all configuration options available
  * for customizing the behavior of the migration system.
  */
 export interface MigrationConfig {
   /** Path configuration */
   paths: PathsConfig;
-  
+
   /** Database configuration */
   database: DatabaseConfig;
-  
+
   /** Mock data generation configuration */
   mockData: MockDataConfig;
-  
+
   /** Validation configuration */
   validation: ValidationConfig;
-  
+
   /** CLI configuration */
   cli: CLIConfig;
 }
@@ -506,15 +537,15 @@ export interface MigrationConfig {
 export type MigrationApplierOptions = {
   /** MongoDB client instance */
   client: MongoClient;
-  
+
   /** Database name */
   database: string;
-  
+
   /** Additional configuration options */
   options?: {
     /** Whether to use transactions */
     useTransactions?: boolean;
-    
+
     /** Batch size for bulk operations */
     batchSize?: number;
   };
@@ -526,16 +557,16 @@ export type MigrationApplierOptions = {
 export type MigrationResult = {
   /** Whether the operation was successful */
   success: boolean;
-  
+
   /** Optional error message if operation failed */
   error?: string;
-  
+
   /** Number of operations executed */
   operationsExecuted: number;
-  
+
   /** Time taken to execute the migration */
   executionTime: number;
-  
+
   /** Additional metadata about the migration */
   metadata?: Record<string, unknown>;
 };
@@ -546,33 +577,33 @@ export type MigrationResult = {
 export type MigrationStatus = {
   /** Migration ID */
   id: string;
-  
+
   /** Migration name */
   name: string;
-  
+
   /** Current status */
-  status: 'pending' | 'applied' | 'failed' | 'rolled-back';
-  
+  status: "pending" | "applied" | "failed" | "rolled-back";
+
   /** Timestamp when migration was last executed */
   appliedAt?: Date;
-  
+
   /** Error message if migration failed */
   error?: string;
 };
 
 /**
  * Context for migration execution
- * 
+ *
  * This interface provides context and utilities during migration execution,
  * including access to the database, configuration, and logging utilities.
  */
 export interface MigrationContext {
   /** Migration configuration */
   config: MigrationConfig;
-  
+
   /** Database connection */
   database: Record<string, unknown>;
-  
+
   /** Logging utility */
   logger: {
     info(message: string): void;
@@ -589,19 +620,22 @@ export interface MigrationContext {
 /**
  * Union of all possible migration rule types for type-safe operations
  */
-export type MigrationRuleType = MigrationRule['type'];
+export type MigrationRuleType = MigrationRule["type"];
 
 /**
  * Helper type to extract a specific migration rule by its type
  */
-export type ExtractMigrationRule<T extends MigrationRuleType> = Extract<MigrationRule, { type: T }>;
+export type ExtractMigrationRule<T extends MigrationRuleType> = Extract<
+  MigrationRule,
+  { type: T }
+>;
 
 /**
  * Type-safe operation handler map - forces implementation of all operation types
- * 
+ *
  * @template TResult - The return type of the operation handlers
  * @template TArgs - Additional arguments passed to operation handlers
- * 
+ *
  * @example
  * ```typescript
  * // For appliers that return void
@@ -610,8 +644,8 @@ export type ExtractMigrationRule<T extends MigrationRuleType> = Extract<Migratio
  *   seed_collection: (operation) => handleSeedCollection(operation),
  *   transform_collection: (operation) => handleTransformCollection(operation),
  * };
- * 
- * // For appliers that take state and return new state  
+ *
+ * // For appliers that take state and return new state
  * const stateHandlers: OperationHandlerMap<State, [State]> = {
  *   create_collection: (operation, state) => applyToState(operation, state),
  *   seed_collection: (operation, state) => applyToState(operation, state),
@@ -628,7 +662,7 @@ export type OperationHandlerMap<TResult, TArgs extends readonly unknown[]> = {
 
 /**
  * Utility type for creating type-safe operation dispatchers
- * 
+ *
  * @example
  * ```typescript
  * function createDispatcher<TResult, TArgs extends readonly unknown[]>(
@@ -651,25 +685,28 @@ export type OperationDispatcher<TResult, TArgs extends readonly unknown[]> = (
 
 /**
  * Factory function to create a type-safe operation dispatcher
- * 
+ *
  * @param handlers - Map of operation handlers
  * @returns Type-safe dispatcher function
- * 
+ *
  * @example
  * ```typescript
  * import { createOperationDispatcher } from "@diister/mongodbee/migration/types";
- * 
+ *
  * const dispatcher = createOperationDispatcher({
  *   create_collection: (operation) => console.log(`Creating ${operation.collectionName}`),
  *   seed_collection: (operation) => console.log(`Seeding ${operation.collectionName}`),
  *   transform_collection: (operation) => console.log(`Transforming ${operation.collectionName}`)
  * });
- * 
+ *
  * dispatcher({ type: 'create_collection', collectionName: 'users' });
  * ```
  */
-export function createOperationDispatcher<TResult, TArgs extends readonly unknown[]>(
-  handlers: OperationHandlerMap<TResult, TArgs>
+export function createOperationDispatcher<
+  TResult,
+  TArgs extends readonly unknown[],
+>(
+  handlers: OperationHandlerMap<TResult, TArgs>,
 ): OperationDispatcher<TResult, TArgs> {
   return (operation: MigrationRule, ...args: TArgs): TResult => {
     const handler = handlers[operation.type];

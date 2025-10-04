@@ -1,6 +1,6 @@
 /**
  * @fileoverview Advanced Multi-Collection Tests
- * 
+ *
  * Tests critical scenarios that were missing:
  * 1. Multi-collection transforms with real MongoDB
  * 2. Multi-collection transform rollback
@@ -8,19 +8,19 @@
  * 4. Edge cases and error handling
  */
 
-import { assertEquals, assertExists, assert } from "@std/assert";
+import { assert, assertEquals, assertExists } from "@std/assert";
 import { withDatabase } from "../+shared.ts";
 import {
   createMultiCollectionInfo,
-  getMultiCollectionInfo,
   discoverMultiCollectionInstances,
+  getMultiCollectionInfo,
   shouldInstanceReceiveMigration,
 } from "../../src/migration/multicollection-registry.ts";
 import { createMongodbApplier } from "../../src/migration/appliers/mongodb.ts";
-import type { 
-  TransformMultiCollectionTypeRule,
+import type {
   CreateMultiCollectionInstanceRule,
   SeedMultiCollectionInstanceRule,
+  TransformMultiCollectionTypeRule,
 } from "../../src/migration/types.ts";
 
 // ============================================================================
@@ -33,7 +33,12 @@ Deno.test("MongodbApplier - transforms ALL instances of a type", async (t) => {
 
     // Create 3 instances of the same type
     await createMultiCollectionInfo(db, "blog_comments", "comments", "mig_001");
-    await createMultiCollectionInfo(db, "forum_comments", "comments", "mig_001");
+    await createMultiCollectionInfo(
+      db,
+      "forum_comments",
+      "comments",
+      "mig_001",
+    );
     await createMultiCollectionInfo(db, "main_comments", "comments", "mig_001");
 
     // Seed data in all instances
@@ -71,9 +76,15 @@ Deno.test("MongodbApplier - transforms ALL instances of a type", async (t) => {
     await applier.applyOperation(operation);
 
     // Verify ALL instances were transformed
-    const blogDoc = await db.collection("blog_comments").findOne({ _type: "user_comment" });
-    const forumDoc = await db.collection("forum_comments").findOne({ _type: "user_comment" });
-    const mainDoc = await db.collection("main_comments").findOne({ _type: "user_comment" });
+    const blogDoc = await db.collection("blog_comments").findOne({
+      _type: "user_comment",
+    });
+    const forumDoc = await db.collection("forum_comments").findOne({
+      _type: "user_comment",
+    });
+    const mainDoc = await db.collection("main_comments").findOne({
+      _type: "user_comment",
+    });
 
     assertExists(blogDoc);
     assertExists(forumDoc);
@@ -120,7 +131,8 @@ Deno.test("MongodbApplier - transform handles multiple documents per instance", 
     await applier.applyOperation(operation);
 
     // All documents should be transformed
-    const docs = await db.collection("comments").find({ _type: "user_comment" }).toArray();
+    const docs = await db.collection("comments").find({ _type: "user_comment" })
+      .toArray();
     assertEquals(docs.length, 3);
 
     for (const doc of docs) {
@@ -167,7 +179,9 @@ Deno.test("MongodbApplier - reverses multi-collection transform", async (t) => {
     // Apply reverse - should remove the 'likes' field
     await applier.applyReverseOperation(operation);
 
-    const doc = await db.collection("comments").findOne({ _type: "user_comment" });
+    const doc = await db.collection("comments").findOne({
+      _type: "user_comment",
+    });
     assertExists(doc);
 
     // The 'likes' field should be removed
@@ -185,7 +199,12 @@ Deno.test("MongodbApplier - reverses transform across multiple instances", async
 
     // Create 2 instances
     await createMultiCollectionInfo(db, "blog_comments", "comments", "mig_001");
-    await createMultiCollectionInfo(db, "forum_comments", "comments", "mig_001");
+    await createMultiCollectionInfo(
+      db,
+      "forum_comments",
+      "comments",
+      "mig_001",
+    );
 
     // Both have transformed data
     await db.collection("blog_comments").insertOne({
@@ -266,12 +285,12 @@ Deno.test("MongodbApplier - respects version tracking during transform", async (
     const oldShouldReceive = await shouldInstanceReceiveMigration(
       db,
       "comments_old",
-      "mig_002"
+      "mig_002",
     );
     const newShouldReceive = await shouldInstanceReceiveMigration(
       db,
       "comments_new",
-      "mig_002"
+      "mig_002",
     );
 
     // Old instance should receive the migration
@@ -285,22 +304,58 @@ Deno.test("MongodbApplier - respects version tracking during transform", async (
 Deno.test("MongodbApplier - handles mixed versions gracefully", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create instances at different points in time
-    await createMultiCollectionInfo(db, "v1_comments", "comments", "2024_01_01_0000_A@initial");
-    await createMultiCollectionInfo(db, "v2_comments", "comments", "2024_06_01_0000_B@mid");
-    await createMultiCollectionInfo(db, "v3_comments", "comments", "2024_12_01_0000_C@late");
+    await createMultiCollectionInfo(
+      db,
+      "v1_comments",
+      "comments",
+      "2024_01_01_0000_A@initial",
+    );
+    await createMultiCollectionInfo(
+      db,
+      "v2_comments",
+      "comments",
+      "2024_06_01_0000_B@mid",
+    );
+    await createMultiCollectionInfo(
+      db,
+      "v3_comments",
+      "comments",
+      "2024_12_01_0000_C@late",
+    );
 
     // Seed data
-    await db.collection("v1_comments").insertOne({ _type: "user_comment", content: "V1" });
-    await db.collection("v2_comments").insertOne({ _type: "user_comment", content: "V2" });
-    await db.collection("v3_comments").insertOne({ _type: "user_comment", content: "V3" });
+    await db.collection("v1_comments").insertOne({
+      _type: "user_comment",
+      content: "V1",
+    });
+    await db.collection("v2_comments").insertOne({
+      _type: "user_comment",
+      content: "V2",
+    });
+    await db.collection("v3_comments").insertOne({
+      _type: "user_comment",
+      content: "V3",
+    });
 
     // Migration at 2024_09_01
     const migration_id = "2024_09_01_0000_M@transform";
 
     // Check who should receive
-    const v1Should = await shouldInstanceReceiveMigration(db, "v1_comments", migration_id);
-    const v2Should = await shouldInstanceReceiveMigration(db, "v2_comments", migration_id);
-    const v3Should = await shouldInstanceReceiveMigration(db, "v3_comments", migration_id);
+    const v1Should = await shouldInstanceReceiveMigration(
+      db,
+      "v1_comments",
+      migration_id,
+    );
+    const v2Should = await shouldInstanceReceiveMigration(
+      db,
+      "v2_comments",
+      migration_id,
+    );
+    const v3Should = await shouldInstanceReceiveMigration(
+      db,
+      "v3_comments",
+      migration_id,
+    );
 
     // v1 and v2 created before migration → should receive
     assertEquals(v1Should, true);
@@ -346,7 +401,9 @@ Deno.test("MongodbApplier - handles transform on non-existent type gracefully", 
     await applier.applyOperation(operation);
 
     // Admin comment should be unchanged
-    const doc = await db.collection("comments").findOne({ _type: "admin_comment" });
+    const doc = await db.collection("comments").findOne({
+      _type: "admin_comment",
+    });
     assertExists(doc);
     assert(!("likes" in doc));
   });
@@ -357,7 +414,12 @@ Deno.test("MongodbApplier - handles empty instance collection", async (t) => {
     const applier = createMongodbApplier(db);
 
     // Create instance but don't insert any documents
-    await createMultiCollectionInfo(db, "empty_comments", "comments", "mig_001");
+    await createMultiCollectionInfo(
+      db,
+      "empty_comments",
+      "comments",
+      "mig_001",
+    );
 
     const operation: TransformMultiCollectionTypeRule = {
       type: "transform_multicollection_type",
@@ -450,9 +512,13 @@ Deno.test("MongodbApplier - transforms only specified type, not others", async (
 
     await applier.applyOperation(operation);
 
-    const product = await db.collection("catalog").findOne({ _type: "product" });
+    const product = await db.collection("catalog").findOne({
+      _type: "product",
+    });
     const book = await db.collection("catalog").findOne({ _type: "book" });
-    const service = await db.collection("catalog").findOne({ _type: "service" });
+    const service = await db.collection("catalog").findOne({
+      _type: "service",
+    });
 
     // Product should have the new field
     assertExists(product);
@@ -474,17 +540,28 @@ Deno.test("MongodbApplier - discovers instances correctly", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create multiple instances of different types
     await createMultiCollectionInfo(db, "blog_comments", "comments", "mig_001");
-    await createMultiCollectionInfo(db, "forum_comments", "comments", "mig_001");
+    await createMultiCollectionInfo(
+      db,
+      "forum_comments",
+      "comments",
+      "mig_001",
+    );
     await createMultiCollectionInfo(db, "catalog_main", "catalog", "mig_001");
 
     // Discover comments instances
-    const commentInstances = await discoverMultiCollectionInstances(db, "comments");
+    const commentInstances = await discoverMultiCollectionInstances(
+      db,
+      "comments",
+    );
     assertEquals(commentInstances.length, 2);
     assert(commentInstances.includes("blog_comments"));
     assert(commentInstances.includes("forum_comments"));
 
     // Discover catalog instances
-    const catalogInstances = await discoverMultiCollectionInstances(db, "catalog");
+    const catalogInstances = await discoverMultiCollectionInstances(
+      db,
+      "catalog",
+    );
     assertEquals(catalogInstances.length, 1);
     assertEquals(catalogInstances[0], "catalog_main");
   });
@@ -519,7 +596,8 @@ Deno.test("MongodbApplier - seed type adds _type automatically", async (t) => {
     await applier.applyOperation(seedOp);
 
     // Documents should have _type field added
-    const docs = await db.collection("comments").find({ _type: "user_comment" }).toArray();
+    const docs = await db.collection("comments").find({ _type: "user_comment" })
+      .toArray();
     assertEquals(docs.length, 2);
 
     for (const doc of docs) {
@@ -597,4 +675,3 @@ Deno.test("MongodbApplier - full multi-collection lifecycle", async (t) => {
     assert(!("priceWithTax" in productsAfterRollback[1]));
   });
 });
-

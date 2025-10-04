@@ -59,12 +59,12 @@ export function defineConfig(config: MongodbeeConfig): MongodbeeConfig {
 export const DEFAULT_MONGODBEE_CONFIG: MongodbeeConfig = {
   database: {
     connection: {
-      uri: "mongodb://localhost:27017"
+      uri: "mongodb://localhost:27017",
     },
-    name: "myapp"
+    name: "myapp",
   },
   paths: {
     migrations: "./migrations",
-    schemas: "./schemas.ts"
+    schemas: "./schemas.ts",
   },
 };
