@@ -42,6 +42,17 @@ import * as v from "valibot";
 import { createMockGenerator } from "@diister/valibot-mock";
 
 /**
+ * Constants for mock data generation
+ */
+const MOCK_GENERATION = {
+  DOCS_PER_COLLECTION_MIN: 2,
+  DOCS_PER_COLLECTION_MAX: 4,
+  DOCS_PER_TYPE_MIN: 1,
+  DOCS_PER_TYPE_MAX: 2,
+  MIN_SPARSE_THRESHOLD: 2,
+} as const;
+
+/**
  * Configuration options for the simulation validator
  */
 export interface SimulationValidatorOptions {
@@ -132,21 +143,8 @@ export class SimulationValidator implements MigrationValidator {
         );
       }
 
-      // Use provided initial state or build mock state for standalone validation
-      let currentState: SimulationDatabaseState;
-      
-      if (initialState) {
-        // Use provided state (from migrate.ts incremental validation)
-        // This avoids O(n²) complexity when validating batches
-        currentState = initialState;
-      } else if (definition.parent) {
-        // Standalone validation of child migration
-        // Build hybrid state: real seeds from parent migrations + mock supplements
-        currentState = this.buildMockStateFromSchemas(definition.parent);
-      } else {
-        // Root migration with no parent - start with empty state
-        currentState = createEmptyDatabaseState();
-      }
+      // Determine initial state
+      let currentState = this.determineInitialState(definition, initialState);
 
       // Test forward execution of current migration
       const forwardErrors: string[] = [];
@@ -421,6 +419,191 @@ export class SimulationValidator implements MigrationValidator {
   }
 
   /**
+   * Determines the initial database state for validation
+   *
+   * @private
+   */
+  private determineInitialState(
+    definition: MigrationDefinition,
+    providedState?: SimulationDatabaseState,
+  ): SimulationDatabaseState {
+    if (providedState) {
+      // Use provided state (from migrate.ts incremental validation)
+      // This avoids O(n²) complexity when validating batches
+      return providedState;
+    }
+
+    if (definition.parent) {
+      // Standalone validation of child migration
+      // Build hybrid state: real seeds from parent migrations + mock supplements
+      return this.buildMockStateFromSchemas(definition.parent);
+    }
+
+    // Root migration with no parent - start with empty state
+    return createEmptyDatabaseState();
+  }
+
+  /**
+   * Detects if a schema has changed by comparing JSON representations
+   *
+   * @private
+   */
+  private hasSchemaChanged(
+    parentSchema: unknown,
+    currentSchema: unknown,
+  ): boolean {
+    return JSON.stringify(parentSchema) !== JSON.stringify(currentSchema);
+  }
+
+  /**
+   * Validates that documents match a given schema
+   *
+   * @private
+   * @returns true if all documents are valid, false otherwise
+   */
+  private areDocumentsValid(
+    documents: Record<string, unknown>[],
+    schema: Record<string, unknown>,
+  ): boolean {
+    for (const doc of documents) {
+      // deno-lint-ignore no-explicit-any
+      const validation = v.safeParse(v.object(schema as any), doc);
+      if (!validation.success) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Checks if operations contain a transformation matching the predicate
+   *
+   * @private
+   */
+  private hasTransformOperation(
+    operations: MigrationRule[],
+    predicate: (op: MigrationRule) => boolean,
+  ): boolean {
+    return operations.some(predicate);
+  }
+
+  /**
+   * Formats validation errors from valibot into readable messages
+   *
+   * @private
+   */
+  private formatValidationError(
+    // deno-lint-ignore no-explicit-any
+    validation: v.SafeParseResult<any>,
+    context: {
+      type: "collection" | "multicollection";
+      name: string;
+      index: number;
+      typeName?: string;
+    },
+  ): string[] {
+    const errors: string[] = [];
+
+    const location = context.type === "collection"
+      ? `collection "${context.name}" (index ${context.index})`
+      : `multi-collection "${context.name}" type "${context.typeName}" (index ${context.index})`;
+
+    errors.push(`Transformed document in ${location} does not match schema:`);
+
+    if (validation.issues && validation.issues.length > 0) {
+      const issue = validation.issues[0];
+      errors.push(
+        `  Field: ${issue.path?.map((p: { key: string }) => p.key).join(".") || "(root)"}`,
+      );
+      errors.push(`  Expected: ${issue.expected || "valid value"}`);
+      errors.push(
+        `  Received: ${issue.received || JSON.stringify(issue.input)}`,
+      );
+      errors.push(`  Issue: ${issue.message}`);
+    }
+
+    const tip = context.type === "collection"
+      ? "Check your transformation function - it may be returning invalid values."
+      : `Check your transformation function for type "${context.typeName}" - it may be returning invalid values.`;
+
+    errors.push(`  💡 Tip: ${tip}`);
+
+    return errors;
+  }
+
+  /**
+   * Validates collection schema changes and ensures transformations exist for incompatible changes
+   *
+   * @private
+   */
+  private validateCollectionSchemaChanges(
+    definition: MigrationDefinition,
+    stateBefore: SimulationDatabaseState,
+    operations: MigrationRule[],
+  ): string[] {
+    const errors: string[] = [];
+
+    if (
+      !definition.parent?.schemas.collections ||
+      !definition.schemas.collections
+    ) {
+      return errors;
+    }
+
+    const parentCollections = definition.parent.schemas.collections;
+    const currentCollections = definition.schemas.collections;
+
+    for (const collectionName of Object.keys(currentCollections)) {
+      const parentSchema = parentCollections[collectionName];
+      const currentSchema = currentCollections[collectionName];
+
+      // New collection, no validation needed
+      if (!parentSchema) continue;
+
+      // No change, skip validation
+      if (!this.hasSchemaChanged(parentSchema, currentSchema)) continue;
+
+      // Check if there are existing documents
+      const collectionData = stateBefore.collections?.[collectionName];
+      const documentCount = collectionData?.content.length || 0;
+
+      // No documents, schema change is safe
+      if (documentCount === 0) continue;
+
+      // Check if existing documents are compatible with new schema
+      const documentsAreValid = this.areDocumentsValid(
+        collectionData.content,
+        currentSchema,
+      );
+
+      // Documents are valid, no transformation needed
+      if (documentsAreValid) continue;
+
+      // Documents are invalid, check if transformation exists
+      const hasTransform = this.hasTransformOperation(
+        operations,
+        (op) =>
+          op.type === "transform_collection" &&
+          op.collectionName === collectionName,
+      );
+
+      if (!hasTransform) {
+        errors.push(
+          `Schema for collection "${collectionName}" has changed and existing documents are not compatible.`,
+        );
+        errors.push(
+          `  There are ${documentCount} existing document(s) that don't match the new schema.`,
+        );
+        errors.push(
+          `  💡 Tip: Add a .collection("${collectionName}").transform({ up: (doc) => ({ ...doc, newField: defaultValue }), down: ... }) operation.`,
+        );
+      }
+    }
+
+    return errors;
+  }
+
+  /**
    * Validates that schema changes for multi-collections have corresponding transformations
    *
    * @private
@@ -440,241 +623,333 @@ export class SimulationValidator implements MigrationValidator {
       return errors;
     }
 
-    // ========================================================================
-    // VALIDATE COLLECTION SCHEMA CHANGES
-    // ========================================================================
-    if (
-      definition.schemas.collections && definition.parent.schemas.collections
+    // Validate collection schema changes
+    errors.push(
+      ...this.validateCollectionSchemaChanges(
+        definition,
+        stateBefore,
+        operations,
+      ),
+    );
+
+    // Validate multi-collection schema changes
+    errors.push(
+      ...this.validateMultiCollectionSchemaChanges(
+        definition,
+        stateBefore,
+        operations,
+      ),
+    );
+
+    return errors;
+  }
+
+  /**
+   * Collects all documents of a specific type from multi-collection instances
+   *
+   * @private
+   */
+  private collectMultiCollectionDocuments(
+    stateBefore: SimulationDatabaseState,
+    multiCollectionName: string,
+    typeName: string,
+  ): {
+    documents: Record<string, unknown>[];
+    instanceNames: string[];
+    totalCount: number;
+  } {
+    const documents: Record<string, unknown>[] = [];
+    const instanceNames: string[] = [];
+    let totalCount = 0;
+
+    if (!stateBefore.multiCollections) {
+      return { documents, instanceNames, totalCount };
+    }
+
+    for (
+      const [instanceName, instanceData] of Object.entries(
+        stateBefore.multiCollections,
+      )
     ) {
-      const parentCollections = definition.parent.schemas.collections;
-      const currentCollections = definition.schemas.collections;
-
-      for (const collectionName of Object.keys(currentCollections)) {
-        const parentSchema = parentCollections[collectionName];
-        const currentSchema = currentCollections[collectionName];
-
-        if (!parentSchema) {
-          // New collection, no validation needed
-          continue;
-        }
-
-        // Detect if schema has changed
-        const schemaChanged = JSON.stringify(parentSchema) !==
-          JSON.stringify(currentSchema);
-
-        if (schemaChanged) {
-          // Check if there are existing documents in this collection
-          const collectionData = stateBefore.collections?.[collectionName];
-          const documentCount = collectionData?.content.length || 0;
-
-          if (documentCount > 0) {
-            // Check if existing documents are valid with the NEW schema
-            let documentsAreValid = true;
-            
-            for (const doc of collectionData.content) {
-              const validation = v.safeParse(v.object(currentSchema), doc);
-              if (!validation.success) {
-                documentsAreValid = false;
-                break;
-              }
-            }
-
-            // If documents are NOT valid with new schema, require transformation
-            if (!documentsAreValid) {
-              // Check if there's a transform operation for this collection
-              const hasTransform = operations.some((op) => {
-                if (op.type === "transform_collection") {
-                  return op.collectionName === collectionName;
-                }
-                return false;
-              });
-
-              if (!hasTransform) {
-                errors.push(
-                  `Schema for collection "${collectionName}" has changed and existing documents are not compatible.`,
-                );
-                errors.push(
-                  `  There are ${documentCount} existing document(s) that don't match the new schema.`,
-                );
-                errors.push(
-                  `  💡 Tip: Add a .collection("${collectionName}").transform({ up: (doc) => ({ ...doc, newField: defaultValue }), down: ... }) operation.`,
-                );
-              }
-            }
-            // If documents ARE valid, no transformation needed (e.g., optional field added)
-          }
-          // If no documents exist, schema change is safe
+      if (instanceName.startsWith(`${multiCollectionName}@`)) {
+        const docsOfType = instanceData.content.filter(
+          (doc: Record<string, unknown>) => doc._type === typeName,
+        );
+        if (docsOfType.length > 0) {
+          totalCount += docsOfType.length;
+          instanceNames.push(instanceName);
+          documents.push(...docsOfType);
         }
       }
     }
 
-    // ========================================================================
-    // VALIDATE MULTI-COLLECTION SCHEMA CHANGES
-    // ========================================================================
+    return { documents, instanceNames, totalCount };
+  }
+
+  /**
+   * Validates multi-collection type schema changes
+   *
+   * @private
+   */
+  private validateMultiCollectionTypeChange(
+    multiCollectionName: string,
+    typeName: string,
+    parentTypeSchema: Record<string, unknown>,
+    currentTypeSchema: Record<string, unknown>,
+    stateBefore: SimulationDatabaseState,
+    operations: MigrationRule[],
+  ): string[] {
+    const errors: string[] = [];
+
+    if (!this.hasSchemaChanged(parentTypeSchema, currentTypeSchema)) {
+      return errors;
+    }
+
+    const { documents, instanceNames, totalCount } = this
+      .collectMultiCollectionDocuments(
+        stateBefore,
+        multiCollectionName,
+        typeName,
+      );
+
+    // No documents, schema change is safe
+    if (totalCount === 0) return errors;
+
+    // Check if existing documents are compatible with new schema
+    const documentsAreValid = this.areDocumentsValid(
+      documents,
+      currentTypeSchema,
+    );
+
+    // Documents are valid, no transformation needed
+    if (documentsAreValid) return errors;
+
+    // Documents are invalid, check if transformation exists
+    const hasTransform = this.hasTransformOperation(
+      operations,
+      (op) =>
+        op.type === "transform_multicollection_type" &&
+        op.collectionType === multiCollectionName &&
+        op.typeName === typeName,
+    );
+
+    if (!hasTransform) {
+      errors.push(
+        `Schema for multi-collection "${multiCollectionName}.${typeName}" has changed and existing documents are not compatible.`,
+      );
+      errors.push(
+        `  There are ${totalCount} existing document(s) of type "${typeName}" across ${instanceNames.length} instance(s): ${
+          instanceNames.join(", ")
+        }`,
+      );
+      errors.push(
+        `  💡 Tip: Add a .multiCollection("${multiCollectionName}").transformType("${typeName}", {...}) operation.`,
+      );
+    }
+
+    return errors;
+  }
+
+  /**
+   * Validates removed multi-collection types
+   *
+   * @private
+   */
+  private validateRemovedMultiCollectionType(
+    multiCollectionName: string,
+    removedTypeName: string,
+    stateBefore: SimulationDatabaseState,
+  ): string[] {
+    const errors: string[] = [];
+
+    const { instanceNames, totalCount } = this
+      .collectMultiCollectionDocuments(
+        stateBefore,
+        multiCollectionName,
+        removedTypeName,
+      );
+
+    errors.push(
+      `Type "${multiCollectionName}.${removedTypeName}" was removed from schema but no migration is provided.`,
+    );
+
+    if (totalCount > 0) {
+      errors.push(
+        `  There are ${totalCount} existing document(s) of this type across ${instanceNames.length} instance(s): ${
+          instanceNames.join(", ")
+        }`,
+      );
+      errors.push(
+        `  These documents will become orphaned without a transformation.`,
+      );
+    } else {
+      errors.push(
+        `  While no documents exist currently, future multi-collection instances could contain documents of this type.`,
+      );
+    }
+
+    errors.push(`  💡 Options:`);
+    errors.push(
+      `     1. Rename: Add .multiCollection("${multiCollectionName}").type("${removedTypeName}").transform({ up: (doc) => ({ ...doc, _type: "new_name" }), down: ... })`,
+    );
+    errors.push(
+      `     2. Delete: Add .multiCollection("${multiCollectionName}").type("${removedTypeName}").transform({ up: () => null, down: ... })`,
+    );
+    errors.push(
+      `     3. Merge: Transform into another existing type with appropriate field mapping`,
+    );
+
+    return errors;
+  }
+
+  /**
+   * Validates multi-collection schema changes
+   *
+   * @private
+   */
+  private validateMultiCollectionSchemaChanges(
+    definition: MigrationDefinition,
+    stateBefore: SimulationDatabaseState,
+    operations: MigrationRule[],
+  ): string[] {
+    const errors: string[] = [];
+
     if (!definition.schemas.multiCollections) {
       return errors;
     }
 
-    const parentSchemas = definition.parent.schemas.multiCollections || {};
+    const parentSchemas = definition.parent?.schemas.multiCollections || {};
     const currentSchemas = definition.schemas.multiCollections;
 
-    // Check each multi-collection for schema changes
     for (const multiCollectionName of Object.keys(currentSchemas)) {
       const parentSchema = parentSchemas[multiCollectionName];
       const currentSchema = currentSchemas[multiCollectionName];
 
-      if (!parentSchema) {
-        // New multi-collection, no validation needed
-        continue;
-      }
+      // New multi-collection, no validation needed
+      if (!parentSchema) continue;
 
-      // Check each type within the multi-collection
+      // Validate each type within the multi-collection
       for (const typeName of Object.keys(currentSchema)) {
         const parentTypeSchema = parentSchema[typeName];
         const currentTypeSchema = currentSchema[typeName];
 
-        if (!parentTypeSchema) {
-          // New type, no validation needed
-          continue;
-        }
+        // New type, no validation needed
+        if (!parentTypeSchema) continue;
 
-        // Detect if schema has changed
-        const schemaChanged = JSON.stringify(parentTypeSchema) !==
-          JSON.stringify(currentTypeSchema);
-
-        if (schemaChanged) {
-          // Check if there are instances of this multi-collection type in the state
-          // Multi-collections are stored by instance name (e.g., "comments@system_comments")
-          // We need to find all instances and check if they contain documents of this type
-          let totalDocumentsOfType = 0;
-          const instanceNames: string[] = [];
-          const existingDocs: Record<string, unknown>[] = [];
-
-          if (stateBefore.multiCollections) {
-            for (
-              const [instanceName, instanceData] of Object.entries(
-                stateBefore.multiCollections,
-              )
-            ) {
-              // Check if this instance belongs to our multi-collection type
-              // Instance names follow pattern: "{type}@{instance_name}"
-              if (instanceName.startsWith(`${multiCollectionName}@`)) {
-                // Collect documents of this specific type
-                const docsOfType = instanceData.content.filter(
-                  (doc: Record<string, unknown>) => doc._type === typeName,
-                );
-                if (docsOfType.length > 0) {
-                  totalDocumentsOfType += docsOfType.length;
-                  instanceNames.push(instanceName);
-                  existingDocs.push(...docsOfType);
-                }
-              }
-            }
-          }
-
-          if (totalDocumentsOfType > 0) {
-            // Check if existing documents are valid with the NEW schema
-            let documentsAreValid = true;
-            
-            for (const doc of existingDocs) {
-              const validation = v.safeParse(v.object(currentTypeSchema), doc);
-              if (!validation.success) {
-                documentsAreValid = false;
-                break;
-              }
-            }
-
-            // If documents are NOT valid with new schema, require transformation
-            if (!documentsAreValid) {
-              // Check if there's a transform operation for this type
-              const hasTransform = operations.some((op) => {
-                if (op.type === "transform_multicollection_type") {
-                  return op.collectionType === multiCollectionName &&
-                    op.typeName === typeName;
-                }
-                return false;
-              });
-
-              if (!hasTransform) {
-                errors.push(
-                  `Schema for multi-collection "${multiCollectionName}.${typeName}" has changed and existing documents are not compatible.`,
-                );
-                errors.push(
-                  `  There are ${totalDocumentsOfType} existing document(s) of type "${typeName}" across ${instanceNames.length} instance(s): ${
-                    instanceNames.join(", ")
-                  }`,
-                );
-                errors.push(
-                  `  💡 Tip: Add a .multiCollection("${multiCollectionName}").transformType("${typeName}", {...}) operation.`,
-                );
-              }
-            }
-            // If documents ARE valid, no transformation needed (e.g., optional field added)
-          }
-          // If no documents exist, schema change is safe
-        }
+        errors.push(
+          ...this.validateMultiCollectionTypeChange(
+            multiCollectionName,
+            typeName,
+            parentTypeSchema,
+            currentTypeSchema,
+            stateBefore,
+            operations,
+          ),
+        );
       }
 
-      // Check for REMOVED types (types in parent but not in current schema)
-      // This detects deletions or renames that need explicit migration
+      // Check for removed types
       for (const removedTypeName of Object.keys(parentSchema)) {
         if (!currentSchema[removedTypeName]) {
-          // Type was removed from schema - check if there are existing documents
-          let totalDocumentsOfType = 0;
-          const instanceNames: string[] = [];
+          errors.push(
+            ...this.validateRemovedMultiCollectionType(
+              multiCollectionName,
+              removedTypeName,
+              stateBefore,
+            ),
+          );
+        }
+      }
+    }
 
-          if (stateBefore.multiCollections) {
-            for (
-              const [instanceName, instanceData] of Object.entries(
-                stateBefore.multiCollections,
-              )
-            ) {
-              if (instanceName.startsWith(`${multiCollectionName}@`)) {
-                const docsOfType = instanceData.content.filter(
-                  (doc: Record<string, unknown>) =>
-                    doc._type === removedTypeName,
-                );
-                if (docsOfType.length > 0) {
-                  totalDocumentsOfType += docsOfType.length;
-                  instanceNames.push(instanceName);
-                }
-              }
-            }
+    return errors;
+  }
+
+  /**
+   * Validates collection documents against their schemas
+   *
+   * @private
+   */
+  private validateCollectionDocuments(
+    collections: Record<string, Record<string, unknown>>,
+    stateAfter: SimulationDatabaseState,
+  ): string[] {
+    const errors: string[] = [];
+
+    for (const [collectionName, schema] of Object.entries(collections)) {
+      const collectionData = stateAfter.collections?.[collectionName];
+      if (!collectionData || collectionData.content.length === 0) continue;
+
+      // Find first invalid document
+      for (let i = 0; i < collectionData.content.length; i++) {
+        const doc = collectionData.content[i];
+        // deno-lint-ignore no-explicit-any
+        const validation = v.safeParse(v.object(schema as any), doc);
+
+        if (!validation.success) {
+          errors.push(
+            ...this.formatValidationError(validation, {
+              type: "collection",
+              name: collectionName,
+              index: i,
+            }),
+          );
+          // Only show first invalid document to avoid spam
+          break;
+        }
+      }
+    }
+
+    return errors;
+  }
+
+  /**
+   * Validates multi-collection documents against their schemas
+   *
+   * @private
+   */
+  private validateMultiCollectionDocuments(
+    multiCollections: Record<string, Record<string, Record<string, unknown>>>,
+    stateAfter: SimulationDatabaseState,
+  ): string[] {
+    const errors: string[] = [];
+
+    for (
+      const [multiCollectionName, types] of Object.entries(multiCollections)
+    ) {
+      for (
+        const [instanceName, instanceData] of Object.entries(
+          stateAfter.multiCollections || {},
+        )
+      ) {
+        // Match instance to multi-collection type
+        if (!instanceName.startsWith(`${multiCollectionName}@`)) continue;
+
+        // Validate each document
+        for (let i = 0; i < instanceData.content.length; i++) {
+          const doc = instanceData.content[i];
+          const docType = doc._type as string;
+
+          if (!docType || !types[docType]) {
+            continue; // Type might be removed, handled by schema change validation
           }
 
-          // Always error if type was removed, whether there are documents or not
-          // Because: 1) existing documents need migration, 2) future instances could have old data
-          errors.push(
-            `Type "${multiCollectionName}.${removedTypeName}" was removed from schema but no migration is provided.`,
-          );
+          const schema = types[docType];
+          // deno-lint-ignore no-explicit-any
+          const validation = v.safeParse(v.object(schema as any), doc);
 
-          if (totalDocumentsOfType > 0) {
+          if (!validation.success) {
             errors.push(
-              `  There are ${totalDocumentsOfType} existing document(s) of this type across ${instanceNames.length} instance(s): ${
-                instanceNames.join(", ")
-              }`,
+              ...this.formatValidationError(validation, {
+                type: "multicollection",
+                name: instanceName,
+                index: i,
+                typeName: docType,
+              }),
             );
-            errors.push(
-              `  These documents will become orphaned without a transformation.`,
-            );
-          } else {
-            errors.push(
-              `  While no documents exist currently, future multi-collection instances could contain documents of this type.`,
-            );
+            // Only show first invalid document per type to avoid spam
+            break;
           }
-
-          errors.push(
-            `  💡 Options:`,
-          );
-          errors.push(
-            `     1. Rename: Add .multiCollection("${multiCollectionName}").type("${removedTypeName}").transform({ up: (doc) => ({ ...doc, _type: "new_name" }), down: ... })`,
-          );
-          errors.push(
-            `     2. Delete: Add .multiCollection("${multiCollectionName}").type("${removedTypeName}").transform({ up: () => null, down: ... })`,
-          );
-          errors.push(
-            `     3. Merge: Transform into another existing type with appropriate field mapping`,
-          );
         }
       }
     }
@@ -700,111 +975,22 @@ export class SimulationValidator implements MigrationValidator {
 
     // Validate collection documents
     if (definition.schemas.collections) {
-      for (
-        const [collectionName, schema] of Object.entries(
+      errors.push(
+        ...this.validateCollectionDocuments(
           definition.schemas.collections,
-        )
-      ) {
-        const collectionData = stateAfter.collections?.[collectionName];
-        if (!collectionData || collectionData.content.length === 0) continue;
-
-        // Validate each document against the schema
-        for (let i = 0; i < collectionData.content.length; i++) {
-          const doc = collectionData.content[i];
-          const validation = v.safeParse(v.object(schema), doc);
-
-          if (!validation.success) {
-            errors.push(
-              `Transformed document in collection "${collectionName}" (index ${i}) does not match schema:`,
-            );
-            // Get first validation issue for clarity
-            if (validation.issues && validation.issues.length > 0) {
-              const issue = validation.issues[0];
-              errors.push(
-                `  Field: ${
-                  issue.path?.map((p) => p.key).join(".") || "(root)"
-                }`,
-              );
-              errors.push(
-                `  Expected: ${issue.expected || "valid value"}`,
-              );
-              errors.push(
-                `  Received: ${issue.received || JSON.stringify(issue.input)}`,
-              );
-              errors.push(
-                `  Issue: ${issue.message}`,
-              );
-            }
-            errors.push(
-              `  💡 Tip: Check your transformation function - it may be returning invalid values.`,
-            );
-            // Only show first invalid document to avoid spam
-            break;
-          }
-        }
-      }
+          stateAfter,
+        ),
+      );
     }
 
     // Validate multi-collection documents
     if (definition.schemas.multiCollections) {
-      for (
-        const [multiCollectionName, types] of Object.entries(
+      errors.push(
+        ...this.validateMultiCollectionDocuments(
           definition.schemas.multiCollections,
-        )
-      ) {
-        // Check all instances of this multi-collection type
-        for (
-          const [instanceName, instanceData] of Object.entries(
-            stateAfter.multiCollections || {},
-          )
-        ) {
-          // Match instance to multi-collection type
-          if (!instanceName.startsWith(`${multiCollectionName}@`)) continue;
-
-          // Validate each document
-          for (let i = 0; i < instanceData.content.length; i++) {
-            const doc = instanceData.content[i];
-            const docType = doc._type as string;
-
-            if (!docType || !types[docType]) {
-              continue; // Type might be removed, handled by schema change validation
-            }
-
-            const schema = types[docType];
-            const validation = v.safeParse(v.object(schema), doc);
-
-            if (!validation.success) {
-              errors.push(
-                `Transformed document in multi-collection "${instanceName}" type "${docType}" (index ${i}) does not match schema:`,
-              );
-              if (validation.issues && validation.issues.length > 0) {
-                const issue = validation.issues[0];
-                errors.push(
-                  `  Field: ${
-                    issue.path?.map((p) => p.key).join(".") || "(root)"
-                  }`,
-                );
-                errors.push(
-                  `  Expected: ${issue.expected || "valid value"}`,
-                );
-                errors.push(
-                  `  Received: ${
-                    issue.received || JSON.stringify(issue.input)
-                  }`,
-                );
-                errors.push(
-                  `  Issue: ${issue.message}`,
-                );
-              }
-              errors.push(
-                `  💡 Tip: Check your transformation function for type "${docType}" - it may be returning invalid values.`,
-              );
-              // Only show first invalid document per type to avoid spam
-              break;
-            }
-          }
-        }
-      }
+          stateAfter,
+        ),
+      );
     }
 
     return errors;
@@ -930,31 +1116,19 @@ export class SimulationValidator implements MigrationValidator {
   }
 
   /**
-   * Builds a hybrid database state from parent migrations
-   * Used for standalone validation when no initial state is provided
-   * 
-   * Hybrid approach:
-   * 1. Simulates all parent migrations (preserves real seeds)
-   * 2. Adds mock data to empty collections (tests edge cases)
-   * 
-   * This ensures we catch issues with both:
-   * - Real seed data (tests expect specific values)
-   * - Empty/sparse collections (transformations on collections without seeds)
+   * Simulates all parent migrations to get real seed data
    *
    * @private
-   * @param parent - The parent migration definition
-   * @returns Database state with real seeds + mock data supplements
    */
-  private buildMockStateFromSchemas(
+  private simulateParentMigrations(
     parent: MigrationDefinition,
   ): SimulationDatabaseState {
     let currentState = createEmptyDatabaseState();
 
-    // PHASE 1: Simulate all parent migrations to get real seeds
     // Collect all ancestors (from root to immediate parent)
     const ancestors: MigrationDefinition[] = [];
     let current: MigrationDefinition | null = parent;
-    
+
     while (current !== null) {
       ancestors.unshift(current);
       current = current.parent;
@@ -973,116 +1147,237 @@ export class SimulationValidator implements MigrationValidator {
       }
     }
 
-    // PHASE 2: Add mock data to empty collections (for transformation testing)
-    // This catches cases where collections are created but never seeded
-    if (parent.schemas.collections) {
-      for (const [collectionName, schema] of Object.entries(parent.schemas.collections)) {
-        const collection = currentState.collections?.[collectionName];
-        
-        // If collection exists but is empty, add some mock data
-        if (collection && collection.content.length === 0) {
-          const mockDocs: Record<string, unknown>[] = [];
-          const docCount = Math.floor(Math.random() * 3) + 2; // 2 to 4 docs
-          
-          for (let i = 0; i < docCount; i++) {
-            try {
-              const mockDoc = this.generateMockDocument(schema as Record<string, unknown>);
-              mockDocs.push(mockDoc);
-            } catch (_error) {
-              break;
-            }
-          }
+    return currentState;
+  }
 
-          if (mockDocs.length > 0) {
-            currentState = this.applier.applyOperation(currentState, {
-              type: "seed_collection",
-              collectionName: collectionName,
-              documents: mockDocs,
-            });
+  /**
+   * Generates mock documents for empty collections
+   *
+   * @private
+   */
+  private supplementCollectionsWithMockData(
+    state: SimulationDatabaseState,
+    collections: Record<string, Record<string, unknown>>,
+  ): SimulationDatabaseState {
+    let currentState = state;
+
+    for (const [collectionName, schema] of Object.entries(collections)) {
+      const collection = currentState.collections?.[collectionName];
+
+      // If collection exists but is empty, add some mock data
+      if (!collection || collection.content.length > 0) continue;
+
+      const mockDocs: Record<string, unknown>[] = [];
+      const docCount = Math.floor(
+        Math.random() *
+          (MOCK_GENERATION.DOCS_PER_COLLECTION_MAX -
+            MOCK_GENERATION.DOCS_PER_COLLECTION_MIN + 1),
+      ) + MOCK_GENERATION.DOCS_PER_COLLECTION_MIN;
+
+      for (let i = 0; i < docCount; i++) {
+        try {
+          const mockDoc = this.generateMockDocument(
+            schema as Record<string, unknown>,
+          );
+          mockDocs.push(mockDoc);
+        } catch (_error) {
+          break;
+        }
+      }
+
+      if (mockDocs.length > 0) {
+        currentState = this.applier.applyOperation(currentState, {
+          type: "seed_collection",
+          collectionName: collectionName,
+          documents: mockDocs,
+        });
+      }
+    }
+
+    return currentState;
+  }
+
+  /**
+   * Creates a new multi-collection instance with mock data
+   *
+   * @private
+   */
+  private createMockMultiCollectionInstance(
+    state: SimulationDatabaseState,
+    multiCollectionName: string,
+    types: Record<string, Record<string, unknown>>,
+  ): SimulationDatabaseState {
+    let currentState = state;
+    const instanceName = `${multiCollectionName}_mock_instance`;
+
+    currentState = this.applier.applyOperation(currentState, {
+      type: "create_multicollection_instance",
+      collectionName: `${multiCollectionName}@${instanceName}`,
+      collectionType: multiCollectionName,
+    });
+
+    // Add mock docs for each type
+    for (const [typeName, typeSchema] of Object.entries(types)) {
+      const mockDocs: Record<string, unknown>[] = [];
+      const docsPerType = Math.floor(
+        Math.random() *
+          (MOCK_GENERATION.DOCS_PER_TYPE_MAX -
+            MOCK_GENERATION.DOCS_PER_TYPE_MIN + 1),
+      ) + MOCK_GENERATION.DOCS_PER_TYPE_MIN;
+
+      for (let i = 0; i < docsPerType; i++) {
+        try {
+          const mockDoc = this.generateMockDocument(
+            typeSchema as Record<string, unknown>,
+          );
+          mockDocs.push({ ...mockDoc, _type: typeName });
+        } catch (_error) {
+          break;
+        }
+      }
+
+      if (mockDocs.length > 0) {
+        currentState = this.applier.applyOperation(currentState, {
+          type: "seed_multicollection_instance",
+          collectionName: `${multiCollectionName}@${instanceName}`,
+          typeName: typeName,
+          documents: mockDocs,
+        });
+      }
+    }
+
+    return currentState;
+  }
+
+  /**
+   * Supplements existing multi-collection instances with mock data for sparse types
+   *
+   * @private
+   */
+  private supplementMultiCollectionInstancesWithMockData(
+    state: SimulationDatabaseState,
+    instanceNames: string[],
+    types: Record<string, Record<string, unknown>>,
+  ): SimulationDatabaseState {
+    let currentState = state;
+
+    for (const instanceName of instanceNames) {
+      const instance = currentState.multiCollections?.[instanceName];
+      if (!instance) continue;
+
+      for (const [typeName, typeSchema] of Object.entries(types)) {
+        // Check if this type has any documents
+        const docsOfType = instance.content.filter(
+          (doc: Record<string, unknown>) => doc._type === typeName,
+        );
+
+        // If type is sparse (< threshold), add some mocks
+        if (docsOfType.length >= MOCK_GENERATION.MIN_SPARSE_THRESHOLD) {
+          continue;
+        }
+
+        const mockDocs: Record<string, unknown>[] = [];
+        const toAdd = MOCK_GENERATION.MIN_SPARSE_THRESHOLD - docsOfType.length;
+
+        for (let i = 0; i < toAdd; i++) {
+          try {
+            const mockDoc = this.generateMockDocument(
+              typeSchema as Record<string, unknown>,
+            );
+            mockDocs.push({ ...mockDoc, _type: typeName });
+          } catch (_error) {
+            break;
           }
+        }
+
+        if (mockDocs.length > 0) {
+          currentState = this.applier.applyOperation(currentState, {
+            type: "seed_multicollection_instance",
+            collectionName: instanceName,
+            typeName: typeName,
+            documents: mockDocs,
+          });
         }
       }
     }
 
-    // PHASE 3: Add mock data to multi-collection instances with sparse data
-    if (parent.schemas.multiCollections) {
-      for (const [multiCollectionName, types] of Object.entries(parent.schemas.multiCollections)) {
-        // Check all instances of this multi-collection
-        const instanceNames = Object.keys(currentState.multiCollections || {})
-          .filter(name => name.startsWith(`${multiCollectionName}@`));
+    return currentState;
+  }
 
-        // If no instances exist, create one with mock data
-        if (instanceNames.length === 0) {
-          const instanceName = `${multiCollectionName}_mock_instance`;
-          
-          currentState = this.applier.applyOperation(currentState, {
-            type: "create_multicollection_instance",
-            collectionName: `${multiCollectionName}@${instanceName}`,
-            collectionType: multiCollectionName,
-          });
+  /**
+   * Supplements multi-collections with mock data
+   *
+   * @private
+   */
+  private supplementMultiCollectionsWithMockData(
+    state: SimulationDatabaseState,
+    multiCollections: Record<string, Record<string, Record<string, unknown>>>,
+  ): SimulationDatabaseState {
+    let currentState = state;
 
-          // Add mock docs for each type
-          for (const [typeName, typeSchema] of Object.entries(types as Record<string, unknown>)) {
-            const mockDocs: Record<string, unknown>[] = [];
-            const docsPerType = Math.floor(Math.random() * 2) + 1; // 1-2 docs
+    for (
+      const [multiCollectionName, types] of Object.entries(multiCollections)
+    ) {
+      // Check all instances of this multi-collection
+      const instanceNames = Object.keys(currentState.multiCollections || {})
+        .filter((name) => name.startsWith(`${multiCollectionName}@`));
 
-            for (let i = 0; i < docsPerType; i++) {
-              try {
-                const mockDoc = this.generateMockDocument(typeSchema as Record<string, unknown>);
-                mockDocs.push({ ...mockDoc, _type: typeName });
-              } catch (_error) {
-                break;
-              }
-            }
-
-            if (mockDocs.length > 0) {
-              currentState = this.applier.applyOperation(currentState, {
-                type: "seed_multicollection_instance",
-                collectionName: `${multiCollectionName}@${instanceName}`,
-                typeName: typeName,
-                documents: mockDocs,
-              });
-            }
-          }
-        } else {
-          // Supplement existing instances with mock data for empty types
-          for (const instanceName of instanceNames) {
-            const instance = currentState.multiCollections?.[instanceName];
-            if (!instance) continue;
-
-            for (const [typeName, typeSchema] of Object.entries(types as Record<string, unknown>)) {
-              // Check if this type has any documents
-              const docsOfType = instance.content.filter(
-                (doc: Record<string, unknown>) => doc._type === typeName
-              );
-
-              // If type is empty or sparse (< 2 docs), add some mocks
-              if (docsOfType.length < 2) {
-                const mockDocs: Record<string, unknown>[] = [];
-                const toAdd = 2 - docsOfType.length;
-
-                for (let i = 0; i < toAdd; i++) {
-                  try {
-                    const mockDoc = this.generateMockDocument(typeSchema as Record<string, unknown>);
-                    mockDocs.push({ ...mockDoc, _type: typeName });
-                  } catch (_error) {
-                    break;
-                  }
-                }
-
-                if (mockDocs.length > 0) {
-                  currentState = this.applier.applyOperation(currentState, {
-                    type: "seed_multicollection_instance",
-                    collectionName: instanceName,
-                    typeName: typeName,
-                    documents: mockDocs,
-                  });
-                }
-              }
-            }
-          }
-        }
+      // If no instances exist, create one with mock data
+      if (instanceNames.length === 0) {
+        currentState = this.createMockMultiCollectionInstance(
+          currentState,
+          multiCollectionName,
+          types as Record<string, Record<string, unknown>>,
+        );
+      } else {
+        // Supplement existing instances with mock data for sparse types
+        currentState = this.supplementMultiCollectionInstancesWithMockData(
+          currentState,
+          instanceNames,
+          types as Record<string, Record<string, unknown>>,
+        );
       }
+    }
+
+    return currentState;
+  }
+
+  /**
+   * Builds a hybrid database state from parent migrations
+   * Used for standalone validation when no initial state is provided
+   *
+   * Hybrid approach:
+   * 1. Simulates all parent migrations (preserves real seeds)
+   * 2. Adds mock data to empty collections (tests edge cases)
+   *
+   * This ensures we catch issues with both:
+   * - Real seed data (tests expect specific values)
+   * - Empty/sparse collections (transformations on collections without seeds)
+   *
+   * @private
+   * @param parent - The parent migration definition
+   * @returns Database state with real seeds + mock data supplements
+   */
+  private buildMockStateFromSchemas(
+    parent: MigrationDefinition,
+  ): SimulationDatabaseState {
+    // PHASE 1: Simulate all parent migrations to get real seeds
+    let currentState = this.simulateParentMigrations(parent);
+
+    // PHASE 2: Add mock data to empty collections
+    if (parent.schemas.collections) {
+      currentState = this.supplementCollectionsWithMockData(
+        currentState,
+        parent.schemas.collections,
+      );
+    }
+
+    // PHASE 3: Add mock data to multi-collection instances
+    if (parent.schemas.multiCollections) {
+      currentState = this.supplementMultiCollectionsWithMockData(
+        currentState,
+        parent.schemas.multiCollections,
+      );
     }
 
     return currentState;
