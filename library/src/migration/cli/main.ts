@@ -114,7 +114,19 @@ async function main(): Promise<void> {
     throw new Error(`Unknown command "${command}"`);
   }
 
-  await cmd.handler(args as any);
+  try {
+    await cmd.handler(args as any);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(red(`Error: ${message}`));
+    const cause = (error as any).cause;
+    if (cause) {
+      // Errors:
+      for(const err of cause.errors ?? []) {
+        console.error(red(` - ${err}`));
+      }
+    }
+  }
 }
 
 // Run main function if this is the main module

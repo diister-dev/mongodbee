@@ -481,6 +481,73 @@ Deno.test("SimulationValidator - handles empty migrations", async () => {
   assert(result.warnings.some((w) => w.includes("no operations")));
 });
 
+Deno.test("SimulationValidator - detects schema without createCollection", async () => {
+  const schemas = {
+    collections: {
+      users: {
+        name: v.string(),
+        email: v.string(),
+      },
+    },
+    multiCollections: {},
+  };
+
+  const migration = migrationDefinition(
+    "2024_01_01_1200_MISSING@missing",
+    "Missing",
+    {
+      parent: null,
+      schemas,
+      migrate(m) {
+        // Schema declares "users" but doesn't create it!
+        return m.compile();
+      },
+    },
+  );
+
+  const validator = createSimulationValidator();
+  const result = await validator.validateMigration(migration);
+
+  // Should FAIL with error about missing collection
+  assertEquals(result.success, false);
+  assert(result.errors.some((e) => e.includes("users")));
+  assert(result.errors.some((e) => e.includes("createCollection")));
+});
+
+Deno.test("SimulationValidator - detects schema without newMultiCollection", async () => {
+  const schemas = {
+    collections: {},
+    multiCollections: {
+      comments: {
+        user_comment: {
+          content: v.string(),
+        },
+      },
+    },
+  };
+
+  const migration = migrationDefinition(
+    "2024_01_01_1200_MISSINGMC@missingmc",
+    "MissingMC",
+    {
+      parent: null,
+      schemas,
+      migrate(m) {
+        // Schema declares "comments" multi-collection but doesn't create it!
+        return m.compile();
+      },
+    },
+  );
+
+  const validator = createSimulationValidator();
+  const result = await validator.validateMigration(migration);
+
+  // Should PASS with warning (multi-collections are models, not required to be instantiated)
+  assertEquals(result.success, true);
+  assert(result.warnings.some((w) => w.includes("comments")));
+  assert(result.warnings.some((w) => w.includes("model")));
+});
+
 Deno.test("validateMigrationWithSimulation - convenience function", async () => {
   const schemas = {
     collections: {

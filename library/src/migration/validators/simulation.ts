@@ -119,13 +119,9 @@ export class SimulationValidator implements MigrationValidator {
 
       // Validate that migration has operations
       if (operations.length === 0) {
-        warnings.push("Migration has no operations");
-        return Promise.resolve({
-          success: true,
-          errors,
-          warnings,
-          data: { operationCount: 0 },
-        });
+        warnings.push(
+          "Migration has no operations",
+        );
       }
 
       // Build initial state by simulating all parent migrations
@@ -199,6 +195,54 @@ export class SimulationValidator implements MigrationValidator {
       if (forwardErrors.length > 0) {
         errors.push("Forward migration simulation failed:");
         errors.push(...forwardErrors.map((err) => `  ${err}`));
+      }
+
+      // Validate that declared schema collections are actually created
+      if (definition.schemas.collections) {
+        const declaredCollections = Object.keys(definition.schemas.collections);
+        const createdCollections = Object.keys(
+          stateAfterMigration.collections || {},
+        );
+
+        const missingCollections = declaredCollections.filter(
+          (name) => !createdCollections.includes(name),
+        );
+
+        if (missingCollections.length > 0) {
+          errors.push(
+            `Schema declares ${missingCollections.length} collection(s) that are not created in migrate(): ${
+              missingCollections.join(", ")
+            }`,
+          );
+          errors.push(
+            "  💡 Tip: Did you forget to call .createCollection() in your migration?",
+          );
+        }
+      }
+
+      // Warn about declared multi-collections (they are models, not required to be instantiated)
+      if (definition.schemas.multiCollections) {
+        const declaredMultiCollections = Object.keys(
+          definition.schemas.multiCollections,
+        );
+        const createdMultiCollections = Object.keys(
+          stateAfterMigration.multiCollections || {},
+        );
+
+        const missingMultiCollections = declaredMultiCollections.filter(
+          (name) => !createdMultiCollections.includes(name),
+        );
+
+        if (missingMultiCollections.length > 0) {
+          warnings.push(
+            `Schema declares ${missingMultiCollections.length} multi-collection model(s) that are not instantiated in migrate(): ${
+              missingMultiCollections.join(", ")
+            }`,
+          );
+          warnings.push(
+            "  💡 Note: Multi-collections are models and don't require instantiation in the migration.",
+          );
+        }
       }
 
       // Test reversibility if enabled and forward execution succeeded

@@ -429,23 +429,10 @@ export class MongodbApplier implements MigrationApplier {
         // Convert Valibot schema to MongoDB JSON Schema validator
         const validator = toMongoValidator(wrappedSchema);
         options.validator = validator;
-
-        console.log(
-          `[DEBUG] Creating collection ${operation.collectionName} with validator:`,
-          JSON.stringify(validator, null, 2),
-        );
-      } else {
-        console.log(
-          `[DEBUG] Creating collection ${operation.collectionName} WITHOUT schema`,
-        );
       }
 
       // Create collection with validator
       await this.db.createCollection(operation.collectionName, options);
-
-      console.log(
-        `[DEBUG] Collection ${operation.collectionName} created successfully`,
-      );
 
       // Apply indexes if schema is provided
       if (operation.schema) {
@@ -479,13 +466,8 @@ export class MongodbApplier implements MigrationApplier {
     const indexes = extractIndexes(wrappedSchema);
 
     if (indexes.length === 0) {
-      console.log(`[DEBUG] No indexes found for collection ${collectionName}`);
       return;
     }
-
-    console.log(
-      `[DEBUG] Creating ${indexes.length} index(es) for collection ${collectionName}`,
-    );
 
     for (const index of indexes) {
       const indexName = sanitizePathName(index.path);
@@ -498,15 +480,12 @@ export class MongodbApplier implements MigrationApplier {
           unique: index.metadata.unique || false,
           sparse: false,
         });
-        console.log(
-          `[DEBUG] Created index ${indexName} on ${collectionName}.${index.path}`,
-        );
       } catch (error) {
         // Tolerate duplicate index errors
         if (
           error instanceof Error && error.message.includes("already exists")
         ) {
-          console.log(`[DEBUG] Index ${indexName} already exists, skipping`);
+          return;
         } else {
           throw error;
         }
@@ -1155,10 +1134,6 @@ export class MongodbApplier implements MigrationApplier {
         operation.collectionName,
         operation.schema as Record<string, any>,
       );
-
-      console.log(
-        `[DEBUG] Successfully updated indexes for collection ${operation.collectionName}`,
-      );
     } catch (error) {
       throw new Error(
         `Failed to update indexes for collection ${operation.collectionName}: ${
@@ -1212,10 +1187,6 @@ export class MongodbApplier implements MigrationApplier {
         operation.collectionType,
         migrationId,
       );
-
-      console.log(
-        `[DEBUG] Marked collection ${operation.collectionName} as multi-collection (type: ${operation.collectionType})`,
-      );
     } catch (error) {
       throw new Error(
         `Failed to mark collection ${operation.collectionName} as multi-collection: ${
@@ -1243,10 +1214,6 @@ export class MongodbApplier implements MigrationApplier {
           $in: [MULTI_COLLECTION_INFO_TYPE, MULTI_COLLECTION_MIGRATIONS_TYPE],
         },
       });
-
-      console.log(
-        `[DEBUG] Removed multi-collection metadata from ${operation.collectionName}`,
-      );
     } catch (error) {
       throw new Error(
         `Failed to reverse mark as multi-collection for ${operation.collectionName}: ${
@@ -1262,13 +1229,10 @@ export class MongodbApplier implements MigrationApplier {
    * @private
    * @param operation - Update indexes operation to reverse
    */
-  private reverseUpdateIndexes(operation: UpdateIndexesRule): Promise<void> {
+  private reverseUpdateIndexes(_operation: UpdateIndexesRule): Promise<void> {
     // Index updates are idempotent and don't need reversal
     // If we wanted to be more strict, we could drop indexes that were added,
     // but this would require tracking which indexes existed before the migration
-    console.log(
-      `[DEBUG] Reverse update_indexes is a no-op for collection ${operation.collectionName}`,
-    );
     return Promise.resolve();
   }
 

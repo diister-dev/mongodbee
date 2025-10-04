@@ -100,11 +100,7 @@ export async function migrateCommand(
 
       if (!schemaValidation.valid) {
         console.log();
-        console.error(red(bold("Schema validation failed:")));
-        for (const error of schemaValidation.errors) {
-          console.error(red(`  ${error}`));
-        }
-        throw new Error("Schema validation failed. See errors above.");
+        throw new Error("Schema validation failed. See errors above.", { cause: schemaValidation } );
       }
 
       console.log(green(`✓ Schema validation passed`));
