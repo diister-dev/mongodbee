@@ -218,7 +218,7 @@ export async function rollbackCommand(
       console.log(
         dim("  Note: The migration file still exists in the filesystem."),
       );
-      console.log(dim("  To re-apply it, run `mongodbee apply`."));
+      console.log(dim("  To re-apply it, run `mongodbee migrate`."));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`Failed to rollback migration: ${message}`);

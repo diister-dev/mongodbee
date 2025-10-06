@@ -194,7 +194,7 @@ Initialize migrations in your project:
 
 ```bash
 # Deno
-deno task migrate:init
+deno task mongodbeeinit
 
 # Or directly
 deno run --allow-read --allow-write --allow-net --allow-env jsr:@diister/mongodbee/migration/cli init
@@ -209,7 +209,7 @@ This creates a `migrations/` folder and `mongodbee.config.ts` configuration file
 Generate a new migration file:
 
 ```bash
-deno task migrate:generate add_user_fields
+deno task mongodbee generate --name add_user_fields
 ```
 
 Edit the generated migration file:
@@ -255,16 +255,16 @@ export async function migrate(migration: ReturnType<typeof migrationBuilder>) {
 
 ```bash
 # Apply all pending migrations
-deno task migrate:apply
+deno task mongodbee migrate
 
 # Check migration status
-deno task migrate:status
+deno task mongodbee status
 
 # View migration history
-deno task migrate:history
+deno task mongodbeehistory
 
 # Rollback the last migration
-deno task migrate:rollback
+deno task mongodbeerollback
 ```
 
 ### Multi-Collection Models

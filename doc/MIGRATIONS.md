@@ -406,7 +406,7 @@ deno task mongodbee generate --name "transform_comments"
 deno task mongodbee status
 
 # 7. Apply the migration
-deno task mongodbee apply
+deno task mongodbee migrate
 
 # 8. Rollback if needed
 deno task mongodbee rollback
@@ -992,7 +992,7 @@ The migration system is thoroughly tested with **165+ automated tests** covering
 - Builder API (collections, multi-collections, transforms)
 - Forward and reverse operations
 - Schema inheritance between parent-child migrations
-- CLI commands (init, generate, apply, status)
+- CLI commands (init, generate, migrate, status, rollback, history, check)
 
 ### Multi-Collection Features ✅
 - **Real MongoDB transforms** across multiple instances
@@ -1132,7 +1132,7 @@ try {
     } else {
       // Warn in development but allow startup
       console.warn(`⚠️  ${message}`);
-      console.warn(`   Run: deno task migrate:apply`);
+      console.warn(`   Run: deno task mongodbee migrate`);
     }
   }
   
@@ -1158,7 +1158,7 @@ Add migration validation to your deployment pipeline:
 #!/bin/bash
 
 # Apply pending migrations
-deno task migrate:apply
+deno task mongodbee migrate
 
 # Validate all migrations are applied (will exit with code 1 if not)
 deno run --allow-all scripts/validate-migrations.ts

@@ -162,7 +162,7 @@ export async function statusCommand(
     console.log();
 
     if (pendingCount > 0) {
-      console.log(dim("  Run `mongodbee apply` to apply pending migrations."));
+      console.log(dim("  Run `mongodbee migrate` to apply pending migrations."));
     } else {
       console.log(green("  ✓ Database is up to date!"));
     }

@@ -89,7 +89,7 @@ export async function historyCommand(
       if (operations.length === 0) {
         console.log(dim("No operations recorded yet."));
         console.log();
-        console.log(dim("Run `mongodbee apply` to apply migrations."));
+        console.log(dim("Run `mongodbee migrate` to apply migrations."));
         return;
       }
 
