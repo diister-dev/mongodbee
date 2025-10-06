@@ -14,10 +14,15 @@ import type { MongoClient } from "../mongodb.ts";
 /**
  * Represents the different properties that can be applied to a migration
  */
-export type MigrationProperty = {
-  /** Indicates that this migration cannot be reversed */
-  type: "irreversible";
-};
+export type MigrationProperty =
+  | {
+      /** Indicates that this migration cannot be reversed */
+      type: "irreversible";
+    }
+  | {
+      /** Indicates that this migration has lossy transformations */
+      type: "lossy";
+    };
 
 /**
  * Rule for creating a new collection
@@ -52,6 +57,10 @@ export type TransformCollectionRule<
   collectionName: string;
   up: (doc: T) => U;
   down: (doc: U) => T;
+  /** Marks this transformation as irreversible (cannot be rolled back) */
+  irreversible?: boolean;
+  /** Marks this transformation as lossy (rollback loses data) */
+  lossy?: boolean;
 };
 
 /**
@@ -89,6 +98,10 @@ export type TransformMultiCollectionTypeRule<
   schema?: unknown;
   /** Optional Valibot schema from parent migration (old schema) - used to generate mock data for simulation */
   parentSchema?: unknown;
+  /** Marks this transformation as irreversible (cannot be rolled back) */
+  irreversible?: boolean;
+  /** Marks this transformation as lossy (rollback loses data) */
+  lossy?: boolean;
 };
 
 /**
@@ -141,6 +154,20 @@ export type TransformRule<
   readonly up: (doc: T) => U;
   /** Function to transform from new to old format */
   readonly down: (doc: U) => T;
+  /**
+   * Marks this transformation as irreversible
+   * Use when the migration cannot be rolled back (no valid down() function)
+   * Will show a warning during migrate and prevent rollback
+   * @default false
+   */
+  readonly irreversible?: boolean;
+  /**
+   * Marks this transformation as lossy
+   * Use when the down() function cannot restore the exact original data
+   * Will show a warning during rollback and require confirmation
+   * @default false
+   */
+  readonly lossy?: boolean;
 };
 
 /**

@@ -104,7 +104,7 @@ Deno.test("history - shows applied migrations in history", async () => {
       await generateCommand({ name: "second", cwd: tempDir });
 
       // Apply migrations
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       // Verify applied
       const appliedIds = await getAppliedMigrationIds(db);
@@ -130,7 +130,7 @@ Deno.test("history - shows rollback operations in history", async () => {
       await generateCommand({ name: "second", cwd: tempDir });
 
       // Apply migrations
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       let appliedIds = await getAppliedMigrationIds(db);
       assertEquals(appliedIds.length, 2);
@@ -163,9 +163,9 @@ Deno.test("history - shows multiple operations chronologically", async () => {
       await generateCommand({ name: "third", cwd: tempDir });
 
       // Perform multiple operations
-      await migrateCommand({ cwd: tempDir }); // Apply all
+      await migrateCommand({ cwd: tempDir, force: true }); // Apply all
       await rollbackCommand({ force: true, cwd: tempDir }); // Rollback one
-      await migrateCommand({ cwd: tempDir }); // Re-apply
+      await migrateCommand({ cwd: tempDir, force: true }); // Re-apply
 
       // Run history
       await historyCommand({ cwd: tempDir });
@@ -190,7 +190,7 @@ Deno.test("history - uses custom config path when provided", async () => {
       await generateCommand({ name: "test", cwd: tempDir });
 
       // Apply with custom config
-      await migrateCommand({ configPath: "./custom.config.ts", cwd: tempDir });
+      await migrateCommand({ configPath: "./custom.config.ts", cwd: tempDir, force: true });
 
       // Run history with custom config
       await historyCommand({ configPath: "./custom.config.ts", cwd: tempDir });
@@ -240,7 +240,7 @@ Deno.test("history - shows operations for specific migrations", async () => {
       await generateCommand({ name: "comments", cwd: tempDir });
 
       // Apply all migrations
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       const appliedIds = await getAppliedMigrationIds(db);
       assertEquals(appliedIds.length, 3);
@@ -265,7 +265,7 @@ Deno.test("history - reflects current database state", async () => {
       await historyCommand({ cwd: tempDir });
 
       // Apply migration
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       let appliedIds = await getAppliedMigrationIds(db);
       assertEquals(appliedIds.length, 1);

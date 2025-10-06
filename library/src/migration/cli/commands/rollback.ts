@@ -18,30 +18,12 @@ import {
 } from "../../state.ts";
 import { MongodbApplier } from "../../appliers/mongodb.ts";
 import { migrationBuilder } from "../../builder.ts";
+import { confirm } from "../utils/confirm.ts";
 
 export interface RollbackCommandOptions {
   configPath?: string;
   force?: boolean;
   cwd?: string;
-}
-
-/**
- * Prompts user for confirmation
- */
-async function confirm(message: string): Promise<boolean> {
-  console.log(yellow(message));
-  console.log(dim("Type 'yes' to confirm: "));
-
-  const buf = new Uint8Array(1024);
-  const n = await Deno.stdin.read(buf);
-
-  if (n === null) {
-    return false;
-  }
-
-  const answer = new TextDecoder().decode(buf.subarray(0, n)).trim()
-    .toLowerCase();
-  return answer === "yes";
 }
 
 /**
@@ -120,6 +102,35 @@ export async function rollbackCommand(
     if (state.hasProperty("irreversible")) {
       console.log(red("⚠  This migration is marked as IRREVERSIBLE."));
       console.log(red("   Rolling it back may lead to data loss."));
+      console.log();
+
+      if (!options.force) {
+        const confirmed = await confirm(
+          "Are you sure you want to rollback this migration?",
+        );
+
+        if (!confirmed) {
+          console.log(yellow("Rollback cancelled."));
+          return;
+        }
+      }
+    }
+
+    // Check for lossy transformations
+    if (state.hasProperty("lossy")) {
+      const lossyTransforms = state.operations.filter((op) =>
+        (op.type === "transform_collection" || op.type === "transform_multicollection_type") &&
+        op.lossy
+      );
+      console.log(yellow("⚠  This migration contains LOSSY transformations:"));
+      for (const op of lossyTransforms) {
+        if (op.type === "transform_collection") {
+          console.log(yellow(`   - Collection: ${op.collectionName}`));
+        } else if (op.type === "transform_multicollection_type") {
+          console.log(yellow(`   - Multi-collection: ${op.collectionType}.${op.typeName}`));
+        }
+      }
+      console.log(yellow("   Rolling back will result in DATA LOSS."));
       console.log();
 
       if (!options.force) {

@@ -25,11 +25,13 @@ import { MongodbApplier } from "../../appliers/mongodb.ts";
 import { validateMigrationChainWithProjectSchema } from "../../schema-validation.ts";
 import { validateMigrationsWithSimulation } from "../utils/validate-migrations.ts";
 import { migrationBuilder } from "../../builder.ts";
+import { confirm } from "../utils/confirm.ts";
 
 export interface MigrateCommandOptions {
   configPath?: string;
   dryRun?: boolean;
   cwd?: string;
+  force?: boolean;
 }
 
 /**
@@ -127,7 +129,116 @@ export async function migrateCommand(
     // STEP 1: Validate ALL pending migrations BEFORE applying any
     await validateMigrationsWithSimulation(pendingMigrations);
 
-    // STEP 2: Apply each pending migration
+    // STEP 2: Check for irreversible or lossy migrations
+    const migrationsWithIssues: Array<{
+      migration: typeof pendingMigrations[0];
+      irreversible: boolean;
+      lossyTransforms: string[];
+    }> = [];
+
+    for (const migration of pendingMigrations) {
+      const builder = migrationBuilder({
+        schemas: migration.schemas,
+        parentSchemas: migration.parent?.schemas,
+      });
+      const state = migration.migrate(builder);
+
+      const isIrreversible = state.hasProperty("irreversible");
+      const isLossy = state.hasProperty("lossy");
+      const lossyTransforms = isLossy
+        ? state.operations
+            .filter((op) => {
+              if (op.type === "create_collection") return true;
+              if (op.type === "create_multicollection_instance") return true;
+              if (op.type === "update_indexes") return true;
+              if (
+                (op.type === "transform_collection" ||
+                  op.type === "transform_multicollection_type") &&
+                op.lossy
+              ) {
+                return true;
+              }
+              return false;
+            })
+            .map((op) => {
+              if (op.type === "create_collection") {
+                return `Create collection: ${op.collectionName}`;
+              } else if (op.type === "create_multicollection_instance") {
+                return `Create multi-collection: ${op.collectionName}`;
+              } else if (op.type === "update_indexes") {
+                return `Update indexes: ${op.collectionName}`;
+              } else if (op.type === "transform_collection") {
+                return `Transform: ${op.collectionName}`;
+              } else if (op.type === "transform_multicollection_type") {
+                return `Transform: ${op.collectionType}.${op.typeName}`;
+              }
+              return "";
+            })
+        : [];
+
+      if (isIrreversible || isLossy) {
+        migrationsWithIssues.push({
+          migration,
+          irreversible: isIrreversible,
+          lossyTransforms,
+        });
+      }
+    }
+
+    // Separate irreversible from lossy
+    const irreversibleMigrations = migrationsWithIssues.filter((m) =>
+      m.irreversible
+    );
+    const lossyOnlyMigrations = migrationsWithIssues.filter((m) =>
+      !m.irreversible && m.lossyTransforms.length > 0
+    );
+
+    // Show irreversible warnings and require confirmation
+    if (irreversibleMigrations.length > 0 && !options.force) {
+      console.log(
+        red("⚠  WARNING: Some migrations are IRREVERSIBLE (cannot be rolled back):"),
+      );
+      console.log();
+
+      for (const issue of irreversibleMigrations) {
+        console.log(red(`  • ${issue.migration.name}`));
+      }
+
+      console.log();
+
+      const confirmed = await confirm(
+        "Do you want to proceed with these irreversible migrations?",
+      );
+
+      if (!confirmed) {
+        console.log(yellow("Migration cancelled."));
+        console.log(dim("  Tip: Use --force to skip this confirmation"));
+        return;
+      }
+
+      console.log();
+    }
+
+    // Show lossy warnings (informational only, no confirmation needed for migrate)
+    if (lossyOnlyMigrations.length > 0) {
+      console.log(
+        yellow(
+          "ℹ  Note: Some migrations are LOSSY (rollback will result in data loss):",
+        ),
+      );
+      console.log();
+
+      for (const issue of lossyOnlyMigrations) {
+        console.log(yellow(`  ${issue.migration.name}:`));
+        for (const op of issue.lossyTransforms) {
+          console.log(yellow(`    - ${op}`));
+        }
+      }
+
+      console.log();
+    }
+
+    // STEP 3: Apply each pending migration
     const applier = new MongodbApplier(db);
     console.log(bold(blue("📝 Applying migrations...")));
     console.log();

@@ -96,7 +96,7 @@ Deno.test("migrate - applies single pending migration", async () => {
       await generateCommand({ name: "initial", cwd: tempDir });
 
       // Apply migrations
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       // Check migration was marked as applied
       const appliedIds = await getAppliedMigrationIds(db);
@@ -122,7 +122,7 @@ Deno.test("migrate - applies multiple pending migrations in order", async () => 
       await generateCommand({ name: "third", cwd: tempDir });
 
       // Apply all migrations
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       // Check all migrations were applied
       const appliedIds = await getAppliedMigrationIds(db);
@@ -146,14 +146,14 @@ Deno.test("migrate - skips already applied migrations", async () => {
       await generateCommand({ name: "second", cwd: tempDir });
 
       // Apply migrations first time
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       // Check applied count
       let appliedIds = await getAppliedMigrationIds(db);
       assertEquals(appliedIds.length, 2);
 
       // Apply again - should be no-op
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       // Count should still be 2
       appliedIds = await getAppliedMigrationIds(db);
@@ -175,7 +175,7 @@ Deno.test("migrate - dry run mode doesn't apply migrations", async () => {
       await generateCommand({ name: "test", cwd: tempDir });
 
       // Apply with dry run
-      await migrateCommand({ dryRun: true, cwd: tempDir });
+      await migrateCommand({ dryRun: true, cwd: tempDir, force: true });
 
       // Check no migrations were applied
       const appliedIds = await getAppliedMigrationIds(db);
@@ -213,7 +213,7 @@ Deno.test("migrate - handles migrations with actual operations", async () => {
       await Deno.writeTextFile(migrationPath, content);
 
       // Apply migration
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       // Check collection was created
       const collections = await db.listCollections().toArray();
@@ -234,10 +234,10 @@ Deno.test("migrate - reports success when no pending migrations", async () => {
 
       // Generate and apply a migration
       await generateCommand({ name: "initial", cwd: tempDir });
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       // Apply again - should succeed with no pending message
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
       // If no error thrown, test passes
     });
   });
@@ -259,7 +259,7 @@ Deno.test("migrate - validates schema consistency before applying", async () => 
       await generateCommand({ name: "test", cwd: tempDir });
 
       // Schema validation should run (will pass for generated migrations)
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
       // If no schema validation error, test passes
     });
   });
@@ -282,7 +282,7 @@ Deno.test("migrate - uses custom config path when provided", async () => {
       await generateCommand({ name: "test", cwd: tempDir });
 
       // Apply with custom config path
-      await migrateCommand({ configPath: "./custom.config.ts", cwd: tempDir });
+      await migrateCommand({ configPath: "./custom.config.ts", cwd: tempDir, force: true });
 
       // Check migration was applied
       const appliedIds = await getAppliedMigrationIds(db);
@@ -404,7 +404,7 @@ export default migrationDefinition({
       let errorThrown = false;
       let errorMessage = "";
       try {
-        await migrateCommand({ cwd: tempDir });
+        await migrateCommand({ cwd: tempDir, force: true });
       } catch (error) {
         errorThrown = true;
         errorMessage = error instanceof Error ? error.message : String(error);

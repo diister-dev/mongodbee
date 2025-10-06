@@ -305,6 +305,24 @@ export class SimulationValidator implements MigrationValidator {
         }
       }
 
+      // Check for lossy transformations
+      if (state.hasProperty("lossy")) {
+        const lossyTransforms = operations.filter((op) =>
+          (op.type === "transform_collection" || op.type === "transform_multicollection_type") &&
+          op.lossy
+        );
+        warnings.push(
+          `Migration has lossy transformations - rollback will result in data loss`,
+        );
+        for (const op of lossyTransforms) {
+          if (op.type === "transform_collection") {
+            warnings.push(`  ⚠ Collection: ${op.collectionName}`);
+          } else if (op.type === "transform_multicollection_type") {
+            warnings.push(`  ⚠ Multi-collection: ${op.collectionType}.${op.typeName}`);
+          }
+        }
+      }
+
       return Promise.resolve({
         success: errors.length === 0,
         errors,

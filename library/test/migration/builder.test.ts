@@ -57,7 +57,7 @@ Deno.test("MigrationBuilder - createCollection adds create operation", () => {
   assertEquals(state.operations[0].collectionName, "users");
 });
 
-Deno.test("MigrationBuilder - createCollection marks as irreversible", () => {
+Deno.test("MigrationBuilder - createCollection marks as lossy", () => {
   const schemas = {
     collections: {
       users: {
@@ -71,7 +71,7 @@ Deno.test("MigrationBuilder - createCollection marks as irreversible", () => {
     .done()
     .compile();
 
-  assert(state.hasProperty("irreversible"));
+  assert(state.hasProperty("lossy"));
 });
 
 Deno.test("MigrationBuilder - seed adds seed operation", () => {
@@ -381,7 +381,9 @@ Deno.test("getMigrationSummary - returns correct counts", () => {
   assertEquals(summary.seeds, 1);
   assertEquals(summary.transforms, 1);
   assertEquals(summary.totalOperations, 3);
-  assert(summary.isIrreversible);
+  // createCollection now marks as lossy, not irreversible
+  assert(!summary.isIrreversible);
+  assert(summary.properties.includes("lossy"));
 });
 
 Deno.test("getMigrationSummary - shows reversible when no create operations", () => {

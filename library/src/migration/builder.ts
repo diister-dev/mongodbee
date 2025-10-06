@@ -19,6 +19,20 @@
  *       down: (doc) => { const { slug, ...rest } = doc; return rest; }
  *     })
  *     .done()
+ *   .collection("users")
+ *     .transform({
+ *       up: (doc) => ({ ...doc, fullName: `${doc.firstName} ${doc.lastName}` }),
+ *       down: (doc) => ({ ...doc, firstName: doc.fullName.split(' ')[0], lastName: doc.fullName.split(' ')[1] || '' }),
+ *       lossy: true  // Rollback may not preserve exact original names
+ *     })
+ *     .done()
+ *   .collection("passwords")
+ *     .transform({
+ *       up: (doc) => ({ ...doc, password: hash(doc.password) }),
+ *       down: (doc) => doc,  // Cannot unhash passwords
+ *       irreversible: true  // No valid rollback possible
+ *     })
+ *     .done()
  *   .compile();
  * ```
  *
@@ -131,9 +145,22 @@ function createCollectionBuilder(
         collectionName,
         up: rule.up,
         down: rule.down,
+        irreversible: rule.irreversible,
+        lossy: rule.lossy,
       };
 
       state.operations.push(transformRule);
+
+      // Mark migration as irreversible if the transform is marked as such
+      if (rule.irreversible) {
+        state.mark({ type: "irreversible" });
+      }
+
+      // Mark migration as lossy if the transform is marked as such
+      if (rule.lossy) {
+        state.mark({ type: "lossy" });
+      }
+
       return this;
     },
 
@@ -172,9 +199,22 @@ function createMultiCollectionTypeBuilder(
         down: rule.down,
         schema: typeSchema,
         parentSchema: parentTypeSchema,
+        irreversible: rule.irreversible,
+        lossy: rule.lossy,
       };
 
       state.operations.push(transformRule);
+
+      // Mark migration as irreversible if the transform is marked as such
+      if (rule.irreversible) {
+        state.mark({ type: "irreversible" });
+      }
+
+      // Mark migration as lossy if the transform is marked as such
+      if (rule.lossy) {
+        state.mark({ type: "lossy" });
+      }
+
       return this;
     },
 
@@ -285,8 +325,8 @@ function createMigrationBuilder(
 
       state.operations.push(createRule);
 
-      // Creating a collection makes the migration irreversible
-      state.mark({ type: "irreversible" });
+      // Creating a collection makes the migration lossy (rollback drops the collection)
+      state.mark({ type: "lossy" });
 
       return createCollectionBuilder(state, name, options);
     },
@@ -311,8 +351,8 @@ function createMigrationBuilder(
 
       state.operations.push(createRule);
 
-      // Creating a multi-collection instance makes the migration irreversible
-      state.mark({ type: "irreversible" });
+      // Creating a multi-collection instance makes the migration lossy (rollback drops the collection)
+      state.mark({ type: "lossy" });
 
       return createMultiCollectionInstanceBuilder(
         state,
@@ -375,7 +415,9 @@ function createMigrationBuilder(
 
       state.operations.push(updateRule);
 
-      // Updating indexes is reversible (can drop and recreate)
+      // Updating indexes is lossy (rollback doesn't restore old indexes)
+      state.mark({ type: "lossy" });
+
       return builder;
     },
 

@@ -125,7 +125,7 @@ Deno.test("status - shows applied migrations", async () => {
       await generateCommand({ name: "second", cwd: tempDir });
 
       // Apply migrations
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       // Verify applied
       const appliedIds = await getAppliedMigrationIds(db);
@@ -151,7 +151,7 @@ Deno.test("status - shows mixed state (some applied, some pending)", async () =>
       await generateCommand({ name: "second", cwd: tempDir });
 
       // Apply first batch
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       // Generate more migrations
       await delay(10);
@@ -183,7 +183,7 @@ Deno.test("status - shows up-to-date when all migrations applied", async () => {
       await generateCommand({ name: "second", cwd: tempDir });
 
       // Apply all migrations
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       // Verify all applied
       const appliedIds = await getAppliedMigrationIds(db);
@@ -255,7 +255,7 @@ Deno.test("status - works after migrations are rolled back", async () => {
       await generateCommand({ name: "first", cwd: tempDir });
 
       // Apply then rollback
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       const appliedBefore = await getAppliedMigrationIds(db);
       assertEquals(appliedBefore.length, 1);

@@ -96,7 +96,7 @@ Deno.test("rollback - rolls back the last applied migration", async () => {
       await generateCommand({ name: "second", cwd: tempDir });
 
       // Apply migrations
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       let appliedIds = await getAppliedMigrationIds(db);
       assertEquals(appliedIds.length, 2);
@@ -126,7 +126,7 @@ Deno.test("rollback - can rollback multiple times", async () => {
       await generateCommand({ name: "third", cwd: tempDir });
 
       // Apply all migrations
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       let appliedIds = await getAppliedMigrationIds(db);
       assertEquals(appliedIds.length, 3);
@@ -180,7 +180,7 @@ Deno.test("rollback - can re-apply after rollback", async () => {
       await generateCommand({ name: "test", cwd: tempDir });
 
       // Apply migration
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       let appliedIds = await getAppliedMigrationIds(db);
       assertEquals(appliedIds.length, 1);
@@ -192,7 +192,7 @@ Deno.test("rollback - can re-apply after rollback", async () => {
       assertEquals(appliedIds.length, 0);
 
       // Re-apply
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       appliedIds = await getAppliedMigrationIds(db);
       assertEquals(appliedIds.length, 1);
@@ -227,7 +227,7 @@ Deno.test("rollback - handles migration with operations", async () => {
       await Deno.writeTextFile(migrationPath, content);
 
       // Apply migration
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       // Check collection was created
       const collections = await db.listCollections().toArray();
@@ -255,7 +255,7 @@ Deno.test("rollback - respects dry run mode (if supported)", async () => {
       await generateCommand({ name: "test", cwd: tempDir });
 
       // Apply migration
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       let appliedIds = await getAppliedMigrationIds(db);
       assertEquals(appliedIds.length, 1);
@@ -287,7 +287,7 @@ Deno.test("rollback - uses custom config path when provided", async () => {
       await generateCommand({ name: "test", cwd: tempDir });
 
       // Apply with custom config
-      await migrateCommand({ configPath: "./custom.config.ts", cwd: tempDir });
+      await migrateCommand({ configPath: "./custom.config.ts", cwd: tempDir, force: true });
 
       let appliedIds = await getAppliedMigrationIds(db);
       assertEquals(appliedIds.length, 1);
@@ -320,7 +320,7 @@ Deno.test("rollback - maintains migration order", async () => {
       await generateCommand({ name: "third", cwd: tempDir });
 
       // Apply all
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       const initialIds = await getAppliedMigrationIds(db);
       assertEquals(initialIds.length, 3);

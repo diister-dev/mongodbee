@@ -97,7 +97,7 @@ Deno.test("integration - complete workflow: init → generate → migrate → st
       assertEquals(files.length, 2);
 
       // Step 3: Apply migrations
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       // Verify migrations were applied
       const appliedIds = await getAppliedMigrationIds(db);
@@ -121,7 +121,7 @@ Deno.test("integration - incremental migrations: init → generate → migrate �
       await generateCommand({ name: "initial", cwd: tempDir });
 
       // Apply first batch
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       let appliedIds = await getAppliedMigrationIds(db);
       assertEquals(appliedIds.length, 1);
@@ -133,7 +133,7 @@ Deno.test("integration - incremental migrations: init → generate → migrate �
       await generateCommand({ name: "add_index", cwd: tempDir });
 
       // Apply second batch
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       // Verify all migrations applied
       appliedIds = await getAppliedMigrationIds(db);
@@ -150,7 +150,7 @@ Deno.test("integration - handles empty migration directory gracefully", async ()
       await setupTestConfig(tempDir, dbName);
 
       // Try to migrate with no migrations
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
       // Should complete without error
     });
   });
@@ -176,7 +176,7 @@ Deno.test("integration - multiple migrations with dependencies", async () => {
       assertEquals(files.length, 4);
 
       // Apply all migrations
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       // Verify all were applied in order
       const appliedIds = await getAppliedMigrationIds(db);
@@ -203,9 +203,9 @@ Deno.test("integration - idempotent migrations: multiple migrate calls", async (
       await generateCommand({ name: "test", cwd: tempDir });
 
       // Apply migrations multiple times
-      await migrateCommand({ cwd: tempDir });
-      await migrateCommand({ cwd: tempDir });
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
+      await migrateCommand({ cwd: tempDir, force: true });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       // Should still only have 1 applied migration
       const appliedIds = await getAppliedMigrationIds(db);
@@ -228,7 +228,7 @@ Deno.test("integration - status shows correct information after migrations", asy
       await generateCommand({ name: "migration3", cwd: tempDir });
 
       // Apply only 2 migrations
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       // Status should show some applied, some pending
       await statusCommand({ cwd: tempDir });
@@ -247,13 +247,13 @@ Deno.test("integration - dry run doesn't affect subsequent real migration", asyn
       await generateCommand({ name: "test", cwd: tempDir });
 
       // Dry run first
-      await migrateCommand({ dryRun: true, cwd: tempDir });
+      await migrateCommand({ dryRun: true, cwd: tempDir, force: true });
 
       let appliedIds = await getAppliedMigrationIds(db);
       assertEquals(appliedIds.length, 0);
 
       // Real migration
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       appliedIds = await getAppliedMigrationIds(db);
       assertEquals(appliedIds.length, 1);
@@ -279,7 +279,7 @@ Deno.test("integration - can continue after partial failure", async () => {
       // (In a real scenario, you'd make the second one fail, but for this test we just verify the flow)
 
       try {
-        await migrateCommand({ cwd: tempDir });
+        await migrateCommand({ cwd: tempDir, force: true });
       } catch {
         // Even if migration fails, we should be able to check status
       }
@@ -322,7 +322,7 @@ Deno.test("integration - migrations maintain parent-child relationships", async 
       }
 
       // Apply all migrations
-      await migrateCommand({ cwd: tempDir });
+      await migrateCommand({ cwd: tempDir, force: true });
 
       const appliedIds = await getAppliedMigrationIds(db);
       assertEquals(appliedIds.length, 3);
