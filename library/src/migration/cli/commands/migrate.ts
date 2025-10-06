@@ -22,10 +22,9 @@ import {
   markMigrationAsFailed,
 } from "../../state.ts";
 import { MongodbApplier } from "../../appliers/mongodb.ts";
-import { createSimulationApplier, createEmptyDatabaseState } from "../../appliers/simulation.ts";
-import { createSimulationValidator } from "../../validators/simulation.ts";
-import { migrationBuilder } from "../../builder.ts";
 import { validateMigrationChainWithProjectSchema } from "../../schema-validation.ts";
+import { validateMigrationsWithSimulation } from "../utils/validate-migrations.ts";
+import { migrationBuilder } from "../../builder.ts";
 
 export interface MigrateCommandOptions {
   configPath?: string;
@@ -70,20 +69,20 @@ export async function migrateCommand(
 
     const db = client.db(dbName);
 
-    console.log(green(`✓ Connected to database: ${dbName}`));
-    console.log();
-
     // Discover and load migrations
     console.log(dim("Discovering migrations..."));
     const migrationsWithFiles = await loadAllMigrations(migrationsDir);
+    if (migrationsWithFiles.length === 0) {
+      console.log(yellow("⚠ No migrations found"));
+      return;
+    }
+
     const allMigrations = buildMigrationChain(migrationsWithFiles);
 
-    console.log(green(`✓ Found ${allMigrations.length} migration(s)`));
-    console.log();
+    console.log(dim(`Found ${allMigrations.length} migration(s)`));
 
     // Validate that last migration matches project schema
     if (allMigrations.length > 0) {
-      console.log(dim("Validating schema consistency..."));
       const schemaPath = path.resolve(
         cwd,
         config.paths?.schemas || "./schemas.ts",
@@ -125,78 +124,11 @@ export async function migrateCommand(
     console.log(yellow(`⚡ Pending migrations: ${pendingMigrations.length}`));
     console.log();
 
-    // Create validators and applier
-    const applier = new MongodbApplier(db);
-    const simulationValidator = createSimulationValidator({
-      validateReversibility: true,
-      strictValidation: true,
-      maxOperations: 1000,
-    });
-
     // STEP 1: Validate ALL pending migrations BEFORE applying any
-    console.log(bold(blue("🧪 Validating all pending migrations...")));
-    console.log();
-
-    // Create simulation applier to build state progressively
-    const simulationApplier = createSimulationApplier({
-      strictValidation: true,
-      trackHistory: false,
-    });
-    let simulationState = createEmptyDatabaseState();
-
-    for (const migration of pendingMigrations) {
-      console.log(
-        dim(`  → ${migration.name} ${dim(`(${migration.id})`)}`),
-      );
-
-      // Validate migration with current simulation state
-      const validationResult = await simulationValidator.validateMigration(
-        migration,
-        simulationState, // Pass current state (from previous migrations)
-      );
-
-      if (!validationResult.success) {
-        console.error(red(`    ✗ Simulation validation failed:`));
-        for (const error of validationResult.errors) {
-          console.error(red(`      ${error}`));
-        }
-        console.log();
-        throw new Error(
-          `Migration ${migration.name} failed validation. No migrations were applied.`,
-        );
-      }
-
-      if (validationResult.warnings.length > 0) {
-        for (const warning of validationResult.warnings) {
-          console.log(yellow(`    ⚠ ${warning}`));
-        }
-      }
-
-      console.log(
-        green(
-          `    ✓ Valid (${
-            validationResult.data?.operationCount || 0
-          } operations)`,
-        ),
-      );
-
-      // Apply migration to simulation state for next migration validation
-      const builder = migrationBuilder({
-        schemas: migration.schemas,
-        parentSchemas: migration.parent?.schemas,
-      });
-      const state = migration.migrate(builder);
-
-      for (const operation of state.operations) {
-        simulationState = simulationApplier.applyOperation(simulationState, operation);
-      }
-    }
-
-    console.log();
-    console.log(green(bold("✓ All migrations validated successfully!")));
-    console.log();
+    await validateMigrationsWithSimulation(pendingMigrations);
 
     // STEP 2: Apply each pending migration
+    const applier = new MongodbApplier(db);
     console.log(bold(blue("📝 Applying migrations...")));
     console.log();
 
