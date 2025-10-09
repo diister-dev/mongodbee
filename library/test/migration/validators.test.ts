@@ -33,7 +33,7 @@ import * as v from "valibot";
 Deno.test("ChainValidator - validates simple linear chain", () => {
   const m1 = migrationDefinition("2024_01_01_1200_A_first", "First", {
     parent: null,
-    schemas: { collections: {}, multiCollections: {} },
+    schemas: { collections: {}, multiModels: {} },
     migrate(m) {
       return m.compile();
     },
@@ -41,7 +41,7 @@ Deno.test("ChainValidator - validates simple linear chain", () => {
 
   const m2 = migrationDefinition("2024_01_01_1300_B_second", "Second", {
     parent: m1,
-    schemas: { collections: {}, multiCollections: {} },
+    schemas: { collections: {}, multiModels: {} },
     migrate(m) {
       return m.compile();
     },
@@ -49,7 +49,7 @@ Deno.test("ChainValidator - validates simple linear chain", () => {
 
   const m3 = migrationDefinition("2024_01_01_1400_C_third", "Third", {
     parent: m2,
-    schemas: { collections: {}, multiCollections: {} },
+    schemas: { collections: {}, multiModels: {} },
     migrate(m) {
       return m.compile();
     },
@@ -66,7 +66,7 @@ Deno.test("ChainValidator - validates simple linear chain", () => {
 Deno.test("ChainValidator - detects duplicate migration IDs", () => {
   const m1 = migrationDefinition("2024_01_01_1200_DUP_test", "First", {
     parent: null,
-    schemas: { collections: {}, multiCollections: {} },
+    schemas: { collections: {}, multiModels: {} },
     migrate(m) {
       return m.compile();
     },
@@ -74,7 +74,7 @@ Deno.test("ChainValidator - detects duplicate migration IDs", () => {
 
   const m2 = migrationDefinition("2024_01_01_1200_DUP_test", "Second", {
     parent: null,
-    schemas: { collections: {}, multiCollections: {} },
+    schemas: { collections: {}, multiModels: {} },
     migrate(m) {
       return m.compile();
     },
@@ -98,7 +98,7 @@ Deno.test("ChainValidator - detects broken parent references", () => {
 
   const child = migrationDefinition("2024_01_01_1300_CHILD_test", "Child", {
     parent: fakeParent as never,
-    schemas: { collections: {}, multiCollections: {} },
+    schemas: { collections: {}, multiModels: {} },
     migrate(m) {
       return m.compile();
     },
@@ -114,7 +114,7 @@ Deno.test("ChainValidator - detects broken parent references", () => {
 Deno.test("ChainValidator - allows multiple roots when configured", () => {
   const root1 = migrationDefinition("2024_01_01_1200_R1_first", "Root 1", {
     parent: null,
-    schemas: { collections: {}, multiCollections: {} },
+    schemas: { collections: {}, multiModels: {} },
     migrate(m) {
       return m.compile();
     },
@@ -122,7 +122,7 @@ Deno.test("ChainValidator - allows multiple roots when configured", () => {
 
   const root2 = migrationDefinition("2024_01_01_1300_R2_second", "Root 2", {
     parent: null,
-    schemas: { collections: {}, multiCollections: {} },
+    schemas: { collections: {}, multiModels: {} },
     migrate(m) {
       return m.compile();
     },
@@ -142,7 +142,7 @@ Deno.test("ChainValidator - allows multiple roots when configured", () => {
 Deno.test("validateMigrationChain - convenience function", () => {
   const migration = migrationDefinition("2024_01_01_1200_TEST_test", "Test", {
     parent: null,
-    schemas: { collections: {}, multiCollections: {} },
+    schemas: { collections: {}, multiModels: {} },
     migrate(m) {
       return m.compile();
     },
@@ -166,7 +166,7 @@ Deno.test("IntegrityValidator - validates migration state with operations", () =
         email: v.string(),
       },
     },
-    multiCollections: {},
+    multiModels: {},
   };
 
   const migration = migrationDefinition(
@@ -269,7 +269,7 @@ Deno.test("SimulationValidator - validates simple migration", async () => {
         name: v.string(),
       },
     },
-    multiCollections: {},
+    multiModels: {},
   };
 
   const migration = migrationDefinition("2024_01_01_1200_USR@users", "Users", {
@@ -298,7 +298,7 @@ Deno.test("SimulationValidator - validates migration with seed and transform", a
         price: v.number(),
       },
     },
-    multiCollections: {},
+    multiModels: {},
   };
 
   const m1 = migrationDefinition(
@@ -355,7 +355,7 @@ Deno.test("SimulationValidator - detects operations on non-existent collections"
         name: v.string(),
       },
     },
-    multiCollections: {},
+    multiModels: {},
   };
 
   const migration = migrationDefinition(
@@ -388,7 +388,7 @@ Deno.test("SimulationValidator - validates parent-child migrations", async () =>
         content: v.string(),
       },
     },
-    multiCollections: {},
+    multiModels: {},
   };
 
   const parent = migrationDefinition(
@@ -430,7 +430,7 @@ Deno.test("SimulationValidator - warns about too many operations", async () => {
         value: v.number(),
       },
     },
-    multiCollections: {},
+    multiModels: {},
   };
 
   const migration = migrationDefinition(
@@ -466,7 +466,7 @@ Deno.test("SimulationValidator - handles empty migrations", async () => {
     "Empty",
     {
       parent: null,
-      schemas: { collections: {}, multiCollections: {} },
+      schemas: { collections: {}, multiModels: {} },
       migrate(m) {
         return m.compile();
       },
@@ -489,7 +489,7 @@ Deno.test("SimulationValidator - detects schema without createCollection", async
         email: v.string(),
       },
     },
-    multiCollections: {},
+    multiModels: {},
   };
 
   const migration = migrationDefinition(
@@ -517,7 +517,7 @@ Deno.test("SimulationValidator - detects schema without createCollection", async
 Deno.test("SimulationValidator - detects schema without newMultiCollection", async () => {
   const schemas = {
     collections: {},
-    multiCollections: {
+    multiModels: {
       comments: {
         user_comment: {
           content: v.string(),
@@ -552,7 +552,7 @@ Deno.test("SimulationValidator - detects schema change without transformation", 
   // Parent migration: defines user_comment with simple content
   const parentSchemas = {
     collections: {},
-    multiCollections: {
+    multiModels: {
       comments: {
         user_comment: {
           authorId: v.string(),
@@ -587,7 +587,7 @@ Deno.test("SimulationValidator - detects schema change without transformation", 
   // Child migration: changes content to object WITHOUT transformation
   const childSchemas = {
     collections: {},
-    multiCollections: {
+    multiModels: {
       comments: {
         user_comment: {
           authorId: v.string(),
@@ -627,7 +627,7 @@ Deno.test("SimulationValidator - accepts schema change WITH valid transformation
   // Parent migration: defines user_comment with simple content
   const parentSchemas = {
     collections: {},
-    multiCollections: {
+    multiModels: {
       comments: {
         user_comment: {
           authorId: v.string(),
@@ -661,7 +661,7 @@ Deno.test("SimulationValidator - accepts schema change WITH valid transformation
   // Child migration: changes content to object WITH transformation
   const childSchemas = {
     collections: {},
-    multiCollections: {
+    multiModels: {
       comments: {
         user_comment: {
           authorId: v.string(),
@@ -727,7 +727,7 @@ Deno.test("validateMigrationWithSimulation - convenience function", async () => 
         author: v.string(),
       },
     },
-    multiCollections: {},
+    multiModels: {},
   };
 
   const migration = migrationDefinition(
@@ -767,7 +767,7 @@ Deno.test("Validators - full validation pipeline", async () => {
         price: v.number(),
       },
     },
-    multiCollections: {},
+    multiModels: {},
   };
 
   const m1 = migrationDefinition("2024_01_01_1200_ORD1@init", "Init orders", {
@@ -794,7 +794,7 @@ Deno.test("Validators - full validation pipeline", async () => {
           total: v.number(),
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(m) {
       m.collection("orders")

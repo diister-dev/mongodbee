@@ -37,7 +37,7 @@ Deno.test("Rollback - simple collection transformation", async (t) => {
               email: v.string(),
             },
           },
-          multiCollections: {},
+          multiModels: {},
         },
         migrate(migration) {
           return migration
@@ -68,7 +68,7 @@ Deno.test("Rollback - simple collection transformation", async (t) => {
               age: v.number(),
             },
           },
-          multiCollections: {},
+          multiModels: {},
         },
         migrate(migration) {
           return migration
@@ -144,7 +144,7 @@ Deno.test("Rollback - successive migrations", async (t) => {
             name: v.string(),
           },
         },
-        multiCollections: {},
+        multiModels: {},
       },
       migrate(migration) {
         return migration
@@ -167,7 +167,7 @@ Deno.test("Rollback - successive migrations", async (t) => {
             price: v.number(),
           },
         },
-        multiCollections: {},
+        multiModels: {},
       },
       migrate(migration) {
         return migration
@@ -195,7 +195,7 @@ Deno.test("Rollback - successive migrations", async (t) => {
             stock: v.number(),
           },
         },
-        multiCollections: {},
+        multiModels: {},
       },
       migrate(migration) {
         return migration
@@ -275,7 +275,7 @@ Deno.test("Rollback - multi-collection type transformation", async (t) => {
         parent: null,
         schemas: {
           collections: {},
-          multiCollections: {
+          multiModels: {
             catalog: {
               book: {
                 title: v.string(),
@@ -305,7 +305,7 @@ Deno.test("Rollback - multi-collection type transformation", async (t) => {
         parent: migration1,
         schemas: {
           collections: {},
-          multiCollections: {
+          multiModels: {
             catalog: {
               book: {
                 title: v.string(),
@@ -393,7 +393,7 @@ Deno.test("Rollback - multi-collection across multiple instances", async (t) => 
         parent: null,
         schemas: {
           collections: {},
-          multiCollections: {
+          multiModels: {
             catalog: {
               book: {
                 title: v.string(),
@@ -422,7 +422,7 @@ Deno.test("Rollback - multi-collection across multiple instances", async (t) => 
         parent: migration1,
         schemas: {
           collections: {},
-          multiCollections: {
+          multiModels: {
             catalog: {
               book: {
                 title: v.string(),

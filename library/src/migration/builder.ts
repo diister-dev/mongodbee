@@ -183,11 +183,11 @@ function createMultiCollectionTypeBuilder(
   return {
     transform(rule: TransformRule): MultiCollectionTypeBuilder {
       // Extract schema for this specific type from options
-      const typeSchema = options.schemas?.multiCollections?.[collectionType]
+      const typeSchema = options.schemas?.multiModels?.[collectionType]
         ?.[typeName];
 
       // Extract parent schema if available
-      const parentTypeSchema = options.parentSchemas?.multiCollections
+      const parentTypeSchema = options.parentSchemas?.multiModels
         ?.[collectionType]
         ?.[typeName];
 
@@ -268,7 +268,7 @@ function createMultiCollectionInstanceBuilder(
       documents: readonly unknown[],
     ): MultiCollectionInstanceBuilder {
       // Validate documents against schema if available, similar to collection seed
-      const schema = options.schemas.multiCollections?.[collectionType]
+      const schema = options.schemas.multiModels?.[collectionType]
         ?.[typeName];
       let validatedDocs: readonly unknown[] = documents;
 
@@ -369,9 +369,9 @@ function createMigrationBuilder(
       // Need to infer collection type from schemas - find which multi-collection model this belongs to
       let collectionType: string | undefined;
 
-      if (options.schemas?.multiCollections) {
+      if (options.schemas?.multiModels) {
         // Try to match collection name pattern with model names
-        for (const modelName of Object.keys(options.schemas.multiCollections)) {
+        for (const modelName of Object.keys(options.schemas.multiModels)) {
           // Simple heuristic: if collection name starts with model name, it's probably that type
           if (
             collectionName.startsWith(modelName + "_") ||

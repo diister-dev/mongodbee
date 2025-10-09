@@ -28,9 +28,9 @@ Deno.test("SimulationApplier - createEmptyDatabaseState returns empty state", ()
   const state = createEmptyDatabaseState();
 
   assertExists(state.collections);
-  assertExists(state.multiCollections);
+  assertExists(state.multiModels);
   assertEquals(Object.keys(state.collections).length, 0);
-  assertEquals(Object.keys(state.multiCollections).length, 0);
+  assertEquals(Object.keys(state.multiModels).length, 0);
 });
 
 Deno.test("SimulationApplier - compareDatabaseStates returns true for identical states", () => {
@@ -248,10 +248,10 @@ Deno.test("SimulationApplier - creates multi-collection instance with metadata",
 
   state = applier.applyOperation(state, operation);
 
-  assertExists(state.multiCollections);
-  assertExists(state.multiCollections.catalog_main);
+  assertExists(state.multiModels);
+  assertExists(state.multiModels.catalog_main);
 
-  const content = state.multiCollections.catalog_main.content;
+  const content = state.multiModels.catalog_main.content;
   assertEquals(content.length, 2); // _information and _migrations
 
   const infoDoc = content.find((doc: Record<string, unknown>) =>
@@ -270,7 +270,7 @@ Deno.test("SimulationApplier - seeds multi-collection type with _type field", ()
   const applier = new SimulationApplier();
   let state = createEmptyDatabaseState();
 
-  state.multiCollections = {
+  state.multiModels = {
     catalog_main: { content: [] },
   };
 
@@ -288,8 +288,8 @@ Deno.test("SimulationApplier - seeds multi-collection type with _type field", ()
 
   state = applier.applyOperation(state, operation);
 
-  assertExists(state.multiCollections);
-  const content = state.multiCollections.catalog_main.content;
+  assertExists(state.multiModels);
+  const content = state.multiModels.catalog_main.content;
   assertEquals(content.length, 2);
   assertEquals((content[0] as Record<string, unknown>)._type, "product");
   assertEquals((content[1] as Record<string, unknown>)._type, "product");
@@ -308,7 +308,7 @@ Deno.test("SimulationApplier - transforms type across all instances", () => {
   const applier = new SimulationApplier();
   let state = createEmptyDatabaseState();
 
-  state.multiCollections = {
+  state.multiModels = {
     catalog_store1: {
       content: [
         {
@@ -350,11 +350,11 @@ Deno.test("SimulationApplier - transforms type across all instances", () => {
   state = applier.applyOperation(state, operation);
 
   // Check both instances were transformed
-  assertExists(state.multiCollections);
-  const product1 = state.multiCollections.catalog_store1.content.find(
+  assertExists(state.multiModels);
+  const product1 = state.multiModels.catalog_store1.content.find(
     (doc: Record<string, unknown>) => doc._type === "product",
   ) as Record<string, unknown>;
-  const product2 = state.multiCollections.catalog_store2.content.find(
+  const product2 = state.multiModels.catalog_store2.content.find(
     (doc: Record<string, unknown>) => doc._type === "product",
   ) as Record<string, unknown>;
 
@@ -366,7 +366,7 @@ Deno.test("SimulationApplier - generates mock data when no instances exist", () 
   const applier = new SimulationApplier();
   let state = createEmptyDatabaseState();
 
-  state.multiCollections = {};
+  state.multiModels = {};
 
   const schema = v.object({
     _id: v.string(),
@@ -393,8 +393,8 @@ Deno.test("SimulationApplier - generates mock data when no instances exist", () 
   state = applier.applyOperation(state, operation);
 
   // Test instance should be created
-  assertExists(state.multiCollections);
-  assertExists(state.multiCollections.catalog_test_simulation);
+  assertExists(state.multiModels);
+  assertExists(state.multiModels.catalog_test_simulation);
 });
 
 // ============================================================================

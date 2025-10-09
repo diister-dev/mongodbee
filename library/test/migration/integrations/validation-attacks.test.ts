@@ -33,7 +33,7 @@ Deno.test("Validation Attack 1: Schema change without transformation should fail
           createdAt: v.date(),
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(migration) {
       migration.createCollection("users");
@@ -71,7 +71,7 @@ Deno.test("Validation Attack 1: Schema change without transformation should fail
           createdAt: v.date(),
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(migration) {
       // 🚨 ATTACK: No transformation provided for new required field
@@ -102,7 +102,7 @@ Deno.test("Validation Attack 2: Multi-collection type removal without transforma
     parent: null,
     schemas: {
       collections: {},
-      multiCollections: {
+      multiModels: {
         posts: {
           article: {
             _id: v.string(),
@@ -128,7 +128,7 @@ Deno.test("Validation Attack 2: Multi-collection type removal without transforma
     parent: rootMigration,
     schemas: {
       collections: {},
-      multiCollections: {
+      multiModels: {
         posts: {
           article: {
             _id: v.string(),
@@ -178,7 +178,7 @@ Deno.test("Validation Attack 3: Transformation returning invalid values should f
           createdAt: v.date(),
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(migration) {
       migration.createCollection("users").seed([
@@ -206,7 +206,7 @@ Deno.test("Validation Attack 3: Transformation returning invalid values should f
           createdAt: v.date(),
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(migration) {
       // 🚨 ATTACK: Transformation returns null instead of boolean
@@ -252,7 +252,7 @@ Deno.test("Validation Attack 4: Transformation with type mismatch should fail", 
           createdAt: v.date(),
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(migration) {
       migration.createCollection("users").seed([
@@ -279,7 +279,7 @@ Deno.test("Validation Attack 4: Transformation with type mismatch should fail", 
           createdAt: v.date(),
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(migration) {
       // 🚨 ATTACK: Returns string instead of number
@@ -324,7 +324,7 @@ Deno.test("Validation Attack 5: Transformation missing required field should fai
           createdAt: v.date(),
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(migration) {
       migration.createCollection("users").seed([
@@ -351,7 +351,7 @@ Deno.test("Validation Attack 5: Transformation missing required field should fai
           createdAt: v.date(),
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(migration) {
       // 🚨 ATTACK: Transformation doesn't add the 'status' field
@@ -396,7 +396,7 @@ Deno.test("Valid transformation with correct values should pass", async () => {
           createdAt: v.date(),
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(migration) {
       migration.createCollection("users");
@@ -416,7 +416,7 @@ Deno.test("Valid transformation with correct values should pass", async () => {
           createdAt: v.date(),
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(migration) {
       // ✅ VALID: Proper transformation with correct type
@@ -449,7 +449,7 @@ Deno.test("Validation Attack 7: Multi-collection transformation with invalid val
     parent: null,
     schemas: {
       collections: {},
-      multiCollections: {
+      multiModels: {
         posts: {
           article: {
             _id: v.string(),
@@ -469,7 +469,7 @@ Deno.test("Validation Attack 7: Multi-collection transformation with invalid val
     parent: rootMigration,
     schemas: {
       collections: {},
-      multiCollections: {
+      multiModels: {
         posts: {
           article: {
             _id: v.string(),

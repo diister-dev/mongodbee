@@ -9,7 +9,6 @@
  */
 
 import type * as v from "../schema.ts";
-import type { MongoClient } from "../mongodb.ts";
 
 /**
  * Represents the different properties that can be applied to a migration
@@ -370,6 +369,8 @@ export interface MigrationBuilder {
   compile(): MigrationState;
 }
 
+export type SchemaContent = Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>;
+
 /**
  * Schema definition for collections and multi-collections
  *
@@ -378,20 +379,26 @@ export interface MigrationBuilder {
  */
 export type SchemasDefinition = {
   /** Schema definitions for regular collections */
-  collections: Record<
+  collections?: Record<
     string,
-    Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>
+    SchemaContent
   >;
 
-  /** Schema definitions for multi-collections (optional) */
+  /** Schema definitions for regular multi-collections */
   multiCollections?: Record<
-    string, // multi-collection schema name
+    string, // multi-collection name
     Record<
       string, // type name within the multi-collection
-      Record<
-        string, // field name
-        v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
-      >
+      SchemaContent
+    >
+  >;
+
+  /** Schema definitions for multi-collections models */
+  multiModels?: Record<
+    string, // multi-collection model schema name
+    Record<
+      string, // type name within the multi-collection
+      SchemaContent
     >
   >;
 };
@@ -447,6 +454,8 @@ export interface MigrationApplier {
   applyReverseOperation(operation: MigrationRule): Promise<void> | void;
 }
 
+type StateCollectionContent = { content: Record<string, unknown>[] };
+
 /**
  * Represents the state of a database during simulation
  *
@@ -455,293 +464,13 @@ export interface MigrationApplier {
  */
 export type DatabaseState = {
   /** Collections and their document contents */
-  collections: Record<string, { content: Record<string, unknown>[] }>;
+  collections: Record<string, StateCollectionContent>;
 
-  /** Multi-collections and their contents (future feature) */
-  multiCollections?: Record<string, { content: Record<string, unknown>[] }>;
+  /** Multi-collections and their instances */
+  multiCollections: Record<string, StateCollectionContent>;
+
+  /** Multi-collections models and their contents (future feature) */
+  multiModels: Record<string,
+    Record<string, StateCollectionContent>
+  >;
 };
-
-/**
- * Configuration options for migration mock data generation
- */
-export type MockDataConfig = {
-  /** Whether to enable mock data generation */
-  enabled: boolean;
-
-  /** Locales to use for fake data generation */
-  locale: string[];
-
-  /** Maximum length for generated strings */
-  defaultStringMaxLength: number;
-
-  /** Number of documents to generate per collection */
-  documentsPerCollection: number;
-
-  /** Optional seed for reproducible random data */
-  seed?: number;
-};
-
-/**
- * Configuration for database connections and operations
- */
-export type DatabaseConfig = {
-  /** MongoDB connection URL */
-  url: string;
-
-  /** Database name */
-  name: string;
-
-  /** Whether to drop database on reset (useful for testing) */
-  dropOnReset?: boolean;
-};
-
-/**
- * Configuration for path management
- */
-export type PathsConfig = {
-  /** Directory containing migration files */
-  migrations: string;
-
-  /** Directory containing schema files */
-  schemas: string;
-
-  /** Optional path for generated final schemas */
-  finalSchemas?: string;
-};
-
-/**
- * Configuration for validation settings
- */
-export type ValidationConfig = {
-  /** Whether to validate migration chain integrity */
-  chainValidation: boolean;
-
-  /** Whether to perform integrity checks */
-  integrityCheck: boolean;
-
-  /** Whether to check schema consistency */
-  schemaConsistency: boolean;
-
-  /** Whether to test migration reversibility */
-  reversibilityCheck: boolean;
-};
-
-/**
- * CLI-specific configuration options
- */
-export type CLIConfig = {
-  /** Path to custom migration templates */
-  templatesPath?: string;
-
-  /** Whether to automatically import new migrations */
-  autoImport: boolean;
-};
-
-/**
- * Complete configuration for the migration system
- *
- * This interface defines all configuration options available
- * for customizing the behavior of the migration system.
- */
-export interface MigrationConfig {
-  /** Path configuration */
-  paths: PathsConfig;
-
-  /** Database configuration */
-  database: DatabaseConfig;
-
-  /** Mock data generation configuration */
-  mockData: MockDataConfig;
-
-  /** Validation configuration */
-  validation: ValidationConfig;
-
-  /** CLI configuration */
-  cli: CLIConfig;
-}
-
-/**
- * Options for creating a migration applier
- */
-export type MigrationApplierOptions = {
-  /** MongoDB client instance */
-  client: MongoClient;
-
-  /** Database name */
-  database: string;
-
-  /** Additional configuration options */
-  options?: {
-    /** Whether to use transactions */
-    useTransactions?: boolean;
-
-    /** Batch size for bulk operations */
-    batchSize?: number;
-  };
-};
-
-/**
- * Result of a migration operation
- */
-export type MigrationResult = {
-  /** Whether the operation was successful */
-  success: boolean;
-
-  /** Optional error message if operation failed */
-  error?: string;
-
-  /** Number of operations executed */
-  operationsExecuted: number;
-
-  /** Time taken to execute the migration */
-  executionTime: number;
-
-  /** Additional metadata about the migration */
-  metadata?: Record<string, unknown>;
-};
-
-/**
- * Status of a migration in the system
- */
-export type MigrationStatus = {
-  /** Migration ID */
-  id: string;
-
-  /** Migration name */
-  name: string;
-
-  /** Current status */
-  status: "pending" | "applied" | "failed" | "rolled-back";
-
-  /** Timestamp when migration was last executed */
-  appliedAt?: Date;
-
-  /** Error message if migration failed */
-  error?: string;
-};
-
-/**
- * Context for migration execution
- *
- * This interface provides context and utilities during migration execution,
- * including access to the database, configuration, and logging utilities.
- */
-export interface MigrationContext {
-  /** Migration configuration */
-  config: MigrationConfig;
-
-  /** Database connection */
-  database: Record<string, unknown>;
-
-  /** Logging utility */
-  logger: {
-    info(message: string): void;
-    warn(message: string): void;
-    error(message: string): void;
-    debug(message: string): void;
-  };
-}
-
-// =============================================================================
-// Type-Safe Operation Handler Utilities
-// =============================================================================
-
-/**
- * Union of all possible migration rule types for type-safe operations
- */
-export type MigrationRuleType = MigrationRule["type"];
-
-/**
- * Helper type to extract a specific migration rule by its type
- */
-export type ExtractMigrationRule<T extends MigrationRuleType> = Extract<
-  MigrationRule,
-  { type: T }
->;
-
-/**
- * Type-safe operation handler map - forces implementation of all operation types
- *
- * @template TResult - The return type of the operation handlers
- * @template TArgs - Additional arguments passed to operation handlers
- *
- * @example
- * ```typescript
- * // For appliers that return void
- * const handlers: OperationHandlerMap<Promise<void>, []> = {
- *   create_collection: (operation) => handleCreateCollection(operation),
- *   seed_collection: (operation) => handleSeedCollection(operation),
- *   transform_collection: (operation) => handleTransformCollection(operation),
- * };
- *
- * // For appliers that take state and return new state
- * const stateHandlers: OperationHandlerMap<State, [State]> = {
- *   create_collection: (operation, state) => applyToState(operation, state),
- *   seed_collection: (operation, state) => applyToState(operation, state),
- *   transform_collection: (operation, state) => applyToState(operation, state),
- * };
- * ```
- */
-export type OperationHandlerMap<TResult, TArgs extends readonly unknown[]> = {
-  [K in MigrationRuleType]: (
-    operation: ExtractMigrationRule<K>,
-    ...args: TArgs
-  ) => TResult;
-};
-
-/**
- * Utility type for creating type-safe operation dispatchers
- *
- * @example
- * ```typescript
- * function createDispatcher<TResult, TArgs extends readonly unknown[]>(
- *   handlers: OperationHandlerMap<TResult, TArgs>
- * ): OperationDispatcher<TResult, TArgs> {
- *   return (operation: MigrationRule, ...args: TArgs): TResult => {
- *     const handler = handlers[operation.type];
- *     if (!handler) {
- *       throw new Error(`Unknown operation type: ${operation.type}`);
- *     }
- *     return handler(operation as never, ...args);
- *   };
- * }
- * ```
- */
-export type OperationDispatcher<TResult, TArgs extends readonly unknown[]> = (
-  operation: MigrationRule,
-  ...args: TArgs
-) => TResult;
-
-/**
- * Factory function to create a type-safe operation dispatcher
- *
- * @param handlers - Map of operation handlers
- * @returns Type-safe dispatcher function
- *
- * @example
- * ```typescript
- * import { createOperationDispatcher } from "@diister/mongodbee/migration/types";
- *
- * const dispatcher = createOperationDispatcher({
- *   create_collection: (operation) => console.log(`Creating ${operation.collectionName}`),
- *   seed_collection: (operation) => console.log(`Seeding ${operation.collectionName}`),
- *   transform_collection: (operation) => console.log(`Transforming ${operation.collectionName}`)
- * });
- *
- * dispatcher({ type: 'create_collection', collectionName: 'users' });
- * ```
- */
-export function createOperationDispatcher<
-  TResult,
-  TArgs extends readonly unknown[],
->(
-  handlers: OperationHandlerMap<TResult, TArgs>,
-): OperationDispatcher<TResult, TArgs> {
-  return (operation: MigrationRule, ...args: TArgs): TResult => {
-    const handler = handlers[operation.type];
-    if (!handler) {
-      throw new Error(`Unknown operation type: ${operation.type}`);
-    }
-    return handler(operation as never, ...args);
-  };
-}

@@ -164,7 +164,7 @@ Deno.test("MigrationBuilder - chain multiple operations", () => {
 Deno.test("MigrationBuilder - newMultiCollection creates instance", () => {
   const schemas = {
     collections: {},
-    multiCollections: {
+    multiModels: {
       catalog: {
         product: {
           _id: v.string(),
@@ -192,7 +192,7 @@ Deno.test("MigrationBuilder - newMultiCollection creates instance", () => {
 Deno.test("MigrationBuilder - seedType adds seed for multi-collection", () => {
   const schemas = {
     collections: {},
-    multiCollections: {
+    multiModels: {
       catalog: {
         product: {
           _id: v.string(),
@@ -226,7 +226,7 @@ Deno.test("MigrationBuilder - seedType adds seed for multi-collection", () => {
 Deno.test("MigrationBuilder - multiCollection type transform", () => {
   const schemas = {
     collections: {},
-    multiCollections: {
+    multiModels: {
       catalog: {
         product: {
           _id: v.string(),

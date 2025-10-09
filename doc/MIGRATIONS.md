@@ -29,7 +29,7 @@ export default migrationDefinition(id, name, {
   parent: null,
   schemas: {
     collections: {},
-    multiCollections: {
+    multiModels: {
       exposition: {
         artwork: {
           title: v.string(),
@@ -65,8 +65,8 @@ export default migrationDefinition(id, name, {
       ...parent.schemas.collections,  // Inherit from parent
       // Modifications...
     },
-    multiCollections: {
-      ...parent.schemas.multiCollections,  // Inherit from parent
+    multiModels: {
+      ...parent.schemas.multiModels,  // Inherit from parent
       // Modifications...
     }
   },
@@ -91,7 +91,7 @@ A **multi-collection** is a single MongoDB collection that stores multiple docum
 
 **Structure**:
 ```typescript
-multiCollections: {
+multiModels: {
   exposition: {           // Multi-collection type/model name
     artwork: {           // Document type
       title: v.string(),
@@ -133,7 +133,7 @@ import { expositionModel } from "./models.ts";
 
 export const schemas = {
   collections: {},
-  multiCollections: {
+  multiModels: {
     ...expositionModel.expose()
   }
 };
@@ -737,7 +737,7 @@ export default migrationDefinition(id, name, {
       // ...parent?.schemas.collections (if child)
       // Define collections
     },
-    multiCollections: {
+    multiModels: {
       // ...parent?.schemas.multiCollections (if child)
       // Define multi-collections
     }

@@ -107,7 +107,7 @@ export async function generateCommand(
       parent: ${lastMigration ? "parent" : "null"},
       schemas: {
         collections: {${
-    lastMigration
+    lastMigration?.[1]?.schemas?.collections
       ? `
           ...parent.schemas.collections,`
       : `
@@ -118,6 +118,14 @@ export async function generateCommand(
     lastMigration?.[1]?.schemas?.multiCollections
       ? `
           ...parent.schemas.multiCollections,`
+      : `
+          // \"<collection_name>\" : {}`
+  }
+        },
+        multiModels: {${
+    lastMigration?.[1]?.schemas?.multiModels
+      ? `
+          ...parent.schemas.multiModels,`
       : `
           // \"<collection_type>\" : {}`
   }

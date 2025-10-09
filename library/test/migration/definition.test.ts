@@ -440,7 +440,7 @@ Deno.test("createMigrationSummary - returns correct metadata", () => {
         name: v.string(),
       },
     },
-    multiCollections: {
+    multiModels: {
       catalog: {
         product: {
           _id: v.string(),

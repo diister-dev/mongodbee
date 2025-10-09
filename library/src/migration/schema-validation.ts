@@ -107,35 +107,94 @@ export function validateLastMigrationMatchesProjectSchema(
   const errors: string[] = [];
 
   // Check collections
-  if (
-    !schemasEqual(lastMigration.schemas.collections, projectSchema.collections)
-  ) {
-    errors.push(
-      `Last migration collections schema does not match project schema.\n` +
-        `  Migration: ${
-          Object.keys(lastMigration.schemas.collections).sort().join(", ")
-        }\n` +
-        `  Project:   ${
-          Object.keys(projectSchema.collections).sort().join(", ")
-        }`,
-    );
+  {
+    const migrationCollections = lastMigration.schemas.collections || {};
+    const projectCollections = projectSchema.collections || {};
+    if (!schemasEqual(migrationCollections, projectCollections)) {
+      const migrationNameSet = new Set(Object.keys(migrationCollections));
+      const projectNameSet = new Set(Object.keys(projectCollections));
+
+      const missingInMigration = projectNameSet.difference(migrationNameSet);
+      const extraInMigration = migrationNameSet.difference(projectNameSet);
+
+      if (missingInMigration.size > 0) {
+        errors.push(
+          `Collections missing in last migration: ${[...missingInMigration].sort().join(", ")}`,
+        );
+      }
+      if (extraInMigration.size > 0) {
+        errors.push(
+          `Extra collections detected in last migration: ${[...extraInMigration].sort().join(", ")}`,
+        );
+      }
+
+      if (missingInMigration.size === 0 && extraInMigration.size === 0) {
+        errors.push(
+          `Collections schemas differ between last migration and project schema.`,
+        );
+      }
+    }
   }
 
   // Check multiCollections if they exist
-  const migrationMultiCollections = lastMigration.schemas.multiCollections ||
-    {};
-  const projectMultiCollections = projectSchema.multiCollections || {};
+  {
+    const migrationMultiCollections = lastMigration.schemas.multiCollections || {};
+    const projectMultiCollections = projectSchema.multiCollections || {};
 
-  if (!schemasEqual(migrationMultiCollections, projectMultiCollections)) {
-    errors.push(
-      `Last migration multiCollections schema does not match project schema.\n` +
-        `  Migration: ${
-          Object.keys(migrationMultiCollections).sort().join(", ")
-        }\n` +
-        `  Project:   ${
-          Object.keys(projectMultiCollections).sort().join(", ")
-        }`,
-    );
+    if (!schemasEqual(migrationMultiCollections, projectMultiCollections)) {
+      const migrationNameSet = new Set(Object.keys(migrationMultiCollections));
+      const projectNameSet = new Set(Object.keys(projectMultiCollections));
+
+      const missingInMigration = projectNameSet.difference(migrationNameSet);
+      const extraInMigration = migrationNameSet.difference(projectNameSet);
+
+      if (missingInMigration.size > 0) {
+        errors.push(
+          `Multi-collections missing in last migration: ${[...missingInMigration].sort().join(", ")}`,
+        );
+      }
+      if (extraInMigration.size > 0) {
+        errors.push(
+          `Extra multi-collections in last migration not in project schema: ${[...extraInMigration].sort().join(", ")}`,
+        );
+      }
+
+      if (missingInMigration.size === 0 && extraInMigration.size === 0) {
+        errors.push(
+          `Multi-collections schemas differ between last migration and project schema.`,
+        );
+      }
+    }
+  }
+
+  // Check multiModels if they exist
+  {
+    const migrationMultiModels = lastMigration.schemas.multiModels || {};
+    const projectMultiModels = projectSchema.multiModels || {};
+    if (!schemasEqual(migrationMultiModels, projectMultiModels)) {
+      const migrationNameSet = new Set(Object.keys(migrationMultiModels));
+      const projectNameSet = new Set(Object.keys(projectMultiModels));
+
+      const missingInMigration = projectNameSet.difference(migrationNameSet);
+      const extraInMigration = migrationNameSet.difference(projectNameSet);
+
+      if (missingInMigration.size > 0) {
+        errors.push(
+          `Multi-models missing in last migration: ${[...missingInMigration].sort().join(", ")}`,
+        );
+      }
+      if (extraInMigration.size > 0) {
+        errors.push(
+          `Extra multi-models in last migration not in project schema: ${[...extraInMigration].sort().join(", ")}`,
+        );
+      }
+
+      if (missingInMigration.size === 0 && extraInMigration.size === 0) {
+        errors.push(
+          `Multi-models schemas differ between last migration and project schema.`,
+        );
+      }
+    }
   }
 
   return {
@@ -180,11 +239,11 @@ export async function validateMigrationChainWithProjectSchema(
   }
 
   // Check if project schema is empty
-  const hasCollections = Object.keys(projectSchema.collections).length > 0;
-  const hasMultiCollections =
-    Object.keys(projectSchema.multiCollections || {}).length > 0;
+  const hasCollections = Object.keys(projectSchema.collections ?? {}).length > 0;
+  const hasMultiCollections = Object.keys(projectSchema.multiCollections || {}).length > 0;
+  const hasMultiModels = Object.keys(projectSchema.multiModels || {}).length > 0;
 
-  if (!hasCollections && !hasMultiCollections) {
+  if (!hasCollections && !hasMultiModels && !hasMultiCollections) {
     warnings.push("Project schema is empty. Define your schemas in schemas.ts");
   }
 

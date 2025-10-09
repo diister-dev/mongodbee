@@ -19,13 +19,13 @@ type AnySchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
 /**
  * Schema definition for a multi-collection model
  */
-export type MultiCollectionSchema = Record<string, Record<string, AnySchema>>;
+export type MultiModelSchema = Record<string, Record<string, AnySchema>>;
 
 /**
  * Multi-collection model metadata
  */
 export type MultiCollectionModel<
-  T extends MultiCollectionSchema = MultiCollectionSchema,
+  T extends MultiModelSchema = MultiModelSchema,
 > = {
   /** Unique name of the model (used as template identifier) */
   readonly name: string;
@@ -59,7 +59,7 @@ export type MultiCollectionModel<
 /**
  * Options for creating a multi-collection model
  */
-export type MultiCollectionModelOptions<T extends MultiCollectionSchema> = {
+export type MultiCollectionModelOptions<T extends MultiModelSchema> = {
   /** Schema definition */
   schema: T;
 
@@ -104,7 +104,7 @@ export type MultiCollectionModelOptions<T extends MultiCollectionSchema> = {
  * // Use in schemas.ts
  * export const schemas = {
  *   collections: {},
- *   multiCollections: {
+ *   multiModels: {
  *     ...catalogModel.expose() // { "catalog": { product: {...}, category: {...} } }
  *   }
  * };
@@ -114,7 +114,7 @@ export type MultiCollectionModelOptions<T extends MultiCollectionSchema> = {
  * const orsay = await multiCollection(db, "catalog_orsay", catalogModel);
  * ```
  */
-export function defineModel<const T extends MultiCollectionSchema>(
+export function defineModel<const T extends MultiModelSchema>(
   name: string,
   options: MultiCollectionModelOptions<T>,
 ): MultiCollectionModel<T> {

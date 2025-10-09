@@ -27,7 +27,7 @@ Deno.test("Schema Evolution: Optional to required field progression", async () =
           price: v.number(),
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(m) {
       m.createCollection("products").seed([
@@ -50,7 +50,7 @@ Deno.test("Schema Evolution: Optional to required field progression", async () =
           description: v.optional(v.string()), // ← OPTIONAL field
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(m) {
       // Even for optional fields, we need transformation if schema changed
@@ -80,7 +80,7 @@ Deno.test("Schema Evolution: Optional to required field progression", async () =
           description: v.string(), // ← NOW REQUIRED
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(m) {
       // Transform to provide default description for products without one
@@ -120,7 +120,7 @@ Deno.test("Schema Evolution: Type migration (string → enum)", async () => {
           total: v.number(),
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(m) {
       m.createCollection("orders").seed([
@@ -143,7 +143,7 @@ Deno.test("Schema Evolution: Type migration (string → enum)", async () => {
           total: v.number(),
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(m) {
       // Transform to normalize status values
@@ -196,7 +196,7 @@ Deno.test("Schema Evolution: Restructuring (flat → nested)", async () => {
           country: v.string(),
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(m) {
       m.createCollection("users").seed([
@@ -229,7 +229,7 @@ Deno.test("Schema Evolution: Restructuring (flat → nested)", async () => {
           }),
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(m) {
       // Transform to nest address fields
@@ -276,7 +276,7 @@ Deno.test("Schema Evolution: Number to formatted string", async () => {
           price: v.number(), // Number in cents
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(m) {
       m.createCollection("items").seed([
@@ -301,7 +301,7 @@ Deno.test("Schema Evolution: Number to formatted string", async () => {
           ),
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(m) {
       // Transform number to formatted currency string
@@ -337,7 +337,7 @@ Deno.test("Schema Evolution: Adding validation constraints progressively", async
           email: v.string(), // No validation
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(m) {
       m.createCollection("contacts").seed([
@@ -358,7 +358,7 @@ Deno.test("Schema Evolution: Adding validation constraints progressively", async
           email: v.pipe(v.string(), v.email()), // ← Added validation
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(m) {
       // Transformation to clean up invalid emails
@@ -399,7 +399,7 @@ Deno.test("Schema Evolution: Array field addition and transformation", async () 
           tag: v.string(), // Single tag
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(m) {
       m.createCollection("posts").seed([
@@ -421,7 +421,7 @@ Deno.test("Schema Evolution: Array field addition and transformation", async () 
           tags: v.array(v.string()), // ← Array of tags
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(m) {
       // Transform single tag to array

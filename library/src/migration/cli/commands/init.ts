@@ -59,27 +59,19 @@ export async function initCommand(
        *
        * @module
        */
+      import { type SchemasDefinition } from "@diister/mongodbee";
 
       export const schemas = {
         collections: {
-          // Example:
-          // "users": {
-          //   _id: v.string(),
-          //   name: v.string(),
-          //   email: v.string(),
-          // }
+          // @see @TODO
         },
         multiCollections: {
-          // Example:
-          // "catalog": {
-          //   product: {
-          //     _id: v.string(),
-          //     name: v.string(),
-          //     price: v.number(),
-          //   }
-          // }
+          // @see @TODO
+        },
+        multiModels: {
+          // @see @TODO
         }
-      };
+      } satisfies SchemasDefinition;
     `),
     );
 

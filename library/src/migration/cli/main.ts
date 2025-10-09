@@ -126,7 +126,7 @@ async function main(): Promise<void> {
     await cmd.handler(args as any);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error(red(`Error: ${message}`));
+    console.error(red(bold("Error:")), message);
     // deno-lint-ignore no-explicit-any
     const cause = (error as any).cause;
     if (cause) {
@@ -144,7 +144,7 @@ if (import.meta.main) {
     await main();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`Error: ${message}`);
+    console.error(red(bold("Error:")), message);
     Deno.exit(1);
   }
 }

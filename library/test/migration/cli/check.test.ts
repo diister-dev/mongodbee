@@ -45,7 +45,7 @@ export const schemas = {
       email: v.pipe(v.string(), v.email()),
     },
   },
-  multiCollections: {},
+  multiModels: {},
 };
 `,
     );
@@ -66,7 +66,7 @@ export default migrationDefinition("2025_01_01_000000", "create_users", {
         email: v.pipe(v.string(), v.email()),
       },
     },
-    multiCollections: {},
+    multiModels: {},
   },
   migrate(migration) {
     migration.createCollection("users");
@@ -121,7 +121,7 @@ export const schemas = {
       age: v.number(),
     },
   },
-  multiCollections: {},
+  multiModels: {},
 };
 `,
     );
@@ -142,7 +142,7 @@ export default migrationDefinition("2025_01_01_000000", "create_users", {
         email: v.pipe(v.string(), v.email()),
       },
     },
-    multiCollections: {},
+    multiModels: {},
   },
   migrate(migration) {
     migration.createCollection("users");
@@ -173,7 +173,7 @@ export default migrationDefinition("2025_01_02_000000", "add_age", {
         age: v.number(), // NEW REQUIRED FIELD without transformation
       },
     },
-    multiCollections: {},
+    multiModels: {},
   },
   migrate(migration) {
     // Missing transformation!
@@ -235,7 +235,7 @@ export const schemas = {
       extraField: v.string(), // This field is NOT in the migration
     },
   },
-  multiCollections: {},
+  multiModels: {},
 };
 `,
     );
@@ -256,7 +256,7 @@ export default migrationDefinition("2025_01_01_000000", "create_users", {
         email: v.pipe(v.string(), v.email()),
       },
     },
-    multiCollections: {},
+    multiModels: {},
   },
   migrate(migration) {
     migration.createCollection("users");
@@ -315,7 +315,7 @@ Deno.test("check - handles empty migrations directory", async () => {
 
 export const schemas = {
   collections: {},
-  multiCollections: {},
+  multiModels: {},
 };
 `,
     );

@@ -342,7 +342,7 @@ export default migrationDefinition({
   id: "${files[0].replace(".ts", "")}",
   name: "create_users",
   parent: null,
-  schemas: { collections: { users: userSchema }, multiCollections: {} },
+  schemas: { collections: { users: userSchema }, multiModels: {} },
   migrate: (b) => b.createCollection("users", userSchema).compile(),
 });`;
       await Deno.writeTextFile(migration1Path, migration1Content);
@@ -368,7 +368,7 @@ export default migrationDefinition({
   id: "${files[1].replace(".ts", "")}",
   name: "add_posts",
   parent: "${files[0].replace(".ts", "")}",
-  schemas: { collections: { users: userSchema, posts: postSchema }, multiCollections: {} },
+  schemas: { collections: { users: userSchema, posts: postSchema }, multiModels: {} },
   migrate: (b) => b.createCollection("posts", postSchema).compile(),
 });`;
       await Deno.writeTextFile(migration2Path, migration2Content);
@@ -395,7 +395,7 @@ export default migrationDefinition({
   id: "${files[2].replace(".ts", "")}",
   name: "add_age_field",
   parent: "${files[1].replace(".ts", "")}",
-  schemas: { collections: { users: userSchema, posts: postSchema }, multiCollections: {} },
+  schemas: { collections: { users: userSchema, posts: postSchema }, multiModels: {} },
   migrate: (b) => b.compile(), // ❌ NO TRANSFORMATION - This should fail validation
 });`;
       await Deno.writeTextFile(migration3Path, migration3Content);

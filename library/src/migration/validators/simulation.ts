@@ -24,6 +24,7 @@ import type {
   MigrationDefinition,
   MigrationRule,
   MigrationState,
+  SchemasDefinition,
 } from "../types.ts";
 import type {
   MigrationExecutionContext,
@@ -150,28 +151,7 @@ export class SimulationValidator implements MigrationValidator {
       const forwardErrors: string[] = [];
       const stateBeforeMigration = currentState; // Capture state before applying this migration
 
-      // Generate mock data for collections without seeds (for transformation testing)
-      if (definition.parent && definition.parent.schemas.collections) {
-        for (const [collectionName, parentSchema] of Object.entries(definition.parent.schemas.collections)) {
-          // Check if collection exists but is empty (created but not seeded)
-          const collection = stateBeforeMigration.collections?.[collectionName];
-          if (collection && collection.content.length === 0) {
-            // Generate mock document from parent schema
-            try {
-              const mockDoc = this.generateMockDocument(parentSchema);
-              collection.content.push(mockDoc);
-            } catch (error) {
-              // Silently fail - not critical, just means we won't test transformations on this collection
-              warnings.push(
-                `Could not generate mock data for collection "${collectionName}": ${
-                  error instanceof Error ? error.message : "Unknown error"
-                }`,
-              );
-            }
-          }
-        }
-      }
-
+      // Apply operations in sequence
       for (let i = 0; i < operations.length; i++) {
         const operation = operations[i];
         try {
@@ -193,81 +173,110 @@ export class SimulationValidator implements MigrationValidator {
         errors.push(...forwardErrors.map((err) => `  ${err}`));
       }
 
-      // Validate that NEW collections (not from parent) are actually created
-      if (definition.schemas.collections) {
-        const declaredCollections = Object.keys(definition.schemas.collections);
-        const parentCollections = definition.parent?.schemas.collections
-          ? Object.keys(definition.parent.schemas.collections)
-          : [];
-        const createdCollections = Object.keys(
-          stateAfterMigration.collections || {},
-        );
-
-        // Only check collections that are NEW in this migration (not inherited from parent)
-        const newCollections = declaredCollections.filter(
-          (name) => !parentCollections.includes(name),
-        );
-
-        const missingCollections = newCollections.filter(
-          (name) => !createdCollections.includes(name),
-        );
-
-        if (missingCollections.length > 0) {
-          errors.push(
-            `Schema declares ${missingCollections.length} NEW collection(s) that are not created in migrate(): ${
-              missingCollections.join(", ")
-            }`,
-          );
-          errors.push(
-            "  💡 Tip: Did you forget to call .createCollection() in your migration?",
-          );
+      // Check for collections creations and multi-collection creations
+      {
+        // Validate that NEW collections (not from parent) are actually created
+        if (definition.schemas.collections) {
+          const declaredCollections = Object.keys(definition.schemas.collections ?? {});
+          const parentCollections = Object.keys(definition.parent?.schemas.collections ?? {});
+          const createdCollections = Object.keys(stateAfterMigration.collections ?? {});
+  
+          const declaredCollectionsName = new Set(declaredCollections);
+          const parentCollectionsName = new Set(parentCollections);
+          const createdCollectionsName = new Set(createdCollections);
+          // New collections are those declared in this migration but not present in parent
+          const newCollectionsFromParent = declaredCollectionsName.difference(parentCollectionsName);
+          // Check that all NEW collections are created in migrate()
+          const missingCollections = newCollectionsFromParent.difference(createdCollectionsName);
+  
+          if (missingCollections.size > 0) {
+            for (const collName of missingCollections) {
+              errors.push(
+                `Collection "${collName}" is declared in schema but not created in migrate()`,
+              );
+            }
+            errors.push(
+              " 💡 Tip: Did you forget to call .createCollection() in your migration?",
+            );
+          }
         }
-      }
-
-      // Warn about NEW declared multi-collections (they are models, not required to be instantiated)
-      if (definition.schemas.multiCollections) {
-        const declaredMultiCollections = Object.keys(
-          definition.schemas.multiCollections,
-        );
-        const parentMultiCollections = definition.parent?.schemas.multiCollections
-          ? Object.keys(definition.parent.schemas.multiCollections)
-          : [];
-        const createdMultiCollections = Object.keys(
-          stateAfterMigration.multiCollections || {},
-        );
-
-        // Only check multi-collections that are NEW in this migration (not inherited from parent)
-        const newMultiCollections = declaredMultiCollections.filter(
-          (name) => !parentMultiCollections.includes(name),
-        );
-
-        const missingMultiCollections = newMultiCollections.filter(
-          (name) => !createdMultiCollections.includes(name),
-        );
-
-        if (missingMultiCollections.length > 0) {
-          warnings.push(
-            `Schema declares ${missingMultiCollections.length} NEW multi-collection model(s) that are not instantiated in migrate(): ${
-              missingMultiCollections.join(", ")
-            }`,
+  
+        if (definition.schemas.multiCollections) {
+          const declaredMultiCollections = Object.keys(definition.schemas.multiCollections ?? {});
+          const parentMultiCollections = Object.keys(definition.parent?.schemas.multiCollections ?? {});
+          const createdMultiCollections = Object.keys(stateAfterMigration.multiModels ?? {});
+  
+          const declaredMultiCollectionsName = new Set(declaredMultiCollections);
+          const parentMultiCollectionsName = new Set(parentMultiCollections);
+          const createdMultiCollectionsName = new Set(createdMultiCollections);
+          // New multi-collections are those declared in this migration but not present in parent
+          const newMultiCollectionsFromParent = declaredMultiCollectionsName.difference(parentMultiCollectionsName);
+          // Check that all NEW multi-collections are created in migrate()
+          const missingMultiCollections = newMultiCollectionsFromParent.difference(createdMultiCollectionsName);
+  
+          if (missingMultiCollections.size > 0) {
+            for (const collName of missingMultiCollections) {
+              errors.push(
+                `Multi-collection "${collName}" is declared in schema but not created in migrate()`,
+              );
+            }
+            errors.push(
+              " 💡 Tip: Did you forget to call .createMultiCollection() in your migration?",
+            );
+          }
+        }
+  
+        // Warn about NEW declared multi-collections (they are models, not required to be instantiated)
+        if (definition.schemas.multiModels) {
+          const declaredMultiModels = Object.keys(
+            definition.schemas.multiModels,
           );
-          warnings.push(
-            "  💡 Note: Multi-collections are models and don't require instantiation in the migration.",
+          const parentMultiModels = definition.parent?.schemas.multiModels
+            ? Object.keys(definition.parent.schemas.multiModels)
+            : [];
+          const createdMultiModels = Object.keys(
+            stateAfterMigration.multiModels || {},
           );
+  
+          // Only check multi-collections that are NEW in this migration (not inherited from parent)
+          const newMultiModels = declaredMultiModels.filter(
+            (name) => !parentMultiModels.includes(name),
+          );
+  
+          const missingModels = newMultiModels.filter(
+            (name) => !createdMultiModels.includes(name),
+          );
+  
+          if (missingModels.length > 0) {
+            warnings.push(
+              `Schema declares ${missingModels.length} NEW multi-collection model(s) that are not instantiated in migrate(): ${
+                missingModels.join(", ")
+              }`,
+            );
+            warnings.push(
+              "  💡 Note: Multi-collections are models and don't require instantiation in the migration.",
+            );
+          }
         }
       }
 
       // Validate schema changes require transformations for existing data
-      if (definition.parent && definition.schemas.multiCollections) {
-        const schemaChangeErrors = this.validateSchemaChanges(
-          definition,
-          stateBeforeMigration,
-          operations,
-        );
-        if (schemaChangeErrors.length > 0) {
-          errors.push(...schemaChangeErrors);
-        }
-      }
+      const changeStateResult = this.validateSchemaChanges(
+        definition,
+        stateBeforeMigration,
+        stateAfterMigration,
+        operations,
+      )
+      // if (definition.parent && definition.schemas.multiModels) {
+      //   const schemaChangeErrors = this.validateSchemaChanges(
+      //     definition,
+      //     stateBeforeMigration,
+      //     operations,
+      //   );
+      //   if (schemaChangeErrors.length > 0) {
+      //     errors.push(...schemaChangeErrors);
+      //   }
+      // }
 
       // Validate that transformed documents match their target schemas
       // This catches bad transformation logic (e.g., returning null instead of proper values)
@@ -573,65 +582,53 @@ export class SimulationValidator implements MigrationValidator {
   private validateCollectionSchemaChanges(
     definition: MigrationDefinition,
     stateBefore: SimulationDatabaseState,
+    stateAfter: SimulationDatabaseState,
     operations: MigrationRule[],
   ): string[] {
     const errors: string[] = [];
+    const currentSchema = definition.schemas.collections || {};
+    const parentSchema = definition.parent?.schemas.collections || {};
 
-    if (
-      !definition.parent?.schemas.collections ||
-      !definition.schemas.collections
-    ) {
-      return errors;
+    // Validate current state collections against their schemas
+    for (const [collectionName, currentCollSchema] of Object.entries(currentSchema)) {
+      for (const [docIndex, doc] of ((stateAfter.collections || {})[collectionName]?.content || []).entries()) {
+        const valid = v.safeParse(v.object(currentCollSchema), doc);
+        if (!valid.success) {
+          errors.push(...this.formatValidationError(valid, {
+            type: "collection",
+            name: collectionName,
+            index: docIndex,
+          }));
+        }
+      }
     }
 
-    const parentCollections = definition.parent.schemas.collections;
-    const currentCollections = definition.schemas.collections;
-
-    for (const collectionName of Object.keys(currentCollections)) {
-      const parentSchema = parentCollections[collectionName];
-      const currentSchema = currentCollections[collectionName];
-
-      // New collection, no validation needed
-      if (!parentSchema) continue;
-
-      // No change, skip validation
-      if (!this.hasSchemaChanged(parentSchema, currentSchema)) continue;
-
-      // Check if there are existing documents
-      const collectionData = stateBefore.collections?.[collectionName];
-      const documentCount = collectionData?.content.length || 0;
-
-      // No documents, schema change is safe
-      if (documentCount === 0) continue;
-
-      // Check if existing documents are compatible with new schema
-      const documentsAreValid = this.areDocumentsValid(
-        collectionData.content,
-        currentSchema,
-      );
-
-      // Documents are valid, no transformation needed
-      if (documentsAreValid) continue;
-
-      // Documents are invalid, check if transformation exists
-      const hasTransform = this.hasTransformOperation(
-        operations,
-        (op) =>
-          op.type === "transform_collection" &&
-          op.collectionName === collectionName,
-      );
-
-      if (!hasTransform) {
-        errors.push(
-          `Schema for collection "${collectionName}" has changed and existing documents are not compatible.`,
-        );
-        errors.push(
-          `  There are ${documentCount} existing document(s) that don't match the new schema.`,
-        );
-        errors.push(
-          `  💡 Tip: Add a .collection("${collectionName}").transform({ up: (doc) => ({ ...doc, newField: defaultValue }), down: ... }) operation.`,
-        );
+    let stateBeforeRollback = stateAfter;
+    // Apply reverse operations to get back to pre-migration state
+    for (let i = operations.length - 1; i >= 0; i--) {
+      const operation = operations[i];
+      try {
+        stateBeforeRollback = this.applier.applyReverseOperation(stateBeforeRollback, operation);
+      } catch {
+        // Ignore errors during reverse application
       }
+    }
+    const stateAfterRollback = stateBeforeRollback;
+
+    // Check each collection for schema changes
+    for (const [collectionName, parentCollSchema] of Object.entries(parentSchema)) {
+      // New collection, no validation needed
+      if (!parentCollSchema) continue;
+      // Check if schema has changed
+      for (const [docIndex, doc] of ((stateAfterRollback.collections || {})[collectionName]?.content || []).entries()) {
+        const valid = v.safeParse(v.object(parentCollSchema), doc);
+        if (!valid.success) {
+          // @TODO: Throw error if lossy or irreversible not marked.
+          console.warn(`Skipping schema change validation for collection "${collectionName}" as documents do not match parent schema.`, operations);
+        }
+      }
+      const currentCollSchema = currentSchema[collectionName];
+      if (!currentCollSchema) continue; // Collection was removed, skip
     }
 
     return errors;
@@ -649,31 +646,29 @@ export class SimulationValidator implements MigrationValidator {
   private validateSchemaChanges(
     definition: MigrationDefinition,
     stateBefore: SimulationDatabaseState,
+    stateAfter: SimulationDatabaseState,
     operations: MigrationRule[],
   ): string[] {
     const errors: string[] = [];
-
-    if (!definition.parent) {
-      return errors;
-    }
 
     // Validate collection schema changes
     errors.push(
       ...this.validateCollectionSchemaChanges(
         definition,
         stateBefore,
+        stateAfter,
         operations,
       ),
     );
 
     // Validate multi-collection schema changes
-    errors.push(
-      ...this.validateMultiCollectionSchemaChanges(
-        definition,
-        stateBefore,
-        operations,
-      ),
-    );
+    // errors.push(
+    //   ...this.validateMultiCollectionSchemaChanges(
+    //     definition,
+    //     stateBefore,
+    //     operations,
+    //   ),
+    // );
 
     return errors;
   }
@@ -683,7 +678,7 @@ export class SimulationValidator implements MigrationValidator {
    *
    * @private
    */
-  private collectMultiCollectionDocuments(
+  private collectMultiCollectionModelDocuments(
     stateBefore: SimulationDatabaseState,
     multiCollectionName: string,
     typeName: string,
@@ -696,22 +691,32 @@ export class SimulationValidator implements MigrationValidator {
     const instanceNames: string[] = [];
     let totalCount = 0;
 
-    if (!stateBefore.multiCollections) {
+    if (!stateBefore.multiModels) {
       return { documents, instanceNames, totalCount };
     }
 
     for (
-      const [instanceName, instanceData] of Object.entries(
-        stateBefore.multiCollections,
+      const [instanceType, instanceData] of Object.entries(
+        stateBefore.multiModels,
       )
     ) {
-      if (instanceName.startsWith(`${multiCollectionName}@`)) {
+      // if (instanceName.startsWith(`${multiCollectionName}@`)) {
+      //   const docsOfType = instanceData.content.filter(
+      //     (doc: Record<string, unknown>) => doc._type === typeName,
+      //   );
+      //   if (docsOfType.length > 0) {
+      //     totalCount += docsOfType.length;
+      //     instanceNames.push(instanceName);
+      //     documents.push(...docsOfType);
+      //   }
+      // }
+      if (instanceType === multiCollectionName) {
         const docsOfType = instanceData.content.filter(
           (doc: Record<string, unknown>) => doc._type === typeName,
         );
         if (docsOfType.length > 0) {
           totalCount += docsOfType.length;
-          instanceNames.push(instanceName);
+          instanceNames.push(instanceType);
           documents.push(...docsOfType);
         }
       }
@@ -740,7 +745,7 @@ export class SimulationValidator implements MigrationValidator {
     }
 
     const { documents, instanceNames, totalCount } = this
-      .collectMultiCollectionDocuments(
+      .collectMultiCollectionModelDocuments(
         stateBefore,
         multiCollectionName,
         typeName,
@@ -797,7 +802,7 @@ export class SimulationValidator implements MigrationValidator {
     const errors: string[] = [];
 
     const { instanceNames, totalCount } = this
-      .collectMultiCollectionDocuments(
+      .collectMultiCollectionModelDocuments(
         stateBefore,
         multiCollectionName,
         removedTypeName,
@@ -848,12 +853,12 @@ export class SimulationValidator implements MigrationValidator {
   ): string[] {
     const errors: string[] = [];
 
-    if (!definition.schemas.multiCollections) {
+    if (!definition.schemas.multiModels) {
       return errors;
     }
 
-    const parentSchemas = definition.parent?.schemas.multiCollections || {};
-    const currentSchemas = definition.schemas.multiCollections;
+    const parentSchemas = definition.parent?.schemas.multiModels || {};
+    const currentSchemas = definition.schemas.multiModels;
 
     for (const multiCollectionName of Object.keys(currentSchemas)) {
       const parentSchema = parentSchemas[multiCollectionName];
@@ -1189,17 +1194,18 @@ export class SimulationValidator implements MigrationValidator {
    *
    * @private
    */
-  private supplementCollectionsWithMockData(
+  private populateCollectionsMock(
     state: SimulationDatabaseState,
     collections: Record<string, Record<string, unknown>>,
   ): SimulationDatabaseState {
-    let currentState = state;
+    const currentState = state;
 
     for (const [collectionName, schema] of Object.entries(collections)) {
+      if(!currentState.collections?.[collectionName]) {
+        currentState.collections[collectionName] = { content: [] };
+      }
       const collection = currentState.collections?.[collectionName];
-
-      // If collection exists but is empty, add some mock data
-      if (!collection || collection.content.length > 0) continue;
+      if (!collection) continue;
 
       const mockDocs: Record<string, unknown>[] = [];
       const docCount = Math.floor(
@@ -1218,121 +1224,7 @@ export class SimulationValidator implements MigrationValidator {
           break;
         }
       }
-
-      if (mockDocs.length > 0) {
-        currentState = this.applier.applyOperation(currentState, {
-          type: "seed_collection",
-          collectionName: collectionName,
-          documents: mockDocs,
-        });
-      }
-    }
-
-    return currentState;
-  }
-
-  /**
-   * Creates a new multi-collection instance with mock data
-   *
-   * @private
-   */
-  private createMockMultiCollectionInstance(
-    state: SimulationDatabaseState,
-    multiCollectionName: string,
-    types: Record<string, Record<string, unknown>>,
-  ): SimulationDatabaseState {
-    let currentState = state;
-    const instanceName = `${multiCollectionName}_mock_instance`;
-
-    currentState = this.applier.applyOperation(currentState, {
-      type: "create_multicollection_instance",
-      collectionName: `${multiCollectionName}@${instanceName}`,
-      collectionType: multiCollectionName,
-    });
-
-    // Add mock docs for each type
-    for (const [typeName, typeSchema] of Object.entries(types)) {
-      const mockDocs: Record<string, unknown>[] = [];
-      const docsPerType = Math.floor(
-        Math.random() *
-          (MOCK_GENERATION.DOCS_PER_TYPE_MAX -
-            MOCK_GENERATION.DOCS_PER_TYPE_MIN + 1),
-      ) + MOCK_GENERATION.DOCS_PER_TYPE_MIN;
-
-      for (let i = 0; i < docsPerType; i++) {
-        try {
-          const mockDoc = this.generateMockDocument(
-            typeSchema as Record<string, unknown>,
-          );
-          mockDocs.push({ ...mockDoc, _type: typeName });
-        } catch (_error) {
-          break;
-        }
-      }
-
-      if (mockDocs.length > 0) {
-        currentState = this.applier.applyOperation(currentState, {
-          type: "seed_multicollection_instance",
-          collectionName: `${multiCollectionName}@${instanceName}`,
-          typeName: typeName,
-          documents: mockDocs,
-        });
-      }
-    }
-
-    return currentState;
-  }
-
-  /**
-   * Supplements existing multi-collection instances with mock data for sparse types
-   *
-   * @private
-   */
-  private supplementMultiCollectionInstancesWithMockData(
-    state: SimulationDatabaseState,
-    instanceNames: string[],
-    types: Record<string, Record<string, unknown>>,
-  ): SimulationDatabaseState {
-    let currentState = state;
-
-    for (const instanceName of instanceNames) {
-      const instance = currentState.multiCollections?.[instanceName];
-      if (!instance) continue;
-
-      for (const [typeName, typeSchema] of Object.entries(types)) {
-        // Check if this type has any documents
-        const docsOfType = instance.content.filter(
-          (doc: Record<string, unknown>) => doc._type === typeName,
-        );
-
-        // If type is sparse (< threshold), add some mocks
-        if (docsOfType.length >= MOCK_GENERATION.MIN_SPARSE_THRESHOLD) {
-          continue;
-        }
-
-        const mockDocs: Record<string, unknown>[] = [];
-        const toAdd = MOCK_GENERATION.MIN_SPARSE_THRESHOLD - docsOfType.length;
-
-        for (let i = 0; i < toAdd; i++) {
-          try {
-            const mockDoc = this.generateMockDocument(
-              typeSchema as Record<string, unknown>,
-            );
-            mockDocs.push({ ...mockDoc, _type: typeName });
-          } catch (_error) {
-            break;
-          }
-        }
-
-        if (mockDocs.length > 0) {
-          currentState = this.applier.applyOperation(currentState, {
-            type: "seed_multicollection_instance",
-            collectionName: instanceName,
-            typeName: typeName,
-            documents: mockDocs,
-          });
-        }
-      }
+      collection.content.push(...mockDocs);
     }
 
     return currentState;
@@ -1343,38 +1235,87 @@ export class SimulationValidator implements MigrationValidator {
    *
    * @private
    */
-  private supplementMultiCollectionsWithMockData(
+  private populateMultiCollectionsMock(
     state: SimulationDatabaseState,
-    multiCollections: Record<string, Record<string, Record<string, unknown>>>,
+    multiCollections: NonNullable<SchemasDefinition['multiCollections']>,
   ): SimulationDatabaseState {
-    let currentState = state;
+    const currentState = state;
 
-    for (
-      const [multiCollectionName, types] of Object.entries(multiCollections)
-    ) {
-      // Check all instances of this multi-collection
-      const instanceNames = Object.keys(currentState.multiCollections || {})
-        .filter((name) => name.startsWith(`${multiCollectionName}@`));
+    for(const [collectionName, schema] of Object.entries(multiCollections)) {
+      if(!currentState.multiCollections?.[collectionName]) {
+        currentState.multiCollections[collectionName] = { content: [] };
+      }
+      const collection = currentState.multiCollections?.[collectionName];
 
-      // If no instances exist, create one with mock data
-      if (instanceNames.length === 0) {
-        currentState = this.createMockMultiCollectionInstance(
-          currentState,
-          multiCollectionName,
-          types as Record<string, Record<string, unknown>>,
-        );
-      } else {
-        // Supplement existing instances with mock data for sparse types
-        currentState = this.supplementMultiCollectionInstancesWithMockData(
-          currentState,
-          instanceNames,
-          types as Record<string, Record<string, unknown>>,
-        );
+      // If collection exists but is empty, add some mock data
+      if (!collection) continue;
+
+      const docCount = Math.floor(
+        Math.random() *
+          (MOCK_GENERATION.DOCS_PER_COLLECTION_MAX -
+            MOCK_GENERATION.DOCS_PER_COLLECTION_MIN + 1),
+      ) + MOCK_GENERATION.DOCS_PER_COLLECTION_MIN;
+
+      for (let i = 0; i < docCount; i++) {
+        try {
+          for(const typeName of Object.keys(schema)) {
+            const mockDoc = this.generateMockDocument(
+              schema[typeName] as Record<string, unknown>,
+            );
+            collection.content.push({ ...mockDoc, _type: typeName });
+          }
+        } catch (_error) {
+          break;
+        }
       }
     }
 
     return currentState;
   }
+
+  private populateMultiCollectionsModelMock(
+    state: SimulationDatabaseState,
+    multiModels: NonNullable<SchemasDefinition['multiModels']>,
+  ): SimulationDatabaseState {
+    const currentState = state;
+
+    for(const [modelType, schema] of Object.entries(multiModels)) {
+      if(!currentState.multiModels?.[modelType]) {
+        currentState.multiModels[modelType] = {};
+      }
+
+      const modelInstances = currentState.multiModels?.[modelType];
+      
+      const collectCount = 5;
+      for (let i = 0; i < collectCount; i++) {
+        const collec = { content: [] as Record<string, unknown>[] }
+        const docCount = Math.floor(
+          Math.random() *
+            (MOCK_GENERATION.DOCS_PER_COLLECTION_MAX -
+              MOCK_GENERATION.DOCS_PER_COLLECTION_MIN + 1),
+        ) + MOCK_GENERATION.DOCS_PER_COLLECTION_MIN;
+
+        for (let j = 0; j < docCount; j++) {
+          try {
+            for(const typeName of Object.keys(schema)) {
+              const mockDoc = this.generateMockDocument(
+                schema[typeName] as Record<string, unknown>,
+              );
+              collec.content.push({ ...mockDoc, _type: typeName });
+            }
+          } catch (_error) {
+            break;
+          }
+        }
+        
+        const collectionName = `${modelType}@instance${i+1}`;
+        modelInstances[collectionName] = collec;
+      }
+    }
+
+    return currentState;
+  }
+
 
   /**
    * Builds a hybrid database state from parent migrations
@@ -1395,22 +1336,26 @@ export class SimulationValidator implements MigrationValidator {
   private buildMockStateFromSchemas(
     parent: MigrationDefinition,
   ): SimulationDatabaseState {
-    // PHASE 1: Simulate all parent migrations to get real seeds
     let currentState = this.simulateParentMigrations(parent);
-
-    // PHASE 2: Add mock data to empty collections
+    
     if (parent.schemas.collections) {
-      currentState = this.supplementCollectionsWithMockData(
+      currentState = this.populateCollectionsMock(
         currentState,
         parent.schemas.collections,
       );
     }
 
-    // PHASE 3: Add mock data to multi-collection instances
     if (parent.schemas.multiCollections) {
-      currentState = this.supplementMultiCollectionsWithMockData(
+      currentState = this.populateMultiCollectionsMock(
         currentState,
         parent.schemas.multiCollections,
+      );
+    }
+    
+    if (parent.schemas.multiModels) {
+      currentState = this.populateMultiCollectionsModelMock(
+        currentState,
+        parent.schemas.multiModels,
       );
     }
 

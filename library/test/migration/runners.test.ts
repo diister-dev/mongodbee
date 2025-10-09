@@ -226,7 +226,7 @@ Deno.test("executeMigration - executes simple migration successfully", async () 
             name: v.string(),
           },
         },
-        multiCollections: {},
+        multiModels: {},
       },
       migrate(migration) {
         migration.createCollection("users");
@@ -274,7 +274,7 @@ Deno.test("executeMigration - executes migration with multiple operations", asyn
             email: v.string(),
           },
         },
-        multiCollections: {},
+        multiModels: {},
       },
       migrate(migration) {
         migration
@@ -335,7 +335,7 @@ Deno.test("executeMigration - validates before execution when enabled", async ()
         collections: {
           users: schemas.users,
         },
-        multiCollections: {},
+        multiModels: {},
       },
       migrate(migration) {
         migration.createCollection("users");
@@ -399,7 +399,7 @@ Deno.test("executeMigration - stops on validation error when continueOnErrors is
         collections: {
           users: schemas.users,
         },
-        multiCollections: {},
+        multiModels: {},
       },
       migrate(migration) {
         migration.createCollection("users");
@@ -461,7 +461,7 @@ Deno.test("executeMigration - tracks progress with callback", async () => {
         collections: {
           users: schemas.users,
         },
-        multiCollections: {},
+        multiModels: {},
       },
       migrate(migration) {
         migration.createCollection("users")
@@ -534,7 +534,7 @@ Deno.test("executeMigration - calls operation callbacks", async () => {
         collections: {
           users: schemas.users,
         },
-        multiCollections: {},
+        multiModels: {},
       },
       migrate(migration) {
         migration.createCollection("users");
@@ -594,7 +594,7 @@ Deno.test("executeMigration - handles operation failure with retry", async () =>
         collections: {
           users: schemas.users,
         },
-        multiCollections: {},
+        multiModels: {},
       },
       migrate(migration) {
         migration.createCollection("users");
@@ -656,7 +656,7 @@ Deno.test("executeMigration - respects operation timeout", async () => {
         collections: {
           users: schemas.users,
         },
-        multiCollections: {},
+        multiModels: {},
       },
       migrate(migration) {
         migration.createCollection("users");
@@ -718,7 +718,7 @@ Deno.test("executeMigration - runs in dry-run mode", async () => {
         collections: {
           users: schemas.users,
         },
-        multiCollections: {},
+        multiModels: {},
       },
       migrate(migration) {
         migration.createCollection("users");
@@ -792,7 +792,7 @@ Deno.test("executeMigrations - executes multiple migrations in sequence", async 
       collections: {
         users: schemas.users,
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(migration) {
       migration.createCollection("users");
@@ -806,7 +806,7 @@ Deno.test("executeMigrations - executes multiple migrations in sequence", async 
       collections: {
         posts: schemas.posts,
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(migration) {
       migration.createCollection("posts");
@@ -873,7 +873,7 @@ Deno.test("executeMigrations - stops on first failure when continueOnErrors is f
       collections: {
         users: schemas.users,
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(migration) {
       migration.createCollection("users");
@@ -887,7 +887,7 @@ Deno.test("executeMigrations - stops on first failure when continueOnErrors is f
       collections: {
         users: schemas.users, // Intentional error: using users schema for posts
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(migration) {
       migration.createCollection("posts");
@@ -960,7 +960,7 @@ Deno.test("rollbackMigration - rolls back a migration", async () => {
         collections: {
           users: schemas.users,
         },
-        multiCollections: {},
+        multiModels: {},
       },
       migrate(migration) {
         migration.createCollection("users")
@@ -1024,7 +1024,7 @@ Deno.test("validateMigration - validates migration without executing", async () 
         collections: {
           users: schemas.users,
         },
-        multiCollections: {},
+        multiModels: {},
       },
       migrate(migration) {
         migration.createCollection("users");
@@ -1079,7 +1079,7 @@ Deno.test("validateMigration - returns warning when no validator configured", as
         collections: {
           users: schemas.users,
         },
-        multiCollections: {},
+        multiModels: {},
       },
       migrate(migration) {
         migration.createCollection("users");
@@ -1127,7 +1127,7 @@ Deno.test("executeMigration - executes successfully with proper tracking", async
         collections: {
           users: schemas.users,
         },
-        multiCollections: {},
+        multiModels: {},
       },
       migrate(migration) {
         migration.createCollection("users")

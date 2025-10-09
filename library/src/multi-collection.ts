@@ -102,7 +102,7 @@ export function refId(
 ): v.SchemaWithPipe<
   readonly [v.StringSchema<undefined>, v.RegexAction<string, undefined>]
 > {
-  return v.pipe(v.string(), v.regex(new RegExp(`^${type}:`)));
+  return v.pipe(v.string(), v.regex(new RegExp(`^${type}:[a-zA-Z0-9]+`)));
 }
 
 // Type for aggregation pipeline stages

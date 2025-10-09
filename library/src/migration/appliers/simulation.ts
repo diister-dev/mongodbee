@@ -10,7 +10,7 @@
  * import { createSimulationApplier } from "@diister/mongodbee/migration/appliers";
  *
  * const applier = createSimulationApplier();
- * const initialState = { collections: {}, multiCollections: {} };
+ * const initialState = { collections: {}, multiModels: {} };
  *
  * // Apply operations
  * let state = initialState;
@@ -250,7 +250,7 @@ export class SimulationApplier implements SimulationMigrationApplier {
    * @example
    * ```typescript
    * const applier = new SimulationApplier();
-   * let state = { collections: {}, multiCollections: {} };
+   * let state = { collections: {}, multiModels: {} };
    *
    * state = applier.applyOperation(state, {
    *   type: 'create_collection',
@@ -552,14 +552,14 @@ export class SimulationApplier implements SimulationMigrationApplier {
     state: SimulationDatabaseState,
     operation: CreateMultiCollectionInstanceRule,
   ): SimulationDatabaseState {
-    // Initialize multiCollections if not present
-    if (!state.multiCollections) {
-      state.multiCollections = {};
+    // Initialize multiModels if not present
+    if (!state.multiModels) {
+      state.multiModels = {};
     }
 
     if (
       this.options.strictValidation &&
-      state.multiCollections[operation.collectionName]
+      state.multiModels[operation.collectionName]
     ) {
       throw new Error(
         `Multi-collection instance ${operation.collectionName} already exists`,
@@ -567,7 +567,7 @@ export class SimulationApplier implements SimulationMigrationApplier {
     }
 
     // Create the multi-collection instance with metadata documents
-    state.multiCollections[operation.collectionName] = {
+    state.multiModels[operation.collectionName] = {
       content: [
         {
           _id: "_information",
@@ -605,20 +605,20 @@ export class SimulationApplier implements SimulationMigrationApplier {
     state: SimulationDatabaseState,
     operation: CreateMultiCollectionInstanceRule,
   ): SimulationDatabaseState {
-    if (!state.multiCollections) {
-      state.multiCollections = {};
+    if (!state.multiModels) {
+      state.multiModels = {};
     }
 
     if (
       this.options.strictValidation &&
-      !state.multiCollections[operation.collectionName]
+      !state.multiModels[operation.collectionName]
     ) {
       throw new Error(
         `Multi-collection instance ${operation.collectionName} does not exist for dropping`,
       );
     }
 
-    delete state.multiCollections[operation.collectionName];
+    delete state.multiModels[operation.collectionName];
     this.trackOperation(state, operation, "reverse");
     return state;
   }
@@ -635,13 +635,13 @@ export class SimulationApplier implements SimulationMigrationApplier {
     state: SimulationDatabaseState,
     operation: SeedMultiCollectionInstanceRule,
   ): SimulationDatabaseState {
-    if (!state.multiCollections) {
-      state.multiCollections = {};
+    if (!state.multiModels) {
+      state.multiModels = {};
     }
 
     if (
       this.options.strictValidation &&
-      !state.multiCollections[operation.collectionName]
+      !state.multiModels[operation.collectionName]
     ) {
       throw new Error(
         `Multi-collection instance ${operation.collectionName} does not exist for seeding`,
@@ -649,8 +649,8 @@ export class SimulationApplier implements SimulationMigrationApplier {
     }
 
     // Ensure collection exists (create if not in strict mode)
-    if (!state.multiCollections[operation.collectionName]) {
-      state.multiCollections[operation.collectionName] = { content: [] };
+    if (!state.multiModels[operation.collectionName]) {
+      state.multiModels[operation.collectionName] = { content: [] };
     }
 
     // Add documents to the multi-collection with _type field
@@ -673,7 +673,7 @@ export class SimulationApplier implements SimulationMigrationApplier {
       return docObj;
     });
 
-    state.multiCollections[operation.collectionName].content.push(...documents);
+    state.multiModels[operation.collectionName].content.push(...documents);
     this.trackOperation(state, operation, "apply");
     return state;
   }
@@ -690,11 +690,11 @@ export class SimulationApplier implements SimulationMigrationApplier {
     state: SimulationDatabaseState,
     operation: SeedMultiCollectionInstanceRule,
   ): SimulationDatabaseState {
-    if (!state.multiCollections) {
+    if (!state.multiModels) {
       return state;
     }
 
-    const collection = state.multiCollections[operation.collectionName];
+    const collection = state.multiModels[operation.collectionName];
 
     if (!collection) return state;
 
@@ -740,14 +740,14 @@ export class SimulationApplier implements SimulationMigrationApplier {
     state: SimulationDatabaseState,
     operation: TransformMultiCollectionTypeRule,
   ): SimulationDatabaseState {
-    if (!state.multiCollections) {
+    if (!state.multiModels) {
       return state;
     }
 
     // Find all instances of this multi-collection type by checking metadata
-    const matchingCollections = Object.keys(state.multiCollections).filter(
+    const matchingCollections = Object.keys(state.multiModels).filter(
       (name) => {
-        const collection = state.multiCollections![name];
+        const collection = state.multiModels![name];
         const infoDoc = collection.content.find((
           doc: Record<string, unknown>,
         ) => doc._type === "_information");
@@ -766,7 +766,7 @@ export class SimulationApplier implements SimulationMigrationApplier {
         _type: operation.typeName,
       };
 
-      state.multiCollections[testInstanceName] = {
+      state.multiModels[testInstanceName] = {
         content: [{
           _id: "_information",
           _type: "_information",
@@ -822,7 +822,7 @@ export class SimulationApplier implements SimulationMigrationApplier {
         }
 
         // If transform succeeded, update state with transformed document
-        state.multiCollections[testInstanceName].content = [transformed];
+        state.multiModels[testInstanceName].content = [transformed];
 
         this.trackOperation(state, operation, "apply");
         return state;
@@ -840,7 +840,7 @@ export class SimulationApplier implements SimulationMigrationApplier {
 
     // Apply transformation to each instance
     for (const collectionName of matchingCollections) {
-      const collection = state.multiCollections[collectionName];
+      const collection = state.multiModels[collectionName];
       if (!collection) continue;
 
       let foundDocuments = false;
@@ -998,14 +998,14 @@ export class SimulationApplier implements SimulationMigrationApplier {
     state: SimulationDatabaseState,
     operation: TransformMultiCollectionTypeRule,
   ): SimulationDatabaseState {
-    if (!state.multiCollections) {
+    if (!state.multiModels) {
       return state;
     }
 
     // Find all instances of this multi-collection type by checking metadata
-    const matchingCollections = Object.keys(state.multiCollections).filter(
+    const matchingCollections = Object.keys(state.multiModels).filter(
       (name) => {
-        const collection = state.multiCollections![name];
+        const collection = state.multiModels![name];
         const infoDoc = collection.content.find((
           doc: Record<string, unknown>,
         ) => doc._type === "_information");
@@ -1031,7 +1031,7 @@ export class SimulationApplier implements SimulationMigrationApplier {
         const reversedDocument = operation.down(transformedDocument);
 
         // Store the reversed document in a test instance
-        state.multiCollections[testInstanceName] = {
+        state.multiModels[testInstanceName] = {
           content: [reversedDocument],
         };
 
@@ -1051,7 +1051,7 @@ export class SimulationApplier implements SimulationMigrationApplier {
 
     // Apply reverse transformation to each instance
     for (const collectionName of matchingCollections) {
-      const collection = state.multiCollections[collectionName];
+      const collection = state.multiModels[collectionName];
       if (!collection) continue;
 
       // Reverse transform documents of the specified type
@@ -1127,8 +1127,8 @@ export class SimulationApplier implements SimulationMigrationApplier {
     // Validate that collection exists (either as regular or multi-collection)
     const collectionExists =
       state.collections && state.collections[operation.collectionName] ||
-      state.multiCollections &&
-        state.multiCollections[operation.collectionName];
+      state.multiModels &&
+        state.multiModels[operation.collectionName];
 
     if (this.options.strictValidation && !collectionExists) {
       throw new Error(
@@ -1136,26 +1136,26 @@ export class SimulationApplier implements SimulationMigrationApplier {
       );
     }
 
-    // In simulation, we mark by ensuring the collection is in multiCollections
-    // If it's in regular collections, we move it to multiCollections
+    // In simulation, we mark by ensuring the collection is in multiModels
+    // If it's in regular collections, we move it to multiModels
     if (state.collections && state.collections[operation.collectionName]) {
       // Move from regular to multi-collection
-      if (!state.multiCollections) {
-        state.multiCollections = {};
+      if (!state.multiModels) {
+        state.multiModels = {};
       }
-      state.multiCollections[operation.collectionName] = {
+      state.multiModels[operation.collectionName] = {
         content: state.collections[operation.collectionName].content || [],
       };
       delete state.collections[operation.collectionName];
     } else if (
-      !state.multiCollections ||
-      !state.multiCollections[operation.collectionName]
+      !state.multiModels ||
+      !state.multiModels[operation.collectionName]
     ) {
       // Create as empty multi-collection if it doesn't exist
-      if (!state.multiCollections) {
-        state.multiCollections = {};
+      if (!state.multiModels) {
+        state.multiModels = {};
       }
-      state.multiCollections[operation.collectionName] = {
+      state.multiModels[operation.collectionName] = {
         content: [],
       };
     }
@@ -1180,8 +1180,8 @@ export class SimulationApplier implements SimulationMigrationApplier {
     // We don't actually move it back since the simulation doesn't track metadata
     if (
       this.options.strictValidation &&
-      (!state.multiCollections ||
-        !state.multiCollections[operation.collectionName])
+      (!state.multiModels ||
+        !state.multiModels[operation.collectionName])
     ) {
       throw new Error(
         `Multi-collection ${operation.collectionName} does not exist for reversing mark operation`,
@@ -1299,13 +1299,14 @@ export function createSimulationApplier(
  * @example
  * ```typescript
  * const initialState = createEmptyDatabaseState();
- * console.log(initialState); // { collections: {}, multiCollections: {} }
+ * console.log(initialState); // { collections: {}, multiModels: {} }
  * ```
  */
 export function createEmptyDatabaseState(): SimulationDatabaseState {
   return {
     collections: {},
     multiCollections: {},
+    multiModels: {},
   };
 }
 
@@ -1330,11 +1331,11 @@ export function compareDatabaseStates(
 ): boolean {
   // Helper to filter out test simulation instances
   const filterTestInstances = (
-    multiCollections?: Record<string, { content: Record<string, unknown>[] }>,
+    multiModels?: Record<string, { content: Record<string, unknown>[] }>,
   ) => {
-    if (!multiCollections) return undefined;
+    if (!multiModels) return undefined;
     const filtered: Record<string, { content: Record<string, unknown>[] }> = {};
-    for (const [name, collection] of Object.entries(multiCollections)) {
+    for (const [name, collection] of Object.entries(multiModels)) {
       // Skip test simulation instances
       if (!name.endsWith("_test_simulation")) {
         filtered[name] = collection;
@@ -1346,11 +1347,11 @@ export function compareDatabaseStates(
   // Compare excluding operation history and test simulation instances
   const clean1 = {
     collections: state1.collections,
-    multiCollections: filterTestInstances(state1.multiCollections),
+    multiModels: filterTestInstances(state1.multiModels),
   };
   const clean2 = {
     collections: state2.collections,
-    multiCollections: filterTestInstances(state2.multiCollections),
+    multiModels: filterTestInstances(state2.multiModels),
   };
 
   return JSON.stringify(clean1) === JSON.stringify(clean2);

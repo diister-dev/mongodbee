@@ -32,7 +32,7 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
           createdAt: v.date(),
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(migration) {
       migration.createCollection("users").seed([
@@ -65,7 +65,7 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
       collections: {
         ...migration1.schemas.collections,
       },
-      multiCollections: {
+      multiModels: {
         posts: {
           article: {
             _id: v.string(),
@@ -131,8 +131,8 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
           createdAt: v.date(),
         },
       },
-      multiCollections: {
-        ...migration2.schemas.multiCollections,
+      multiModels: {
+        ...migration2.schemas.multiModels,
       },
     },
     migrate(migration) {
@@ -163,8 +163,8 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
       collections: {
         ...migration3.schemas.collections,
       },
-      multiCollections: {
-        ...migration3.schemas.multiCollections,
+      multiModels: {
+        ...migration3.schemas.multiModels,
         comments: {
           comment: {
             _id: v.string(),
@@ -207,15 +207,15 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
       collections: {
         ...migration4.schemas.collections,
       },
-      multiCollections: {
-        ...migration4.schemas.multiCollections,
+      multiModels: {
+        ...migration4.schemas.multiModels,
         posts: {
           article: {
-            ...migration4.schemas.multiCollections.posts.article,
+            ...migration4.schemas.multiModels.posts.article,
             likes: v.array(v.string()), // ← NEW FIELD: array of user IDs
           },
           video: {
-            ...migration4.schemas.multiCollections.posts.video,
+            ...migration4.schemas.multiModels.posts.video,
             likes: v.array(v.string()), // ← NEW FIELD
           },
         },
@@ -277,7 +277,7 @@ Deno.test("Journey: Rollback to different points", async () => {
           value: v.number(),
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(m) {
       m.createCollection("data").seed([
@@ -297,7 +297,7 @@ Deno.test("Journey: Rollback to different points", async () => {
           doubled: v.number(), // NEW FIELD
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(m) {
       m.collection("data").transform({
@@ -325,7 +325,7 @@ Deno.test("Journey: Rollback to different points", async () => {
           tripled: v.number(), // NEW FIELD
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(m) {
       m.collection("data").transform({
@@ -365,7 +365,7 @@ Deno.test("Journey: State verification at each step", async () => {
           count: v.number(),
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(m) {
       m.createCollection("counter").seed([
@@ -386,7 +386,7 @@ Deno.test("Journey: State verification at each step", async () => {
           increment: v.number(), // How much to add each time
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(m) {
       m.collection("counter").transform({
@@ -415,7 +415,7 @@ Deno.test("Journey: State verification at each step", async () => {
           label: v.string(), // Human readable label
         },
       },
-      multiCollections: {},
+      multiModels: {},
     },
     migrate(m) {
       m.collection("counter").transform({
