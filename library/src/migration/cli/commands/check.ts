@@ -34,7 +34,6 @@ export async function checkCommand(
 
   try {
     // Load configuration
-    console.log(dim("Loading configuration..."));
     const cwd = options.cwd || Deno.cwd();
     const config = await loadConfig({ configPath: options.configPath, cwd });
 

@@ -143,20 +143,19 @@ export {
   shouldInstanceReceiveMigration,
 } from "./multicollection-registry.ts";
 
-// Application startup validation helpers
+// Status checking utilities
 export {
-  assertMigrationsApplied,
+  assertMigrationSystemHealthy,
   checkMigrationStatus,
-  checkSchemaAlignment,
-  isLastMigrationApplied,
-  validateDatabaseState,
-  validateMigrationsForEnv,
-} from "./validation-helpers.ts";
+} from "./check-status.ts";
 export type {
-  DatabaseStateValidationResult,
-  MigrationValidationResult,
-  SchemaAlignmentResult,
-} from "./validation-helpers.ts";
+  CheckMigrationStatusOptions,
+  DatabaseStatusDetails,
+  MigrationCounts,
+  MigrationInfo,
+  MigrationStatusResult,
+  MigrationValidationDetails,
+} from "./check-status.ts";
 
 /**
  * Version information for the migration system

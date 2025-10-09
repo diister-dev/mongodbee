@@ -47,7 +47,6 @@ export async function migrateCommand(
 
   try {
     // Load configuration
-    console.log(dim("Loading configuration..."));
     const cwd = options.cwd || Deno.cwd();
     const config = await loadConfig({ configPath: options.configPath, cwd });
 
@@ -60,12 +59,9 @@ export async function migrateCommand(
     const dbName = config.database?.name || "myapp";
 
     console.log(dim(`Migrations directory: ${migrationsDir}`));
-    console.log(dim(`Connection URI: ${connectionUri}`));
     console.log(dim(`Database: ${dbName}`));
     console.log();
 
-    // Connect to database
-    console.log(dim("Connecting to database..."));
     client = new MongoClient(connectionUri);
     await client.connect();
 

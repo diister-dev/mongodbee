@@ -53,8 +53,6 @@ export const generateCommandOptions = {
 export async function generateCommand(
   options: GenerateCommandOptions,
 ): Promise<void> {
-  console.log(dim("Loading configuration..."));
-
   const cwd = options.cwd || Deno.cwd();
   const config = await loadConfig({ configPath: options.configPath, cwd });
 

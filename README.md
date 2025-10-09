@@ -360,99 +360,64 @@ This creates the necessary metadata documents without modifying existing data.
 
 ### Application Startup Validation
 
-MongoDBee provides validation functions to check your database state at application startup. This is **critical for production** to ensure everything is in sync.
-
-#### Complete Validation (Recommended)
-
-The simplest and most comprehensive approach - validates both migrations and schemas:
+Validate your migration system at application startup to catch issues before they become problems:
 
 ```typescript
-import { validateDatabaseState } from "@diister/mongodbee/migration";
+import { checkMigrationStatus } from "@diister/mongodbee/migration";
 
-// At application startup
-const db = client.db("myapp");
-const env = Deno.env.get("ENV") || "development";
+// Automatically loads paths from mongodbee.config.ts
+const status = await checkMigrationStatus({ db });
 
-const result = await validateDatabaseState(db, { env });
+// Simple check
+if (!status.ok) {
+  console.error(status.message);
+  throw new Error("Migration system unhealthy");
+}
 
-if (!result.isValid) {
-  console.error("❌ Database validation failed!");
-  console.error(result.message);
-  
-  // Log specific issues
-  for (const issue of result.issues) {
-    console.error(`  - ${issue}`);
-  }
-  
-  if (env === "production") {
-    throw new Error("Database validation failed - cannot start application");
-  }
-} else {
-  console.log("✓ Database validation passed");
+// Check for pending migrations
+if (status.database && !status.database.isUpToDate) {
+  console.warn(`${status.database.pendingCount} pending migration(s)`);
 }
 ```
-
-This single function checks:
-- ✅ All migrations are applied
-- ✅ Application schemas match database structure
-- ✅ Environment-aware error reporting
-
-#### Individual Validation Functions
-
-For more granular control, you can use individual validation functions:
-
-**Migration Status Validation**:
-
-```typescript
-import { 
-  checkMigrationStatus,
-  isLastMigrationApplied,
-  validateMigrationsForEnv 
-} from "@diister/mongodbee/migration";
-
-// Option 1: Check detailed migration status
-const status = await checkMigrationStatus(db);
-if (!status.isUpToDate) {
-  console.warn(`⚠️ ${status.message}`);
-  console.warn(`Pending migrations: [${status.pendingMigrations.join(', ')}]`);
-}
-
-// Option 2: Simple boolean check
-const upToDate = await isLastMigrationApplied(db);
-if (!upToDate) {
-  throw new Error("Latest migration not applied");
-}
-
-// Option 3: Environment-aware (warns in dev, throws in prod)
-await validateMigrationsForEnv(db, env);
 ```
 
-**Schema Alignment Validation**:
+**Result structure:**
 
 ```typescript
-import { checkSchemaAlignment } from "@diister/mongodbee/migration";
-
-const schemaCheck = await checkSchemaAlignment(db);
-
-if (!schemaCheck.isAligned) {
-  console.error(`❌ ${schemaCheck.message}`);
+{
+  ok: boolean,              // ✅ Main health check
+  message: string,          // Human-readable summary
   
-  for (const error of schemaCheck.errors) {
-    console.error(
-      `  ${error.collection}.${error.field}: ` +
-      `expected ${error.expected}, got ${error.actual}`
-    );
+  counts: {
+    total: number,          // Total migrations
+    valid: number,          // Valid migrations
+    invalid: number         // Invalid migrations
+  },
+  
+  validation: {
+    isSchemaConsistent: boolean,  // Schemas match
+    areMigrationsValid: boolean,  // Can be simulated
+    errors: string[],             // Validation errors
+    warnings: string[]            // Validation warnings
+  },
+  
+  database?: {               // Only when db provided
+    isUpToDate: boolean,     // All migrations applied
+    appliedCount: number,    // Number applied
+    pendingCount: number,    // Number pending
+    pendingIds: string[]     // IDs of pending migrations
   }
 }
 ```
 
-#### Why This Matters
+**Fail-fast mode:**
 
-- **Prevents runtime errors** from schema mismatches
-- **Catches forgotten migrations** before production issues
-- **Detects schema drift** when schemas.ts changed without migrations
-- **Enforces deployment discipline** - no deploys without proper database state
-- **Clear feedback** to developers about what's wrong
+```typescript
+import { assertMigrationSystemHealthy } from "@diister/mongodbee/migration";
+
+// Throws if unhealthy - loads from config automatically
+await assertMigrationSystemHealthy({ db });
+```
 
 ### Learn More
 

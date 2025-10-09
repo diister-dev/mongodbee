@@ -33,7 +33,6 @@ export async function historyCommand(
 
   try {
     // Load configuration
-    console.log(dim("Loading configuration..."));
     const cwd = options.cwd || Deno.cwd();
     const config = await loadConfig({ configPath: options.configPath, cwd });
 
@@ -44,19 +43,15 @@ export async function historyCommand(
     const connectionUri = config.database?.connection?.uri ||
       "mongodb://localhost:27017";
     const dbName = config.database?.name || "myapp";
-
-    console.log(dim(`Connection URI: ${connectionUri}`));
+    
     console.log(dim(`Database: ${dbName}`));
     console.log();
 
     // Connect to database
-    console.log(dim("Connecting to database..."));
     client = new MongoClient(connectionUri);
     await client.connect();
 
     const db = client.db(dbName);
-
-    console.log(green(`✓ Connected to database: ${dbName}`));
     console.log();
 
     // Load migrations
