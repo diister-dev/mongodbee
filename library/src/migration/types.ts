@@ -33,6 +33,13 @@ export type CreateCollectionRule = {
   schema?: unknown;
 };
 
+export type CreateMultiCollectionRule = {
+  type: "create_multicollection";
+  collectionName: string;
+  /** Valibot schema for the multi-collection - used to create MongoDB JSON Schema validator */
+  schema?: unknown;
+}
+
 /**
  * Rule for seeding a collection with initial data
  */
@@ -41,6 +48,13 @@ export type SeedCollectionRule = {
   collectionName: string;
   documents: readonly unknown[];
 };
+
+export type SeedMultiCollectionTypeRule = {
+  type: "seed_multicollection_type";
+  collectionName: string;
+  documentType: string;
+  documents: readonly unknown[];
+}
 
 /**
  * Rule for transforming documents in a collection
@@ -131,7 +145,9 @@ export type MarkAsMultiCollectionRule = {
  */
 export type MigrationRule =
   | CreateCollectionRule
+  | CreateMultiCollectionRule
   | SeedCollectionRule
+  | SeedMultiCollectionTypeRule
   | TransformCollectionRule
   | CreateMultiCollectionInstanceRule
   | SeedMultiCollectionInstanceRule
@@ -229,6 +245,13 @@ export interface MigrationCollectionBuilder {
  */
 export interface MultiCollectionTypeBuilder {
   /**
+   * Seeds this type with initial documents
+   * @param documents - Array of documents to insert
+   * @returns The type builder for method chaining
+   */
+  seed(documents: readonly unknown[]): MultiCollectionTypeBuilder;
+
+  /**
    * Applies a transformation to all documents of this type across ALL instances
    * @param rule - The transformation rule with up/down functions
    * @returns The type builder for method chaining
@@ -303,6 +326,13 @@ export interface MigrationBuilder {
    * @returns A collection builder for the existing collection
    */
   collection(name: string): MigrationCollectionBuilder;
+
+  /**
+   * Creates a new multi-collection template and returns a builder to configure it
+   * @param name - The name of the multi-collection template to create
+   * @returns A multi-collection builder for the new template
+   */
+  createMultiCollection(name: string): MultiCollectionBuilder;
 
   /**
    * Configures a multi-collection template (affects ALL instances)

@@ -43,6 +43,7 @@ import * as v from "../schema.ts";
 import type {
   CreateCollectionRule,
   CreateMultiCollectionInstanceRule,
+  CreateMultiCollectionRule,
   MarkAsMultiCollectionRule,
   MigrationBuilder,
   MigrationCollectionBuilder,
@@ -52,7 +53,9 @@ import type {
   MultiCollectionBuilder,
   MultiCollectionInstanceBuilder,
   MultiCollectionTypeBuilder,
+  SchemasDefinition,
   SeedCollectionRule,
+  SeedMultiCollectionTypeRule,
   SeedMultiCollectionInstanceRule,
   TransformCollectionRule,
   TransformMultiCollectionTypeRule,
@@ -61,21 +64,12 @@ import type {
 } from "./types.ts";
 
 /**
- * Schema for migration builder options
- */
-export const MigrationBuilderOptionsSchema = v.object({
-  schemas: v.record(v.string(), v.record(v.string(), v.any())),
-  parentSchemas: v.optional(
-    v.record(v.string(), v.record(v.string(), v.any())),
-  ),
-});
-
-/**
  * Options for creating a migration builder
  */
-export type MigrationBuilderOptions = v.InferInput<
-  typeof MigrationBuilderOptionsSchema
->;
+export type MigrationBuilderOptions = {
+  schemas: SchemasDefinition,
+  parentSchemas?: SchemasDefinition,
+}
 
 /**
  * Creates a new migration state instance with required methods
@@ -181,6 +175,38 @@ function createMultiCollectionTypeBuilder(
   options: MigrationBuilderOptions,
 ): MultiCollectionTypeBuilder {
   return {
+    seed(documents: readonly unknown[]): MultiCollectionTypeBuilder {
+      // Validate documents against schema if available
+      const schema = options.schemas.multiModels?.[collectionType]
+        ?.[typeName];
+      let validatedDocs: readonly unknown[] = documents;
+
+      if (schema) {
+        validatedDocs = documents.map((doc) => {
+          const parseResult = v.safeParse(v.object(schema), doc);
+          if (!parseResult.success) {
+            throw new Error(
+              `Document in multi-collection ${collectionType}.${typeName} failed schema validation: ${
+                parseResult.issues.map((i) => i.message).join(", ")
+              }`,
+            );
+          }
+          // Return original document instead of parseResult.output to preserve Date objects
+          return doc;
+        });
+      }
+
+      const seedRule: SeedMultiCollectionInstanceRule = {
+        type: "seed_multicollection_instance",
+        collectionName: collectionType, // Use collectionType as the base collection name
+        typeName,
+        documents: validatedDocs,
+      };
+
+      state.operations.push(seedRule);
+      return this;
+    },
+
     transform(rule: TransformRule): MultiCollectionTypeBuilder {
       // Extract schema for this specific type from options
       const typeSchema = options.schemas?.multiModels?.[collectionType]
@@ -333,6 +359,19 @@ function createMigrationBuilder(
 
     collection(name: string): MigrationCollectionBuilder {
       return createCollectionBuilder(state, name, options);
+    },
+
+    createMultiCollection(name: string) : MultiCollectionBuilder {
+      // Extract schema for this multi-collection from options
+      const multiCollectionSchema = options.schemas?.multiCollections?.[name];
+
+      state.operations.push({
+        type: "create_multicollection",
+        collectionName: name,
+        schema: multiCollectionSchema,
+      });
+
+      return createMultiCollectionBuilder(state, name, builder, options);
     },
 
     multiCollection(name: string): MultiCollectionBuilder {

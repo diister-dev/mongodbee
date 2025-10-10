@@ -41,6 +41,8 @@ import {
 import { migrationBuilder } from "../builder.ts";
 import * as v from "valibot";
 import { createMockGenerator } from "@diister/valibot-mock";
+import { dirtyEquivalent } from "../../utils/object.ts";
+import { createMemoryApplier } from "../appliers/memory.ts";
 
 /**
  * Constants for mock data generation
@@ -97,10 +99,11 @@ export class SimulationValidator implements MigrationValidator {
 
   constructor(options: SimulationValidatorOptions = {}) {
     this.options = { ...DEFAULT_SIMULATION_VALIDATOR_OPTIONS, ...options };
-    this.applier = createSimulationApplier({
-      strictValidation: this.options.strictValidation,
-      trackHistory: this.options.trackHistory,
-    });
+    // this.applier = createSimulationApplier({
+    //   strictValidation: this.options.strictValidation,
+    //   trackHistory: this.options.trackHistory,
+    // });
+    this.applier = createMemoryApplier();
   }
 
   /**
@@ -152,10 +155,12 @@ export class SimulationValidator implements MigrationValidator {
       const stateBeforeMigration = currentState; // Capture state before applying this migration
 
       // Apply operations in sequence
+      let appliedOperations = 0;
       for (let i = 0; i < operations.length; i++) {
         const operation = operations[i];
         try {
           currentState = this.applier.applyOperation(currentState, operation);
+          appliedOperations++;
         } catch (error) {
           const errorMessage = error instanceof Error
             ? error.message
@@ -164,6 +169,10 @@ export class SimulationValidator implements MigrationValidator {
             `Operation ${i + 1} (${operation.type}): ${errorMessage}`,
           );
         }
+      }
+
+      if(appliedOperations !== operations.length) {
+        errors.push(`Only ${appliedOperations} out of ${operations.length} operations were applied successfully.`);
       }
 
       const stateAfterMigration = currentState; // Capture state after applying this migration
@@ -267,6 +276,9 @@ export class SimulationValidator implements MigrationValidator {
         stateAfterMigration,
         operations,
       )
+
+      errors.push(...changeStateResult);
+
       // if (definition.parent && definition.schemas.multiModels) {
       //   const schemaChangeErrors = this.validateSchemaChanges(
       //     definition,
@@ -278,6 +290,7 @@ export class SimulationValidator implements MigrationValidator {
       //   }
       // }
 
+      /*
       // Validate that transformed documents match their target schemas
       // This catches bad transformation logic (e.g., returning null instead of proper values)
       if (forwardErrors.length === 0) {
@@ -331,6 +344,7 @@ export class SimulationValidator implements MigrationValidator {
           }
         }
       }
+      */
 
       return Promise.resolve({
         success: errors.length === 0,
@@ -584,8 +598,12 @@ export class SimulationValidator implements MigrationValidator {
     stateBefore: SimulationDatabaseState,
     stateAfter: SimulationDatabaseState,
     operations: MigrationRule[],
-  ): string[] {
+  ): {
+    errors: string[];
+    issues: { type: string, message: string }[];
+  } {
     const errors: string[] = [];
+    const issues: { type: string, message: string }[] = [];
     const currentSchema = definition.schemas.collections || {};
     const parentSchema = definition.parent?.schemas.collections || {};
 
@@ -594,11 +612,9 @@ export class SimulationValidator implements MigrationValidator {
       for (const [docIndex, doc] of ((stateAfter.collections || {})[collectionName]?.content || []).entries()) {
         const valid = v.safeParse(v.object(currentCollSchema), doc);
         if (!valid.success) {
-          errors.push(...this.formatValidationError(valid, {
-            type: "collection",
-            name: collectionName,
-            index: docIndex,
-          }));
+          errors.push(`Document in collection "${collectionName}" does not match schema:\n-> ${valid.issues.map((issue) => {
+            return `(${v.getDotPath(issue)}) ${issue.message}`;
+          }).join("\n-> ")}`);
         }
       }
     }
@@ -623,15 +639,110 @@ export class SimulationValidator implements MigrationValidator {
       for (const [docIndex, doc] of ((stateAfterRollback.collections || {})[collectionName]?.content || []).entries()) {
         const valid = v.safeParse(v.object(parentCollSchema), doc);
         if (!valid.success) {
-          // @TODO: Throw error if lossy or irreversible not marked.
-          console.warn(`Skipping schema change validation for collection "${collectionName}" as documents do not match parent schema.`, operations);
+          errors.push(`The collection "${collectionName}" not valid after rollback.\n-> ${valid.issues.map((issue) => {            
+            return `(${v.getDotPath(issue)}) ${issue.message}`;
+          }).join("\n-> ")}"`);
+        }
+
+        const docBefore = (stateBefore.collections || {})[collectionName]?.content?.[docIndex];
+
+        const equal = dirtyEquivalent(docBefore, doc);
+        if (!equal) {
+          issues.push({
+            type: "rollback_document_mismatch",
+            message: `Document in collection "${collectionName}" different after rollback.`
+          });
         }
       }
       const currentCollSchema = currentSchema[collectionName];
       if (!currentCollSchema) continue; // Collection was removed, skip
     }
 
-    return errors;
+    return {
+      errors,
+      issues,
+    };
+  }
+
+  private validateMultiCollectionSchemaChanges(
+    definition: MigrationDefinition,
+    stateBefore: SimulationDatabaseState,
+    stateAfter: SimulationDatabaseState,
+    operations: MigrationRule[],
+  ) : {
+    errors: string[];
+    issues: { type: string, message: string }[];
+  } {
+    const errors: string[] = [];
+    const issues: { type: string, message: string }[] = [];
+    const currentSchema = definition.schemas.multiCollections || {};
+    const parentSchema = definition.parent?.schemas.multiCollections || {};
+
+    // Validate current state multi-collections against their schemas
+    for (const [multiCollectionName, currentMultiCollSchema] of Object.entries(currentSchema)) {
+      const currentCollState = stateAfter.multiCollections[multiCollectionName];
+      const allCollTypes = Object.keys(currentMultiCollSchema);
+      for(const element of currentCollState.content) {
+        const elementType = element._type as string;
+        if(!allCollTypes.includes(elementType)) {
+          errors.push(`Document in multi-collection "${multiCollectionName}" has unknown type "${elementType}"`);
+          continue;
+        }
+
+        const schema = currentMultiCollSchema[elementType];
+        const valid = v.safeParse(v.object(schema), element);
+
+        if (!valid.success) {
+          console.log(element);
+          errors.push(`Document in multi-collection "${multiCollectionName}" type "${elementType}" does not match schema:\n-> ${valid.issues.map((issue) => {
+            return `(${v.getDotPath(issue)}) ${issue.message}`;
+          }).join("\n-> ")}`);
+        }
+      }
+    }
+
+    let stateBeforeRollback = stateAfter;
+    // Apply reverse operations to get back to pre-migration state
+    for (let i = operations.length - 1; i >= 0; i--) {
+      const operation = operations[i];
+      try {
+        stateBeforeRollback = this.applier.applyReverseOperation(stateBeforeRollback, operation);
+      } catch {
+        // Ignore errors during reverse application
+      }
+    }
+    const stateAfterRollback = stateBeforeRollback;
+
+    // Check each multi-collection for schema changes
+    for (const [multiCollectionName, parentMultiCollSchema] of Object.entries(parentSchema)) {
+      // New multi-collection, no validation needed
+      if (!parentMultiCollSchema) continue;
+      // Check if schema has changed
+      for (const [docIndex, doc] of ((stateAfterRollback.multiCollections || {})[multiCollectionName]?.content || []).entries()) {
+        const docType = doc._type as string;
+        const parentTypeSchema = parentMultiCollSchema[docType];
+        if (!parentTypeSchema) continue; // Type was added, no validation needed
+        const valid = v.safeParse(v.object(parentTypeSchema), doc);
+        if (!valid.success) {
+          errors.push(`The multi-collection "${multiCollectionName}" type "${docType}" not valid after rollback.\n-> ${valid.issues.map((issue) => {
+            return `(${v.getDotPath(issue)}) ${issue.message}`;
+          }).join("\n-> ")}`);
+        }
+        const docBefore = (stateBefore.multiCollections || {})[multiCollectionName]?.content?.[docIndex];
+        const equal = dirtyEquivalent(docBefore, doc);
+        if (!equal) {
+          issues.push({
+            type: "rollback_document_mismatch",
+            message: `Document in multi-collection "${multiCollectionName}" type "${docType}" different after rollback.`
+          });
+        }
+      }
+    }
+
+    return {
+      errors,
+      issues,
+    }
   }
 
   /**
@@ -652,23 +763,25 @@ export class SimulationValidator implements MigrationValidator {
     const errors: string[] = [];
 
     // Validate collection schema changes
-    errors.push(
-      ...this.validateCollectionSchemaChanges(
-        definition,
-        stateBefore,
-        stateAfter,
-        operations,
-      ),
+    const collectionChangeResult = this.validateCollectionSchemaChanges(
+      definition,
+      stateBefore,
+      stateAfter,
+      operations,
     );
 
     // Validate multi-collection schema changes
-    // errors.push(
-    //   ...this.validateMultiCollectionSchemaChanges(
-    //     definition,
-    //     stateBefore,
-    //     operations,
-    //   ),
-    // );
+    const multiCollectionChangeResult = this.validateMultiCollectionSchemaChanges(
+      definition,
+      stateBefore,
+      stateAfter,
+      operations,
+    );
+
+    errors.push(
+      ...[...new Set(collectionChangeResult.errors)],
+      ...[...new Set(multiCollectionChangeResult.errors)],
+    );
 
     return errors;
   }
@@ -837,69 +950,6 @@ export class SimulationValidator implements MigrationValidator {
     errors.push(
       `     3. Merge: Transform into another existing type with appropriate field mapping`,
     );
-
-    return errors;
-  }
-
-  /**
-   * Validates multi-collection schema changes
-   *
-   * @private
-   */
-  private validateMultiCollectionSchemaChanges(
-    definition: MigrationDefinition,
-    stateBefore: SimulationDatabaseState,
-    operations: MigrationRule[],
-  ): string[] {
-    const errors: string[] = [];
-
-    if (!definition.schemas.multiModels) {
-      return errors;
-    }
-
-    const parentSchemas = definition.parent?.schemas.multiModels || {};
-    const currentSchemas = definition.schemas.multiModels;
-
-    for (const multiCollectionName of Object.keys(currentSchemas)) {
-      const parentSchema = parentSchemas[multiCollectionName];
-      const currentSchema = currentSchemas[multiCollectionName];
-
-      // New multi-collection, no validation needed
-      if (!parentSchema) continue;
-
-      // Validate each type within the multi-collection
-      for (const typeName of Object.keys(currentSchema)) {
-        const parentTypeSchema = parentSchema[typeName];
-        const currentTypeSchema = currentSchema[typeName];
-
-        // New type, no validation needed
-        if (!parentTypeSchema) continue;
-
-        errors.push(
-          ...this.validateMultiCollectionTypeChange(
-            multiCollectionName,
-            typeName,
-            parentTypeSchema,
-            currentTypeSchema,
-            stateBefore,
-            operations,
-          ),
-        );
-      }
-
-      // Check for removed types
-      for (const removedTypeName of Object.keys(parentSchema)) {
-        if (!currentSchema[removedTypeName]) {
-          errors.push(
-            ...this.validateRemovedMultiCollectionType(
-              multiCollectionName,
-              removedTypeName,
-              stateBefore,
-            ),
-          );
-        }
-      }
-    }
 
     return errors;
   }
