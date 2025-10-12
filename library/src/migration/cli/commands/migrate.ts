@@ -26,6 +26,21 @@ import { validateMigrationChainWithProjectSchema } from "../../schema-validation
 import { validateMigrationsWithSimulation } from "../utils/validate-migrations.ts";
 import { migrationBuilder } from "../../builder.ts";
 import { confirm } from "../utils/confirm.ts";
+import {
+  detectInstancesNeedingCatchUp,
+  filterOperationsForModelType,
+  getMigrationsForCatchUp,
+} from "../../catch-up.ts";
+import { recordMultiCollectionMigration } from "../../multicollection-registry.ts";
+
+interface CliArgs {
+  config?: string;
+  "dry-run"?: boolean;
+  force?: boolean;
+  verbose?: boolean;
+  "auto-sync"?: boolean;
+  [key: string]: unknown;
+}
 
 export interface MigrateCommandOptions {
   configPath?: string;
@@ -33,6 +48,8 @@ export interface MigrateCommandOptions {
   cwd?: string;
   force?: boolean;
   verbose?: boolean;
+  /** Automatically catch up orphaned multi-model instances without confirmation */
+  autoSync?: boolean;
 }
 
 /**
@@ -47,9 +64,20 @@ export async function migrateCommand(
   let client: MongoClient | undefined;
 
   try {
+    // Map CLI args to options (handle kebab-case to camelCase)
+    const cliArgs = options as unknown as CliArgs;
+    const opts: MigrateCommandOptions = {
+      configPath: options.configPath || cliArgs.config,
+      dryRun: options.dryRun || cliArgs["dry-run"],
+      cwd: options.cwd,
+      force: options.force,
+      verbose: options.verbose,
+      autoSync: options.autoSync || cliArgs["auto-sync"],
+    };
+
     // Load configuration
-    const cwd = options.cwd || Deno.cwd();
-    const config = await loadConfig({ configPath: options.configPath, cwd });
+    const cwd = opts.cwd || Deno.cwd();
+    const config = await loadConfig({ configPath: opts.configPath, cwd });
 
     const migrationsDir = path.resolve(
       cwd,
@@ -122,11 +150,417 @@ export async function migrateCommand(
 
     if (pendingMigrations.length === 0) {
       console.log(green("✓ No pending migrations. Database is up to date."));
+      
+      // Even if no pending migrations, check for instances needing catch-up
+      console.log();
+      console.log(bold(blue("🔍 Checking for multi-model instances needing catch-up...")));
+      const catchUpSummary = await detectInstancesNeedingCatchUp(db, allMigrations);
+      
+      if (catchUpSummary.totalInstances > 0) {
+        console.log(yellow(`⚠  Found ${catchUpSummary.totalInstances} instance(s) needing catch-up`));
+        console.log();
+        
+        // Display details
+        for (const [modelType, instances] of catchUpSummary.instancesByModel) {
+          console.log(yellow(`  Model type: ${modelType}`));
+          for (const instance of instances) {
+            console.log(yellow(`    • ${instance.collectionName}`));
+            console.log(dim(`      Missing ${instance.missingMigrationIds.length} migration(s)`));
+            if (instance.isOrphaned) {
+              console.log(dim(`      Status: Orphaned (no migration tracking)`));
+            }
+          }
+        }
+        console.log();
+        
+        // Execute catch-up if auto-sync or force
+        if (opts.autoSync || opts.force) {
+          console.log(bold(blue("\n📦 Catching up multi-model instances...")));
+          console.log();
+
+          for (const [modelType, instances] of catchUpSummary.instancesByModel) {
+            for (const instance of instances) {
+              console.log(
+                bold(
+                  `Catching up: ${blue(instance.collectionName)} ${dim(`(${modelType})`)}`,
+                ),
+              );
+
+              const migrationsToApply = getMigrationsForCatchUp(
+                allMigrations,
+                instance.missingMigrationIds,
+              );
+
+              for (const migration of migrationsToApply) {
+                console.log(
+                  dim(`  Applying: ${migration.name} (${migration.id})`),
+                );
+
+                const startTime = Date.now();
+
+                try {
+                  const builder = migrationBuilder({ schemas: migration.schemas });
+                  const migrator = migration.migrate(builder);
+
+                  // Filter operations for this specific model type
+                  const filteredOps = filterOperationsForModelType(
+                    migrator.operations,
+                    modelType,
+                  );
+
+                  if (filteredOps.length === 0) {
+                    console.log(dim(`    No relevant operations, skipping`));
+                    
+                    const duration = Date.now() - startTime;
+                    
+                    // Still record as applied to maintain consistency
+                    await recordMultiCollectionMigration(
+                      db,
+                      instance.collectionName,
+                      migration.id,
+                      "applied",
+                      duration,
+                    );
+                    continue;
+                  }
+
+                  console.log(
+                    dim(`    Applying ${filteredOps.length} operation(s)...`),
+                  );
+
+                  // Create applier for this migration
+                  const applier = createMongodbApplier(db, migration, {
+                    currentMigrationId: migration.id,
+                  });
+
+                  // Apply filtered operations
+                  for (const op of filteredOps) {
+                    await applier.applyOperation(op);
+                  }
+
+                  const duration = Date.now() - startTime;
+
+                  // Record migration for this instance
+                  await recordMultiCollectionMigration(
+                    db,
+                    instance.collectionName,
+                    migration.id,
+                    "applied",
+                    duration,
+                  );
+
+                  console.log(green(`    ✓ Applied successfully (${duration}ms)`));
+                } catch (error) {
+                  const duration = Date.now() - startTime;
+                  
+                  // Record failure
+                  await recordMultiCollectionMigration(
+                    db,
+                    instance.collectionName,
+                    migration.id,
+                    "failed",
+                    duration,
+                    error instanceof Error ? error.message : String(error),
+                  );
+
+                  console.error(red(`    ✗ Failed: ${error instanceof Error ? error.message : String(error)}`));
+                  throw error;
+                }
+              }
+
+              console.log(green(`  ✓ Catch-up complete for ${instance.collectionName}`));
+              console.log();
+            }
+          }
+
+          console.log(green(`✓ All instances caught up successfully`));
+        } else {
+          console.log(yellow("  Run 'mongodbee migrate --auto-sync' to catch up these instances"));
+        }
+      } else {
+        console.log(green("  ✓ All multi-model instances are up to date"));
+      }
+      
       return;
     }
 
     console.log(yellow(`⚡ Pending migrations: ${pendingMigrations.length}`));
     console.log();
+
+    // STEP 0: Check for multi-model instances needing catch-up
+    console.log(bold(blue("🔍 Checking for multi-model instances needing catch-up...")));
+    const catchUpSummary = await detectInstancesNeedingCatchUp(db, allMigrations);
+
+    if (catchUpSummary.totalInstances > 0) {
+      console.log(yellow(`\n⚠  Found ${catchUpSummary.totalInstances} instance(s) needing catch-up:`));
+      console.log();
+
+      // Display details
+      for (const [modelType, instances] of catchUpSummary.instancesByModel) {
+        console.log(yellow(`  Model type: ${bold(modelType)}`));
+        for (const instance of instances) {
+          console.log(yellow(`    • ${instance.collectionName}`));
+          console.log(dim(`      Missing: ${instance.missingMigrationIds.length} migration(s)`));
+          if (instance.isOrphaned) {
+            console.log(red(`      ⚠ Orphaned (no migration tracking - will receive ALL migrations)`));
+          }
+        }
+      }
+
+      console.log();
+      console.log(dim(`  Total catch-up operations: ${catchUpSummary.totalMissingMigrations}`));
+      console.log();
+
+      // Ask for confirmation unless --auto-sync or --force
+      if (!opts.autoSync && !opts.force) {
+        const confirmed = await confirm(
+          "Do you want to catch up these instances before applying new migrations?",
+        );
+
+        if (!confirmed) {
+          console.log(yellow("Catch-up cancelled. Continuing with pending migrations only..."));
+          console.log(
+            dim("  Warning: Skipped instances may have schema inconsistencies!"),
+          );
+          console.log();
+        } else {
+          // Apply catch-up
+          console.log(bold(blue("\n📦 Catching up multi-model instances...")));
+          console.log();
+
+          for (const [modelType, instances] of catchUpSummary.instancesByModel) {
+            for (const instance of instances) {
+              console.log(
+                bold(
+                  `Catching up: ${blue(instance.collectionName)} ${dim(`(${modelType})`)}`,
+                ),
+              );
+
+              const migrationsToApply = getMigrationsForCatchUp(
+                allMigrations,
+                instance.missingMigrationIds,
+              );
+
+              for (const migration of migrationsToApply) {
+                console.log(
+                  dim(`  Applying: ${migration.name} (${migration.id})`),
+                );
+
+                const startTime = Date.now();
+
+                try {
+                  const builder = migrationBuilder({ schemas: migration.schemas });
+                  const migrator = migration.migrate(builder);
+
+                  // Filter operations for this specific model type
+                  const filteredOps = filterOperationsForModelType(
+                    migrator.operations,
+                    modelType,
+                  );
+
+                  if (filteredOps.length === 0) {
+                    console.log(dim(`    No relevant operations, skipping`));
+                    
+                    const duration = Date.now() - startTime;
+                    
+                    // Still record as applied to maintain consistency
+                    await recordMultiCollectionMigration(
+                      db,
+                      instance.collectionName,
+                      migration.id,
+                      "applied",
+                      duration,
+                    );
+                    continue;
+                  }
+
+                  console.log(
+                    dim(`    Applying ${filteredOps.length} operation(s)...`),
+                  );
+
+                  // Create applier and apply only filtered operations
+                  const applier = createMongodbApplier(db, migration, {
+                    currentMigrationId: migration.id,
+                  });
+
+                  // Apply filtered operations
+                  for (const op of filteredOps) {
+                    await applier.applyOperation(op);
+                  }
+
+                  const duration = Date.now() - startTime;
+
+                  // Record migration as applied for this instance
+                  await recordMultiCollectionMigration(
+                    db,
+                    instance.collectionName,
+                    migration.id,
+                    "applied",
+                    duration,
+                  );
+
+                  console.log(green(`    ✓ Applied successfully (${duration}ms)`));
+                } catch (error) {
+                  const duration = Date.now() - startTime;
+                  const errorMessage = error instanceof Error ? error.message : String(error);
+                  
+                  console.log(red(`    ✗ Failed: ${errorMessage}`));
+                  
+                  // Record migration as failed for this instance
+                  await recordMultiCollectionMigration(
+                    db,
+                    instance.collectionName,
+                    migration.id,
+                    "failed",
+                    duration,
+                    errorMessage,
+                  );
+                  
+                  throw new Error(
+                    `Catch-up failed for ${instance.collectionName}: ${errorMessage}`,
+                  );
+                }
+              }
+
+              console.log(
+                green(`  ✓ Caught up ${instance.collectionName}`),
+              );
+              console.log();
+            }
+          }
+
+          console.log(
+            green(
+              `✓ Caught up ${catchUpSummary.totalInstances} instance(s) successfully`,
+            ),
+          );
+          console.log();
+        }
+      } else {
+        // Auto-sync enabled or force flag - apply catch-up automatically
+        if (opts.autoSync) {
+          console.log(dim("  --auto-sync flag detected, catching up automatically..."));
+        } else {
+          console.log(dim("  --force flag detected, catching up automatically..."));
+        }
+        console.log();
+
+        // Apply catch-up (same code as in the confirmed block)
+        console.log(bold(blue("📦 Catching up multi-model instances...")));
+        console.log();
+
+        for (const [modelType, instances] of catchUpSummary.instancesByModel) {
+          for (const instance of instances) {
+            console.log(
+              bold(
+                `Catching up: ${blue(instance.collectionName)} ${dim(`(${modelType})`)}`,
+              ),
+            );
+
+            const migrationsToApply = getMigrationsForCatchUp(
+              allMigrations,
+              instance.missingMigrationIds,
+            );
+
+            for (const migration of migrationsToApply) {
+              console.log(
+                dim(`  Applying: ${migration.name} (${migration.id})`),
+              );
+
+              const startTime = Date.now();
+
+              try {
+                const builder = migrationBuilder({ schemas: migration.schemas });
+                const migrator = migration.migrate(builder);
+
+                // Filter operations for this specific model type
+                const filteredOps = filterOperationsForModelType(
+                  migrator.operations,
+                  modelType,
+                );
+
+                if (filteredOps.length === 0) {
+                  console.log(dim(`    No relevant operations, skipping`));
+                  
+                  const duration = Date.now() - startTime;
+                  
+                  // Still record as applied to maintain consistency
+                  await recordMultiCollectionMigration(
+                    db,
+                    instance.collectionName,
+                    migration.id,
+                    "applied",
+                    duration,
+                  );
+                  continue;
+                }
+
+                console.log(
+                  dim(`    Applying ${filteredOps.length} operation(s)...`),
+                );
+
+                // Create applier and apply only filtered operations
+                const applier = createMongodbApplier(db, migration, {
+                  currentMigrationId: migration.id,
+                });
+
+                // Apply filtered operations
+                for (const op of filteredOps) {
+                  await applier.applyOperation(op);
+                }
+
+                const duration = Date.now() - startTime;
+
+                // Record migration as applied for this instance
+                await recordMultiCollectionMigration(
+                  db,
+                  instance.collectionName,
+                  migration.id,
+                  "applied",
+                  duration,
+                );
+
+                console.log(green(`    ✓ Applied successfully (${duration}ms)`));
+              } catch (error) {
+                const duration = Date.now() - startTime;
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                
+                console.log(red(`    ✗ Failed: ${errorMessage}`));
+                
+                // Record migration as failed for this instance
+                await recordMultiCollectionMigration(
+                  db,
+                  instance.collectionName,
+                  migration.id,
+                  "failed",
+                  duration,
+                  errorMessage,
+                );
+                
+                throw new Error(
+                  `Catch-up failed for ${instance.collectionName}: ${errorMessage}`,
+                );
+              }
+            }
+
+            console.log(
+              green(`  ✓ Caught up ${instance.collectionName}`),
+            );
+            console.log();
+          }
+        }
+
+        console.log(
+          green(
+            `✓ Caught up ${catchUpSummary.totalInstances} instance(s) successfully`,
+          ),
+        );
+        console.log();
+      }
+    } else {
+      console.log(green("  ✓ All multi-model instances are up to date"));
+      console.log();
+    }
 
     // STEP 1: Validate ALL pending migrations BEFORE applying any
     await validateMigrationsWithSimulation(pendingMigrations, {

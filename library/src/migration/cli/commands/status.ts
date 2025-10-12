@@ -19,6 +19,7 @@ import {
 import { getAllOperations } from "../../history.ts";
 import { validateMigrationChainWithProjectSchema } from "../../schema-validation.ts";
 import { migrationBuilder } from "../../builder.ts";
+import { detectInstancesNeedingCatchUp } from "../../catch-up.ts";
 
 export interface StatusCommandOptions {
   configPath?: string;
@@ -233,6 +234,55 @@ export async function statusCommand(
       console.log(dim("  Run `mongodbee migrate` to apply pending migrations."));
     } else {
       console.log(green("  ✓ Database is up to date!"));
+    }
+
+    // Check for multi-model instances needing catch-up
+    console.log();
+    console.log(bold("Multi-Model Instances:"));
+    console.log();
+
+    const catchUpSummary = await detectInstancesNeedingCatchUp(db, allMigrations);
+
+    if (catchUpSummary.totalInstances === 0) {
+      console.log(green("  ✓ All multi-model instances are up to date"));
+    } else {
+      console.log(yellow(`  ⚠ ${catchUpSummary.totalInstances} instance(s) need catch-up`));
+      console.log();
+
+      // Display details by model type
+      for (const [modelType, instances] of catchUpSummary.instancesByModel) {
+        console.log(yellow(`  Model type: ${bold(modelType)}`));
+        
+        for (const instance of instances) {
+          const statusIcon = instance.isOrphaned ? red("⚠ ") : yellow("⚡");
+          const statusText = instance.isOrphaned 
+            ? red("orphaned") 
+            : yellow("behind");
+          
+          console.log(`    ${statusIcon} ${bold(instance.collectionName)}`);
+          console.log(dim(`       Status: ${statusText} - Missing ${instance.missingMigrationIds.length} migration(s)`));
+          
+          if (options.verbose && instance.missingMigrationIds.length > 0) {
+            console.log(dim(`       Missing IDs:`));
+            for (const missingId of instance.missingMigrationIds.slice(0, 3)) {
+              const migration = allMigrations.find(m => m.id === missingId);
+              if (migration) {
+                console.log(dim(`         • ${migration.name} (${missingId})`));
+              } else {
+                console.log(dim(`         • ${missingId}`));
+              }
+            }
+            if (instance.missingMigrationIds.length > 3) {
+              console.log(dim(`         ... and ${instance.missingMigrationIds.length - 3} more`));
+            }
+          }
+        }
+        console.log();
+      }
+
+      console.log(dim(`  Total catch-up operations needed: ${catchUpSummary.totalMissingMigrations}`));
+      console.log();
+      console.log(dim("  Run `mongodbee migrate --auto-sync` to catch up these instances."));
     }
 
     // Show detailed history if requested

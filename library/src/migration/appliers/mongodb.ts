@@ -58,6 +58,10 @@ export function createMongodbApplier(
 ) {
   const opts = { ...DEFAULT_OPTIONS, ...options };
 
+  // Track which multi-model instances have been recorded for this migration
+  // to avoid duplicate recordings when multiple operations target the same instance
+  const recordedInstances = new Set<string>();
+
   /**
    * Helper to check if a collection exists
    */
@@ -712,6 +716,19 @@ export function createMongodbApplier(
         }
 
         for (const collectionName of instances) {
+          // Check if this instance should receive this migration
+          if (opts.currentMigrationId) {
+            const shouldReceive = await shouldInstanceReceiveMigration(
+              db,
+              collectionName,
+              opts.currentMigrationId,
+            );
+            if (!shouldReceive) {
+              console.log(`Skipping instance ${collectionName} - already has this migration`);
+              continue;
+            }
+          }
+
           const collection = db.collection(collectionName);
           const documents = operation.documents.map((doc: unknown) => {
             const typedDoc = doc as Record<string, unknown>;
@@ -726,6 +743,15 @@ export function createMongodbApplier(
             const batch = documents.slice(i, i + opts.batchSize);
             // deno-lint-ignore no-explicit-any
             await collection.insertMany(batch as any);
+          }
+
+          // Record migration for this instance (only once per migration, even if multiple seed operations)
+          if (opts.currentMigrationId) {
+            const recordKey = `${collectionName}:${opts.currentMigrationId}`;
+            if (!recordedInstances.has(recordKey)) {
+              await recordMultiCollectionMigration(db, collectionName, opts.currentMigrationId);
+              recordedInstances.add(recordKey);
+            }
           }
         }
       },
@@ -743,6 +769,20 @@ export function createMongodbApplier(
 
           if (documentIds.length > 0) {
             await collection.deleteMany({ _id: { $in: documentIds } } as Record<string, unknown>);
+          }
+
+          // Record rollback for this instance (only once per migration, even if multiple seed operations)
+          if (opts.currentMigrationId) {
+            const recordKey = `${collectionName}:${opts.currentMigrationId}:reverted`;
+            if (!recordedInstances.has(recordKey)) {
+              await recordMultiCollectionMigration(
+                db,
+                collectionName,
+                opts.currentMigrationId,
+                "reverted"
+              );
+              recordedInstances.add(recordKey);
+            }
           }
         }
       }
@@ -847,9 +887,13 @@ export function createMongodbApplier(
             operation.up as (doc: Record<string, unknown>) => Record<string, unknown>
           );
 
-          // Record migration for this instance
+          // Record migration for this instance (only once per migration, even if multiple operations)
           if (opts.currentMigrationId) {
-            await recordMultiCollectionMigration(db, collectionName, opts.currentMigrationId);
+            const recordKey = `${collectionName}:${opts.currentMigrationId}`;
+            if (!recordedInstances.has(recordKey)) {
+              await recordMultiCollectionMigration(db, collectionName, opts.currentMigrationId);
+              recordedInstances.add(recordKey);
+            }
           }
         }
       },
@@ -861,24 +905,25 @@ export function createMongodbApplier(
         const instances = await discoverMultiCollectionInstances(db, operation.modelType);
 
         for (const collectionName of instances) {
-          // Check version filtering for reverse as well
-          if (opts.currentMigrationId) {
-            const shouldReceive = await shouldInstanceReceiveMigration(
-              db,
-              collectionName,
-              opts.currentMigrationId,
-            );
-            if (shouldReceive) {
-              console.log(`Skipping reverse for instance ${collectionName} - migration not yet applied`);
-              continue;
-            }
-          }
-
           await transformDocuments(
             collectionName,
             { _type: operation.documentType } as Record<string, unknown>,
             operation.down as (doc: Record<string, unknown>) => Record<string, unknown>
           );
+
+          // Record rollback for this instance (only once per migration, even if multiple operations)
+          if (opts.currentMigrationId) {
+            const recordKey = `${collectionName}:${opts.currentMigrationId}:reverted`;
+            if (!recordedInstances.has(recordKey)) {
+              await recordMultiCollectionMigration(
+                db,
+                collectionName,
+                opts.currentMigrationId,
+                "reverted"
+              );
+              recordedInstances.add(recordKey);
+            }
+          }
         }
       }
     },
@@ -958,6 +1003,58 @@ export function createMongodbApplier(
     // STEP 3: Synchronize validators and indexes with target schemas
     // Re-enables validators with the correct schema for the migration direction
     await synchronizeValidatorsAndIndexes(targetSchemas);
+
+    // STEP 4: Record migration on ALL multi-model instances (even if not affected)
+    // This ensures complete tracking of which migrations each instance has seen
+    if (opts.currentMigrationId && targetSchemas.multiModels) {
+      await recordMigrationOnAllMultiModelInstances(
+        direction === 'up' ? 'applied' : 'reverted'
+      );
+    }
+  }
+
+  /**
+   * Records the current migration on all instances of all multi-model types
+   * This is called after migration to ensure all instances track the migration,
+   * even if they weren't directly affected by it
+   */
+  async function recordMigrationOnAllMultiModelInstances(
+    operation: 'applied' | 'reverted'
+  ): Promise<void> {
+    if (!opts.currentMigrationId) return;
+    if (!migration.schemas.multiModels) return;
+
+    const modelTypes = Object.keys(migration.schemas.multiModels);
+    const recordedKey = `${opts.currentMigrationId}:${operation}:all`;
+
+    // Prevent duplicate recording
+    if (recordedInstances.has(recordedKey)) {
+      return;
+    }
+
+    for (const modelType of modelTypes) {
+      const instances = await discoverMultiCollectionInstances(db, modelType);
+      
+      for (const collectionName of instances) {
+        const instanceKey = `${collectionName}:${opts.currentMigrationId}:${operation}`;
+        
+        // Skip if already recorded by operation handlers
+        if (recordedInstances.has(instanceKey)) {
+          continue;
+        }
+
+        await recordMultiCollectionMigration(
+          db,
+          collectionName,
+          opts.currentMigrationId,
+          operation
+        );
+        
+        recordedInstances.add(instanceKey);
+      }
+    }
+
+    recordedInstances.add(recordedKey);
   }
 
   return {

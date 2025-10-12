@@ -150,10 +150,14 @@ export async function rollbackCommand(
       });
 
       // Reverse operations and synchronize with parent schemas
+      // This automatically handles:
+      // - Collections
+      // - Multi-collections
+      // - Multi-model instances (with automatic history recording)
       const reversedOps = [...state.operations].reverse();
       await applier.applyMigration(reversedOps, 'down');
 
-      // Mark as reverted
+      // Mark as reverted in global history
       await markMigrationAsReverted(db, migrationToRollback.id);
 
       console.log();

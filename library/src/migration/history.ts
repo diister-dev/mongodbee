@@ -8,9 +8,12 @@
  * @module
  */
 
-import { Collection } from "mongodb";
+import type { Collection } from "mongodb";
 import type { Db } from "../mongodb.ts";
 import { getCurrentVersion } from "./utils/package-info.ts";
+import {
+  calculateMigrationStateFromHistory,
+} from "./migration-history.ts";
 
 /**
  * Type of migration operation
@@ -100,6 +103,7 @@ export async function recordOperation(
     mongodbeeVersion,
   };
 
+  // deno-lint-ignore no-explicit-any
   await collection.insertOne(record as any);
 }
 
@@ -162,37 +166,23 @@ export async function getAllOperations(db: Db): Promise<MigrationOperation[]> {
 /**
  * Calculates the current state of a migration from its history
  *
+ * Uses the generic event sourcing logic from migration-history.ts
+ *
  * @param operations - Array of operations for a migration
  * @returns Current status ('pending', 'applied', 'failed', 'reverted')
  */
 export function calculateMigrationState(
   operations: MigrationOperation[],
 ): "pending" | "applied" | "failed" | "reverted" {
-  if (operations.length === 0) {
-    return "pending";
-  }
+  // Map MigrationOperation to BaseMigrationOperation format
+  const baseOps = operations.map((op) => ({
+    id: op.migrationId,
+    operation: op.operation,
+    status: op.status,
+    appliedAt: op.executedAt,
+  }));
 
-  // Get last successful operation
-  const lastSuccessful = operations
-    .filter((op) => op.status === "success")
-    .pop();
-
-  if (!lastSuccessful) {
-    // All operations failed
-    return "failed";
-  }
-
-  // Return state based on last successful operation
-  switch (lastSuccessful.operation) {
-    case "applied":
-      return "applied";
-    case "reverted":
-      return "reverted";
-    case "failed":
-      return "failed";
-    default:
-      return "pending";
-  }
+  return calculateMigrationStateFromHistory(baseOps);
 }
 
 /**

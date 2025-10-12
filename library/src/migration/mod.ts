@@ -112,18 +112,59 @@ export {
 
 // Multi-collection registry
 export {
+  createMetadataSchemas,
   createMultiCollectionInfo,
   discoverMultiCollectionInstances,
   getMultiCollectionInfo,
   getMultiCollectionMigrations,
+  getMultiModelAppliedMigrationIds,
+  getMultiModelCurrentState,
+  getMultiModelMigrationHistory,
   isInstanceCreatedAfterMigration,
   markAsMultiCollection,
+  markMultiModelMigrationAsFailed,
+  markMultiModelMigrationAsReverted,
   MULTI_COLLECTION_INFO_TYPE,
   MULTI_COLLECTION_MIGRATIONS_TYPE,
   multiCollectionInstanceExists,
   recordMultiCollectionMigration,
   shouldInstanceReceiveMigration,
+  shouldInstanceReceiveMigrationByChain,
 } from "./multicollection-registry.ts";
+export type {
+  MultiCollectionInfo,
+  MultiCollectionMigrations,
+  MultiModelMigrationOperation,
+  MultiModelMigrationOperationType,
+  MultiModelOperationStatus,
+} from "./multicollection-registry.ts";
+
+// Catch-up system for orphaned multi-model instances
+export {
+  detectInstancesNeedingCatchUp,
+  filterOperationsForModelType,
+  getMigrationsForCatchUp,
+} from "./catch-up.ts";
+export type {
+  CatchUpSummary,
+  InstanceCatchUpInfo,
+} from "./catch-up.ts";
+
+// Generic event sourcing utilities
+export {
+  calculateMigrationStateFromHistory,
+  getAppliedMigrationIdsFromHistory,
+  groupOperationsByMigrationId,
+} from "./migration-history.ts";
+export type { BaseMigrationOperation } from "./migration-history.ts";
+
+// Migration ID utilities
+export {
+  extractMigrationTimestamp,
+  compareMigrationTimestamps,
+  isMigrationBefore,
+  isMigrationAfter,
+} from "./utils/migration-id.ts";
 
 // Status checking utilities
 export {
