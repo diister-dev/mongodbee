@@ -13,9 +13,9 @@ import {
 } from "../../src/migration/appliers/simulation.ts";
 import type {
   CreateCollectionRule,
-  CreateMultiCollectionInstanceRule,
+  CreateMultiModelInstanceRule,
   SeedCollectionRule,
-  SeedMultiCollectionInstanceRule,
+  SeedMultiModelInstanceTypeRule,
   TransformCollectionRule,
   TransformMultiCollectionTypeRule,
 } from "../../src/migration/types.ts";
@@ -240,10 +240,10 @@ Deno.test("SimulationApplier - creates multi-collection instance with metadata",
   const applier = new SimulationApplier();
   let state = createEmptyDatabaseState();
 
-  const operation: CreateMultiCollectionInstanceRule = {
-    type: "create_multicollection_instance",
+  const operation: CreateMultiModelInstanceRule = {
+    type: "create_multimodel_instance",
     collectionName: "catalog_main",
-    collectionType: "catalog",
+    modelType: "catalog",
   };
 
   state = applier.applyOperation(state, operation);
@@ -279,10 +279,10 @@ Deno.test("SimulationApplier - seeds multi-collection type with _type field", ()
     { name: "Product 2", price: 200 },
   ];
 
-  const operation: SeedMultiCollectionInstanceRule = {
+  const operation: SeedMultiModelInstanceTypeRule = {
     type: "seed_multicollection_instance",
     collectionName: "catalog_main",
-    typeName: "product",
+    modelType: "product",
     documents: products,
   };
 

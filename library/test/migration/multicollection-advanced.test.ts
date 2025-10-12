@@ -18,8 +18,8 @@ import {
 } from "../../src/migration/multicollection-registry.ts";
 import { createMongodbApplier } from "../../src/migration/appliers/mongodb.ts";
 import type {
-  CreateMultiCollectionInstanceRule,
-  SeedMultiCollectionInstanceRule,
+  CreateMultiModelInstanceRule,
+  SeedMultiModelInstanceTypeRule,
   TransformMultiCollectionTypeRule,
 } from "../../src/migration/types.ts";
 
@@ -575,18 +575,18 @@ Deno.test("MongodbApplier - seed type adds _type automatically", async (t) => {
   await withDatabase(t.name, async (db) => {
     const applier = createMongodbApplier(db);
 
-    const createOp: CreateMultiCollectionInstanceRule = {
-      type: "create_multicollection_instance",
+    const createOp: CreateMultiModelInstanceRule = {
+      type: "create_multimodel_instance",
       collectionName: "comments",
-      collectionType: "comments",
+      modelType: "comments",
     };
 
     await applier.applyOperation(createOp);
 
-    const seedOp: SeedMultiCollectionInstanceRule = {
+    const seedOp: SeedMultiModelInstanceTypeRule = {
       type: "seed_multicollection_instance",
       collectionName: "comments",
-      typeName: "user_comment",
+      modelType: "user_comment",
       documents: [
         { content: "First", author: "Alice" },
         { content: "Second", author: "Bob" },
@@ -617,18 +617,18 @@ Deno.test("MongodbApplier - full multi-collection lifecycle", async (t) => {
     const applier = createMongodbApplier(db);
 
     // 1. Create instance
-    const createOp: CreateMultiCollectionInstanceRule = {
-      type: "create_multicollection_instance",
+    const createOp: CreateMultiModelInstanceRule = {
+      type: "create_multimodel_instance",
       collectionName: "main_catalog",
-      collectionType: "catalog",
+      modelType: "catalog",
     };
     await applier.applyOperation(createOp);
 
     // 2. Seed data
-    const seedOp: SeedMultiCollectionInstanceRule = {
+    const seedOp: SeedMultiModelInstanceTypeRule = {
       type: "seed_multicollection_instance",
       collectionName: "main_catalog",
-      typeName: "product",
+      modelType: "product",
       documents: [
         { name: "Widget", price: 10 },
         { name: "Gadget", price: 20 },

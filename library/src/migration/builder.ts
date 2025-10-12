@@ -12,27 +12,27 @@
  * const migration = migrationBuilder({ schemas: mySchemas })
  *   .createCollection("users")
  *     .seed([{ name: "John", email: "john@example.com" }])
- *     .done()
+ *     .end()
  *   .collection("posts")
  *     .transform({
  *       up: (doc) => ({ ...doc, slug: doc.title.toLowerCase() }),
  *       down: (doc) => { const { slug, ...rest } = doc; return rest; }
  *     })
- *     .done()
+ *     .end()
  *   .collection("users")
  *     .transform({
  *       up: (doc) => ({ ...doc, fullName: `${doc.firstName} ${doc.lastName}` }),
  *       down: (doc) => ({ ...doc, firstName: doc.fullName.split(' ')[0], lastName: doc.fullName.split(' ')[1] || '' }),
  *       lossy: true  // Rollback may not preserve exact original names
  *     })
- *     .done()
+ *     .end()
  *   .collection("passwords")
  *     .transform({
  *       up: (doc) => ({ ...doc, password: hash(doc.password) }),
  *       down: (doc) => doc,  // Cannot unhash passwords
  *       irreversible: true  // No valid rollback possible
  *     })
- *     .done()
+ *     .end()
  *   .compile();
  * ```
  *
@@ -42,25 +42,18 @@
 import * as v from "../schema.ts";
 import type {
   CreateCollectionRule,
-  CreateMultiCollectionInstanceRule,
-  CreateMultiCollectionRule,
-  MarkAsMultiCollectionRule,
   MigrationBuilder,
-  MigrationCollectionBuilder,
+  CollectionBuilder,
   MigrationProperty,
   MigrationRule,
   MigrationState,
   MultiCollectionBuilder,
-  MultiCollectionInstanceBuilder,
+  MultiModelInstanceBuilder,
   MultiCollectionTypeBuilder,
   SchemasDefinition,
   SeedCollectionRule,
-  SeedMultiCollectionTypeRule,
-  SeedMultiCollectionInstanceRule,
   TransformCollectionRule,
-  TransformMultiCollectionTypeRule,
-  TransformRule,
-  UpdateIndexesRule,
+  MultiModelInstanceTypeBuilder,
 } from "./types.ts";
 
 /**
@@ -102,48 +95,36 @@ function createCollectionBuilder(
   state: MigrationState,
   collectionName: string,
   options: MigrationBuilderOptions,
-): MigrationCollectionBuilder {
-  return {
-    seed(documents: readonly unknown[]): MigrationCollectionBuilder {
-      // Validate documents against schema if available
-      const schema = options.schemas.collections?.[collectionName];
-      let validatedDocs: readonly unknown[] = documents;
-
-      if (schema) {
-        validatedDocs = documents.map((doc) => {
-          const parseResult = v.safeParse(v.object(schema), doc);
-          if (!parseResult.success) {
-            throw new Error(
-              `Document in collection ${collectionName} failed schema validation: ${
-                parseResult.issues.map((i) => i.message).join(", ")
-              }`,
-            );
-          }
-          return parseResult.output;
-        });
-      }
-
-      const seedRule: SeedCollectionRule = {
+): CollectionBuilder {
+  const builder: CollectionBuilder = {
+    seed(documents) {
+      state.operations.push({
         type: "seed_collection",
         collectionName,
-        documents: validatedDocs,
-      };
+        documents,
+      });
 
-      state.operations.push(seedRule);
-      return this;
+      return builder;
     },
 
-    transform(rule: TransformRule): MigrationCollectionBuilder {
-      const transformRule: TransformCollectionRule = {
+    transform(rule) {
+      const collectionSchema = options.schemas?.collections?.[collectionName];
+      const parentCollectionSchema = options.parentSchemas?.collections?.[collectionName];
+
+      if (!collectionSchema) {
+        throw new Error(`Cannot transform collection ${collectionName}: schema not found in migration.schemas.collections`);
+      }
+
+      state.operations.push({
         type: "transform_collection",
         collectionName,
         up: rule.up,
         down: rule.down,
+        schema: collectionSchema,
+        parentSchema: parentCollectionSchema,
         irreversible: rule.irreversible,
         lossy: rule.lossy,
-      };
-
-      state.operations.push(transformRule);
+      });
 
       // Mark migration as irreversible if the transform is marked as such
       if (rule.irreversible) {
@@ -155,13 +136,15 @@ function createCollectionBuilder(
         state.mark({ type: "lossy" });
       }
 
-      return this;
+      return builder;
     },
 
-    done(): MigrationBuilder {
+    end() {
       return createMigrationBuilder(state, options);
     },
-  };
+  }
+
+  return builder;
 }
 
 /**
@@ -169,67 +152,48 @@ function createCollectionBuilder(
  */
 function createMultiCollectionTypeBuilder(
   state: MigrationState,
-  collectionType: string,
-  typeName: string,
+  collectionName: string,
+  documentType: string,
   parentBuilder: MultiCollectionBuilder,
   options: MigrationBuilderOptions,
 ): MultiCollectionTypeBuilder {
-  return {
-    seed(documents: readonly unknown[]): MultiCollectionTypeBuilder {
-      // Validate documents against schema if available
-      const schema = options.schemas.multiModels?.[collectionType]
-        ?.[typeName];
-      let validatedDocs: readonly unknown[] = documents;
-
-      if (schema) {
-        validatedDocs = documents.map((doc) => {
-          const parseResult = v.safeParse(v.object(schema), doc);
-          if (!parseResult.success) {
-            throw new Error(
-              `Document in multi-collection ${collectionType}.${typeName} failed schema validation: ${
-                parseResult.issues.map((i) => i.message).join(", ")
-              }`,
-            );
-          }
-          // Return original document instead of parseResult.output to preserve Date objects
-          return doc;
-        });
-      }
-
-      const seedRule: SeedMultiCollectionInstanceRule = {
-        type: "seed_multicollection_instance",
-        collectionName: collectionType, // Use collectionType as the base collection name
-        typeName,
-        documents: validatedDocs,
-      };
-
-      state.operations.push(seedRule);
-      return this;
+  const builder: MultiCollectionTypeBuilder = {
+    seed(documents) {
+      state.operations.push({
+        type: "seed_multicollection_type",
+        collectionName,
+        documentType,
+        documents,
+      });
+      return builder;
     },
 
-    transform(rule: TransformRule): MultiCollectionTypeBuilder {
+    transform(rule) {
       // Extract schema for this specific type from options
-      const typeSchema = options.schemas?.multiModels?.[collectionType]
-        ?.[typeName];
+      const typeSchema = options.schemas?.multiCollections
+        ?.[collectionName]
+        ?.[documentType];
 
       // Extract parent schema if available
-      const parentTypeSchema = options.parentSchemas?.multiModels
-        ?.[collectionType]
-        ?.[typeName];
+      const parentTypeSchema = options.parentSchemas?.multiCollections
+        ?.[collectionName]
+        ?.[documentType];
 
-      const transformRule: TransformMultiCollectionTypeRule = {
+      if (!typeSchema) {
+        throw new Error(`Cannot transform type ${documentType} in multi-collection ${collectionName}: schema not found in migration.schemas.multiCollections`);
+      }
+
+      state.operations.push({
         type: "transform_multicollection_type",
-        collectionType,
-        typeName,
+        collectionName,
+        documentType,
         up: rule.up,
         down: rule.down,
         schema: typeSchema,
         parentSchema: parentTypeSchema,
         irreversible: rule.irreversible,
         lossy: rule.lossy,
-      };
-
-      state.operations.push(transformRule);
+      });
 
       // Mark migration as irreversible if the transform is marked as such
       if (rule.irreversible) {
@@ -241,13 +205,15 @@ function createMultiCollectionTypeBuilder(
         state.mark({ type: "lossy" });
       }
 
-      return this;
+      return builder;
     },
 
-    end(): MultiCollectionBuilder {
+    end() {
       return parentBuilder;
     },
   };
+
+  return builder;
 }
 
 /**
@@ -255,15 +221,15 @@ function createMultiCollectionTypeBuilder(
  */
 function createMultiCollectionBuilder(
   state: MigrationState,
-  collectionType: string,
+  collectionName: string,
   mainBuilder: MigrationBuilder,
   options: MigrationBuilderOptions,
 ): MultiCollectionBuilder {
   const builder: MultiCollectionBuilder = {
-    type(typeName: string): MultiCollectionTypeBuilder {
+    type(typeName): MultiCollectionTypeBuilder {
       return createMultiCollectionTypeBuilder(
         state,
-        collectionType,
+        collectionName,
         typeName,
         builder,
         options,
@@ -281,54 +247,101 @@ function createMultiCollectionBuilder(
 /**
  * Creates a multi-collection instance builder
  */
-function createMultiCollectionInstanceBuilder(
+function createMultiModelInstanceBuilder(
   state: MigrationState,
   collectionName: string,
-  collectionType: string,
+  modelType: string,
   mainBuilder: MigrationBuilder,
   options: MigrationBuilderOptions,
-): MultiCollectionInstanceBuilder {
-  return {
-    seedType(
-      typeName: string,
-      documents: readonly unknown[],
-    ): MultiCollectionInstanceBuilder {
-      // Validate documents against schema if available, similar to collection seed
-      const schema = options.schemas.multiModels?.[collectionType]
-        ?.[typeName];
-      let validatedDocs: readonly unknown[] = documents;
-
-      if (schema) {
-        validatedDocs = documents.map((doc) => {
-          const parseResult = v.safeParse(v.object(schema), doc);
-          if (!parseResult.success) {
-            throw new Error(
-              `Document in multi-collection ${collectionName}.${typeName} failed schema validation: ${
-                parseResult.issues.map((i) => i.message).join(", ")
-              }`,
-            );
-          }
-          // Return original document instead of parseResult.output to preserve Date objects
-          return doc;
-        });
-      }
-
-      const seedRule: SeedMultiCollectionInstanceRule = {
-        type: "seed_multicollection_instance",
+): MultiModelInstanceBuilder {
+  const builder: MultiModelInstanceBuilder = {
+    type(typeName) {
+      return createMultiModelInstanceTypeBuilder(
+        state,
         collectionName,
+        modelType,
         typeName,
-        documents: validatedDocs,
-      };
-
-      state.operations.push(seedRule);
-      return this;
+        builder,
+        options,
+      );
     },
-
-    end(): MigrationBuilder {
+    end() {
       return mainBuilder;
     },
   };
+
+  return builder;
 }
+
+function createMultiModelInstanceTypeBuilder(
+  state: MigrationState,
+  collectionName: string,
+  modelType: string,
+  documentType: string,
+  parentBuilder: MultiModelInstanceBuilder,
+  options: MigrationBuilderOptions,
+): MultiModelInstanceTypeBuilder {
+  const builder: MultiModelInstanceTypeBuilder = {
+    seed(documents) {
+      state.operations.push({
+        type: "seed_multimodel_instance_type",
+        collectionName,
+        modelType,
+        documentType,
+        documents,
+      });
+      return builder;
+    },
+
+    transform(rule) {
+      // Extract schema for this specific type from options
+      const typeSchema = options.schemas?.multiModels
+        ?.[modelType]
+        ?.[documentType];
+
+      // Extract parent schema if available
+      const parentTypeSchema = options.parentSchemas?.multiModels
+        ?.[modelType]
+        ?.[documentType];
+
+      if (!typeSchema) {
+        throw new Error(`Cannot transform type ${documentType} in multi-model instance ${collectionName} of model ${modelType}: schema not found in migration.schemas.multiModels`);
+      }
+
+      state.operations.push({
+        type: "transform_multimodel_instance_type",
+        collectionName,
+        modelType,
+        documentType,
+        up: rule.up,
+        down: rule.down,
+        schema: typeSchema,
+        parentSchema: parentTypeSchema,
+        irreversible: rule.irreversible,
+        lossy: rule.lossy,
+      });
+
+      // Mark migration as irreversible if the transform is marked as such
+      if (rule.irreversible) {
+        state.mark({ type: "irreversible" });
+      }
+
+      // Mark migration as lossy if the transform is marked as such
+      if (rule.lossy) {
+        state.mark({ type: "lossy" });
+      }
+
+      return builder;
+    },
+
+    end() {
+      return parentBuilder;
+    },
+  };
+
+  return builder;
+}
+  
 
 /**
  * Creates the main migration builder with functional operations
@@ -338,18 +351,19 @@ function createMigrationBuilder(
   options: MigrationBuilderOptions,
 ): MigrationBuilder {
   const builder: MigrationBuilder = {
-    createCollection(name: string): MigrationCollectionBuilder {
+    createCollection(name) {
       // Extract schema for this collection from options
       const collectionSchema = options.schemas?.collections?.[name];
+      
+      if (!collectionSchema) {
+        throw new Error(`Cannot create collection ${name}: schema not found in migration.schemas.collections`);
+      }
 
-      const createRule: CreateCollectionRule = {
+      state.operations.push({
         type: "create_collection",
         collectionName: name,
-        // Store the raw schema object (will be wrapped in v.object() by the applier)
         schema: collectionSchema,
-      };
-
-      state.operations.push(createRule);
+      });
 
       // Creating a collection makes the migration lossy (rollback drops the collection)
       state.mark({ type: "lossy" });
@@ -357,13 +371,16 @@ function createMigrationBuilder(
       return createCollectionBuilder(state, name, options);
     },
 
-    collection(name: string): MigrationCollectionBuilder {
+    collection(name) {
       return createCollectionBuilder(state, name, options);
     },
 
-    createMultiCollection(name: string) : MultiCollectionBuilder {
+    createMultiCollection(name) {
       // Extract schema for this multi-collection from options
       const multiCollectionSchema = options.schemas?.multiCollections?.[name];
+      if(!multiCollectionSchema) {
+        throw new Error(`Cannot create multi-collection ${name}: schema not found in migration.schemas.multiCollections`);
+      }
 
       state.operations.push({
         type: "create_multicollection",
@@ -374,69 +391,48 @@ function createMigrationBuilder(
       return createMultiCollectionBuilder(state, name, builder, options);
     },
 
-    multiCollection(name: string): MultiCollectionBuilder {
+    multiCollection(name) {
       return createMultiCollectionBuilder(state, name, builder, options);
     },
 
-    newMultiCollection(
-      collectionName: string,
-      collectionType: string,
-    ): MultiCollectionInstanceBuilder {
-      const createRule: CreateMultiCollectionInstanceRule = {
-        type: "create_multicollection_instance",
-        collectionName,
-        collectionType,
-      };
+    createMultiModelInstance(collectionName, modelType) {
+      const multiSchema = options.schemas?.multiModels?.[modelType];
+      if (!multiSchema) {
+        throw new Error(
+          `Cannot create multi-collection instance ${collectionName} of type ${modelType}: schema not found in migration.schemas.multiModels`,
+        );
+      }
 
-      state.operations.push(createRule);
+      state.operations.push({
+        type: "create_multimodel_instance",
+        collectionName,
+        modelType,
+        schema: multiSchema,
+      });
 
       // Creating a multi-collection instance makes the migration lossy (rollback drops the collection)
       state.mark({ type: "lossy" });
 
-      return createMultiCollectionInstanceBuilder(
+      return createMultiModelInstanceBuilder(
         state,
         collectionName,
-        collectionType,
+        modelType,
         builder,
         options,
       );
     },
 
-    multiCollectionInstance(
-      collectionName: string,
-    ): MultiCollectionInstanceBuilder {
-      // Need to infer collection type from schemas - find which multi-collection model this belongs to
-      let collectionType: string | undefined;
-
-      if (options.schemas?.multiModels) {
-        // Try to match collection name pattern with model names
-        for (const modelName of Object.keys(options.schemas.multiModels)) {
-          // Simple heuristic: if collection name starts with model name, it's probably that type
-          if (
-            collectionName.startsWith(modelName + "_") ||
-            collectionName === modelName
-          ) {
-            collectionType = modelName;
-            break;
-          }
-        }
-      }
-
-      if (!collectionType) {
-        // Fallback: use collection name itself as type
-        collectionType = collectionName;
-      }
-
-      return createMultiCollectionInstanceBuilder(
+    multiModelInstance(collectionName, modelType) {
+      return createMultiModelInstanceBuilder(
         state,
         collectionName,
-        collectionType,
+        modelType,
         builder,
         options,
       );
     },
 
-    updateIndexes(collectionName: string): MigrationBuilder {
+    updateIndexes(collectionName) {
       // Extract schema for this collection from options
       const collectionSchema = options.schemas?.collections?.[collectionName];
 
@@ -446,13 +442,11 @@ function createMigrationBuilder(
         );
       }
 
-      const updateRule: UpdateIndexesRule = {
+      state.operations.push({
         type: "update_indexes",
         collectionName,
         schema: collectionSchema,
-      };
-
-      state.operations.push(updateRule);
+      });
 
       // Updating indexes is lossy (rollback doesn't restore old indexes)
       state.mark({ type: "lossy" });
@@ -460,23 +454,23 @@ function createMigrationBuilder(
       return builder;
     },
 
-    markAsMultiCollection(
-      collectionName: string,
-      collectionType: string,
-    ): MigrationBuilder {
-      const markRule: MarkAsMultiCollectionRule = {
-        type: "mark_as_multicollection",
+    markMultiModelType(collectionName, modelType) {
+      state.operations.push({
+        type: "mark_as_multimodel",
         collectionName,
-        collectionType,
-      };
-
-      state.operations.push(markRule);
-
-      // Marking is reversible (can remove metadata documents)
-      return builder;
+        modelType,
+      });
+      
+      return createMultiModelInstanceBuilder(
+        state,
+        collectionName,
+        modelType,
+        builder,
+        options,
+      )
     },
 
-    compile(): MigrationState {
+    compile() {
       return state;
     },
   };
@@ -515,7 +509,7 @@ function createMigrationBuilder(
  *       { name: "Alice", email: "alice@example.com" },
  *       { name: "Bob", email: "bob@example.com" }
  *     ])
- *     .done()
+ *     .end()
  *   .compile();
  * ```
  */

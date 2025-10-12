@@ -29,12 +29,12 @@
 
 import type {
   CreateCollectionRule,
-  CreateMultiCollectionInstanceRule,
+  CreateMultiModelInstanceRule,
   DatabaseState,
-  MarkAsMultiCollectionRule,
+  MarkAsMultiModelTypeRule,
   MigrationRule,
   SeedCollectionRule,
-  SeedMultiCollectionInstanceRule,
+  SeedMultiModelInstanceTypeRule,
   TransformCollectionRule,
   TransformMultiCollectionTypeRule,
   UpdateIndexesRule,
@@ -550,7 +550,7 @@ export class SimulationApplier implements SimulationMigrationApplier {
    */
   private applyCreateMultiCollectionInstance(
     state: SimulationDatabaseState,
-    operation: CreateMultiCollectionInstanceRule,
+    operation: CreateMultiModelInstanceRule,
   ): SimulationDatabaseState {
     // Initialize multiModels if not present
     if (!state.multiModels) {
@@ -572,7 +572,7 @@ export class SimulationApplier implements SimulationMigrationApplier {
         {
           _id: "_information",
           _type: "_information",
-          collectionType: operation.collectionType,
+          collectionType: operation.modelType,
           createdAt: new Date(),
         },
         {
@@ -603,7 +603,7 @@ export class SimulationApplier implements SimulationMigrationApplier {
    */
   private reverseCreateMultiCollectionInstance(
     state: SimulationDatabaseState,
-    operation: CreateMultiCollectionInstanceRule,
+    operation: CreateMultiModelInstanceRule,
   ): SimulationDatabaseState {
     if (!state.multiModels) {
       state.multiModels = {};
@@ -633,7 +633,7 @@ export class SimulationApplier implements SimulationMigrationApplier {
    */
   private applySeedMultiCollectionInstance(
     state: SimulationDatabaseState,
-    operation: SeedMultiCollectionInstanceRule,
+    operation: SeedMultiModelInstanceTypeRule,
   ): SimulationDatabaseState {
     if (!state.multiModels) {
       state.multiModels = {};
@@ -661,11 +661,11 @@ export class SimulationApplier implements SimulationMigrationApplier {
           : { value: doc };
 
       // Add _type field
-      docObj._type = operation.typeName;
+      docObj._type = operation.modelType;
 
       // Generate _id if missing (simple simulation)
       if (!docObj._id) {
-        docObj._id = `${operation.typeName}:sim_${
+        docObj._id = `${operation.modelType}:sim_${
           Math.random().toString(36).substring(2)
         }`;
       }
@@ -688,7 +688,7 @@ export class SimulationApplier implements SimulationMigrationApplier {
    */
   private reverseSeedMultiCollectionInstance(
     state: SimulationDatabaseState,
-    operation: SeedMultiCollectionInstanceRule,
+    operation: SeedMultiModelInstanceTypeRule,
   ): SimulationDatabaseState {
     if (!state.multiModels) {
       return state;
@@ -720,7 +720,7 @@ export class SimulationApplier implements SimulationMigrationApplier {
         : null;
 
       // Keep documents that don't match the operation's type or aren't in the seeded IDs
-      return docType !== operation.typeName ||
+      return docType !== operation.modelType ||
         !seededIds.has(docId as string | number);
     });
 
@@ -819,7 +819,7 @@ export class SimulationApplier implements SimulationMigrationApplier {
    */
   private applyMarkAsMultiCollection(
     state: SimulationDatabaseState,
-    operation: MarkAsMultiCollectionRule,
+    operation: MarkAsMultiModelTypeRule,
   ): SimulationDatabaseState {
     // Validate that collection exists (either as regular or multi-collection)
     const collectionExists =
@@ -871,7 +871,7 @@ export class SimulationApplier implements SimulationMigrationApplier {
    */
   private reverseMarkAsMultiCollection(
     state: SimulationDatabaseState,
-    operation: MarkAsMultiCollectionRule,
+    operation: MarkAsMultiModelTypeRule,
   ): SimulationDatabaseState {
     // In simulation, reversing just validates the collection exists
     // We don't actually move it back since the simulation doesn't track metadata

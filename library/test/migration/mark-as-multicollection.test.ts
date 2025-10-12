@@ -8,7 +8,7 @@
 import { assertEquals, assertExists, assertRejects } from "@std/assert";
 import { migrationBuilder } from "../../src/migration/builder.ts";
 import { MongodbApplier } from "../../src/migration/appliers/mongodb.ts";
-import type { MarkAsMultiCollectionRule } from "../../src/migration/types.ts";
+import type { MarkAsMultiModelTypeRule } from "../../src/migration/types.ts";
 import { withDatabase } from "../+shared.ts";
 import {
   MULTI_COLLECTION_INFO_TYPE,
@@ -22,17 +22,17 @@ import {
 Deno.test("markAsMultiCollection - creates correct operation rule", () => {
   const builder = migrationBuilder({ schemas: {} });
 
-  builder.markAsMultiCollection("catalog_main", "catalog");
+  builder.markMultiModelType("catalog_main", "catalog");
 
   const state = builder.compile();
   assertEquals(state.operations.length, 1);
   assertEquals(state.operations[0].type, "mark_as_multicollection");
   assertEquals(
-    (state.operations[0] as MarkAsMultiCollectionRule).collectionName,
+    (state.operations[0] as MarkAsMultiModelTypeRule).collectionName,
     "catalog_main",
   );
   assertEquals(
-    (state.operations[0] as MarkAsMultiCollectionRule).collectionType,
+    (state.operations[0] as MarkAsMultiModelTypeRule).modelType,
     "catalog",
   );
 });
@@ -41,8 +41,8 @@ Deno.test("markAsMultiCollection - supports method chaining", () => {
   const builder = migrationBuilder({ schemas: {} });
 
   const result = builder
-    .markAsMultiCollection("catalog_main", "catalog")
-    .markAsMultiCollection("product_main", "product");
+    .markMultiModelType("catalog_main", "catalog")
+    .markMultiModelType("product_main", "product");
 
   assertEquals(result, builder); // Returns same builder
   assertEquals(builder.compile().operations.length, 2);
@@ -64,10 +64,10 @@ Deno.test("markAsMultiCollection - creates metadata documents", async (t) => {
     ]);
 
     // Mark as multi-collection
-    const operation: MarkAsMultiCollectionRule = {
+    const operation: MarkAsMultiModelTypeRule = {
       type: "mark_as_multicollection",
       collectionName: "test_catalog",
-      collectionType: "catalog",
+      modelType: "catalog",
     };
 
     await applier.applyOperation(operation);
@@ -109,10 +109,10 @@ Deno.test("markAsMultiCollection - is idempotent", async (t) => {
       { name: "Product X" },
     ]);
 
-    const operation: MarkAsMultiCollectionRule = {
+    const operation: MarkAsMultiModelTypeRule = {
       type: "mark_as_multicollection",
       collectionName: "test_catalog_2",
-      collectionType: "catalog",
+      modelType: "catalog",
     };
 
     // Should not throw
@@ -135,10 +135,10 @@ Deno.test("markAsMultiCollection - throws if collection doesn't exist", async (t
   await withDatabase(t.name, async (db) => {
     const applier = new MongodbApplier(db);
 
-    const operation: MarkAsMultiCollectionRule = {
+    const operation: MarkAsMultiModelTypeRule = {
       type: "mark_as_multicollection",
       collectionName: "nonexistent_collection",
-      collectionType: "catalog",
+      modelType: "catalog",
     };
 
     await assertRejects(
@@ -167,10 +167,10 @@ Deno.test("markAsMultiCollection - reverses by removing metadata", async (t) => 
       { name: "Product Z", price: 400 },
     ]);
 
-    const operation: MarkAsMultiCollectionRule = {
+    const operation: MarkAsMultiModelTypeRule = {
       type: "mark_as_multicollection",
       collectionName: "test_catalog_3",
-      collectionType: "catalog",
+      modelType: "catalog",
     };
 
     // Reverse the operation
@@ -205,10 +205,10 @@ Deno.test("markAsMultiCollection - full apply-reverse cycle", async (t) => {
       { name: "Item 2" },
     ]);
 
-    const operation: MarkAsMultiCollectionRule = {
+    const operation: MarkAsMultiModelTypeRule = {
       type: "mark_as_multicollection",
       collectionName: "test_catalog_4",
-      collectionType: "catalog",
+      modelType: "catalog",
     };
 
     // Apply: mark as multi-collection

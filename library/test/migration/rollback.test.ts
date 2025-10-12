@@ -42,13 +42,13 @@ Deno.test("Rollback - simple collection transformation", async (t) => {
         migrate(migration) {
           return migration
             .createCollection("users")
-            .done()
+            .end()
             .collection("users")
             .seed([
               { name: "Alice", email: "alice@test.com" },
               { name: "Bob", email: "bob@test.com" },
             ])
-            .done()
+            .end()
             .compile();
         },
       },
@@ -80,7 +80,7 @@ Deno.test("Rollback - simple collection transformation", async (t) => {
                 return rest;
               },
             })
-            .done()
+            .end()
             .compile();
         },
       },
@@ -149,10 +149,10 @@ Deno.test("Rollback - successive migrations", async (t) => {
       migrate(migration) {
         return migration
           .createCollection("products")
-          .done()
+          .end()
           .collection("products")
           .seed([{ name: "Product A" }])
-          .done()
+          .end()
           .compile();
       },
     });
@@ -179,7 +179,7 @@ Deno.test("Rollback - successive migrations", async (t) => {
               return rest;
             },
           })
-          .done()
+          .end()
           .compile();
       },
     });
@@ -207,7 +207,7 @@ Deno.test("Rollback - successive migrations", async (t) => {
               return rest;
             },
           })
-          .done()
+          .end()
           .compile();
       },
     });
@@ -286,7 +286,7 @@ Deno.test("Rollback - multi-collection type transformation", async (t) => {
         },
         migrate(migration) {
           return migration
-            .newMultiCollection("catalog_main", "catalog")
+            .createMultiModelInstance("catalog_main", "catalog")
             .seedType("book", [
               { title: "Book 1", author: "Author 1" },
               { title: "Book 2", author: "Author 2" },
@@ -403,10 +403,10 @@ Deno.test("Rollback - multi-collection across multiple instances", async (t) => 
         },
         migrate(migration) {
           return migration
-            .newMultiCollection("catalog_library", "catalog")
+            .createMultiModelInstance("catalog_library", "catalog")
             .seedType("book", [{ title: "Library Book 1" }])
             .end()
-            .newMultiCollection("catalog_store", "catalog")
+            .newMultiModelInstance("catalog_store", "catalog")
             .seedType("book", [{ title: "Store Book 1" }])
             .end()
             .compile();

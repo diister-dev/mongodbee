@@ -87,7 +87,7 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
     },
     migrate(migration) {
       migration
-        .newMultiCollection("posts_main", "posts")
+        .createMultiModelInstance("posts_main", "posts")
         .seedType("article", [
           {
             _id: "post1",
@@ -179,7 +179,7 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
     migrate(migration) {
       // Create comments for posts multi-collection
       migration
-        .newMultiCollection("comments_posts_main", "comments")
+        .createMultiModelInstance("comments_posts_main", "comments")
         .seedType("comment", [
           {
             _id: "comment1",

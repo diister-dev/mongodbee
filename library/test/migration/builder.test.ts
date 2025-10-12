@@ -49,7 +49,7 @@ Deno.test("MigrationBuilder - createCollection adds create operation", () => {
 
   const state = migrationBuilder({ schemas })
     .createCollection("users")
-    .done()
+    .end()
     .compile();
 
   assertEquals(state.operations.length, 1);
@@ -68,7 +68,7 @@ Deno.test("MigrationBuilder - createCollection marks as lossy", () => {
 
   const state = migrationBuilder({ schemas })
     .createCollection("users")
-    .done()
+    .end()
     .compile();
 
   assert(state.hasProperty("lossy"));
@@ -92,7 +92,7 @@ Deno.test("MigrationBuilder - seed adds seed operation", () => {
   const state = migrationBuilder({ schemas })
     .createCollection("users")
     .seed(documents)
-    .done()
+    .end()
     .compile();
 
   assertEquals(state.operations.length, 2);
@@ -121,7 +121,7 @@ Deno.test("MigrationBuilder - transform adds transform operation", () => {
         return rest;
       },
     })
-    .done()
+    .end()
     .compile();
 
   assertEquals(state.operations.length, 1);
@@ -146,9 +146,9 @@ Deno.test("MigrationBuilder - chain multiple operations", () => {
   const state = migrationBuilder({ schemas })
     .createCollection("users")
     .seed([{ _id: "1", name: "Alice" }])
-    .done()
+    .end()
     .createCollection("posts")
-    .done()
+    .end()
     .compile();
 
   assertEquals(state.operations.length, 3);
@@ -175,7 +175,7 @@ Deno.test("MigrationBuilder - newMultiCollection creates instance", () => {
   };
 
   const state = migrationBuilder({ schemas })
-    .newMultiCollection("catalog_main", "catalog")
+    .createMultiModelInstance("catalog_main", "catalog")
     .end()
     .compile();
 
@@ -208,7 +208,7 @@ Deno.test("MigrationBuilder - seedType adds seed for multi-collection", () => {
   ];
 
   const state = migrationBuilder({ schemas })
-    .newMultiCollection("catalog_main", "catalog")
+    .createMultiModelInstance("catalog_main", "catalog")
     .seedType("product", products)
     .end()
     .compile();
@@ -282,7 +282,7 @@ Deno.test("MigrationBuilder - seed validates documents against schema", () => {
   const state = migrationBuilder({ schemas })
     .createCollection("users")
     .seed([validDoc])
-    .done()
+    .end()
     .compile();
 
   assertEquals(state.operations.length, 2);
@@ -294,7 +294,7 @@ Deno.test("MigrationBuilder - seed validates documents against schema", () => {
     migrationBuilder({ schemas })
       .createCollection("users")
       .seed([invalidDoc])
-      .done()
+      .end()
       .compile();
 
     throw new Error("Should have thrown validation error");
@@ -366,13 +366,13 @@ Deno.test("getMigrationSummary - returns correct counts", () => {
   const state = migrationBuilder({ schemas })
     .createCollection("users")
     .seed([{ _id: "1", name: "Alice" }])
-    .done()
+    .end()
     .collection("posts")
     .transform({
       up: (doc) => doc,
       down: (doc) => doc,
     })
-    .done()
+    .end()
     .compile();
 
   const summary = getMigrationSummary(state);
@@ -399,7 +399,7 @@ Deno.test("getMigrationSummary - shows reversible when no create operations", ()
   const state = migrationBuilder({ schemas })
     .collection("users")
     .seed([{ _id: "1", name: "Alice" }])
-    .done()
+    .end()
     .compile();
 
   const summary = getMigrationSummary(state);

@@ -114,7 +114,7 @@ export class SimulationValidator implements MigrationValidator {
    *                       If not provided, will generate mock state from parent schemas
    * @returns Validation result with success status, errors, and warnings
    */
-  validateMigration(
+  async validateMigration(
     definition: MigrationDefinition,
     initialState?: SimulationDatabaseState,
   ): Promise<ValidationResult> {
@@ -159,7 +159,7 @@ export class SimulationValidator implements MigrationValidator {
       for (let i = 0; i < operations.length; i++) {
         const operation = operations[i];
         try {
-          currentState = this.applier.applyOperation(currentState, operation);
+          currentState = await this.applier.applyOperation(currentState, operation);
           appliedOperations++;
         } catch (error) {
           const errorMessage = error instanceof Error
@@ -213,7 +213,7 @@ export class SimulationValidator implements MigrationValidator {
         if (definition.schemas.multiCollections) {
           const declaredMultiCollections = Object.keys(definition.schemas.multiCollections ?? {});
           const parentMultiCollections = Object.keys(definition.parent?.schemas.multiCollections ?? {});
-          const createdMultiCollections = Object.keys(stateAfterMigration.multiModels ?? {});
+          const createdMultiCollections = Object.keys(stateAfterMigration.multiCollections ?? {});
   
           const declaredMultiCollectionsName = new Set(declaredMultiCollections);
           const parentMultiCollectionsName = new Set(parentMultiCollections);
@@ -1209,9 +1209,9 @@ export class SimulationValidator implements MigrationValidator {
    *
    * @private
    */
-  private simulateParentMigrations(
+  private async simulateParentMigrations(
     parent: MigrationDefinition,
-  ): SimulationDatabaseState {
+  ): Promise<SimulationDatabaseState> {
     let currentState = createEmptyDatabaseState();
 
     // Collect all ancestors (from root to immediate parent)
@@ -1232,7 +1232,7 @@ export class SimulationValidator implements MigrationValidator {
       const state = ancestor.migrate(builder);
 
       for (const operation of state.operations) {
-        currentState = this.applier.applyOperation(currentState, operation);
+        currentState = await this.applier.applyOperation(currentState, operation);
       }
     }
 
@@ -1383,10 +1383,10 @@ export class SimulationValidator implements MigrationValidator {
    * @param parent - The parent migration definition
    * @returns Database state with real seeds + mock data supplements
    */
-  private buildMockStateFromSchemas(
+  private async buildMockStateFromSchemas(
     parent: MigrationDefinition,
-  ): SimulationDatabaseState {
-    let currentState = this.simulateParentMigrations(parent);
+  ): Promise<SimulationDatabaseState> {
+    let currentState = await this.simulateParentMigrations(parent);
     
     if (parent.schemas.collections) {
       currentState = this.populateCollectionsMock(

@@ -447,7 +447,7 @@ Deno.test("SimulationValidator - warns about too many operations", async () => {
           builder = builder.seed([{ value: i }]);
         }
 
-        return builder.done().compile();
+        return builder.end().compile();
       },
     },
   );
@@ -571,7 +571,7 @@ Deno.test("SimulationValidator - detects schema change without transformation", 
       schemas: parentSchemas,
       migrate(m) {
         // Create an instance with old schema
-        m.newMultiCollection("comments@test", "comments")
+        m.createMultiModelInstance("comments@test", "comments")
           .seedType("user_comment", [
             {
               authorId: "user1",
@@ -645,7 +645,7 @@ Deno.test("SimulationValidator - accepts schema change WITH valid transformation
       parent: null,
       schemas: parentSchemas,
       migrate(m) {
-        m.newMultiCollection("comments@test", "comments")
+        m.createMultiModelInstance("comments@test", "comments")
           .seedType("user_comment", [
             {
               authorId: "user1",

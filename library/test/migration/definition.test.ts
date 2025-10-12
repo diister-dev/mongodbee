@@ -91,7 +91,7 @@ Deno.test("Migration chain - creates parent-child relationship", () => {
   const migration1 = migrationDefinition("001", "Create users", {
     parent: null,
     schemas: schemas1,
-    migrate: (builder) => builder.createCollection("users").done().compile(),
+    migrate: (builder) => builder.createCollection("users").end().compile(),
   });
 
   const schemas2 = {

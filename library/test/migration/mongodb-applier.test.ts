@@ -12,9 +12,9 @@ import { withDatabase } from "../+shared.ts";
 import { MongodbApplier } from "../../src/migration/appliers/mongodb.ts";
 import type {
   CreateCollectionRule,
-  CreateMultiCollectionInstanceRule,
+  CreateMultiModelInstanceRule,
   SeedCollectionRule,
-  SeedMultiCollectionInstanceRule,
+  SeedMultiModelInstanceTypeRule,
   TransformCollectionRule,
   TransformMultiCollectionTypeRule,
 } from "../../src/migration/types.ts";
@@ -237,10 +237,10 @@ Deno.test("MongodbApplier - creates multi-collection instance with metadata", as
     const applier = new MongodbApplier(db);
     applier.setCurrentMigrationId("test_migration_001");
 
-    const operation: CreateMultiCollectionInstanceRule = {
-      type: "create_multicollection_instance",
+    const operation: CreateMultiModelInstanceRule = {
+      type: "create_multimodel_instance",
       collectionName: "catalog_main",
-      collectionType: "catalog",
+      modelType: "catalog",
     };
 
     await applier.applyOperation(operation);
@@ -274,10 +274,10 @@ Deno.test("MongodbApplier - reverse drops multi-collection instance", async (t) 
       createdAt: new Date(),
     });
 
-    const operation: CreateMultiCollectionInstanceRule = {
-      type: "create_multicollection_instance",
+    const operation: CreateMultiModelInstanceRule = {
+      type: "create_multimodel_instance",
       collectionName: "catalog_main",
-      collectionType: "catalog",
+      modelType: "catalog",
     };
 
     await applier.applyReverseOperation(operation);
@@ -311,10 +311,10 @@ Deno.test("MongodbApplier - seeds multi-collection type with _type field", async
       { name: "Product 2", price: 200 },
     ];
 
-    const operation: SeedMultiCollectionInstanceRule = {
+    const operation: SeedMultiModelInstanceTypeRule = {
       type: "seed_multicollection_instance",
       collectionName: "catalog_main",
-      typeName: "product",
+      modelType: "product",
       documents: products,
     };
 

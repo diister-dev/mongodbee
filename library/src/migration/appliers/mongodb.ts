@@ -24,12 +24,12 @@
 
 import type {
   CreateCollectionRule,
-  CreateMultiCollectionInstanceRule,
-  MarkAsMultiCollectionRule,
+  CreateMultiModelInstanceRule,
+  MarkAsMultiModelTypeRule,
   MigrationApplier,
   MigrationRule,
   SeedCollectionRule,
-  SeedMultiCollectionInstanceRule,
+  SeedMultiModelInstanceTypeRule,
   TransformCollectionRule,
   TransformMultiCollectionTypeRule,
   UpdateIndexesRule,
@@ -814,7 +814,7 @@ export class MongodbApplier implements MigrationApplier {
    * @param operation - Create multi-collection instance operation
    */
   private async applyCreateMultiCollectionInstance(
-    operation: CreateMultiCollectionInstanceRule,
+    operation: CreateMultiModelInstanceRule,
   ): Promise<void> {
     try {
       // Check if instance already exists
@@ -834,7 +834,7 @@ export class MongodbApplier implements MigrationApplier {
       await createMultiCollectionInfo(
         this.db,
         operation.collectionName,
-        operation.collectionType,
+        operation.modelType,
         this.currentMigrationId || "unknown",
       );
     } catch (error) {
@@ -853,7 +853,7 @@ export class MongodbApplier implements MigrationApplier {
    * @param operation - Create multi-collection instance operation to reverse
    */
   private async reverseCreateMultiCollectionInstance(
-    operation: CreateMultiCollectionInstanceRule,
+    operation: CreateMultiModelInstanceRule,
   ): Promise<void> {
     try {
       // Check if instance exists
@@ -888,7 +888,7 @@ export class MongodbApplier implements MigrationApplier {
    * @param operation - Seed multi-collection instance operation
    */
   private async applySeedMultiCollectionInstance(
-    operation: SeedMultiCollectionInstanceRule,
+    operation: SeedMultiModelInstanceTypeRule,
   ): Promise<void> {
     try {
       // Check if instance exists
@@ -913,12 +913,12 @@ export class MongodbApplier implements MigrationApplier {
           : { value: doc };
 
         // Generate _id automatically if not provided, following the same pattern as multi-collection.ts
-        const _id = baseDoc._id ?? `${operation.typeName}:${newId()}`;
+        const _id = baseDoc._id ?? `${operation.modelType}:${newId()}`;
 
         return {
           ...baseDoc,
           _id,
-          _type: operation.typeName,
+          _type: operation.modelType,
         };
       });
 
@@ -930,7 +930,7 @@ export class MongodbApplier implements MigrationApplier {
       }
     } catch (error) {
       throw new Error(
-        `Failed to seed multi-collection instance ${operation.collectionName} with type ${operation.typeName}: ${
+        `Failed to seed multi-collection instance ${operation.collectionName} with type ${operation.modelType}: ${
           error instanceof Error ? error.message : "Unknown error"
         }`,
       );
@@ -944,7 +944,7 @@ export class MongodbApplier implements MigrationApplier {
    * @param operation - Seed multi-collection instance operation to reverse
    */
   private async reverseSeedMultiCollectionInstance(
-    operation: SeedMultiCollectionInstanceRule,
+    operation: SeedMultiModelInstanceTypeRule,
   ): Promise<void> {
     try {
       // Check if instance exists
@@ -978,18 +978,18 @@ export class MongodbApplier implements MigrationApplier {
         if (validIds.length > 0) {
           await collection.deleteMany({
             _id: { $in: validIds },
-            _type: operation.typeName,
+            _type: operation.modelType,
           } as Record<string, unknown>);
         }
       } else {
         console.warn(
-          `Warning: Cannot reverse seed operation for multi-collection instance ${operation.collectionName} type ${operation.typeName} - ` +
+          `Warning: Cannot reverse seed operation for multi-collection instance ${operation.collectionName} type ${operation.modelType} - ` +
             "no documents with _id fields found. This may leave orphaned data.",
         );
       }
     } catch (error) {
       throw new Error(
-        `Failed to reverse seed operation for multi-collection instance ${operation.collectionName} type ${operation.typeName}: ${
+        `Failed to reverse seed operation for multi-collection instance ${operation.collectionName} type ${operation.modelType}: ${
           error instanceof Error ? error.message : "Unknown error"
         }`,
       );
@@ -1150,7 +1150,7 @@ export class MongodbApplier implements MigrationApplier {
    * @param operation - Mark as multi-collection operation
    */
   private async applyMarkAsMultiCollection(
-    operation: MarkAsMultiCollectionRule,
+    operation: MarkAsMultiModelTypeRule,
   ): Promise<void> {
     try {
       const collection = this.db.collection(operation.collectionName);
@@ -1184,7 +1184,7 @@ export class MongodbApplier implements MigrationApplier {
       await createMultiCollectionInfo(
         this.db,
         operation.collectionName,
-        operation.collectionType,
+        operation.modelType,
         migrationId,
       );
     } catch (error) {
@@ -1203,7 +1203,7 @@ export class MongodbApplier implements MigrationApplier {
    * @param operation - Mark as multi-collection operation to reverse
    */
   private async reverseMarkAsMultiCollection(
-    operation: MarkAsMultiCollectionRule,
+    operation: MarkAsMultiModelTypeRule,
   ): Promise<void> {
     try {
       const collection = this.db.collection(operation.collectionName);

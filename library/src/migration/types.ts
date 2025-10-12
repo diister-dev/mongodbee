@@ -29,16 +29,21 @@ export type MigrationProperty =
 export type CreateCollectionRule = {
   type: "create_collection";
   collectionName: string;
-  /** Valibot schema for the collection - used to create MongoDB JSON Schema validator */
-  schema?: unknown;
+  schema: SchemaContent;
 };
 
 export type CreateMultiCollectionRule = {
   type: "create_multicollection";
   collectionName: string;
-  /** Valibot schema for the multi-collection - used to create MongoDB JSON Schema validator */
-  schema?: unknown;
+  schema: MultiSchema;
 }
+
+export type CreateMultiModelInstanceRule = {
+  type: "create_multimodel_instance";
+  collectionName: string;
+  modelType: string;
+  schema: MultiSchema;
+};
 
 /**
  * Rule for seeding a collection with initial data
@@ -56,6 +61,14 @@ export type SeedMultiCollectionTypeRule = {
   documents: readonly unknown[];
 }
 
+export type SeedMultiModelInstanceTypeRule = {
+  type: "seed_multimodel_instance_type";
+  collectionName: string;
+  modelType: string;
+  documentType: string;
+  documents: readonly unknown[];
+};
+
 /**
  * Rule for transforming documents in a collection
  *
@@ -70,47 +83,43 @@ export type TransformCollectionRule<
   collectionName: string;
   up: (doc: T) => U;
   down: (doc: U) => T;
+  schema: SchemaContent;
+  parentSchema?: SchemaContent;
   /** Marks this transformation as irreversible (cannot be rolled back) */
   irreversible?: boolean;
   /** Marks this transformation as lossy (rollback loses data) */
   lossy?: boolean;
 };
 
-/**
- * Rule for creating a multi-collection instance
- */
-export type CreateMultiCollectionInstanceRule = {
-  type: "create_multicollection_instance";
-  collectionName: string;
-  collectionType: string;
-};
-
-/**
- * Rule for seeding a specific type in a multi-collection instance
- */
-export type SeedMultiCollectionInstanceRule = {
-  type: "seed_multicollection_instance";
-  collectionName: string;
-  typeName: string;
-  documents: readonly unknown[];
-};
-
-/**
- * Rule for transforming a specific type across ALL instances of a multi-collection
- */
 export type TransformMultiCollectionTypeRule<
   T = Record<string, unknown>,
   U = Record<string, unknown>,
 > = {
   type: "transform_multicollection_type";
-  collectionType: string;
-  typeName: string;
+  collectionName: string;
+  documentType: string;
   up: (doc: T) => U;
   down: (doc: U) => T;
-  /** Optional Valibot schema for the type (new schema) - used to validate transformed documents */
-  schema?: unknown;
-  /** Optional Valibot schema from parent migration (old schema) - used to generate mock data for simulation */
-  parentSchema?: unknown;
+  schema: SchemaContent,
+  parentSchema?: SchemaContent,
+  /** Marks this transformation as irreversible (cannot be rolled back) */
+  irreversible?: boolean;
+  /** Marks this transformation as lossy (rollback loses data) */
+  lossy?: boolean;
+};
+
+export type TransformMultiModelInstanceTypeRule<
+  T = Record<string, unknown>,
+  U = Record<string, unknown>,
+> = {
+  type: "transform_multimodel_instance_type";
+  collectionName: string;
+  modelType: string;
+  documentType: string;
+  up: (doc: T) => U;
+  down: (doc: U) => T;
+  schema: SchemaContent,
+  parentSchema?: SchemaContent,
   /** Marks this transformation as irreversible (cannot be rolled back) */
   irreversible?: boolean;
   /** Marks this transformation as lossy (rollback loses data) */
@@ -134,26 +143,31 @@ export type UpdateIndexesRule = {
  * or when adopting an existing collection that already has the multi-collection format
  * (documents with _type field) but lacks the metadata documents.
  */
-export type MarkAsMultiCollectionRule = {
-  type: "mark_as_multicollection";
+export type MarkAsMultiModelTypeRule = {
+  type: "mark_as_multimodel";
   collectionName: string;
-  collectionType: string;
+  modelType: string;
 };
 
 /**
  * Union type representing all possible migration operations
  */
 export type MigrationRule =
+  // Create
   | CreateCollectionRule
   | CreateMultiCollectionRule
+  | CreateMultiModelInstanceRule
+  // Seed
   | SeedCollectionRule
   | SeedMultiCollectionTypeRule
+  | SeedMultiModelInstanceTypeRule
+  // Transform
   | TransformCollectionRule
-  | CreateMultiCollectionInstanceRule
-  | SeedMultiCollectionInstanceRule
   | TransformMultiCollectionTypeRule
+  | TransformMultiModelInstanceTypeRule
+  // Other
   | UpdateIndexesRule
-  | MarkAsMultiCollectionRule;
+  | MarkAsMultiModelTypeRule;
 
 /**
  * Transformation rule for bidirectional document changes
@@ -218,26 +232,44 @@ export interface MigrationState {
  * This interface provides a fluent API for chaining operations on a single
  * collection during migration definition.
  */
-export interface MigrationCollectionBuilder {
+export interface CollectionBuilder {
   /**
    * Seeds the collection with initial documents
    * @param documents - Array of documents to insert
    * @returns The collection builder for method chaining
    */
-  seed(documents: readonly unknown[]): MigrationCollectionBuilder;
+  seed(documents: readonly unknown[]): CollectionBuilder;
 
   /**
    * Applies a transformation to all documents in the collection
    * @param rule - The transformation rule with up/down functions
    * @returns The collection builder for method chaining
    */
-  transform(rule: TransformRule): MigrationCollectionBuilder;
+  transform(rule: TransformRule): CollectionBuilder;
 
   /**
    * Finishes configuring this collection and returns to the main builder
    * @returns The main migration builder
    */
-  done(): MigrationBuilder;
+  end(): MigrationBuilder;
+}
+
+/**
+ * Builder interface for configuring a multi-collection template
+ */
+export interface MultiCollectionBuilder {
+  /**
+   * Configures a specific type within the multi-collection
+   * @param typeName - The name of the type to configure
+   * @returns A type builder for the specified type
+   */
+  type(typeName: string): MultiCollectionTypeBuilder;
+
+  /**
+   * Finishes configuring this multi-collection and returns to the main builder
+   * @returns The main migration builder
+   */
+  end(): MigrationBuilder;
 }
 
 /**
@@ -265,38 +297,38 @@ export interface MultiCollectionTypeBuilder {
   end(): MultiCollectionBuilder;
 }
 
-/**
- * Builder interface for configuring a multi-collection template
- */
-export interface MultiCollectionBuilder {
+export interface MultiModelInstanceTypeBuilder {
   /**
-   * Configures a specific type within the multi-collection
-   * @param typeName - The name of the type to configure
-   * @returns A type builder for the specified type
+   * Seeds this type with initial documents
+   * @param documents - Array of documents to insert
+   * @returns The type builder for method chaining
    */
-  type(typeName: string): MultiCollectionTypeBuilder;
+  seed(documents: readonly unknown[]): MultiModelInstanceTypeBuilder;
+  
+  /**
+   * Applies a transformation to all documents of this type in this instance
+   * @param rule - The transformation rule with up/down functions
+   * @returns The type builder for method chaining
+   */
+  transform(rule: TransformRule): MultiModelInstanceTypeBuilder;
 
   /**
-   * Finishes configuring this multi-collection and returns to the main builder
-   * @returns The main migration builder
+   * Finishes configuring this type and returns to the instance builder
+   * @returns The instance builder
    */
-  end(): MigrationBuilder;
+  end(): MultiModelInstanceBuilder;
 }
 
 /**
  * Builder interface for configuring a specific multi-collection instance
  */
-export interface MultiCollectionInstanceBuilder {
+export interface MultiModelInstanceBuilder {
   /**
-   * Seeds a specific type in this instance
-   * @param typeName - The name of the type to seed
-   * @param documents - Array of documents to insert
-   * @returns The instance builder for method chaining
+   * Configures a specific type within this multi-collection instance
+   * @param typeName - The name of the type to configure
+   * @returns A type builder for the specified type
    */
-  seedType(
-    typeName: string,
-    documents: readonly unknown[],
-  ): MultiCollectionInstanceBuilder;
+  type(typeName: string): MultiModelInstanceTypeBuilder;
 
   /**
    * Finishes configuring this instance and returns to the main builder
@@ -318,14 +350,14 @@ export interface MigrationBuilder {
    * @param name - The name of the collection to create
    * @returns A collection builder for the new collection
    */
-  createCollection(name: string): MigrationCollectionBuilder;
+  createCollection(name: string): CollectionBuilder;
 
   /**
    * Configures an existing collection
    * @param name - The name of the collection to configure
    * @returns A collection builder for the existing collection
    */
-  collection(name: string): MigrationCollectionBuilder;
+  collection(name: string): CollectionBuilder;
 
   /**
    * Creates a new multi-collection template and returns a builder to configure it
@@ -344,22 +376,23 @@ export interface MigrationBuilder {
   /**
    * Creates a new instance of a multi-collection
    * @param collectionName - The full name of the collection
-   * @param collectionType - The type/model of the multi-collection
+   * @param modelType - The type/model of the multi-collection
    * @returns An instance builder for the new instance
    */
-  newMultiCollection(
+  createMultiModelInstance(
     collectionName: string,
-    collectionType: string,
-  ): MultiCollectionInstanceBuilder;
+    modelType: string,
+  ): MultiModelInstanceBuilder;
 
   /**
    * Configures an existing multi-collection instance
    * @param collectionName - The full name of the collection
    * @returns An instance builder for the existing instance
    */
-  multiCollectionInstance(
+  multiModelInstance(
     collectionName: string,
-  ): MultiCollectionInstanceBuilder;
+    modelType: string,
+  ): MultiModelInstanceBuilder;
 
   /**
    * Updates indexes on an existing collection to match the schema
@@ -375,22 +408,13 @@ export interface MigrationBuilder {
    * or when adopting an existing collection that already has the multi-collection format.
    *
    * @param collectionName - The full name of the collection to mark
-   * @param collectionType - The type/model of the multi-collection
+   * @param modelType - The type/model of the multi-collection
    * @returns The main migration builder for method chaining
-   *
-   * @example
-   * ```typescript
-   * migrate(migration) {
-   *   return migration
-   *     .markAsMultiCollection("comments_legacy", "comments")
-   *     .compile();
-   * }
-   * ```
    */
-  markAsMultiCollection(
+  markMultiModelType(
     collectionName: string,
-    collectionType: string,
-  ): MigrationBuilder;
+    modelType: string,
+  ): MultiModelInstanceBuilder;
 
   /**
    * Compiles the migration into its final executable state
@@ -400,6 +424,7 @@ export interface MigrationBuilder {
 }
 
 export type SchemaContent = Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>;
+export type MultiSchema = Record<string, SchemaContent>;
 
 /**
  * Schema definition for collections and multi-collections
@@ -417,19 +442,13 @@ export type SchemasDefinition = {
   /** Schema definitions for regular multi-collections */
   multiCollections?: Record<
     string, // multi-collection name
-    Record<
-      string, // type name within the multi-collection
-      SchemaContent
-    >
+    MultiSchema
   >;
 
   /** Schema definitions for multi-collections models */
   multiModels?: Record<
     string, // multi-collection model schema name
-    Record<
-      string, // type name within the multi-collection
-      SchemaContent
-    >
+    MultiSchema
   >;
 };
 

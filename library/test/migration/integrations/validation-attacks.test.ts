@@ -118,7 +118,7 @@ Deno.test("Validation Attack 2: Multi-collection type removal without transforma
       },
     },
     migrate(migration) {
-      migration.newMultiCollection("posts", "main");
+      migration.createMultiModelInstance("posts", "main");
       return migration.compile();
     },
   });
@@ -460,7 +460,7 @@ Deno.test("Validation Attack 7: Multi-collection transformation with invalid val
       },
     },
     migrate(migration) {
-      migration.newMultiCollection("posts", "main");
+      migration.createMultiModelInstance("posts", "main");
       return migration.compile();
     },
   });

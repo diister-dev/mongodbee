@@ -72,7 +72,7 @@ export type {
   // Applier interfaces
   MigrationApplier,
   MigrationBuilder,
-  MigrationCollectionBuilder,
+  CollectionBuilder as MigrationCollectionBuilder,
   // Migration definitions
   MigrationDefinition,
   MigrationProperty,
