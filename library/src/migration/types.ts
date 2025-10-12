@@ -52,6 +52,7 @@ export type SeedCollectionRule = {
   type: "seed_collection";
   collectionName: string;
   documents: readonly unknown[];
+  schema: SchemaContent;
 };
 
 export type SeedMultiCollectionTypeRule = {
@@ -59,6 +60,7 @@ export type SeedMultiCollectionTypeRule = {
   collectionName: string;
   documentType: string;
   documents: readonly unknown[];
+  schema: SchemaContent;
 }
 
 export type SeedMultiModelInstanceTypeRule = {
@@ -67,6 +69,15 @@ export type SeedMultiModelInstanceTypeRule = {
   modelType: string;
   documentType: string;
   documents: readonly unknown[];
+  schema: SchemaContent;
+};
+
+export type SeedMultiModelInstancesTypeRule = {
+  type: "seed_multimodel_instances_type";
+  modelType: string;
+  documentType: string;
+  documents: readonly unknown[];
+  schema: SchemaContent;
 };
 
 /**
@@ -126,6 +137,23 @@ export type TransformMultiModelInstanceTypeRule<
   lossy?: boolean;
 };
 
+export type TransformMultiModelInstancesTypeRule<
+  T = Record<string, unknown>,
+  U = Record<string, unknown>,
+> = {
+  type: "transform_multimodel_instances_type";
+  modelType: string;
+  documentType: string;
+  up: (doc: T) => U;
+  down: (doc: U) => T;
+  schema: SchemaContent,
+  parentSchema?: SchemaContent,
+  /** Marks this transformation as irreversible (cannot be rolled back) */
+  irreversible?: boolean;
+  /** Marks this transformation as lossy (rollback loses data) */
+  lossy?: boolean;
+};
+
 /**
  * Rule for updating indexes on an existing collection
  */
@@ -161,10 +189,12 @@ export type MigrationRule =
   | SeedCollectionRule
   | SeedMultiCollectionTypeRule
   | SeedMultiModelInstanceTypeRule
+  | SeedMultiModelInstancesTypeRule
   // Transform
   | TransformCollectionRule
   | TransformMultiCollectionTypeRule
   | TransformMultiModelInstanceTypeRule
+  | TransformMultiModelInstancesTypeRule
   // Other
   | UpdateIndexesRule
   | MarkAsMultiModelTypeRule;
@@ -176,8 +206,8 @@ export type MigrationRule =
  * @template U - Output document type
  */
 export type TransformRule<
-  T = Record<string, unknown>,
-  U = Record<string, unknown>,
+  T = Record<string, any>,
+  U = Record<string, any>,
 > = {
   /** Function to transform from old to new format */
   readonly up: (doc: T) => U;
@@ -319,6 +349,28 @@ export interface MultiModelInstanceTypeBuilder {
   end(): MultiModelInstanceBuilder;
 }
 
+export interface MultiModelInstancesTypeBuilder {
+  /**
+   * Seeds this type with initial documents across ALL instances of this model type
+   * @param documents - Array of documents to insert
+   * @returns The type builder for method chaining
+   */
+  seed(documents: readonly unknown[]): MultiModelInstancesTypeBuilder;
+  
+  /**
+   * Applies a transformation to all documents of this type across ALL instances of this model type
+   * @param rule - The transformation rule with up/down functions
+   * @returns The type builder for method chaining
+   */
+  transform(rule: TransformRule): MultiModelInstancesTypeBuilder;
+
+  /**
+   * Finishes configuring this type and returns to the main builder
+   * @returns The main migration builder
+   */
+  end(): MultiModelInstancesBuilder;
+}
+
 /**
  * Builder interface for configuring a specific multi-collection instance
  */
@@ -332,6 +384,21 @@ export interface MultiModelInstanceBuilder {
 
   /**
    * Finishes configuring this instance and returns to the main builder
+   * @returns The main migration builder
+   */
+  end(): MigrationBuilder;
+}
+
+export interface MultiModelInstancesBuilder {
+  /**
+   * Configures a specific type within ALL instances of this multi-collection model
+   * @param typeName - The name of the type to configure
+   * @returns A type builder for the specified type
+   */
+  type(typeName: string): MultiModelInstancesTypeBuilder;
+
+  /**
+   * Finishes configuring this model type and returns to the main builder
    * @returns The main migration builder
    */
   end(): MigrationBuilder;
@@ -393,6 +460,15 @@ export interface MigrationBuilder {
     collectionName: string,
     modelType: string,
   ): MultiModelInstanceBuilder;
+
+  /**
+   * Configures all instances of a specific multi-collection model type
+   * @param modelType - The type/model of the multi-collection
+   * @returns An instance builder that applies to all instances of this model type
+   */
+  multiModelInstances(
+    modelType: string,
+  ): MultiModelInstancesBuilder;
 
   /**
    * Updates indexes on an existing collection to match the schema
@@ -519,7 +595,5 @@ export type DatabaseState = {
   multiCollections: Record<string, StateCollectionContent>;
 
   /** Multi-collections models and their contents (future feature) */
-  multiModels: Record<string,
-    Record<string, StateCollectionContent>
-  >;
+  multiModels: Record<string, StateCollectionContent & { modelType: string }>;
 };

@@ -1,16 +1,17 @@
 {
   "version": "5",
   "specifiers": {
-    "jsr:@diister/valibot-mock@^0.0.1": "0.0.1",
+    "jsr:@diister/valibot-mock@^0.0.2": "0.0.2",
     "jsr:@std/assert@*": "1.0.10",
     "jsr:@std/assert@^1.0.8": "1.0.10",
-    "jsr:@std/cli@^1.0.8": "1.0.21",
+    "jsr:@std/cli@^1.0.8": "1.0.23",
     "jsr:@std/fmt@^1.0.2": "1.0.8",
     "jsr:@std/fs@^1.0.5": "1.0.19",
+    "jsr:@std/internal@^1.0.10": "1.0.12",
     "jsr:@std/internal@^1.0.5": "1.0.10",
-    "jsr:@std/internal@^1.0.9": "1.0.10",
-    "jsr:@std/path@^1.0.7": "1.1.1",
-    "jsr:@std/path@^1.1.1": "1.1.1",
+    "jsr:@std/internal@^1.0.9": "1.0.12",
+    "jsr:@std/path@^1.0.7": "1.1.2",
+    "jsr:@std/path@^1.1.1": "1.1.2",
     "jsr:@std/ulid@1": "1.0.0",
     "npm:@faker-js/faker@10.0.0": "10.0.0",
     "npm:@types/node@*": "22.12.0",
@@ -20,8 +21,8 @@
     "npm:valibot@1.1.0": "1.1.0"
   },
   "jsr": {
-    "@diister/valibot-mock@0.0.1": {
-      "integrity": "651e4b7d4c9654c69f5f25ced8de92d1972d4bae446fe5aff54e06e83b0e04be",
+    "@diister/valibot-mock@0.0.2": {
+      "integrity": "5e64d739d3ae50f432a9c29d3b9444d326b29c53c38b48313c2c8dda4c78633b",
       "dependencies": [
         "npm:@faker-js/faker",
         "npm:randexp",
@@ -36,6 +37,9 @@
     },
     "@std/cli@1.0.21": {
       "integrity": "cd25b050bdf6282e321854e3822bee624f07aca7636a3a76d95f77a3a919ca2a"
+    },
+    "@std/cli@1.0.23": {
+      "integrity": "bf95b7a9425ba2af1ae5a6359daf58c508f2decf711a76ed2993cd352498ccca"
     },
     "@std/fmt@1.0.8": {
       "integrity": "71e1fc498787e4434d213647a6e43e794af4fd393ef8f52062246e06f7e372b7"
@@ -53,10 +57,19 @@
     "@std/internal@1.0.10": {
       "integrity": "e3be62ce42cab0e177c27698e5d9800122f67b766a0bea6ca4867886cbde8cf7"
     },
+    "@std/internal@1.0.12": {
+      "integrity": "972a634fd5bc34b242024402972cd5143eac68d8dffaca5eaa4dba30ce17b027"
+    },
     "@std/path@1.1.1": {
       "integrity": "fe00026bd3a7e6a27f73709b83c607798be40e20c81dde655ce34052fd82ec76",
       "dependencies": [
         "jsr:@std/internal@^1.0.9"
+      ]
+    },
+    "@std/path@1.1.2": {
+      "integrity": "c0b13b97dfe06546d5e16bf3966b1cadf92e1cc83e56ba5476ad8b498d9e3038",
+      "dependencies": [
+        "jsr:@std/internal@^1.0.10"
       ]
     },
     "@std/ulid@1.0.0": {
@@ -197,7 +210,7 @@
   },
   "workspace": {
     "dependencies": [
-      "jsr:@diister/valibot-mock@^0.0.1",
+      "jsr:@diister/valibot-mock@^0.0.2",
       "jsr:@std/assert@^1.0.8",
       "jsr:@std/cli@^1.0.8",
       "jsr:@std/fmt@^1.0.2",

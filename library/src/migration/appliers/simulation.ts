@@ -81,7 +81,7 @@ export interface SimulationMigrationApplier {
   applyOperation(
     state: SimulationDatabaseState,
     operation: MigrationRule,
-  ): SimulationDatabaseState;
+  ): SimulationDatabaseState | Promise<SimulationDatabaseState>;
 
   /**
    * Reverses a migration operation on a database state
@@ -92,7 +92,7 @@ export interface SimulationMigrationApplier {
   applyReverseOperation(
     state: SimulationDatabaseState,
     operation: MigrationRule,
-  ): SimulationDatabaseState;
+  ): SimulationDatabaseState | Promise<SimulationDatabaseState>;
 }
 
 /**

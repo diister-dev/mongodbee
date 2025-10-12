@@ -54,6 +54,8 @@ import type {
   SeedCollectionRule,
   TransformCollectionRule,
   MultiModelInstanceTypeBuilder,
+  MultiModelInstancesBuilder,
+  MultiModelInstancesTypeBuilder,
 } from "./types.ts";
 
 /**
@@ -98,10 +100,16 @@ function createCollectionBuilder(
 ): CollectionBuilder {
   const builder: CollectionBuilder = {
     seed(documents) {
+      const collectionSchema = options.schemas?.collections?.[collectionName];
+      if (!collectionSchema) {
+        throw new Error(`Cannot seed collection ${collectionName}: schema not found in migration.schemas.collections`);
+      }
+
       state.operations.push({
         type: "seed_collection",
         collectionName,
         documents,
+        schema: collectionSchema,
       });
 
       return builder;
@@ -159,11 +167,17 @@ function createMultiCollectionTypeBuilder(
 ): MultiCollectionTypeBuilder {
   const builder: MultiCollectionTypeBuilder = {
     seed(documents) {
+      const documentSchema = options.schemas?.multiCollections?.[collectionName]?.[documentType];
+      if(!documentSchema) {
+        throw new Error(`Cannot seed multi-collection ${collectionName}: schema not found in migration.schemas.multiCollections`);
+      }
+
       state.operations.push({
         type: "seed_multicollection_type",
         collectionName,
         documentType,
         documents,
+        schema: documentSchema,
       });
       return builder;
     },
@@ -273,6 +287,34 @@ function createMultiModelInstanceBuilder(
   return builder;
 }
 
+/**
+ * Creates a builder for all instances of a multi-collection model
+ * This allows applying operations to all instances of a model type
+ */
+function createMultiModelInstancesBuilder(
+  state: MigrationState,
+  modelType: string,
+  mainBuilder: MigrationBuilder,
+  options: MigrationBuilderOptions,
+) : MultiModelInstancesBuilder {
+  const builder: MultiModelInstancesBuilder = {
+    type(typeName) {
+      return createMultiModelInstancesTypeBuilder(
+        state,
+        modelType,
+        typeName,
+        builder,
+        options,
+      );
+    },
+    end() {
+      return mainBuilder;
+    },
+  };
+
+  return builder;
+}
+
 function createMultiModelInstanceTypeBuilder(
   state: MigrationState,
   collectionName: string,
@@ -283,12 +325,18 @@ function createMultiModelInstanceTypeBuilder(
 ): MultiModelInstanceTypeBuilder {
   const builder: MultiModelInstanceTypeBuilder = {
     seed(documents) {
+      const documentSchema = options.schemas?.multiModels?.[modelType]?.[documentType];
+      if(!documentSchema) {
+        throw new Error(`Cannot seed multi-model instance ${collectionName} of type ${modelType}: schema not found in migration.schemas.multiModels`);
+      }
+
       state.operations.push({
         type: "seed_multimodel_instance_type",
         collectionName,
         modelType,
         documentType,
         documents,
+        schema: documentSchema,
       });
       return builder;
     },
@@ -337,6 +385,77 @@ function createMultiModelInstanceTypeBuilder(
     end() {
       return parentBuilder;
     },
+  };
+
+  return builder;
+}
+
+function createMultiModelInstancesTypeBuilder(
+  state: MigrationState,
+  modelType: string,
+  documentType: string,
+  parentBuilder: MultiModelInstancesBuilder,
+  options: MigrationBuilderOptions,
+): MultiModelInstancesTypeBuilder {
+  const builder: MultiModelInstancesTypeBuilder = {
+    seed(documents) {
+      const documentSchema = options.schemas?.multiModels?.[modelType]?.[documentType];
+      if(!documentSchema) {
+        throw new Error(`Cannot seed multi-model instances of type ${modelType}: schema not found in migration.schemas.multiModels`);
+      }
+
+      state.operations.push({
+        type: "seed_multimodel_instances_type",
+        modelType,
+        documentType,
+        documents,
+        schema: documentSchema,
+      });
+      return builder;
+    },
+
+    transform(rule) {
+      // Extract schema for this specific type from options
+      const typeSchema = options.schemas?.multiModels
+        ?.[modelType]
+        ?.[documentType];
+
+      // Extract parent schema if available
+      const parentTypeSchema = options.parentSchemas?.multiModels
+        ?.[modelType]
+        ?.[documentType];
+
+      if (!typeSchema) {
+        throw new Error(`Cannot transform type ${documentType} in multi-model instances of model ${modelType}: schema not found in migration.schemas.multiModels`);
+      }
+
+      state.operations.push({
+        type: "transform_multimodel_instances_type",
+        modelType,
+        documentType,
+        up: rule.up,
+        down: rule.down,
+        schema: typeSchema,
+        parentSchema: parentTypeSchema,
+        irreversible: rule.irreversible,
+        lossy: rule.lossy,
+      });
+
+      // Mark migration as irreversible if the transform is marked as such
+      if (rule.irreversible) {
+        state.mark({ type: "irreversible" });
+      }
+
+      // Mark migration as lossy if the transform is marked as such
+      if (rule.lossy) {
+        state.mark({ type: "lossy" });
+      }
+
+      return builder;
+    },
+    end() {
+      return parentBuilder;
+    }
   };
 
   return builder;
@@ -426,6 +545,15 @@ function createMigrationBuilder(
       return createMultiModelInstanceBuilder(
         state,
         collectionName,
+        modelType,
+        builder,
+        options,
+      );
+    },
+
+    multiModelInstances(modelType) {
+      return createMultiModelInstancesBuilder(
+        state,
         modelType,
         builder,
         options,

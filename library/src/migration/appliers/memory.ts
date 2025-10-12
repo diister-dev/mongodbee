@@ -1,4 +1,6 @@
+import { ulid } from "@std/ulid/ulid";
 import type { DatabaseState, MigrationRule } from "../types.ts"
+import * as v from "valibot"
 
 export function createMemoryApplier() {
   const migrations: {
@@ -29,15 +31,14 @@ export function createMemoryApplier() {
     },
     create_multimodel_instance: {
       apply: (state, operation) => {
-        state.multiModels[operation.modelType] ??= {};
-        state.multiModels[operation.modelType][operation.collectionName] = { content: [] };
+        state.multiModels[operation.collectionName] ??= {
+          modelType: operation.modelType,
+          content: [],
+        };
         return state;
       },
       reverse: (state, operation) => {
-        delete state.multiModels[operation.modelType]?.[operation.collectionName];
-        if (Object.keys(state.multiModels[operation.modelType] || {}).length === 0) {
-          delete state.multiModels[operation.modelType];
-        }
+        delete state.multiModels[operation.collectionName];
         return state;
       }
     },
@@ -45,16 +46,19 @@ export function createMemoryApplier() {
       apply: (state, operation) => {
         const original = state.collections[operation.collectionName];
         if (original) {
-          state.multiCollections[operation.collectionName] = original;
+          state.multiModels[operation.collectionName] = {
+            modelType: operation.modelType,
+            content: original.content,
+          };
           delete state.collections[operation.collectionName];
         }
         return state;
       },
       reverse: (state, operation) => {
-        const original = state.multiCollections[operation.collectionName];
-        if (original) {
-          state.collections[operation.collectionName] = original;
-          delete state.multiCollections[operation.collectionName];
+        const multiModel = state.multiModels[operation.collectionName];
+        if (multiModel) {
+          state.collections[operation.collectionName] = { content: multiModel.content };
+          delete state.multiModels[operation.collectionName];
         }
         return state;
       }
@@ -65,7 +69,10 @@ export function createMemoryApplier() {
         if(!collection) {
           throw new Error(`Collection ${operation.collectionName} does not exist`);
         }
-        collection.content.push(...operation.documents as any[]);
+        collection.content.push(...operation.documents.map((doc: any) => ({
+          _id: doc._id || (operation.schema._id ? v.getDefault(operation.schema._id) : undefined) || ulid(),
+          ...doc,
+        })));
         return state;
       },
       reverse: (state, operation) => {
@@ -84,7 +91,11 @@ export function createMemoryApplier() {
         if(!multiCollection) {
           throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
         }
-        multiCollection.content.push(...operation.documents as any[]);
+        multiCollection.content.push(...operation.documents.map((doc: any) => ({
+          _id: doc._id || (operation.schema._id ? v.getDefault(operation.schema._id) : undefined) || `${operation.documentType}:${ulid()}`,
+          ...doc,
+          _type: operation.documentType,
+        })));
         return state;
       },
       reverse: (state, operation) => {
@@ -93,7 +104,7 @@ export function createMemoryApplier() {
           throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
         }
         // Simple reversal by removing the last N documents added
-        multiCollection.content.splice(-operation.documents.length);
+        multiCollection.content = multiCollection.content.filter(doc => !operation.documents.some((odoc: any) => odoc._id && odoc._id === doc._id));
         return state;
       }
     },
@@ -101,26 +112,47 @@ export function createMemoryApplier() {
       apply: (state, operation) => {
         const multiCollection = state.multiModels[operation.collectionName];
         if(!multiCollection) {
-          throw new Error(`Multi-collection type ${operation.collectionName} does not exist`);
+          throw new Error(`Multi-model instance ${operation.collectionName} does not exist`);
         }
-        const instance = multiCollection[operation.collectionName];
-        if(!instance) {
-          throw new Error(`Multi-collection instance ${operation.collectionName} does not exist`);
-        }
-        instance.content.push(...operation.documents as any[]);
+        multiCollection.content.push(...operation.documents.map((doc: any) => ({
+          _id: doc._id || (operation.schema._id ? v.getDefault(operation.schema._id) : undefined) || `${operation.documentType}:${ulid()}`,
+          ...doc,
+          _type: operation.documentType,
+        })));
         return state;
       },
       reverse: (state, operation) => {
         const multiCollection = state.multiModels[operation.collectionName];
         if(!multiCollection) {
-          throw new Error(`Multi-collection type ${operation.collectionName} does not exist`);
-        }
-        const instance = multiCollection[operation.collectionName];
-        if(!instance) {
-          throw new Error(`Multi-collection instance ${operation.collectionName} does not exist`);
+          throw new Error(`Multi-model instance ${operation.collectionName} does not exist`);
         }
         // Simple reversal by removing the last N documents added
-        instance.content.splice(-operation.documents.length);
+        multiCollection.content = multiCollection.content.filter(doc => !operation.documents.some((odoc: any) => odoc._id && odoc._id === doc._id));
+        return state;
+      }
+    },
+    seed_multimodel_instances_type: {
+      apply: (state, operation) => {
+        const modelType = operation.modelType;
+        for (const [_instanceName, instance] of Object.entries(state.multiModels)) {
+          if (instance.modelType === modelType) {
+            instance.content.push(...operation.documents.map((doc: any) => ({
+              _id: doc._id || (operation.schema._id ? v.getDefault(operation.schema._id) : undefined) || `${operation.documentType}:${ulid()}`,
+              ...doc,
+              _type: operation.documentType,
+            })));
+          }
+        }
+        return state;
+      },
+      reverse: (state, operation) => {
+        const modelType = operation.modelType;
+        for (const [_instanceName, instance] of Object.entries(state.multiModels)) {
+          if (instance.modelType === modelType) {
+            // Simple reversal by removing the last N documents added
+            instance.content = instance.content.filter(doc => !operation.documents.some((odoc: any) => odoc._id && odoc._id === doc._id));
+          }
+        }
         return state;
       }
     },
@@ -147,18 +179,97 @@ export function createMemoryApplier() {
     },
     transform_multicollection_type: {
       apply: (state, operation) => {
-        throw new Error("Function not implemented.");
+        const multiCollection = state.multiCollections[operation.collectionName];
+        if(!multiCollection) {
+          throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
+        }
+        multiCollection.content = multiCollection.content.map(doc => {
+          if (doc._type === operation.documentType) {
+            return operation.up(doc as any);
+          }
+          return doc;
+        });
+        return state;
       },
       reverse: (state, operation) => {
-        throw new Error("Function not implemented.");
+        if (operation.irreversible) {
+          throw new Error(`Operation is irreversible`);
+        }
+        const multiCollection = state.multiCollections[operation.collectionName];
+        if(!multiCollection) {
+          throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
+        }
+        multiCollection.content = multiCollection.content.map(doc => {
+          if (doc._type === operation.documentType) {
+            return operation.down(doc as any);
+          }
+          return doc;
+        });
+        return state;
       }
     },
     transform_multimodel_instance_type: {
       apply: (state, operation) => {
-        throw new Error("Function not implemented.");
+        const multiCollection = state.multiModels[operation.collectionName];
+        if(!multiCollection) {
+          throw new Error(`Multi-model instance ${operation.collectionName} does not exist`);
+        }
+        multiCollection.content = multiCollection.content.map(doc => {
+          if (doc._type === operation.documentType) {
+            return operation.up(doc as any);
+          }
+          return doc;
+        });
+        return state;
       },
       reverse: (state, operation) => {
-        throw new Error("Function not implemented.");
+        if (operation.irreversible) {
+          throw new Error(`Operation is irreversible`);
+        }
+        const multiCollection = state.multiModels[operation.collectionName];
+        if(!multiCollection) {
+          throw new Error(`Multi-model instance ${operation.collectionName} does not exist`);
+        }
+        multiCollection.content = multiCollection.content.map(doc => {
+          if (doc._type === operation.documentType) {
+            return operation.down(doc as any);
+          }
+          return doc;
+        });
+        return state;
+      }
+    },
+    transform_multimodel_instances_type: {
+      apply: (state, operation) => {
+        const modelType = operation.modelType;
+        for (const [_instanceName, instance] of Object.entries(state.multiModels)) {
+          if (instance.modelType === modelType) {
+            instance.content = instance.content.map(doc => {
+              if (doc._type === operation.documentType) {
+                return operation.up(doc as any);
+              }
+              return doc;
+            });
+          }
+        }
+        return state;
+      },
+      reverse: (state, operation) => {
+        if (operation.irreversible) {
+          throw new Error(`Operation is irreversible`);
+        }
+        const modelType = operation.modelType;
+        for (const [_instanceName, instance] of Object.entries(state.multiModels)) {
+          if (instance.modelType === modelType) {
+            instance.content = instance.content.map(doc => {
+              if (doc._type === operation.documentType) {
+                return operation.down(doc as any);
+              }
+              return doc;
+            });
+          }
+        }
+        return state;
       }
     },
     update_indexes: {
