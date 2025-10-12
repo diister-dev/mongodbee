@@ -488,28 +488,29 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
             // Add pagination filters
             if (afterId) {
-                if (!afterId.startsWith(`${key as string}:`)) {
-                    throw new Error(`Invalid afterId format for type ${key as string}`);
-                }
-                query = {
-                    $and: [
-                        ...baseQuery,
-                        { _id: { $gt: afterId } }
-                    ]
-                };
-                sort = sort || { _id: 1 };
-            }
-            if (beforeId) {
-                if (!beforeId.startsWith(`${key as string}:`)) {
-                    throw new Error(`Invalid beforeId format for type ${key as string}`);
-                }
-                query = {
-                    $and: [
-                        ...baseQuery,
-                        { _id: { $lt: beforeId } }
-                    ]
-                };
-                sort = sort || { _id: -1 };
+              if (!afterId.startsWith(`${key as string}:`)) {
+                  throw new Error(`Invalid afterId format for type ${key as string}`);
+              }
+              query = {
+                  $and: [
+                      ...baseQuery,
+                      { _id: { $gt: afterId } }
+                  ]
+              };
+              sort = sort || { _id: 1 };
+            } else if (beforeId) {
+              if (!beforeId.startsWith(`${key as string}:`)) {
+                  throw new Error(`Invalid beforeId format for type ${key as string}`);
+              }
+              query = {
+                  $and: [
+                      ...baseQuery,
+                      { _id: { $lt: beforeId } }
+                  ]
+              };
+              sort = sort || { _id: -1 };
+            } else {
+              sort = sort || { _id: 1 };
             }
 
             let total: number | undefined;

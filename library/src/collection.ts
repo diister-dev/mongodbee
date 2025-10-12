@@ -495,12 +495,20 @@ export async function collection<const T extends Record<string, v.BaseSchema<unk
 
             // Add pagination filters
             if (afterId) {
-                (query as Record<string, unknown>)._id = { $gt: afterId };
-                sort = sort || { _id: 1 };
-            }
-            if (beforeId) {
-                (query as Record<string, unknown>)._id = { $lt: beforeId };
-                sort = sort || { _id: -1 };
+              query = {
+                ...query,
+                _id: { $gt: afterId }
+              }
+              sort = sort || { _id: 1 };
+            } else if (beforeId) {
+              // (query as Record<string, unknown>)._id = { $lt: beforeId };
+              query = {
+                ...query,
+                _id: { $lt: beforeId }
+              }
+              sort = sort || { _id: -1 };
+            } else {
+              sort = sort || { _id: 1 };
             }
 
             let total: number | undefined;
