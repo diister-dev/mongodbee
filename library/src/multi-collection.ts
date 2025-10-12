@@ -19,8 +19,7 @@ import { mongoOperationQueue } from "./operation.ts";
 import type { MultiCollectionModel } from "./multi-collection-model.ts";
 import {
   createMultiCollectionInfo,
-  MULTI_COLLECTION_INFO_TYPE,
-  MULTI_COLLECTION_MIGRATIONS_TYPE,
+  createMetadataSchemas,
   multiCollectionInstanceExists,
 } from "./migration/multicollection-registry.ts";
 import { getLastAppliedMigration } from "./migration/state.ts";
@@ -310,24 +309,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     const collections = await db.listCollections({ name: collectionName })
       .toArray();
 
-    const modelValidators = [
-      // Metadata types
-      v.object({
-        _id: v.literal(MULTI_COLLECTION_INFO_TYPE),
-        _type: v.literal(MULTI_COLLECTION_INFO_TYPE),
-        collectionType: v.string(),
-        createdAt: v.date(),
-      }),
-      v.object({
-        _id: v.literal(MULTI_COLLECTION_MIGRATIONS_TYPE),
-        _type: v.literal(MULTI_COLLECTION_MIGRATIONS_TYPE),
-        fromMigrationId: v.string(),
-        appliedMigrations: v.array(v.object({
-          id: v.string(),
-          appliedAt: v.date(),
-        })),
-      }),
-    ]
+    const modelValidators = createMetadataSchemas();
 
     const validator = toMongoValidator(
       v.union([

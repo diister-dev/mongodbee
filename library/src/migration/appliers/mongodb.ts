@@ -17,6 +17,7 @@ import { extractIndexes } from "../../indexes.ts";
 import { sanitizePathName } from "../../schema-navigator.ts";
 import {
   createMultiCollectionInfo,
+  createMetadataSchemas,
   discoverMultiCollectionInstances,
   MULTI_COLLECTION_INFO_TYPE,
   MULTI_COLLECTION_MIGRATIONS_TYPE,
@@ -223,25 +224,7 @@ export function createMongodbApplier(
               })
             );
 
-            const metadataSchemas = [
-              v.object({
-                _id: v.literal(MULTI_COLLECTION_INFO_TYPE),
-                _type: v.literal(MULTI_COLLECTION_INFO_TYPE),
-                collectionType: v.string(),
-                createdAt: v.date(),
-              }),
-              v.object({
-                _id: v.literal(MULTI_COLLECTION_MIGRATIONS_TYPE),
-                _type: v.literal(MULTI_COLLECTION_MIGRATIONS_TYPE),
-                fromMigrationId: v.string(),
-                appliedMigrations: v.array(v.object({
-                  id: v.string(),
-                  appliedAt: v.date(),
-                })),
-              }),
-            ];
-
-            const allSchemas = [...typeSchemas, ...metadataSchemas];
+            const allSchemas = [...typeSchemas, ...createMetadataSchemas()];
             const unionSchema = allSchemas.length > 0
               // deno-lint-ignore no-explicit-any
               ? v.union(allSchemas as any)
@@ -474,25 +457,7 @@ export function createMongodbApplier(
           })
         );
 
-        const metadataSchemas = [
-          v.object({
-            _id: v.literal(MULTI_COLLECTION_INFO_TYPE),
-            _type: v.literal(MULTI_COLLECTION_INFO_TYPE),
-            collectionType: v.string(),
-            createdAt: v.date(),
-          }),
-          v.object({
-            _id: v.literal(MULTI_COLLECTION_MIGRATIONS_TYPE),
-            _type: v.literal(MULTI_COLLECTION_MIGRATIONS_TYPE),
-            fromMigrationId: v.string(),
-            appliedMigrations: v.array(v.object({
-              id: v.string(),
-              appliedAt: v.date(),
-            })),
-          }),
-        ];
-
-        const allSchemas = [...typeSchemas, ...metadataSchemas];
+        const allSchemas = [...typeSchemas, ...createMetadataSchemas()];
         const unionSchema = allSchemas.length > 0
           // deno-lint-ignore no-explicit-any
           ? v.union(allSchemas as any)

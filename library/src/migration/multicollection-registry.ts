@@ -9,12 +9,39 @@
 
 import type { Db } from "../mongodb.ts";
 import { getCurrentVersion } from "./utils/package-info.ts";
+import * as v from "valibot";
 
 /**
  * Special document types reserved for multi-collection metadata
  */
 export const MULTI_COLLECTION_INFO_TYPE = "_information";
 export const MULTI_COLLECTION_MIGRATIONS_TYPE = "_migrations";
+
+/**
+ * Creates valibot schemas for multi-collection metadata documents
+ * These schemas are used for validator creation in MongoDB
+ * 
+ * @returns Array of valibot object schemas for metadata documents
+ */
+export function createMetadataSchemas() {
+  return [
+    v.object({
+      _id: v.literal(MULTI_COLLECTION_INFO_TYPE),
+      _type: v.literal(MULTI_COLLECTION_INFO_TYPE),
+      collectionType: v.string(),
+      createdAt: v.date(),
+    }),
+    v.object({
+      _id: v.literal(MULTI_COLLECTION_MIGRATIONS_TYPE),
+      _type: v.literal(MULTI_COLLECTION_MIGRATIONS_TYPE),
+      fromMigrationId: v.string(),
+      appliedMigrations: v.array(v.object({
+        id: v.string(),
+        appliedAt: v.date(),
+      })),
+    }),
+  ];
+}
 
 /**
  * Information document stored in each multi-collection instance
