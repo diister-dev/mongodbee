@@ -51,15 +51,6 @@ export {
   validateMigrationChain,
 } from "./chain.ts";
 
-// Export integrity validation functionality
-export {
-  createIntegrityValidator,
-  type IntegrityValidationResult,
-  IntegrityValidator,
-  type IntegrityValidatorOptions,
-  validateMigrationState,
-} from "./integrity.ts";
-
 // Export simulation validation functionality
 export {
   createSimulationValidator,

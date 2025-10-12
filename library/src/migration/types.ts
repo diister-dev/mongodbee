@@ -597,3 +597,35 @@ export type DatabaseState = {
   /** Multi-collections models and their contents (future feature) */
   multiModels: Record<string, StateCollectionContent & { modelType: string }>;
 };
+
+
+/**
+ * Extended database state with operation history tracking
+ */
+export interface SimulationDatabaseState extends DatabaseState {
+  /** History of applied operations (if tracking enabled) */
+  operationHistory?: Array<{
+    operation: MigrationRule;
+    timestamp: Date;
+    type: "apply" | "reverse";
+  }>;
+}
+
+/**
+ * Utility function to create an empty database state
+ *
+ * @returns Empty database state
+ *
+ * @example
+ * ```typescript
+ * const initialState = createEmptyDatabaseState();
+ * console.log(initialState); // { collections: {}, multiModels: {} }
+ * ```
+ */
+export function createEmptyDatabaseState(): SimulationDatabaseState {
+  return {
+    collections: {},
+    multiCollections: {},
+    multiModels: {},
+  };
+}

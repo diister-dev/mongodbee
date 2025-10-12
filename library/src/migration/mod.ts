@@ -95,7 +95,6 @@ export {
 export type { MigrationDefinitionOptions } from "./definition.ts";
 
 // Appliers
-export { SimulationApplier } from "./appliers/simulation.ts";
 export { createMongodbApplier } from "./appliers/mongodb.ts";
 export type { MongodbApplierOptions } from "./appliers/mongodb.ts";
 
@@ -105,7 +104,6 @@ export * from "./config/mod.ts";
 // Validators (partial export of working functions)
 export {
   createChainValidator,
-  createIntegrityValidator,
   type MigrationValidator,
   type ValidationResult,
 } from "./validators/mod.ts";

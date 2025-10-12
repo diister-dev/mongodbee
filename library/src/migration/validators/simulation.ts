@@ -28,7 +28,7 @@ import type {
 import {
   createEmptyDatabaseState,
   type SimulationDatabaseState,
-} from "../appliers/simulation.ts";
+} from "../types.ts";
 import { migrationBuilder } from "../builder.ts";
 import * as v from "valibot";
 import { createMockGenerator } from "@diister/valibot-mock";

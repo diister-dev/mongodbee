@@ -203,6 +203,12 @@ Deno.test("migrate - handles migrations with actual operations", async () => {
 
       assert(content !== null);
 
+      content = `import * as v from "valibot";\n` + content;
+      content = content.replace(`collections: {`, `collections: {
+        users: {
+          name: v.string(),
+        }
+      `);
       // Add a createCollection operation
       content = content.replace(
         "migrate(migration) {",
@@ -211,6 +217,20 @@ Deno.test("migrate - handles migrations with actual operations", async () => {
       );
 
       await Deno.writeTextFile(migrationPath, content);
+
+      // Update schema file
+      let updatedSchema = await readFile(`${tempDir}/schemas.ts`);
+      assert(updatedSchema !== null);
+      updatedSchema = `import * as v from "valibot";\n` + updatedSchema;
+      updatedSchema = updatedSchema.replace(
+        "collections: {",
+        `collections: {
+          users: {
+            name: v.string(),
+          },
+        `,
+      );
+      await Deno.writeTextFile(`${tempDir}/schemas.ts`, updatedSchema);
 
       // Apply migration
       await migrateCommand({ cwd: tempDir, force: true });

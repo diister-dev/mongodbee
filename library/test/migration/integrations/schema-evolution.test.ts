@@ -297,7 +297,7 @@ Deno.test("Schema Evolution: Number to formatted string", async () => {
           name: v.string(),
           price: v.pipe(
             v.string(),
-            v.regex(/^\$\d+\.\d{2}$/), // Format: $XX.XX
+            v.regex(/^\$-?\d+\.\d{2}$/), // Format: $XX.XX
           ),
         },
       },

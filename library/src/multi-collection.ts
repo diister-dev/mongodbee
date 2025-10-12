@@ -35,7 +35,7 @@ type CollectionOptions = {
 type DynId<T> = T extends v.LiteralSchema<any, AnyMessage> ? T
   : ReturnType<typeof dbId>;
 
-type AnyMessage = v.ErrorMessage<any>;
+type AnyMessage = any;
 
 type Elements<T extends Record<string, any>> = {
   [key in keyof T]: {

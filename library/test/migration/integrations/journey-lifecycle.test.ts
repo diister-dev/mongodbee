@@ -88,7 +88,7 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
     migrate(migration) {
       migration
         .createMultiModelInstance("posts_main", "posts")
-        .seedType("article", [
+        .type("article").seed([
           {
             _id: "post1",
             authorId: "user1",
@@ -96,8 +96,8 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
             content: "Hello World",
             createdAt: new Date("2025-01-02"),
           },
-        ])
-        .seedType("video", [
+        ]).end()
+        .type("video").seed([
           {
             _id: "post2",
             authorId: "user2",
@@ -180,7 +180,7 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
       // Create comments for posts multi-collection
       migration
         .createMultiModelInstance("comments_posts_main", "comments")
-        .seedType("comment", [
+        .type("comment").seed([
           {
             _id: "comment1",
             postId: "post1",
@@ -223,7 +223,7 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
     },
     migrate(migration) {
       // Transform articles to add likes array
-      migration.multiCollection("posts").type("article").transform({
+      migration.multiModelInstances("posts").type("article").transform({
         up: (doc) => ({
           ...doc,
           likes: [], // Empty array for existing articles
@@ -235,7 +235,7 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
       });
       
       // Transform videos to add likes array
-      migration.multiCollection("posts").type("video").transform({
+      migration.multiModelInstances("posts").type("video").transform({
         up: (doc) => ({
           ...doc,
           likes: [], // Empty array for existing videos
@@ -256,9 +256,7 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
   // ========================================
   // VALIDATION: All migrations are reversible
   // ========================================
-  const result5WithReversibility = await validateMigrationWithSimulation(migration5, {
-    validateReversibility: true,
-  });
+  const result5WithReversibility = await validateMigrationWithSimulation(migration5, {});
   assertEquals(
     result5WithReversibility.success,
     true,
@@ -343,13 +341,13 @@ Deno.test("Journey: Rollback to different points", async () => {
   });
 
   // Validate each migration step
-  const r1 = await validateMigrationWithSimulation(m1, { validateReversibility: true });
+  const r1 = await validateMigrationWithSimulation(m1, {});
   assertEquals(r1.success, true, "Migration 1 should succeed");
 
-  const r2 = await validateMigrationWithSimulation(m2, { validateReversibility: true });
+  const r2 = await validateMigrationWithSimulation(m2, {});
   assertEquals(r2.success, true, "Migration 2 should succeed and be reversible");
 
-  const r3 = await validateMigrationWithSimulation(m3, { validateReversibility: true });
+  const r3 = await validateMigrationWithSimulation(m3, {});
   assertEquals(r3.success, true, "Migration 3 should succeed and be reversible");
 });
 

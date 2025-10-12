@@ -218,6 +218,14 @@ Deno.test("rollback - handles migration with operations", async () => {
       assert(content !== null);
 
       // Add a createCollection operation
+      content = `import * as v from "valibot";
+      ${content}`;
+
+      content = content.replace(`collections: {`, `collections: {
+        users: {
+          name: v.string()
+        },`);
+
       content = content.replace(
         "migrate(migration) {",
         `migrate(migration) {
@@ -225,6 +233,23 @@ Deno.test("rollback - handles migration with operations", async () => {
       );
 
       await Deno.writeTextFile(migrationPath, content);
+
+      // Update the schema file to include the new collection
+      const schemaPath = `${tempDir}/schemas.ts`;
+      let schemaContent = await readFile(schemaPath);
+      assert(schemaContent !== null);
+
+      schemaContent = `import * as v from "valibot";
+       ${schemaContent}`;
+      schemaContent = schemaContent.replace(
+        "collections: {",
+        `collections: {
+          users: {
+            name: v.string()
+          },`,
+      );
+
+      await Deno.writeTextFile(schemaPath, schemaContent);
 
       // Apply migration
       await migrateCommand({ cwd: tempDir, force: true });
