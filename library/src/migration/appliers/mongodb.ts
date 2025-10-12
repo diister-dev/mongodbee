@@ -187,7 +187,66 @@ export function createMongodbApplier(
           console.warn(`Multi-collection ${operation.collectionName} already exists, skipping creation.`);
         }
 
-        // Create union validator for all types
+        // Create union validator for all types (without metadata schemas)
+        const typeSchemas = Object.entries(operation.schema).map(
+          ([typeName, typeSchema]) => v.object({
+            _type: v.literal(typeName),
+            ...(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>),
+          })
+        );
+
+        const unionSchema = typeSchemas.length > 0
+          // deno-lint-ignore no-explicit-any
+          ? v.union(typeSchemas as any)
+          : v.object({ _type: v.string() });
+
+        const collOptions = { validator: toMongoValidator(unionSchema) };
+        await db.createCollection(operation.collectionName, collOptions);
+
+        // Apply indexes for each type
+        const collection = db.collection(operation.collectionName);
+        for (const [typeName, typeSchema] of Object.entries(operation.schema)) {
+          const typeSchemaWithType = {
+            _type: v.literal(typeName),
+            ...(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>),
+          };
+          const wrappedTypeSchema = v.object(typeSchemaWithType);
+          const indexes = extractIndexes(wrappedTypeSchema);
+
+          for (const index of indexes) {
+            const indexName = sanitizePathName(index.path);
+            const keySpec: Record<string, number> = { [index.path]: 1 };
+
+            try {
+              await collection.createIndex(keySpec, {
+                name: indexName,
+                unique: index.metadata.unique || false,
+                sparse: false,
+              });
+            } catch (error) {
+              if (!(error instanceof Error && error.message.includes("already exists"))) {
+                throw error;
+              }
+            }
+          }
+        }
+      },
+      reverse: async (operation) => {
+        if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
+          throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
+        }
+        await db.collection(operation.collectionName).drop();
+      }
+    },
+
+    create_multimodel_instance: {
+      apply: async (operation) => {
+        if (opts.strictValidation && await collectionExists(operation.collectionName)) {
+          // throw new Error(`Multi-model instance ${operation.collectionName} already exists`);
+          console.warn(`Multi-model instance ${operation.collectionName} already exists, skipping creation.`);
+        }
+
+        // Create union validator for all types + metadata schemas
         const typeSchemas = Object.entries(operation.schema).map(
           ([typeName, typeSchema]) => v.object({
             _type: v.literal(typeName),
@@ -249,21 +308,8 @@ export function createMongodbApplier(
             }
           }
         }
-      },
-      reverse: async (operation) => {
-        if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
-          throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
-        }
-        await db.collection(operation.collectionName).drop();
-      }
-    },
 
-    create_multimodel_instance: {
-      apply: async (operation) => {
-        if (opts.strictValidation && await multiCollectionInstanceExists(db, operation.collectionName)) {
-          // throw new Error(`Multi-model instance ${operation.collectionName} already exists`);
-          console.warn(`Multi-model instance ${operation.collectionName} already exists, skipping creation.`);
-        }
+        // Create metadata info document
         await createMultiCollectionInfo(
           db,
           operation.collectionName,

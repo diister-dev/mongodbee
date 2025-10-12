@@ -33,13 +33,15 @@ type CollectionOptions = {
 };
 
 // Use _id if the schema is a literal schema, otherwise use dbId
-type DynId<T> = T extends v.LiteralSchema<any, any> ? T
+type DynId<T> = T extends v.LiteralSchema<any, AnyMessage> ? T
   : ReturnType<typeof dbId>;
+
+type AnyMessage = v.ErrorMessage<any>;
 
 type Elements<T extends Record<string, any>> = {
   [key in keyof T]: {
     _id: DynId<T[key]["_id"]>;
-    _type: v.LiteralSchema<key, any>;
+    _type: v.LiteralSchema<key, AnyMessage>;
   } & T[key];
 }[keyof T];
 
@@ -47,7 +49,7 @@ type OutputElementSchema<T extends Record<string, any>, K extends keyof T> =
   v.ObjectSchema<
     {
       _id: DynId<T[K]["_id"]>;
-      _type: v.LiteralSchema<K, any>;
+      _type: v.LiteralSchema<K, AnyMessage>;
     } & T[K],
     any
   >;
@@ -160,11 +162,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
     filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
     options?: m.FindOptions,
   ): Promise<v.InferOutput<OutputElementSchema<T, E>>[]>;
-  paginate<
-    E extends keyof T,
-    EN = v.InferOutput<OutputElementSchema<T, E>>,
-    R = EN,
-  >(
+  paginate<E extends keyof T, EN = v.InferOutput<OutputElementSchema<T, E>>, R = EN>(
     key: E,
     filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
     options?: {
@@ -251,11 +249,14 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
 export async function multiCollection<const T extends MultiCollectionSchema>(
   db: Db,
   collectionName: string,
-  model: MultiCollectionModel<T>,
-  options?: m.CollectionOptions & CollectionOptions,
+  model: (T | MultiCollectionModel<T>),
+  options?: (m.CollectionOptions & CollectionOptions),
 ): Promise<MultiCollectionResult<T>> {
   // Extract schema from model
-  const collectionSchema: T = model.schema;
+  const useModel = (model && (model as MultiCollectionModel<T>).schema && (typeof model.expose === "function"));
+  const collectionSchema = (useModel
+    ? (model as MultiCollectionModel<T>).schema
+    : model) as T;
   type TInput = Input<T>;
   type TOutput = Output<T>;
 
@@ -309,6 +310,25 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     const collections = await db.listCollections({ name: collectionName })
       .toArray();
 
+    const modelValidators = [
+      // Metadata types
+      v.object({
+        _id: v.literal(MULTI_COLLECTION_INFO_TYPE),
+        _type: v.literal(MULTI_COLLECTION_INFO_TYPE),
+        collectionType: v.string(),
+        createdAt: v.date(),
+      }),
+      v.object({
+        _id: v.literal(MULTI_COLLECTION_MIGRATIONS_TYPE),
+        _type: v.literal(MULTI_COLLECTION_MIGRATIONS_TYPE),
+        fromMigrationId: v.string(),
+        appliedMigrations: v.array(v.object({
+          id: v.string(),
+          appliedAt: v.date(),
+        })),
+      }),
+    ]
+
     const validator = toMongoValidator(
       v.union([
         // User-defined types
@@ -318,22 +338,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             _type: v.literal(key as string),
           });
         }),
-        // Metadata types
-        v.object({
-          _id: v.literal(MULTI_COLLECTION_INFO_TYPE),
-          _type: v.literal(MULTI_COLLECTION_INFO_TYPE),
-          collectionType: v.string(),
-          createdAt: v.date(),
-        }),
-        v.object({
-          _id: v.literal(MULTI_COLLECTION_MIGRATIONS_TYPE),
-          _type: v.literal(MULTI_COLLECTION_MIGRATIONS_TYPE),
-          fromMigrationId: v.string(),
-          appliedMigrations: v.array(v.object({
-            id: v.string(),
-            appliedAt: v.date(),
-          })),
-        }),
+        ...(useModel ? modelValidators : [])
       ]),
     );
 
@@ -499,12 +504,14 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
       const currentMigrationId = lastMigration?.id || "current";
 
       // Create metadata for this instance
-      await createMultiCollectionInfo(
-        db,
-        collectionName,
-        model.name,
-        currentMigrationId,
-      );
+      if(useModel) {
+        await createMultiCollectionInfo(
+          db,
+          collectionName,
+          (model as MultiCollectionModel<T>).name,
+          currentMigrationId,
+        );
+      }
     }
 
     sessionContext = await getSessionContext(db.client);
