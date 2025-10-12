@@ -32,10 +32,7 @@ import type {
   ValidationResult,
 } from "../runners/execution.ts";
 import {
-  compareDatabaseStates,
   createEmptyDatabaseState,
-  createSimulationApplier,
-  type SimulationApplier,
   type SimulationDatabaseState,
 } from "../appliers/simulation.ts";
 import { migrationBuilder } from "../builder.ts";
@@ -279,73 +276,6 @@ export class SimulationValidator implements MigrationValidator {
 
       errors.push(...changeStateResult);
 
-      // if (definition.parent && definition.schemas.multiModels) {
-      //   const schemaChangeErrors = this.validateSchemaChanges(
-      //     definition,
-      //     stateBeforeMigration,
-      //     operations,
-      //   );
-      //   if (schemaChangeErrors.length > 0) {
-      //     errors.push(...schemaChangeErrors);
-      //   }
-      // }
-
-      /*
-      // Validate that transformed documents match their target schemas
-      // This catches bad transformation logic (e.g., returning null instead of proper values)
-      if (forwardErrors.length === 0) {
-        const transformValidationErrors = this.validateTransformedDocuments(
-          definition,
-          stateAfterMigration,
-        );
-        if (transformValidationErrors.length > 0) {
-          errors.push(...transformValidationErrors);
-        }
-      }
-
-      // Test reversibility if enabled and forward execution succeeded
-      if (this.options.validateReversibility && forwardErrors.length === 0) {
-        const reverseErrors = this.validateReversibility(
-          state,
-          stateBeforeMigration,
-          stateAfterMigration,
-        );
-        if (reverseErrors.length > 0) {
-          errors.push("Migration reversibility validation failed:");
-          errors.push(...reverseErrors.map((err) => `  ${err}`));
-        }
-      }
-
-      // Check for irreversible properties
-      if (state.hasProperty("irreversible")) {
-        if (this.options.validateReversibility) {
-          warnings.push(
-            "Migration is marked as irreversible but reversibility validation is enabled",
-          );
-        } else {
-          warnings.push("Migration is marked as irreversible");
-        }
-      }
-
-      // Check for lossy transformations
-      if (state.hasProperty("lossy")) {
-        const lossyTransforms = operations.filter((op) =>
-          (op.type === "transform_collection" || op.type === "transform_multicollection_type") &&
-          op.lossy
-        );
-        warnings.push(
-          `Migration has lossy transformations - rollback will result in data loss`,
-        );
-        for (const op of lossyTransforms) {
-          if (op.type === "transform_collection") {
-            warnings.push(`  ⚠ Collection: ${op.collectionName}`);
-          } else if (op.type === "transform_multicollection_type") {
-            warnings.push(`  ⚠ Multi-collection: ${op.collectionType}.${op.typeName}`);
-          }
-        }
-      }
-      */
-
       return Promise.resolve({
         success: errors.length === 0,
         errors,
@@ -566,7 +496,7 @@ export class SimulationValidator implements MigrationValidator {
 
     // Validate current state collections against their schemas
     for (const [collectionName, currentCollSchema] of Object.entries(currentSchema)) {
-      for (const [docIndex, doc] of ((stateAfter.collections || {})[collectionName]?.content || []).entries()) {
+      for (const [_docIndex, doc] of ((stateAfter.collections || {})[collectionName]?.content || []).entries()) {
         const valid = v.safeParse(v.object(currentCollSchema), doc);
         if (!valid.success) {
           errors.push(`Document in collection "${collectionName}" does not match schema:\n-> ${valid.issues.map((issue) => {
@@ -647,7 +577,10 @@ export class SimulationValidator implements MigrationValidator {
         }
 
         const schema = currentMultiCollSchema[elementType];
-        const valid = v.safeParse(v.object(schema), element);
+        const valid = v.safeParse(v.object({
+          ...schema,
+          _type: v.literal(elementType),
+        }), element);
 
         if (!valid.success) {
           errors.push(`Document in multi-collection "${multiCollectionName}" type "${elementType}" does not match schema:\n-> ${valid.issues.map((issue) => {
@@ -678,7 +611,10 @@ export class SimulationValidator implements MigrationValidator {
         const docType = doc._type as string;
         const parentTypeSchema = parentMultiCollSchema[docType];
         if (!parentTypeSchema) continue; // Type was added, no validation needed
-        const valid = v.safeParse(v.object(parentTypeSchema), doc);
+        const valid = v.safeParse(v.object({
+          ...parentTypeSchema,
+          _type: v.literal(docType),
+        }), doc);
         if (!valid.success) {
           errors.push(`The multi-collection "${multiCollectionName}" type "${docType}" not valid after rollback.\n-> ${valid.issues.map((issue) => {
             return `(${v.getDotPath(issue)}) ${issue.message}`;
@@ -738,7 +674,10 @@ export class SimulationValidator implements MigrationValidator {
           continue;
         }
         const schema = modelSchema[elementType];
-        const valid = v.safeParse(v.object(schema), element);
+        const valid = v.safeParse(v.object({
+          ...schema,
+          _type: v.literal(elementType),
+        }), element);
         if (!valid.success) {
           errors.push(`Document in multi-collection model "${collectionName}" type "${elementType}" does not match schema:\n-> ${valid.issues.map((issue) => {
             return `(${v.getDotPath(issue)}) ${issue.message}`;
@@ -769,7 +708,10 @@ export class SimulationValidator implements MigrationValidator {
           const docType = doc._type as string;
           const parentTypeSchema = parentModelSchema[docType];
           if (!parentTypeSchema) continue; // Type was added, no validation needed
-          const valid = v.safeParse(v.object(parentTypeSchema), doc);
+          const valid = v.safeParse(v.object({
+            ...parentTypeSchema,
+            _type: v.literal(docType),
+          }), doc);
           if (!valid.success) {
             errors.push(`The multi-collection model "${collectionName}" type "${docType}" not valid after rollback.\n-> ${valid.issues.map((issue) => {
               return `(${v.getDotPath(issue)}) ${issue.message}`;
@@ -838,98 +780,6 @@ export class SimulationValidator implements MigrationValidator {
       ...[...new Set(multiCollectionChangeResult.errors)],
       ...[...new Set(multiModelsChangeResult.errors)],
     );
-
-    return errors;
-  }
-
-  /**
-   * Validates collection documents against their schemas
-   *
-   * @private
-   */
-  private validateCollectionDocuments(
-    collections: Record<string, Record<string, unknown>>,
-    stateAfter: SimulationDatabaseState,
-  ): string[] {
-    const errors: string[] = [];
-
-    for (const [collectionName, schema] of Object.entries(collections)) {
-      const collectionData = stateAfter.collections?.[collectionName];
-      if (!collectionData || collectionData.content.length === 0) continue;
-
-      // Find first invalid document
-      for (let i = 0; i < collectionData.content.length; i++) {
-        const doc = collectionData.content[i];
-        // deno-lint-ignore no-explicit-any
-        const validation = v.safeParse(v.object(schema as any), doc);
-
-        if (!validation.success) {
-          errors.push(
-            ...this.formatValidationError(validation, {
-              type: "collection",
-              name: collectionName,
-              index: i,
-            }),
-          );
-          // Only show first invalid document to avoid spam
-          break;
-        }
-      }
-    }
-
-    return errors;
-  }
-
-  /**
-   * Validates multi-collection documents against their schemas
-   *
-   * @private
-   */
-  private validateMultiCollectionDocuments(
-    multiCollections: Record<string, Record<string, Record<string, unknown>>>,
-    stateAfter: SimulationDatabaseState,
-  ): string[] {
-    const errors: string[] = [];
-
-    for (
-      const [multiCollectionName, types] of Object.entries(multiCollections)
-    ) {
-      for (
-        const [instanceName, instanceData] of Object.entries(
-          stateAfter.multiCollections || {},
-        )
-      ) {
-        // Match instance to multi-collection type
-        if (!instanceName.startsWith(`${multiCollectionName}@`)) continue;
-
-        // Validate each document
-        for (let i = 0; i < instanceData.content.length; i++) {
-          const doc = instanceData.content[i];
-          const docType = doc._type as string;
-
-          if (!docType || !types[docType]) {
-            continue; // Type might be removed, handled by schema change validation
-          }
-
-          const schema = types[docType];
-          // deno-lint-ignore no-explicit-any
-          const validation = v.safeParse(v.object(schema as any), doc);
-
-          if (!validation.success) {
-            errors.push(
-              ...this.formatValidationError(validation, {
-                type: "multicollection",
-                name: instanceName,
-                index: i,
-                typeName: docType,
-              }),
-            );
-            // Only show first invalid document per type to avoid spam
-            break;
-          }
-        }
-      }
-    }
 
     return errors;
   }
@@ -1089,9 +939,13 @@ export class SimulationValidator implements MigrationValidator {
   ): SimulationDatabaseState {
     const currentState = state;
 
-    for(const [modelType, schema] of Object.entries(multiModels)) {      
-      const collectCount = 5;
-      for (let i = 0; i < collectCount; i++) {
+    for(const [modelType, schema] of Object.entries(multiModels)) {
+      // Generate multiple instances per model type (configurable via constants)
+      const instanceCount = Math.floor(
+        Math.random() * (MOCK_GENERATION.DOCS_PER_TYPE_MAX - MOCK_GENERATION.DOCS_PER_TYPE_MIN + 1)
+      ) + MOCK_GENERATION.DOCS_PER_TYPE_MIN + MOCK_GENERATION.MIN_SPARSE_THRESHOLD;
+      
+      for (let i = 0; i < instanceCount; i++) {
         const collectionName = `${modelType}@instance${i+1}`;
         currentState.multiModels[collectionName] = {
           modelType,

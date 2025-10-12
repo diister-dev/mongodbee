@@ -17,11 +17,15 @@ import {
   type MigrationStateRecord,
 } from "../../state.ts";
 import { getAllOperations } from "../../history.ts";
+import { validateMigrationChainWithProjectSchema } from "../../schema-validation.ts";
+import { migrationBuilder } from "../../builder.ts";
 
 export interface StatusCommandOptions {
   configPath?: string;
   history?: boolean;
   cwd?: string;
+  verbose?: boolean;
+  validate?: boolean;
 }
 
 /**
@@ -60,7 +64,50 @@ export async function statusCommand(
 
     // Load migrations from filesystem
     const migrationsWithFiles = await loadAllMigrations(migrationsDir);
+    
+    if (migrationsWithFiles.length === 0) {
+      console.log(yellow("⚠ No migrations found"));
+      console.log();
+      return;
+    }
+    
     const allMigrations = buildMigrationChain(migrationsWithFiles);
+
+    console.log(dim(`Found ${allMigrations.length} migration(s)`));
+    console.log();
+
+    // Validate schema consistency if requested
+    if (options.validate) {
+      const schemaPath = path.resolve(
+        cwd,
+        config.paths?.schemas || "./schemas.ts",
+      );
+
+      console.log(bold("📋 Validating schema consistency..."));
+      const schemaValidation = await validateMigrationChainWithProjectSchema(
+        allMigrations,
+        schemaPath,
+      );
+
+      if (schemaValidation.warnings.length > 0) {
+        console.log(yellow("\n  Warnings:"));
+        for (const warning of schemaValidation.warnings) {
+          console.log(yellow(`    ⚠ ${warning}`));
+        }
+      }
+
+      if (!schemaValidation.valid) {
+        console.log(red("\n  ✗ Schema validation failed"));
+        for (const error of schemaValidation.errors) {
+          console.log(red(`    ${error}`));
+        }
+        console.log();
+        throw new Error("Schema validation failed");
+      }
+
+      console.log(green("  ✓ Schema consistency validated"));
+      console.log();
+    }
 
     // Get migration states from database
     const migrationStates = await getAllMigrationStates(db);
@@ -68,7 +115,6 @@ export async function statusCommand(
       migrationStates.map((s) => [s.id, s]),
     );
 
-    // Display status table
     console.log(bold("Migrations:"));
     console.log();
 
@@ -85,21 +131,35 @@ export async function statusCommand(
       15,
     );
 
+    // Analyze migrations for properties (irreversible/lossy) if verbose mode
+    const migrationProperties = new Map<string, { irreversible: boolean; lossy: boolean }>();
+    if (options.verbose) {
+      for (const migration of allMigrations) {
+        const builder = migrationBuilder({
+          schemas: migration.schemas,
+          parentSchemas: migration.parent?.schemas,
+        });
+        const state = migration.migrate(builder);
+        
+        migrationProperties.set(migration.id, {
+          irreversible: state.hasProperty("irreversible"),
+          lossy: state.hasProperty("lossy"),
+        });
+      }
+    }
+
     // Header
-    console.log(
-      gray(
-        `  ${"ID".padEnd(maxIdLength)}  ${
-          "Name".padEnd(maxNameLength)
-        }  Status      Applied`,
-      ),
-    );
-    console.log(
-      gray(
-        `  ${"─".repeat(maxIdLength)}  ${"─".repeat(maxNameLength)}  ${
-          "─".repeat(10)
-        }  ${"─".repeat(20)}`,
-      ),
-    );
+    const headerLine = options.verbose
+      ? `  ${"ID".padEnd(maxIdLength)}  ${"Name".padEnd(maxNameLength)}  Status      Applied             Properties`
+      : `  ${"ID".padEnd(maxIdLength)}  ${"Name".padEnd(maxNameLength)}  Status      Applied`;
+    
+    console.log(gray(headerLine));
+    
+    const separatorLine = options.verbose
+      ? `  ${"─".repeat(maxIdLength)}  ${"─".repeat(maxNameLength)}  ${"─".repeat(10)}  ${"─".repeat(20)}  ${"─".repeat(20)}`
+      : `  ${"─".repeat(maxIdLength)}  ${"─".repeat(maxNameLength)}  ${"─".repeat(10)}  ${"─".repeat(20)}`;
+    
+    console.log(gray(separatorLine));
 
     // Rows
     for (const migration of allMigrations) {
@@ -129,11 +189,25 @@ export async function statusCommand(
         appliedDisplay = dim("-");
       }
 
-      console.log(
-        `  ${dim(migration.id.padEnd(maxIdLength))}  ${
-          migration.name.padEnd(maxNameLength)
-        }  ${statusDisplay.padEnd(10)}  ${appliedDisplay}`,
-      );
+      // Build properties display
+      let propertiesDisplay = "";
+      if (options.verbose) {
+        const props = migrationProperties.get(migration.id);
+        if (props) {
+          const tags: string[] = [];
+          if (props.irreversible) tags.push(red("irreversible"));
+          if (props.lossy) tags.push(yellow("lossy"));
+          propertiesDisplay = tags.length > 0 ? `  ${tags.join(", ")}` : "  " + dim("-");
+        } else {
+          propertiesDisplay = "  " + dim("-");
+        }
+      }
+
+      const baseLine = `  ${dim(migration.id.padEnd(maxIdLength))}  ${
+        migration.name.padEnd(maxNameLength)
+      }  ${statusDisplay.padEnd(10)}  ${appliedDisplay}`;
+
+      console.log(baseLine + propertiesDisplay);
     }
 
     console.log();

@@ -16,7 +16,7 @@ import {
   getLastAppliedMigration,
   markMigrationAsReverted,
 } from "../../state.ts";
-import { MongodbApplier } from "../../appliers/mongodb.ts";
+import { createMongodbApplier } from "../../appliers/mongodb.ts";
 import { migrationBuilder } from "../../builder.ts";
 import { confirm } from "../utils/confirm.ts";
 
@@ -143,36 +143,12 @@ export async function rollbackCommand(
     // Apply reverse operations
     console.log(bold("Rolling back operations..."));
 
-    const applier = new MongodbApplier(db);
+    const applier = createMongodbApplier(db);
     applier.setCurrentMigrationId(migrationToRollback.id);
 
     try {
-      // Synchronize validators with parent schema BEFORE rollback
-      // This ensures that MongoDB validators allow the rollback transformations
-      if (migrationToRollback.parent) {
-        console.log(dim("  🔧 Reverting validators to parent schema..."));
-        await applier.synchronizeSchemas(migrationToRollback.parent.schemas);
-      } else {
-        // First migration has no parent - remove all validators
-        console.log(dim("  🔧 Removing validators (first migration)..."));
-
-        // Remove validators from all collections (except system collections)
-        const collections = await db.listCollections().toArray();
-        for (const collInfo of collections) {
-          if (!collInfo.name.startsWith("__") && !collInfo.name.startsWith("system.")) {
-            try {
-              await db.command({
-                collMod: collInfo.name,
-                validator: {},
-                validationLevel: "off",
-              });
-            } catch (error) {
-              // Ignore errors for collections that don't support validators
-              console.log(dim(`    Note: Could not remove validator from ${collInfo.name}`));
-            }
-          }
-        }
-      }
+      // Note: mongodbv2 handles validator updates automatically during reverse operations
+      // Validators are applied/removed as needed per collection operation
 
       // Apply operations in reverse order
       for (let i = state.operations.length - 1; i >= 0; i--) {
@@ -180,7 +156,7 @@ export async function rollbackCommand(
         console.log(dim(`  Rolling back ${operation.type}...`));
 
         try {
-          await applier.applyReverseOperation(operation);
+          await applier.reverseOperation(operation);
         } catch (error) {
           const message = error instanceof Error
             ? error.message

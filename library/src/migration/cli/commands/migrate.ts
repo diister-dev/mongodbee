@@ -21,7 +21,7 @@ import {
   markMigrationAsApplied,
   markMigrationAsFailed,
 } from "../../state.ts";
-import { MongodbApplier } from "../../appliers/mongodb.ts";
+import { createMongodbApplier } from "../../appliers/mongodb.ts";
 import { validateMigrationChainWithProjectSchema } from "../../schema-validation.ts";
 import { validateMigrationsWithSimulation } from "../utils/validate-migrations.ts";
 import { migrationBuilder } from "../../builder.ts";
@@ -32,6 +32,7 @@ export interface MigrateCommandOptions {
   dryRun?: boolean;
   cwd?: string;
   force?: boolean;
+  verbose?: boolean;
 }
 
 /**
@@ -68,44 +69,49 @@ export async function migrateCommand(
     const db = client.db(dbName);
 
     // Discover and load migrations
-    console.log(dim("Discovering migrations..."));
     const migrationsWithFiles = await loadAllMigrations(migrationsDir);
+    
     if (migrationsWithFiles.length === 0) {
       console.log(yellow("⚠ No migrations found"));
+      console.log();
       return;
     }
 
     const allMigrations = buildMigrationChain(migrationsWithFiles);
 
     console.log(dim(`Found ${allMigrations.length} migration(s)`));
+    console.log();
 
     // Validate that last migration matches project schema
-    if (allMigrations.length > 0) {
-      const schemaPath = path.resolve(
-        cwd,
-        config.paths?.schemas || "./schemas.ts",
-      );
-      const schemaValidation = await validateMigrationChainWithProjectSchema(
-        allMigrations,
-        schemaPath,
-      );
+    const schemaPath = path.resolve(
+      cwd,
+      config.paths?.schemas || "./schemas.ts",
+    );
+    
+    console.log(bold("📋 Validating schema consistency..."));
+    const schemaValidation = await validateMigrationChainWithProjectSchema(
+      allMigrations,
+      schemaPath,
+    );
 
-      if (schemaValidation.warnings.length > 0) {
-        for (const warning of schemaValidation.warnings) {
-          console.log(yellow(`  ⚠ ${warning}`));
-        }
+    if (schemaValidation.warnings.length > 0) {
+      console.log(yellow("\n  Warnings:"));
+      for (const warning of schemaValidation.warnings) {
+        console.log(yellow(`    ⚠ ${warning}`));
       }
-
-      if (!schemaValidation.valid) {
-        console.log();
-        throw new Error("Schema validation failed. See errors above.", {
-          cause: schemaValidation,
-        });
-      }
-
-      console.log(green(`✓ Schema validation passed`));
-      console.log();
     }
+
+    if (!schemaValidation.valid) {
+      console.log(red("\n  ✗ Schema validation failed"));
+      for (const error of schemaValidation.errors) {
+        console.log(red(`    ${error}`));
+      }
+      console.log();
+      throw new Error("Schema validation failed");
+    }
+
+    console.log(green("  ✓ Schema consistency validated"));
+    console.log();
 
     // Get applied migrations
     const appliedIds = await getAppliedMigrationIds(db);
@@ -123,7 +129,9 @@ export async function migrateCommand(
     console.log();
 
     // STEP 1: Validate ALL pending migrations BEFORE applying any
-    await validateMigrationsWithSimulation(pendingMigrations);
+    await validateMigrationsWithSimulation(pendingMigrations, {
+      verbose: options.verbose,
+    });
 
     // STEP 2: Check for irreversible or lossy migrations
     const migrationsWithIssues: Array<{
@@ -145,11 +153,14 @@ export async function migrateCommand(
         ? state.operations
             .filter((op) => {
               if (op.type === "create_collection") return true;
-              if (op.type === "create_multicollection_instance") return true;
+              if (op.type === "create_multicollection") return true;
+              if (op.type === "create_multimodel_instance") return true;
               if (op.type === "update_indexes") return true;
               if (
                 (op.type === "transform_collection" ||
-                  op.type === "transform_multicollection_type") &&
+                  op.type === "transform_multicollection_type" ||
+                  op.type === "transform_multimodel_instance_type" ||
+                  op.type === "transform_multimodel_instances_type") &&
                 op.lossy
               ) {
                 return true;
@@ -159,14 +170,20 @@ export async function migrateCommand(
             .map((op) => {
               if (op.type === "create_collection") {
                 return `Create collection: ${op.collectionName}`;
-              } else if (op.type === "create_multicollection_instance") {
+              } else if (op.type === "create_multicollection") {
                 return `Create multi-collection: ${op.collectionName}`;
+              } else if (op.type === "create_multimodel_instance") {
+                return `Create multi-model instance: ${op.collectionName}`;
               } else if (op.type === "update_indexes") {
                 return `Update indexes: ${op.collectionName}`;
               } else if (op.type === "transform_collection") {
-                return `Transform: ${op.collectionName}`;
+                return `Transform collection: ${op.collectionName}`;
               } else if (op.type === "transform_multicollection_type") {
-                return `Transform: ${op.collectionType}.${op.typeName}`;
+                return `Transform multi-collection type: ${op.collectionName}.${op.documentType}`;
+              } else if (op.type === "transform_multimodel_instance_type") {
+                return `Transform multi-model instance type: ${op.collectionName}.${op.documentType}`;
+              } else if (op.type === "transform_multimodel_instances_type") {
+                return `Transform multi-model instances type: ${op.modelType}.${op.documentType}`;
               }
               return "";
             })
@@ -235,7 +252,7 @@ export async function migrateCommand(
     }
 
     // STEP 3: Apply each pending migration
-    const applier = new MongodbApplier(db);
+    const applier = createMongodbApplier(db);
     console.log(bold(blue("📝 Applying migrations...")));
     console.log();
 
@@ -253,21 +270,28 @@ export async function migrateCommand(
         const startTime = Date.now();
 
         // Execute migration on real database
-        console.log(dim("  📝 Executing operations..."));
         const builder = migrationBuilder({ schemas: migration.schemas });
         const state = migration.migrate(builder);
+
+        if (options.verbose) {
+          console.log(dim(`  📦 Operations: ${state.operations.length}`));
+        }
+
+        console.log(dim("  📝 Executing operations..."));
 
         // ✅ Set migration ID for version tracking
         applier.setCurrentMigrationId(migration.id);
 
         // Apply operations
         for (const operation of state.operations) {
+          if (options.verbose) {
+            console.log(dim(`    → ${operation.type}`));
+          }
           await applier.applyOperation(operation);
         }
 
-        // Synchronize validators and indexes with migration schemas
-        console.log(dim("  🔧 Synchronizing validators and indexes..."));
-        await applier.synchronizeSchemas(migration.schemas);
+        // Note: mongodbv2 applies validators and indexes automatically during operations
+        // No need for explicit synchronizeSchemas call
 
         const duration = Date.now() - startTime;
 
@@ -283,6 +307,7 @@ export async function migrateCommand(
           green(`  ✓ Applied successfully ${dim(`(${duration}ms)`)}`),
         );
       } catch (error) {
+        console.error(error);
         const errorMessage = error instanceof Error
           ? error.message
           : String(error);

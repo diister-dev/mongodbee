@@ -39,8 +39,6 @@ import type {
   TransformMultiCollectionTypeRule,
   UpdateIndexesRule,
 } from "../types.ts";
-import { createMockGenerator } from "@diister/valibot-mock";
-import * as v from "valibot";
 
 /**
  * Configuration options for the simulation applier
@@ -110,74 +108,6 @@ type SimulationOperationHandlers = {
     ) => SimulationDatabaseState;
   };
 };
-
-/**
- * Generates a test document from a Valibot schema using mock data
- * Used when creating test documents for transform validation
- */
-function generateTestDocumentFromSchema(
-  schema: unknown,
-): Record<string, unknown> {
-  if (!schema) {
-    // No schema provided - return minimal test document
-    return {
-      _id: "test_simulation_id",
-    };
-  }
-
-  try {
-    // Wrap the schema in v.object() for valibot-mock
-    const schemaObject = v.object(
-      schema as Record<
-        string,
-        // deno-lint-ignore no-explicit-any
-        v.BaseSchema<any, any, any>
-      >,
-    );
-
-    // Use valibot-mock to generate realistic test data from schema
-    // deno-lint-ignore no-explicit-any
-    const generator = createMockGenerator(schemaObject as any);
-    const mockData = generator.generate();
-
-    // Convert ISO date strings to Date objects
-    // valibot-mock generates ISO strings for dates, but validation expects Date objects
-    const convertDates = (obj: any): any => {
-      if (typeof obj !== "object" || obj === null) return obj;
-      if (Array.isArray(obj)) return obj.map(convertDates);
-
-      const result: any = {};
-      for (const [key, value] of Object.entries(obj)) {
-        if (
-          typeof value === "string" &&
-          /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value)
-        ) {
-          // Looks like an ISO date string
-          result[key] = new Date(value);
-        } else if (typeof value === "object" && value !== null) {
-          result[key] = convertDates(value);
-        } else {
-          result[key] = value;
-        }
-      }
-      return result;
-    };
-
-    const processedData = convertDates(mockData);
-
-    return {
-      _id: "test_simulation_id",
-      ...(typeof processedData === "object" && processedData !== null
-        ? processedData
-        : {}),
-    };
-  } catch (_error) {
-    // If mock generation fails, return minimal document
-    return {
-      _id: "test_simulation_id",
-    };
-  }
-}
 
 /**
  * Implementation of in-memory migration applier for simulation and testing
@@ -1005,51 +935,4 @@ export function createEmptyDatabaseState(): SimulationDatabaseState {
     multiCollections: {},
     multiModels: {},
   };
-}
-
-/**
- * Utility function to compare two database states for equality
- *
- * @param state1 - First database state
- * @param state2 - Second database state
- * @returns True if states are deeply equal
- *
- * @example
- * ```typescript
- * const areEqual = compareDatabaseStates(stateBefore, stateAfter);
- * if (areEqual) {
- *   console.log("Migration is reversible!");
- * }
- * ```
- */
-export function compareDatabaseStates(
-  state1: SimulationDatabaseState,
-  state2: SimulationDatabaseState,
-): boolean {
-  // Helper to filter out test simulation instances
-  const filterTestInstances = (
-    multiModels?: Record<string, { content: Record<string, unknown>[] }>,
-  ) => {
-    if (!multiModels) return undefined;
-    const filtered: Record<string, { content: Record<string, unknown>[] }> = {};
-    for (const [name, collection] of Object.entries(multiModels)) {
-      // Skip test simulation instances
-      if (!name.endsWith("_test_simulation")) {
-        filtered[name] = collection;
-      }
-    }
-    return Object.keys(filtered).length > 0 ? filtered : undefined;
-  };
-
-  // Compare excluding operation history and test simulation instances
-  const clean1 = {
-    collections: state1.collections,
-    multiModels: filterTestInstances(state1.multiModels),
-  };
-  const clean2 = {
-    collections: state2.collections,
-    multiModels: filterTestInstances(state2.multiModels),
-  };
-
-  return JSON.stringify(clean1) === JSON.stringify(clean2);
 }

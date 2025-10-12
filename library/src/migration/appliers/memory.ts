@@ -69,10 +69,13 @@ export function createMemoryApplier() {
         if(!collection) {
           throw new Error(`Collection ${operation.collectionName} does not exist`);
         }
-        collection.content.push(...operation.documents.map((doc: any) => ({
-          _id: doc._id || (operation.schema._id ? v.getDefault(operation.schema._id) : undefined) || ulid(),
-          ...doc,
-        })));
+        collection.content.push(...operation.documents.map((doc: unknown) => {
+          const typedDoc = doc as Record<string, unknown>;
+          return {
+            _id: typedDoc._id || (operation.schema._id ? v.getDefault(operation.schema._id) : undefined) || ulid(),
+            ...typedDoc,
+          };
+        }));
         return state;
       },
       reverse: (state, operation) => {
@@ -80,8 +83,11 @@ export function createMemoryApplier() {
         if(!collection) {
           throw new Error(`Collection ${operation.collectionName} does not exist`);
         }
-        // Simple reversal by removing the last N documents added
-        collection.content.splice(-operation.documents.length);
+        // Reversal by filtering out seeded documents by _id
+        collection.content = collection.content.filter(doc => !operation.documents.some((odoc: unknown) => {
+          const typedDoc = odoc as Record<string, unknown>;
+          return typedDoc._id && typedDoc._id === doc._id;
+        }));
         return state;
       }
     },
@@ -91,11 +97,14 @@ export function createMemoryApplier() {
         if(!multiCollection) {
           throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
         }
-        multiCollection.content.push(...operation.documents.map((doc: any) => ({
-          _id: doc._id || (operation.schema._id ? v.getDefault(operation.schema._id) : undefined) || `${operation.documentType}:${ulid()}`,
-          ...doc,
-          _type: operation.documentType,
-        })));
+        multiCollection.content.push(...operation.documents.map((doc: unknown) => {
+          const typedDoc = doc as Record<string, unknown>;
+          return {
+            _id: typedDoc._id || (operation.schema._id ? v.getDefault(operation.schema._id) : undefined) || `${operation.documentType}:${ulid()}`,
+            ...typedDoc,
+            _type: operation.documentType,
+          };
+        }));
         return state;
       },
       reverse: (state, operation) => {
@@ -103,8 +112,11 @@ export function createMemoryApplier() {
         if(!multiCollection) {
           throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
         }
-        // Simple reversal by removing the last N documents added
-        multiCollection.content = multiCollection.content.filter(doc => !operation.documents.some((odoc: any) => odoc._id && odoc._id === doc._id));
+        // Reversal by filtering out seeded documents by _id
+        multiCollection.content = multiCollection.content.filter(doc => !operation.documents.some((odoc: unknown) => {
+          const typedDoc = odoc as Record<string, unknown>;
+          return typedDoc._id && typedDoc._id === doc._id;
+        }));
         return state;
       }
     },
@@ -114,11 +126,14 @@ export function createMemoryApplier() {
         if(!multiCollection) {
           throw new Error(`Multi-model instance ${operation.collectionName} does not exist`);
         }
-        multiCollection.content.push(...operation.documents.map((doc: any) => ({
-          _id: doc._id || (operation.schema._id ? v.getDefault(operation.schema._id) : undefined) || `${operation.documentType}:${ulid()}`,
-          ...doc,
-          _type: operation.documentType,
-        })));
+        multiCollection.content.push(...operation.documents.map((doc: unknown) => {
+          const typedDoc = doc as Record<string, unknown>;
+          return {
+            _id: typedDoc._id || (operation.schema._id ? v.getDefault(operation.schema._id) : undefined) || `${operation.documentType}:${ulid()}`,
+            ...typedDoc,
+            _type: operation.documentType,
+          };
+        }));
         return state;
       },
       reverse: (state, operation) => {
@@ -126,8 +141,11 @@ export function createMemoryApplier() {
         if(!multiCollection) {
           throw new Error(`Multi-model instance ${operation.collectionName} does not exist`);
         }
-        // Simple reversal by removing the last N documents added
-        multiCollection.content = multiCollection.content.filter(doc => !operation.documents.some((odoc: any) => odoc._id && odoc._id === doc._id));
+        // Reversal by filtering out seeded documents by _id
+        multiCollection.content = multiCollection.content.filter(doc => !operation.documents.some((odoc: unknown) => {
+          const typedDoc = odoc as Record<string, unknown>;
+          return typedDoc._id && typedDoc._id === doc._id;
+        }));
         return state;
       }
     },
@@ -136,11 +154,14 @@ export function createMemoryApplier() {
         const modelType = operation.modelType;
         for (const [_instanceName, instance] of Object.entries(state.multiModels)) {
           if (instance.modelType === modelType) {
-            instance.content.push(...operation.documents.map((doc: any) => ({
-              _id: doc._id || (operation.schema._id ? v.getDefault(operation.schema._id) : undefined) || `${operation.documentType}:${ulid()}`,
-              ...doc,
-              _type: operation.documentType,
-            })));
+            instance.content.push(...operation.documents.map((doc: unknown) => {
+              const typedDoc = doc as Record<string, unknown>;
+              return {
+                _id: typedDoc._id || (operation.schema._id ? v.getDefault(operation.schema._id) : undefined) || `${operation.documentType}:${ulid()}`,
+                ...typedDoc,
+                _type: operation.documentType,
+              };
+            }));
           }
         }
         return state;
@@ -149,8 +170,11 @@ export function createMemoryApplier() {
         const modelType = operation.modelType;
         for (const [_instanceName, instance] of Object.entries(state.multiModels)) {
           if (instance.modelType === modelType) {
-            // Simple reversal by removing the last N documents added
-            instance.content = instance.content.filter(doc => !operation.documents.some((odoc: any) => odoc._id && odoc._id === doc._id));
+            // Reversal by filtering out seeded documents by _id
+            instance.content = instance.content.filter(doc => !operation.documents.some((odoc: unknown) => {
+              const typedDoc = odoc as Record<string, unknown>;
+              return typedDoc._id && typedDoc._id === doc._id;
+            }));
           }
         }
         return state;
@@ -162,7 +186,7 @@ export function createMemoryApplier() {
         if(!collection) {
           throw new Error(`Collection ${operation.collectionName} does not exist`);
         }
-        collection.content = collection.content.map(operation.up as any);
+        collection.content = collection.content.map(operation.up as (doc: Record<string, unknown>) => Record<string, unknown>);
         return state;
       },
       reverse: (state, operation) => {
@@ -173,7 +197,7 @@ export function createMemoryApplier() {
         if(!collection) {
           throw new Error(`Collection ${operation.collectionName} does not exist`);
         }
-        collection.content = collection.content.map(operation.down as any);
+        collection.content = collection.content.map(operation.down as (doc: Record<string, unknown>) => Record<string, unknown>);
         return state;
       }
     },
@@ -185,7 +209,7 @@ export function createMemoryApplier() {
         }
         multiCollection.content = multiCollection.content.map(doc => {
           if (doc._type === operation.documentType) {
-            return operation.up(doc as any);
+            return operation.up(doc as Record<string, unknown>);
           }
           return doc;
         });
@@ -201,7 +225,7 @@ export function createMemoryApplier() {
         }
         multiCollection.content = multiCollection.content.map(doc => {
           if (doc._type === operation.documentType) {
-            return operation.down(doc as any);
+            return operation.down(doc as Record<string, unknown>);
           }
           return doc;
         });
@@ -216,7 +240,7 @@ export function createMemoryApplier() {
         }
         multiCollection.content = multiCollection.content.map(doc => {
           if (doc._type === operation.documentType) {
-            return operation.up(doc as any);
+            return operation.up(doc as Record<string, unknown>);
           }
           return doc;
         });
@@ -232,7 +256,7 @@ export function createMemoryApplier() {
         }
         multiCollection.content = multiCollection.content.map(doc => {
           if (doc._type === operation.documentType) {
-            return operation.down(doc as any);
+            return operation.down(doc as Record<string, unknown>);
           }
           return doc;
         });
@@ -246,7 +270,7 @@ export function createMemoryApplier() {
           if (instance.modelType === modelType) {
             instance.content = instance.content.map(doc => {
               if (doc._type === operation.documentType) {
-                return operation.up(doc as any);
+                return operation.up(doc as Record<string, unknown>);
               }
               return doc;
             });
@@ -263,7 +287,7 @@ export function createMemoryApplier() {
           if (instance.modelType === modelType) {
             instance.content = instance.content.map(doc => {
               if (doc._type === operation.documentType) {
-                return operation.down(doc as any);
+                return operation.down(doc as Record<string, unknown>);
               }
               return doc;
             });
@@ -292,6 +316,8 @@ export function createMemoryApplier() {
     if (!handler) {
       throw new Error(`No handler for operation type: ${operation.type}`)
     }
+    // Type assertion is safe here because we're dispatching to the correct handler based on operation.type
+    // deno-lint-ignore no-explicit-any
     return await handler(state, operation as any);
   }
 
@@ -303,6 +329,8 @@ export function createMemoryApplier() {
     if (!handler) {
       throw new Error(`No reverse handler for operation type: ${operation.type}`);
     }
+    // Type assertion is safe here because we're dispatching to the correct handler based on operation.type
+    // deno-lint-ignore no-explicit-any
     return await handler(state, operation as any);
   }
 

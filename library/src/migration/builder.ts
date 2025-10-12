@@ -39,7 +39,6 @@
  * @module
  */
 
-import * as v from "../schema.ts";
 import type {
   CreateCollectionRule,
   MigrationBuilder,
@@ -169,7 +168,7 @@ function createMultiCollectionTypeBuilder(
     seed(documents) {
       const documentSchema = options.schemas?.multiCollections?.[collectionName]?.[documentType];
       if(!documentSchema) {
-        throw new Error(`Cannot seed multi-collection ${collectionName}: schema not found in migration.schemas.multiCollections`);
+        throw new Error(`Cannot seed document type "${documentType}" in multi-collection "${collectionName}": schema not found in migration.schemas.multiCollections`);
       }
 
       state.operations.push({
@@ -327,7 +326,7 @@ function createMultiModelInstanceTypeBuilder(
     seed(documents) {
       const documentSchema = options.schemas?.multiModels?.[modelType]?.[documentType];
       if(!documentSchema) {
-        throw new Error(`Cannot seed multi-model instance ${collectionName} of type ${modelType}: schema not found in migration.schemas.multiModels`);
+        throw new Error(`Cannot seed document type "${documentType}" in multi-model instance "${collectionName}" (model: ${modelType}): schema not found in migration.schemas.multiModels`);
       }
 
       state.operations.push({
@@ -401,7 +400,7 @@ function createMultiModelInstancesTypeBuilder(
     seed(documents) {
       const documentSchema = options.schemas?.multiModels?.[modelType]?.[documentType];
       if(!documentSchema) {
-        throw new Error(`Cannot seed multi-model instances of type ${modelType}: schema not found in migration.schemas.multiModels`);
+        throw new Error(`Cannot seed document type "${documentType}" in multi-model instances (model: ${modelType}): schema not found in migration.schemas.multiModels`);
       }
 
       state.operations.push({
@@ -506,6 +505,9 @@ function createMigrationBuilder(
         collectionName: name,
         schema: multiCollectionSchema,
       });
+
+      // Creating a multi-collection makes the migration lossy (rollback drops the collection)
+      state.mark({ type: "lossy" });
 
       return createMultiCollectionBuilder(state, name, builder, options);
     },

@@ -40,7 +40,6 @@
 
 // Export all simulation applier functionality
 export {
-  compareDatabaseStates,
   createEmptyDatabaseState,
   createSimulationApplier,
   SimulationApplier,
