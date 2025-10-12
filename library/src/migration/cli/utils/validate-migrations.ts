@@ -35,7 +35,6 @@ export async function validateMigrationsWithSimulation(
   console.log();
 
   const simulationValidator = createSimulationValidator({
-    validateReversibility: true,
     strictValidation: true,
     maxOperations: 1000,
   });

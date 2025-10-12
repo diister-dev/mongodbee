@@ -13,7 +13,6 @@
  * - **Schema Validation**: Validate data integrity throughout the migration process
  * - **Flexible Configuration**: Support for multiple environments and configurations
  * - **Template System**: Generate migrations from built-in or custom templates
- * - **Execution Runners**: Coordinate migration execution with logging and error handling
  * - **JSR Compatible**: Designed for the JavaScript Registry with proper documentation
  *
  * ## Basic Usage
@@ -42,23 +41,6 @@
  *     ])
  *     .done()
  *   .compile();
- * ```
- *
- * ### Running Migrations
- *
- * ```typescript
- * import { createMigrationRunner, MongodbApplier } from "@diister/mongodbee/migration";
- *
- * // Create applier and runner
- * const applier = new MongodbApplier(mongoClient.db("myapp"));
- * const runner = createMigrationRunner({
- *   config: systemConfig,
- *   applier
- * });
- *
- * // Execute migration
- * const result = await runner.executeMigration(migrationDefinition);
- * console.log(`Migration completed: ${result.success}`);
  * ```
  *
  * @module
@@ -120,13 +102,12 @@ export type { MongodbApplierOptions } from "./appliers/mongodb.ts";
 // Configuration
 export * from "./config/mod.ts";
 
-// Runners
-export * from "./runners/mod.ts";
-
 // Validators (partial export of working functions)
 export {
   createChainValidator,
   createIntegrityValidator,
+  type MigrationValidator,
+  type ValidationResult,
 } from "./validators/mod.ts";
 
 // Multi-collection registry

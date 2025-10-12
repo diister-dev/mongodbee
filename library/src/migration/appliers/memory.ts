@@ -1,8 +1,8 @@
 import { ulid } from "@std/ulid/ulid";
-import type { DatabaseState, MigrationRule } from "../types.ts"
+import type { DatabaseState, MigrationDefinition, MigrationRule } from "../types.ts"
 import * as v from "valibot"
 
-export function createMemoryApplier() {
+export function createMemoryApplier(_migration: MigrationDefinition) {
   const migrations: {
     [K in MigrationRule['type']]: {
       apply: (state: DatabaseState, operation: Extract<MigrationRule, { type: K }>) => DatabaseState | Promise<DatabaseState>,
@@ -334,8 +334,39 @@ export function createMemoryApplier() {
     return await handler(state, operation as any);
   }
 
+  /**
+   * Applies a complete migration (all operations)
+   * 
+   * For memory applier, there's no schema synchronization needed since
+   * this is just an in-memory simulation.
+   * 
+   * @param state - Current database state
+   * @param operations - Array of migration operations to apply
+   * @param direction - 'up' for forward migration, 'down' for rollback
+   * @returns Updated database state
+   */
+  async function applyMigration(
+    state: DatabaseState,
+    operations: MigrationRule[],
+    direction: 'up' | 'down',
+  ): Promise<DatabaseState> {
+    let currentState = state;
+
+    for (const operation of operations) {
+      if (direction === 'up') {
+        currentState = await applyOperation(currentState, operation);
+      } else {
+        currentState = await reverseOperation(currentState, operation);
+      }
+    }
+
+    // No synchronization needed for memory applier
+    return currentState;
+  }
+
   return {
     applyOperation,
     reverseOperation,
+    applyMigration,
   }
 }

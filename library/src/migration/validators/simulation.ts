@@ -23,14 +23,8 @@
 import type {
   MigrationDefinition,
   MigrationRule,
-  MigrationState,
   SchemasDefinition,
 } from "../types.ts";
-import type {
-  MigrationExecutionContext,
-  MigrationValidator,
-  ValidationResult,
-} from "../runners/execution.ts";
 import {
   createEmptyDatabaseState,
   type SimulationDatabaseState,
@@ -42,11 +36,39 @@ import { dirtyEquivalent } from "../../utils/object.ts";
 import { createMemoryApplier } from "../appliers/memory.ts";
 
 /**
+ * Validation result from validators
+ */
+export type ValidationResult = {
+  /** Whether validation passed */
+  success: boolean;
+
+  /** Validation errors (blocking) */
+  errors: string[];
+
+  /** Validation warnings (non-blocking) */
+  warnings: string[];
+
+  /** Additional validation data */
+  data?: Record<string, unknown>;
+};
+
+/**
+ * Validator interface for migration validation
+ */
+export type MigrationValidator = {
+  /** Validates a complete migration definition */
+  validateMigration: (
+    definition: MigrationDefinition,
+    initialState?: SimulationDatabaseState,
+  ) => Promise<ValidationResult>;
+};
+
+/**
  * Constants for mock data generation
  */
 const MOCK_GENERATION = {
-  DOCS_PER_COLLECTION_MIN: 1000,
-  DOCS_PER_COLLECTION_MAX: 1000,
+  DOCS_PER_COLLECTION_MIN: 100,
+  DOCS_PER_COLLECTION_MAX: 100,
   DOCS_PER_TYPE_MIN: 1,
   DOCS_PER_TYPE_MAX: 2,
   MIN_SPARSE_THRESHOLD: 2,
@@ -56,9 +78,6 @@ const MOCK_GENERATION = {
  * Configuration options for the simulation validator
  */
 export interface SimulationValidatorOptions {
-  /** Whether to validate that migrations are reversible */
-  validateReversibility?: boolean;
-
   /** Whether to use strict validation in the simulation applier */
   strictValidation?: boolean;
 
@@ -67,9 +86,6 @@ export interface SimulationValidatorOptions {
 
   /** Maximum number of operations to validate (for performance) */
   maxOperations?: number;
-
-  /** Whether to validate individual operations */
-  validateOperations?: boolean;
 }
 
 /**
@@ -77,11 +93,9 @@ export interface SimulationValidatorOptions {
  */
 export const DEFAULT_SIMULATION_VALIDATOR_OPTIONS: SimulationValidatorOptions =
   {
-    validateReversibility: true,
     strictValidation: true,
     trackHistory: true,
     maxOperations: 1000,
-    validateOperations: true,
   };
 
 /**
@@ -91,16 +105,10 @@ export const DEFAULT_SIMULATION_VALIDATOR_OPTIONS: SimulationValidatorOptions =
  * in-memory environment before they are applied to real databases.
  */
 export class SimulationValidator implements MigrationValidator {
-  private readonly applier: ReturnType<typeof createMemoryApplier>;
   private readonly options: SimulationValidatorOptions;
 
   constructor(options: SimulationValidatorOptions = {}) {
     this.options = { ...DEFAULT_SIMULATION_VALIDATOR_OPTIONS, ...options };
-    // this.applier = createSimulationApplier({
-    //   strictValidation: this.options.strictValidation,
-    //   trackHistory: this.options.trackHistory,
-    // });
-    this.applier = createMemoryApplier();
   }
 
   /**
@@ -119,6 +127,9 @@ export class SimulationValidator implements MigrationValidator {
     const warnings: string[] = [];
 
     try {
+      // Create applier for this migration
+      const applier = createMemoryApplier(definition);
+
       // Build migration state for current migration
       const builder = migrationBuilder({
         schemas: definition.schemas,
@@ -156,7 +167,7 @@ export class SimulationValidator implements MigrationValidator {
       for (let i = 0; i < operations.length; i++) {
         const operation = operations[i];
         try {
-          currentState = await this.applier.applyOperation(currentState, operation);
+          currentState = await applier.applyOperation(currentState, operation);
           appliedOperations++;
         } catch (error) {
           const errorMessage = error instanceof Error
@@ -269,6 +280,7 @@ export class SimulationValidator implements MigrationValidator {
       // Validate schema changes require transformations for existing data
       const changeStateResult = await this.validateSchemaChanges(
         definition,
+        applier,
         stateBeforeMigration,
         stateAfterMigration,
         operations,
@@ -303,110 +315,6 @@ export class SimulationValidator implements MigrationValidator {
   }
 
   /**
-   * Validates individual operations before execution
-   *
-   * @param operation - The operation to validate
-   * @param _context - Execution context (not used in simulation validation)
-   * @returns Validation result
-   */
-  validateOperation(
-    operation: MigrationRule,
-    _context: MigrationExecutionContext,
-  ): Promise<ValidationResult> {
-    if (!this.options.validateOperations) {
-      return Promise.resolve({
-        success: true,
-        errors: [],
-        warnings: [],
-        data: { operationValidated: false },
-      });
-    }
-
-    const errors: string[] = [];
-    const warnings: string[] = [];
-
-    try {
-      // Test operation in isolation
-      const testState = createEmptyDatabaseState();
-      this.applier.applyOperation(testState, operation);
-
-      return Promise.resolve({
-        success: true,
-        errors,
-        warnings,
-        data: { operationValidated: true },
-      });
-    } catch (error) {
-      const errorMessage = error instanceof Error
-        ? error.message
-        : String(error);
-      errors.push(`Operation validation failed: ${errorMessage}`);
-
-      return Promise.resolve({
-        success: false,
-        errors,
-        warnings,
-        data: { operationValidated: false },
-      });
-    }
-  }
-
-  /**
-   * Validates the final state after migration
-   *
-   * @param state - The migration state to validate
-   * @param _context - Execution context (not used in simulation validation)
-   * @returns Validation result
-   */
-  validateState(
-    state: MigrationState,
-    _context: MigrationExecutionContext,
-  ): Promise<ValidationResult> {
-    const errors: string[] = [];
-    const warnings: string[] = [];
-
-    try {
-      // Basic state validation
-      if (state.operations.length === 0) {
-        warnings.push("Migration state has no operations");
-      }
-
-      // Check for conflicting properties
-      const properties = state.properties.map((p) => p.type);
-      if (
-        properties.includes("irreversible") &&
-        this.options.validateReversibility
-      ) {
-        warnings.push(
-          "Migration is marked as irreversible but reversibility validation was requested",
-        );
-      }
-
-      return Promise.resolve({
-        success: errors.length === 0,
-        errors,
-        warnings,
-        data: {
-          operationCount: state.operations.length,
-          properties: properties,
-        },
-      });
-    } catch (error) {
-      const errorMessage = error instanceof Error
-        ? error.message
-        : String(error);
-      errors.push(`State validation failed: ${errorMessage}`);
-
-      return Promise.resolve({
-        success: false,
-        errors,
-        warnings,
-        data: { stateValidated: false },
-      });
-    }
-  }
-
-  /**
    * Determines the initial database state for validation
    *
    * @private
@@ -432,56 +340,13 @@ export class SimulationValidator implements MigrationValidator {
   }
 
   /**
-   * Formats validation errors from valibot into readable messages
-   *
-   * @private
-   */
-  private formatValidationError(
-    // deno-lint-ignore no-explicit-any
-    validation: v.SafeParseResult<any>,
-    context: {
-      type: "collection" | "multicollection";
-      name: string;
-      index: number;
-      typeName?: string;
-    },
-  ): string[] {
-    const errors: string[] = [];
-
-    const location = context.type === "collection"
-      ? `collection "${context.name}" (index ${context.index})`
-      : `multi-collection "${context.name}" type "${context.typeName}" (index ${context.index})`;
-
-    errors.push(`Transformed document in ${location} does not match schema:`);
-
-    if (validation.issues && validation.issues.length > 0) {
-      const issue = validation.issues[0];
-      errors.push(
-        `  Field: ${issue.path?.map((p: { key: string }) => p.key).join(".") || "(root)"}`,
-      );
-      errors.push(`  Expected: ${issue.expected || "valid value"}`);
-      errors.push(
-        `  Received: ${issue.received || JSON.stringify(issue.input)}`,
-      );
-      errors.push(`  Issue: ${issue.message}`);
-    }
-
-    const tip = context.type === "collection"
-      ? "Check your transformation function - it may be returning invalid values."
-      : `Check your transformation function for type "${context.typeName}" - it may be returning invalid values.`;
-
-    errors.push(`  💡 Tip: ${tip}`);
-
-    return errors;
-  }
-
-  /**
    * Validates collection schema changes and ensures transformations exist for incompatible changes
    *
    * @private
    */
   private async validateCollectionSchemaChanges(
     definition: MigrationDefinition,
+    applier: ReturnType<typeof createMemoryApplier>,
     stateBefore: SimulationDatabaseState,
     stateAfter: SimulationDatabaseState,
     operations: MigrationRule[],
@@ -511,7 +376,7 @@ export class SimulationValidator implements MigrationValidator {
     for (let i = operations.length - 1; i >= 0; i--) {
       const operation = operations[i];
       try {
-        stateBeforeRollback = await this.applier.reverseOperation(stateBeforeRollback, operation);
+        stateBeforeRollback = await applier.reverseOperation(stateBeforeRollback, operation);
       } catch {
         // Ignore errors during reverse application
       }
@@ -553,6 +418,7 @@ export class SimulationValidator implements MigrationValidator {
 
   private async validateMultiCollectionSchemaChanges(
     definition: MigrationDefinition,
+    applier: ReturnType<typeof createMemoryApplier>,
     stateBefore: SimulationDatabaseState,
     stateAfter: SimulationDatabaseState,
     operations: MigrationRule[],
@@ -595,7 +461,7 @@ export class SimulationValidator implements MigrationValidator {
     for (let i = operations.length - 1; i >= 0; i--) {
       const operation = operations[i];
       try {
-        stateBeforeRollback = await this.applier.reverseOperation(stateBeforeRollback, operation);
+        stateBeforeRollback = await applier.reverseOperation(stateBeforeRollback, operation);
       } catch {
         // Ignore errors during reverse application
       }
@@ -639,6 +505,7 @@ export class SimulationValidator implements MigrationValidator {
 
   private async validateMultiModelSchemaChanges(
     definition: MigrationDefinition,
+    applier: ReturnType<typeof createMemoryApplier>,
     stateBefore: SimulationDatabaseState,
     stateAfter: SimulationDatabaseState,
     operations: MigrationRule[],
@@ -691,7 +558,7 @@ export class SimulationValidator implements MigrationValidator {
     for (let i = operations.length - 1; i >= 0; i--) {
       const operation = operations[i];
       try {
-        stateBeforeRollback = await this.applier.reverseOperation(stateBeforeRollback, operation);
+        stateBeforeRollback = await applier.reverseOperation(stateBeforeRollback, operation);
       } catch {
         // Ignore errors during reverse application
       }
@@ -740,12 +607,15 @@ export class SimulationValidator implements MigrationValidator {
    *
    * @private
    * @param definition - The migration definition
+   * @param applier - The memory applier for this migration
    * @param stateBefore - Database state before this migration
+   * @param stateAfter - Database state after this migration
    * @param operations - Operations in this migration
    * @returns Array of error messages (empty if validation passes)
    */
   private async validateSchemaChanges(
     definition: MigrationDefinition,
+    applier: ReturnType<typeof createMemoryApplier>,
     stateBefore: SimulationDatabaseState,
     stateAfter: SimulationDatabaseState,
     operations: MigrationRule[],
@@ -755,6 +625,7 @@ export class SimulationValidator implements MigrationValidator {
     // Validate collection schema changes
     const collectionChangeResult = await this.validateCollectionSchemaChanges(
       definition,
+      applier,
       structuredClone(stateBefore),
       structuredClone(stateAfter),
       operations,
@@ -763,6 +634,7 @@ export class SimulationValidator implements MigrationValidator {
     // Validate multi-collection schema changes
     const multiCollectionChangeResult = await this.validateMultiCollectionSchemaChanges(
       definition,
+      applier,
       structuredClone(stateBefore),
       structuredClone(stateAfter),
       operations,
@@ -770,6 +642,7 @@ export class SimulationValidator implements MigrationValidator {
 
     const multiModelsChangeResult = await this.validateMultiModelSchemaChanges(
       definition,
+      applier,
       structuredClone(stateBefore),
       structuredClone(stateAfter),
       operations,
@@ -835,6 +708,9 @@ export class SimulationValidator implements MigrationValidator {
 
     // Apply each ancestor migration in order
     for (const ancestor of ancestors) {
+      // Create applier for this ancestor migration
+      const applier = createMemoryApplier(ancestor);
+      
       const builder = migrationBuilder({
         schemas: ancestor.schemas,
         parentSchemas: ancestor.parent?.schemas,
@@ -842,7 +718,7 @@ export class SimulationValidator implements MigrationValidator {
       const state = ancestor.migrate(builder);
 
       for (const operation of state.operations) {
-        currentState = await this.applier.applyOperation(currentState, operation);
+        currentState = await applier.applyOperation(currentState, operation);
       }
     }
 

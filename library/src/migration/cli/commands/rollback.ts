@@ -122,7 +122,7 @@ export async function rollbackCommand(
         if (op.type === "transform_collection") {
           console.log(yellow(`   - Collection: ${op.collectionName}`));
         } else if (op.type === "transform_multicollection_type") {
-          console.log(yellow(`   - Multi-collection: ${op.collectionType}.${op.typeName}`));
+          console.log(yellow(`   - Multi-collection: ${op.collectionName}.${op.documentType}`));
         }
       }
       console.log(yellow("   Rolling back will result in DATA LOSS."));
@@ -143,42 +143,15 @@ export async function rollbackCommand(
     // Apply reverse operations
     console.log(bold("Rolling back operations..."));
 
-    const applier = createMongodbApplier(db);
-    applier.setCurrentMigrationId(migrationToRollback.id);
-
     try {
-      // Note: mongodbv2 handles validator updates automatically during reverse operations
-      // Validators are applied/removed as needed per collection operation
+      // Create applier with migration context
+      const applier = createMongodbApplier(db, migrationToRollback, {
+        currentMigrationId: migrationToRollback.id,
+      });
 
-      // Apply operations in reverse order
-      for (let i = state.operations.length - 1; i >= 0; i--) {
-        const operation = state.operations[i];
-        console.log(dim(`  Rolling back ${operation.type}...`));
-
-        try {
-          await applier.reverseOperation(operation);
-        } catch (error) {
-          const message = error instanceof Error
-            ? error.message
-            : String(error);
-          console.log(
-            yellow(`  ⚠ Could not reverse ${operation.type}: ${message}`),
-          );
-
-          if (operation.type === "create_collection") {
-            console.log(
-              dim(
-                "    Note: Collection creation cannot be automatically reversed.",
-              ),
-            );
-            console.log(
-              dim(
-                "    You may need to manually drop the collection if needed.",
-              ),
-            );
-          }
-        }
-      }
+      // Reverse operations and synchronize with parent schemas
+      const reversedOps = [...state.operations].reverse();
+      await applier.applyMigration(reversedOps, 'down');
 
       // Mark as reverted
       await markMigrationAsReverted(db, migrationToRollback.id);

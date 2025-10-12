@@ -67,4 +67,6 @@ export {
   SimulationValidator,
   type SimulationValidatorOptions,
   validateMigrationWithSimulation,
+  type ValidationResult,
+  type MigrationValidator,
 } from "./simulation.ts";

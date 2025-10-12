@@ -252,7 +252,6 @@ export async function migrateCommand(
     }
 
     // STEP 3: Apply each pending migration
-    const applier = createMongodbApplier(db);
     console.log(bold(blue("📝 Applying migrations...")));
     console.log();
 
@@ -271,27 +270,21 @@ export async function migrateCommand(
 
         // Execute migration on real database
         const builder = migrationBuilder({ schemas: migration.schemas });
-        const state = migration.migrate(builder);
+        const migrator = migration.migrate(builder);
 
         if (options.verbose) {
-          console.log(dim(`  📦 Operations: ${state.operations.length}`));
+          console.log(dim(`  📦 Operations: ${migrator.operations.length}`));
         }
 
         console.log(dim("  📝 Executing operations..."));
 
-        // ✅ Set migration ID for version tracking
-        applier.setCurrentMigrationId(migration.id);
+        // Create applier with migration context
+        const migrationApplier = createMongodbApplier(db, migration, {
+          currentMigrationId: migration.id,
+        });
 
-        // Apply operations
-        for (const operation of state.operations) {
-          if (options.verbose) {
-            console.log(dim(`    → ${operation.type}`));
-          }
-          await applier.applyOperation(operation);
-        }
-
-        // Note: mongodbv2 applies validators and indexes automatically during operations
-        // No need for explicit synchronizeSchemas call
+        // Apply all operations and synchronize schemas
+        await migrationApplier.applyMigration(migrator.operations, 'up');
 
         const duration = Date.now() - startTime;
 
