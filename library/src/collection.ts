@@ -661,120 +661,108 @@ export async function collection<
 
       return cursor as unknown as m.AbstractCursor<TOutput>;
     },
-    async paginate<E = WithId<TOutput>, R = E>(
-      filter: m.Filter<TInput>,
-      options?: {
-        limit?: number;
-        afterId?: string | m.ObjectId;
-        beforeId?: string | m.ObjectId;
-        sort?: m.Sort | m.SortDirection;
-        prepare?: (doc: WithId<TOutput>) => Promise<E>;
-        filter?: (doc: E) => Promise<boolean> | boolean;
-        format?: (doc: E) => Promise<R>;
-      },
-    ): Promise<{
-      total: number;
-      position: number;
-      data: R[];
+    async paginate<E = WithId<TOutput>, R = E>(filter: m.Filter<TInput>, options?: {
+        limit?: number,
+        afterId?: string | m.ObjectId,
+        beforeId?: string | m.ObjectId,
+        sort?: m.Sort | m.SortDirection,
+        prepare?: (doc: WithId<TOutput>) => Promise<E>,
+        filter?: (doc: E) => Promise<boolean> | boolean,
+        format?: (doc: E) => Promise<R>,
+    }): Promise<{
+        total: number,
+        position: number,
+        data: R[],
     }> {
-      let {
-        limit = 100,
-        afterId,
-        beforeId,
-        sort,
-        prepare,
-        filter: customFilter,
-        format,
-      } = options || {};
-      const session = sessionContext.getSession();
-      const baseQuery: m.Filter<TInput> = { ...filter };
-      const query: m.Filter<TInput> = { ...filter };
+        let { limit = 100, afterId, beforeId, sort, prepare, filter: customFilter, format } = options || {};
+        const session = sessionContext.getSession();
+        const baseQuery: m.Filter<TInput> = { ...filter };
+        let query: m.Filter<TInput> = { ...filter };
 
-      // Add pagination filters
-      if (afterId) {
-        (query as Record<string, unknown>)._id = { $gt: afterId };
-        sort = sort || { _id: 1 };
-      }
-      if (beforeId) {
-        (query as Record<string, unknown>)._id = { $lt: beforeId };
-        sort = sort || { _id: -1 };
-      }
-
-      let total: number | undefined;
-      let position: number | undefined;
-      {
-        // Count total documents matching the base filter
-        total = await collection.countDocuments(baseQuery, { session });
-
+        // Add pagination filters
         if (afterId) {
-          const positionQuery = {
-            ...baseQuery,
-            _id: { $lte: afterId },
-          } as m.Filter<TInput>;
-          position = await collection.countDocuments(positionQuery, {
-            session,
-          });
+            query = {
+            ...query,
+            _id: { $gt: afterId }
+            }
+            sort = sort || { _id: 1 };
         } else if (beforeId) {
-          const positionQuery = {
-            ...baseQuery,
-            _id: { $gte: beforeId },
-          } as m.Filter<TInput>;
-          const remainingCount = await collection.countDocuments(
-            positionQuery,
-            { session },
-          );
-          position = total - remainingCount;
+            // (query as Record<string, unknown>)._id = { $lt: beforeId };
+            query = {
+            ...query,
+            _id: { $lt: beforeId }
+            }
+            sort = sort || { _id: -1 };
         } else {
-          position = 0;
-        }
-      }
-
-      const cursor = collection.find(query, { session }).sort(sort as m.Sort);
-      let hardLimit = 10_000;
-      const elements: R[] = [];
-
-      while (hardLimit-- > 0 && limit > 0) {
-        const doc = await cursor.next() as WithId<TOutput> | null;
-        if (!doc) break;
-
-        // Validate document with schema
-        const validation = v.safeParse(schema, doc);
-        if (!validation.success) {
-          continue; // Skip invalid documents
+            sort = sort || { _id: 1 };
         }
 
-        const validatedDoc = validation.output as WithId<TOutput>;
+        let total: number | undefined;
+        let position: number | undefined;
+        {
+            // Count total documents matching the base filter
+            total = await collection.countDocuments(baseQuery, { session });
+            
+            if (afterId) {
+                const positionQuery = { 
+                    ...baseQuery,
+                    _id: { $lte: afterId }
+                } as m.Filter<TInput>;
+                position = await collection.countDocuments(positionQuery, { session });
+            } else if (beforeId) {
+                const positionQuery = { 
+                    ...baseQuery,
+                    _id: { $gte: beforeId }
+                } as m.Filter<TInput>;
+                const remainingCount = await collection.countDocuments(positionQuery, { session });
+                position = total - remainingCount;
+            } else {
+                position = 0;
+            }
+        }
 
-        // Step 1: Prepare - enrich document with external data
-        const enrichedDoc = prepare
-          ? await prepare(validatedDoc)
-          : validatedDoc as unknown as E;
+        const cursor = collection.find(query, { session }).sort(sort as m.Sort);
+        let hardLimit = 10_000;
+        const elements: R[] = [];
+        
+        while(hardLimit-- > 0 && limit > 0) {
+            const doc = await cursor.next() as WithId<TOutput> | null;
+            if (!doc) break;
 
-        // Step 2: Filter - apply custom filtering logic
-        const isValid = await customFilter?.(enrichedDoc) ?? true;
-        if (!isValid) continue;
+            // Validate document with schema
+            const validation = v.safeParse(schema, doc);
+            if (!validation.success) {
+                continue; // Skip invalid documents
+            }
 
-        // Step 3: Format - transform document to final output format
-        const finalDoc = format
-          ? await format(enrichedDoc)
-          : enrichedDoc as unknown as R;
+            const validatedDoc = validation.output as WithId<TOutput>;
+            
+            // Step 1: Prepare - enrich document with external data
+            const enrichedDoc = prepare ? await prepare(validatedDoc) : validatedDoc as unknown as E;
+            
+            // Step 2: Filter - apply custom filtering logic
+            const isValid = await customFilter?.(enrichedDoc) ?? true;
+            if (!isValid) continue;
+            
+            // Step 3: Format - transform document to final output format
+            const finalDoc = format ? await format(enrichedDoc) : enrichedDoc as unknown as R;
+            
+            elements.push(finalDoc);
+            limit--;
+        }
 
-        elements.push(finalDoc);
-        limit--;
-      }
+        // If paginating backwards (beforeId) and no explicit sort was provided, reverse the results to maintain chronological order
+        if(beforeId) {
+            elements.reverse();
+            position = (position || 0) - elements.length;
+            position = position < 0 ? 0 : position;
+        }
 
-      // If paginating backwards (beforeId) and no explicit sort was provided, reverse the results to maintain chronological order
-      if (beforeId) {
-        elements.reverse();
-        position = (position || 0) - elements.length;
-        position = position < 0 ? 0 : position;
-      }
-
-      return {
-        total,
-        position,
-        data: elements,
-      };
+        return {
+            total,
+            position,
+            data: elements,
+        };
     },
     countDocuments(filter, options?) {
       const session = sessionContext.getSession();

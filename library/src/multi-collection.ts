@@ -504,469 +504,435 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
   return {
     withSession: sessionContext!.withSession,
-    async insertOne(key, doc) {
-      const _id = doc._id ?? `${key as string}:${newId()}`;
-      const schema = schemaElements[key];
-      const validation = v.parse(schema, {
-        ...doc,
-        _id,
-      });
+        async insertOne(key, doc) {
+            const _id = doc._id ?? `${key as string}:${newId()}`;
+            const schema = schemaElements[key];
+            const validation = v.parse(schema, {
+                ...doc,
+                _id,
+            });
 
-      // Apply sanitization based on configuration
-      const safeDoc = sanitizeForMongoDB(validation, {
-        undefinedBehavior: opts.undefinedBehavior || "remove",
-        deep: true,
-      }) as any;
+            // Apply sanitization based on configuration
+            const safeDoc = sanitizeForMongoDB(validation, {
+                undefinedBehavior: opts.undefinedBehavior || 'remove',
+                deep: true
+            }) as any;
 
-      const session = sessionContext.getSession();
-      const result = await collection.insertOne(safeDoc, { session });
-      if (!result.acknowledged) {
-        throw new Error("Insert failed");
-      }
+            const session = sessionContext.getSession();
+            const result = await collection.insertOne(safeDoc, { session });
+            if(!result.acknowledged) {
+                throw new Error("Insert failed");
+            }
 
-      return result.insertedId as unknown as string;
-    },
-    async insertMany(key, docs) {
-      const validation = docs.map((doc) => {
-        const _id = doc._id ?? `${key as string}:${newId()}`;
-        return v.parse(schema, {
-          ...doc,
-          _id,
-        });
-      });
-
-      // Apply sanitization based on configuration
-      const safeDocs = validation.map((doc) =>
-        sanitizeForMongoDB(doc, {
-          undefinedBehavior: opts.undefinedBehavior || "remove",
-          deep: true,
-        }) as any
-      );
-
-      const session = sessionContext.getSession();
-      const result = await collection.insertMany(safeDocs, { session });
-      if (!result.acknowledged) {
-        throw new Error("Insert failed");
-      }
-
-      return Object.values(result.insertedIds) as unknown as string[];
-    },
-    async getById(key, id) {
-      const session = sessionContext.getSession();
-      const result = await collection.findOne({
-        $and: [
-          { _type: key as string },
-          { _id: id },
-        ],
-      } as any, { session });
-
-      if (!result) {
-        throw new Error("No element found");
-      }
-
-      return v.parse(schema, result);
-    },
-    async findOne(key, filter) {
-      const session = sessionContext.getSession();
-      const result = await collection.findOne({
-        $and: [
-          { _type: key as string },
-          filter,
-        ],
-      } as any, { session });
-
-      if (!result) {
-        return null;
-      }
-
-      return v.parse(schema, result);
-    },
-    async find(key, filter, options) {
-      const typeChecker = {
-        _type: key as string,
-      };
-
-      const session = sessionContext.getSession();
-      const cursor = collection.find({
-        $and: filter ? [typeChecker, filter] : [typeChecker],
-      } as any, { session, ...options });
-
-      const result = await cursor.toArray();
-      let invalidsCount = 0;
-
-      const output = result.map((item) => {
-        const parsed = v.safeParse(schema, item);
-        if (!parsed.success) {
-          invalidsCount++;
-          return null;
-        }
-        return parsed.output;
-      }).filter((
-        item,
-      ): item is v.InferOutput<OutputElementSchema<T, typeof key>> =>
-        item !== null
-      );
-
-      return output;
-    },
-    async paginate<
-      E extends keyof T,
-      EN = v.InferOutput<OutputElementSchema<T, E>>,
-      R = EN,
-    >(
-      key: E,
-      filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
-      options?: {
-        limit?: number;
-        afterId?: string;
-        beforeId?: string;
-        sort?: m.Sort | m.SortDirection;
-        prepare?: (
-          doc: v.InferOutput<OutputElementSchema<T, E>>,
-        ) => Promise<EN>;
-        filter?: (doc: EN) => Promise<boolean> | boolean;
-        format?: (doc: EN) => Promise<R>;
-      },
-    ) {
-      let {
-        limit = 100,
-        afterId,
-        beforeId,
-        sort,
-        prepare,
-        filter: customFilter,
-        format,
-      } = options || {};
-      const session = sessionContext.getSession();
-
-      const typeChecker = {
-        _type: key as string,
-      };
-
-      // Build the base query with type filter
-      const baseQuery = filter ? [typeChecker, filter] : [typeChecker];
-      let query: Record<string, unknown> = { $and: baseQuery };
-
-      // Add pagination filters
-      if (afterId) {
-        if (!afterId.startsWith(`${key as string}:`)) {
-          throw new Error(`Invalid afterId format for type ${key as string}`);
-        }
-        query = {
-          $and: [
-            ...baseQuery,
-            { _id: { $gt: afterId } },
-          ],
-        };
-        sort = sort || { _id: 1 };
-      }
-      if (beforeId) {
-        if (!beforeId.startsWith(`${key as string}:`)) {
-          throw new Error(`Invalid beforeId format for type ${key as string}`);
-        }
-        query = {
-          $and: [
-            ...baseQuery,
-            { _id: { $lt: beforeId } },
-          ],
-        };
-        sort = sort || { _id: -1 };
-      }
-
-      let total: number | undefined;
-      let position: number | undefined;
-      {
-        const baseCountQuery = { $and: baseQuery };
-        total = await collection.countDocuments(baseCountQuery as never, {
-          session,
-        });
-
-        if (afterId) {
-          const positionQuery = {
-            $and: [
-              ...baseQuery,
-              { _id: { $lte: afterId } },
-            ],
-          };
-          position = await collection.countDocuments(positionQuery as never, {
-            session,
-          });
-        } else if (beforeId) {
-          const positionQuery = {
-            $and: [
-              ...baseQuery,
-              { _id: { $gte: beforeId } },
-            ],
-          };
-          const remainingCount = await collection.countDocuments(
-            positionQuery as never,
-            { session },
-          );
-          position = total - remainingCount;
-        } else {
-          position = 0;
-        }
-      }
-
-      const cursor = collection.find(query as never, { session }).sort(
-        sort as m.Sort,
-      );
-      let hardLimit = 10_000;
-      const elements: R[] = [];
-
-      while (hardLimit-- > 0 && limit > 0) {
-        const doc = await cursor.next();
-        if (!doc) break;
-
-        // Validate document with schema
-        const validation = v.safeParse(schema, doc);
-        if (!validation.success) {
-          continue; // Skip invalid documents
-        }
-
-        const validatedDoc = validation.output as v.InferOutput<
-          OutputElementSchema<T, E>
-        >;
-
-        // Step 1: Prepare - enrich document with external data
-        const enrichedDoc = prepare
-          ? await prepare(validatedDoc)
-          : validatedDoc as unknown as EN;
-
-        // Step 2: Filter - apply custom filtering logic
-        const isValid = await customFilter?.(enrichedDoc) ?? true;
-        if (!isValid) continue;
-
-        // Step 3: Format - transform document to final output format
-        const finalDoc = format
-          ? await format(enrichedDoc)
-          : enrichedDoc as unknown as R;
-
-        elements.push(finalDoc);
-        limit--;
-      }
-
-      // If paginating backwards (beforeId) and no explicit sort was provided, reverse the results to maintain chronological order
-      if (beforeId) {
-        elements.reverse();
-        position = (position || 0) - elements.length;
-        position = position < 0 ? 0 : position;
-      }
-
-      return {
-        total,
-        position,
-        data: elements,
-      };
-    },
-    countDocuments(key, filter, options?) {
-      const session = sessionContext.getSession();
-
-      const typeChecker = {
-        _type: key as string,
-      };
-
-      // Build the query using the same logic as find()
-      const query = {
-        $and: filter ? [typeChecker, filter] : [typeChecker],
-      };
-
-      return collection.countDocuments(query as never, { session, ...options });
-    },
-    async deleteId(key, id) {
-      const schema = schemaWithId[key];
-      v.parse(schema._id, id);
-
-      if (!id.startsWith(`${key as string}:`)) {
-        throw new Error(`Invalid id format`);
-      }
-
-      const session = sessionContext.getSession();
-
-      const result = await collection.deleteOne({
-        _id: id,
-      } as any, { session });
-
-      if (!result.acknowledged) {
-        throw new Error("Delete failed");
-      }
-
-      if (result.deletedCount === 0) {
-        throw new Error("No element that match the filter to delete");
-      }
-
-      return result.deletedCount;
-    },
-    async deleteIds(key, ids) {
-      const schema = schemaWithId[key];
-      ids.forEach((id) => {
-        v.parse(schema._id, id);
-      });
-
-      const session = sessionContext.getSession();
-
-      const result = await collection.deleteMany({
-        _id: {
-          $in: ids,
+            return result.insertedId as unknown as string;
         },
-        _type: key as string,
-      } as any, { session });
+        async insertMany(key, docs) {
+            const validation = docs.map((doc) => {
+                const _id = doc._id ?? `${key as string}:${newId()}`;
+                return v.parse(schema, {
+                    ...doc,
+                    _id,
+                });
+            });
 
-      if (!result.acknowledged) {
-        throw new Error("Delete failed");
-      }
+            // Apply sanitization based on configuration
+            const safeDocs = validation.map(doc => sanitizeForMongoDB(doc, {
+                undefinedBehavior: opts.undefinedBehavior || 'remove',
+                deep: true
+            }) as any);
 
-      if (result.deletedCount === 0) {
-        throw new Error("No element that match the filter to delete");
-      }
+            const session = sessionContext.getSession();
+            const result = await collection.insertMany(safeDocs, { session });
+            if(!result.acknowledged) {
+                throw new Error("Insert failed");
+            }
 
-      return result.deletedCount;
-    },
-    async deleteMany(key, filter) {
-      const session = sessionContext.getSession();
+            return Object.values(result.insertedIds) as unknown as string[];
+        },
+        async getById(key, id) {
+            const session = sessionContext.getSession();
+            const result = await collection.findOne({
+                $and: [
+                    { _type: key as string },
+                    { _id: id },
+                ]
+            } as any, { session });
 
-      // Combine the user filter with the type filter
-      const combinedFilter = {
-        ...filter,
-        _type: key as string,
-      } as any;
+            if (!result) {
+                throw new Error("No element found");
+            }
+            
+            return v.parse(schema, result);
+        },
+        async findOne(key, filter) {
+            const session = sessionContext.getSession();
+            const result = await collection.findOne({
+                $and: [
+                    { _type: key as string },
+                    filter,
+                ]
+            } as any, { session });
 
-      const result = await collection.deleteMany(combinedFilter, { session });
+            if (!result) {
+                return null;
+            }
+            
+            return v.parse(schema, result);
+        },
+        async find(key, filter, options) {
+            const typeChecker = {
+                _type: key as string,
+            };
 
-      if (!result.acknowledged) {
-        throw new Error("Delete failed");
-      }
+            const session = sessionContext.getSession();
+            const cursor = collection.find({
+                $and: filter ? [typeChecker, filter] : [typeChecker],
+            } as any, { session, ...options });
+            
+            const result = await cursor.toArray();
+            let invalidsCount = 0;
 
-      return result.deletedCount;
-    },
-    async deleteAny(filter) {
-      const session = sessionContext.getSession();
+            const output = result.map((item) => {
+                const parsed = v.safeParse(schema, item);
+                if(!parsed.success) {
+                    invalidsCount++;
+                    return null;
+                }
+                return parsed.output;
+            }).filter((item): item is v.InferOutput<OutputElementSchema<T, typeof key>> => item !== null);
+            
+            return output;
+        },
+        async paginate<E extends keyof T, EN = v.InferOutput<OutputElementSchema<T, E>>, R = EN>(
+            key: E, 
+            filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, 
+            options?: {
+                limit?: number,
+                afterId?: string,
+                beforeId?: string,
+                sort?: m.Sort | m.SortDirection,
+                prepare?: (doc: v.InferOutput<OutputElementSchema<T, E>>) => Promise<EN>,
+                filter?: (doc: EN) => Promise<boolean> | boolean,
+                format?: (doc: EN) => Promise<R>,
+            }
+        ) {
+            let { limit = 100, afterId, beforeId, sort, prepare, filter: customFilter, format } = options || {};
+            const session = sessionContext.getSession();
+            
+            const typeChecker = {
+                _type: key as string,
+            };
+            
+            // Build the base query with type filter
+            const baseQuery = filter ? [typeChecker, filter] : [typeChecker];
+            let query: Record<string, unknown> = { $and: baseQuery };
 
-      const result = await collection.deleteMany(filter as any, { session });
+            // Add pagination filters
+            if (afterId) {
+              if (!afterId.startsWith(`${key as string}:`)) {
+                  throw new Error(`Invalid afterId format for type ${key as string}`);
+              }
+              query = {
+                  $and: [
+                      ...baseQuery,
+                      { _id: { $gt: afterId } }
+                  ]
+              };
+              sort = sort || { _id: 1 };
+            } else if (beforeId) {
+              if (!beforeId.startsWith(`${key as string}:`)) {
+                  throw new Error(`Invalid beforeId format for type ${key as string}`);
+              }
+              query = {
+                  $and: [
+                      ...baseQuery,
+                      { _id: { $lt: beforeId } }
+                  ]
+              };
+              sort = sort || { _id: -1 };
+            } else {
+              sort = sort || { _id: 1 };
+            }
 
-      if (!result.acknowledged) {
-        throw new Error("Delete failed");
-      }
+            let total: number | undefined;
+            let position: number | undefined;
+            {
+                const baseCountQuery = { $and: baseQuery };
+                total = await collection.countDocuments(baseCountQuery as never, { session });
+                
+                if (afterId) {
+                    const positionQuery = {
+                        $and: [
+                            ...baseQuery,
+                            { _id: { $lte: afterId } }
+                        ]
+                    };
+                    position = await collection.countDocuments(positionQuery as never, { session });
+                } else if (beforeId) {
+                    const positionQuery = {
+                        $and: [
+                            ...baseQuery,
+                            { _id: { $gte: beforeId } }
+                        ]
+                    };
+                    const remainingCount = await collection.countDocuments(positionQuery as never, { session });
+                    position = total - remainingCount;
+                } else {
+                    position = 0;
+                }
+            }
 
-      return result.deletedCount;
-    },
-    async updateOne(key, id, doc) {
-      const dotSchema = dotSchemaElements[key];
-      if (!dotSchema) {
-        throw new Error(`Invalid element type`);
-      }
+            const cursor = collection.find(query as never, { session }).sort(sort as m.Sort);
+            let hardLimit = 10_000;
+            const elements: R[] = [];
+            
+            while(hardLimit-- > 0 && limit > 0) {
+                const doc = await cursor.next();
+                if (!doc) break;
 
-      v.parse(dotSchema, doc);
+                // Validate document with schema
+                const validation = v.safeParse(schema, doc);
+                if (!validation.success) {
+                    continue; // Skip invalid documents
+                }
 
-      const session = sessionContext.getSession();
+                const validatedDoc = validation.output as v.InferOutput<OutputElementSchema<T, E>>;
+                
+                // Step 1: Prepare - enrich document with external data
+                const enrichedDoc = prepare ? await prepare(validatedDoc) : validatedDoc as unknown as EN;
+                
+                // Step 2: Filter - apply custom filtering logic
+                const isValid = await customFilter?.(enrichedDoc) ?? true;
+                if (!isValid) continue;
+                
+                // Step 3: Format - transform document to final output format
+                const finalDoc = format ? await format(enrichedDoc) : enrichedDoc as unknown as R;
+                
+                elements.push(finalDoc);
+                limit--;
+            }
 
-      const result = await collection.updateOne({
-        _id: id,
-        _type: key as string,
-      } as any, {
-        $set: doc,
-      } as any, { session });
+            // If paginating backwards (beforeId) and no explicit sort was provided, reverse the results to maintain chronological order
+            if(beforeId) {
+                elements.reverse();
+                position = (position || 0) - elements.length;
+                position = position < 0 ? 0 : position;
+            }
 
-      if (!result.acknowledged) {
-        throw new Error("Update failed");
-      }
+            return {
+                total,
+                position,
+                data: elements,
+            };
+        },
+        countDocuments(key, filter, options?) {
+            const session = sessionContext.getSession();
+            
+            const typeChecker = {
+                _type: key as string,
+            };
+            
+            // Build the query using the same logic as find()
+            const query = {
+                $and: filter ? [typeChecker, filter] : [typeChecker],
+            };
+            
+            return collection.countDocuments(query as never, { session, ...options });
+        },
+        async deleteId(key, id) {
+            const schema = schemaWithId[key];
+            v.parse(schema._id, id);
 
-      if (result.matchedCount === 0) {
-        throw new Error("No element that match the filter to update");
-      }
+            if(!id.startsWith(`${key as string}:`)) {
+                throw new Error(`Invalid id format`);
+            }
 
-      if (result.modifiedCount === 0) {
-        throw new Error("No element that match the filter to update");
-      }
+            const session = sessionContext.getSession();
 
-      return result.modifiedCount;
-    },
-    async updateMany(operation) {
-      const bulkOps: any[] = [];
-      for (const type in operation) {
-        const elements = operation[type];
-        for (const id in elements) {
-          const element = elements[id];
-          const dotSchema = dotSchemaElements[type];
-          if (!id.startsWith(`${type}:`)) {
-            throw new Error(`Invalid id format`);
-          }
-          if (!dotSchema) {
-            throw new Error(`Invalid element type`);
-          }
-          v.parse(dotSchema, element);
+            const result = await collection.deleteOne({
+                _id: id,
+            } as any, { session });
 
-          bulkOps.push({
-            updateOne: {
-              filter: { _id: id },
-              update: { $set: element },
-            },
-          });
-        }
-      }
+            if(!result.acknowledged) {
+                throw new Error("Delete failed");
+            }
 
-      if (bulkOps.length === 0) {
-        throw new Error("No element to update");
-      }
+            if (result.deletedCount === 0) {
+                throw new Error("No element that match the filter to delete");
+            }
 
-      const session = sessionContext.getSession();
+            return result.deletedCount;
+        },
+        async deleteIds(key, ids) {
+            const schema = schemaWithId[key];
+            ids.forEach((id) => {
+                v.parse(schema._id, id);
+            });
 
-      const result = await collection.bulkWrite(bulkOps, { session });
+            const session = sessionContext.getSession();
 
-      if (result.matchedCount === 0) {
-        throw new Error("No element that match the filter to update");
-      }
+            const result = await collection.deleteMany({
+                _id: {
+                    $in: ids,
+                },
+                _type: key as string,
+            } as any, { session });
 
-      if (result.modifiedCount === 0) {
-        throw new Error("No element that match the filter to update");
-      }
+            if(!result.acknowledged) {
+                throw new Error("Delete failed");
+            }
 
-      return result.modifiedCount;
-    },
-    async aggregate(stageBuilder) {
-      const stage: StageBuilder<T> = {
-        match: (key, filter) => ({
-          $match: {
-            _type: key as string,
-            ...filter,
-          },
-        }),
-        unwind: (_key, field) => ({
-          $unwind: `$${field}`,
-        }),
-        lookup: (_key, localField, foreignField, others) => ({
-          $lookup: {
-            from: collectionName,
-            localField,
-            foreignField,
-            as: localField,
-            ...(others || {}),
-          },
-        }),
-        project: (projection) => ({
-          $project: projection,
-        }),
-        group: (grouping) => ({
-          $group: grouping,
-        }),
-        sort: (sort) => ({
-          $sort: sort,
-        }),
-        limit: (limit) => ({
-          $limit: limit,
-        }),
-        skip: (skip) => ({
-          $skip: skip,
-        }),
-      };
+            if (result.deletedCount === 0) {
+                throw new Error("No element that match the filter to delete");
+            }
 
-      const session = sessionContext.getSession();
+            return result.deletedCount;
+        },
+        async deleteMany(key, filter) {
+            const session = sessionContext.getSession();
 
-      const pipeline = stageBuilder(stage);
-      const cursor = collection.aggregate(pipeline, { session });
+            // Combine the user filter with the type filter
+            const combinedFilter = {
+                ...filter,
+                _type: key as string,
+            } as any;
 
-      return await cursor.toArray();
-    },
+            const result = await collection.deleteMany(combinedFilter, { session });
+
+            if (!result.acknowledged) {
+                throw new Error("Delete failed");
+            }
+
+            return result.deletedCount;
+        },
+        async deleteAny(filter) {
+            const session = sessionContext.getSession();
+
+            const result = await collection.deleteMany(filter as any, { session });
+
+            if (!result.acknowledged) {
+                throw new Error("Delete failed");
+            }
+
+            return result.deletedCount;
+        },
+        async updateOne(key, id, doc) {
+            const dotSchema = dotSchemaElements[key];
+            if(!dotSchema) {
+                throw new Error(`Invalid element type`);
+            }
+
+            v.parse(dotSchema, doc);
+
+            const session = sessionContext.getSession();
+
+            const result = await collection.updateOne({
+                _id: id,
+                _type: key as string,
+            } as any, {
+                $set: doc,
+            } as any, { session });
+
+            if(!result.acknowledged) {
+                throw new Error("Update failed");
+            }
+
+            if (result.matchedCount === 0) {
+                throw new Error("No element that match the filter to update");
+            }
+
+            if (result.modifiedCount === 0) {
+                throw new Error("No element that match the filter to update");
+            }
+
+            return result.modifiedCount;
+        },
+        async updateMany(operation) {
+            const bulkOps: any[] = [];
+            for(const type in operation) {
+                const elements = operation[type];
+                for(const id in elements) {
+                    const element = elements[id];
+                    const dotSchema = dotSchemaElements[type];
+                    if(!id.startsWith(`${type}:`)) {
+                        throw new Error(`Invalid id format`);
+                    }
+                    if(!dotSchema) {
+                        throw new Error(`Invalid element type`);
+                    }
+                    v.parse(dotSchema, element);
+
+                    bulkOps.push({
+                        updateOne: {
+                            filter: { _id: id },
+                            update: { $set: element },
+                        }
+                    });
+                }
+            }
+
+            if (bulkOps.length === 0) {
+                throw new Error("No element to update");
+            }
+
+            const session = sessionContext.getSession();
+
+            const result = await collection.bulkWrite(bulkOps, { session });
+
+            if (result.matchedCount === 0) {
+                throw new Error("No element that match the filter to update");
+            }
+
+            if (result.modifiedCount === 0) {
+                throw new Error("No element that match the filter to update");
+            }
+
+            return result.modifiedCount;
+        },
+        async aggregate(stageBuilder) {
+            const stage: StageBuilder<T> = {
+                match: (key, filter) => ({
+                    $match: {
+                        _type: key as string,
+                        ...filter,
+                    },
+                }),
+                unwind: (key, field) => ({
+                    $unwind: `$${field}`,
+                }),
+                lookup: (key, localField, foreignField, others) => ({
+                    $lookup: {
+                        from: collectionName,
+                        localField,
+                        foreignField,
+                        as: localField,
+                        ...(others || {})
+                    },
+                }),
+                project: (projection) => ({
+                    $project: projection,
+                }),
+                group: (grouping) => ({
+                    $group: grouping,
+                }),
+                sort: (sort) => ({
+                    $sort: sort,
+                }),
+                limit: (limit) => ({
+                    $limit: limit,
+                }),
+                skip: (skip) => ({
+                    $skip: skip,
+                })
+            };
+
+            const session = sessionContext.getSession();
+            
+            const pipeline = stageBuilder(stage);
+            const cursor = collection.aggregate(pipeline, { session });
+            
+            return await cursor.toArray();
+        },
   };
 }
 
