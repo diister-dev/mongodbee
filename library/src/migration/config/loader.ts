@@ -499,7 +499,7 @@ export async function loadConfigOld(
  */
 export function resolveConfigPaths(
   config: MigrationSystemConfig,
-  basePath = Deno.cwd(),
+  basePath: string = Deno.cwd(),
 ): MigrationSystemConfig {
   const resolved = { ...config };
 

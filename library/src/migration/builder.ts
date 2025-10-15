@@ -702,7 +702,14 @@ export function isTransformCollectionRule(
  * console.log(`Is reversible: ${!summary.isIrreversible}`);
  * ```
  */
-export function getMigrationSummary(state: MigrationState) {
+export function getMigrationSummary(state: MigrationState): {
+  creates: number;
+  seeds: number;
+  transforms: number;
+  totalOperations: number;
+  isIrreversible: boolean;
+  properties: Array<MigrationProperty["type"]>;
+} {
   const summary = {
     creates: 0,
     seeds: 0,

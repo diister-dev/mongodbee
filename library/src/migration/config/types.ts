@@ -32,7 +32,27 @@ import * as v from "../../schema.ts";
  * Defines how to connect to MongoDB for applying migrations.
  * Supports both URI-based and component-based configuration.
  */
-export const DatabaseConfigSchema = v.object({
+const DatabaseConfigSchema: v.ObjectSchema<{
+    readonly connection: v.ObjectSchema<{
+        readonly uri: v.StringSchema<undefined>;
+        readonly options: v.OptionalSchema<v.ObjectSchema<{
+            readonly connectTimeoutMS: v.OptionalSchema<v.NumberSchema<undefined>, undefined>;
+            readonly serverSelectionTimeoutMS: v.OptionalSchema<v.NumberSchema<undefined>, undefined>;
+            readonly maxPoolSize: v.OptionalSchema<v.NumberSchema<undefined>, undefined>;
+            readonly minPoolSize: v.OptionalSchema<v.NumberSchema<undefined>, undefined>;
+            readonly maxIdleTimeMS: v.OptionalSchema<v.NumberSchema<undefined>, undefined>;
+            readonly ssl: v.OptionalSchema<v.BooleanSchema<undefined>, undefined>;
+            readonly authSource: v.OptionalSchema<v.StringSchema<undefined>, undefined>;
+            readonly readPreference: v.OptionalSchema<v.PicklistSchema<["primary", "primaryPreferred", "secondary", "secondaryPreferred", "nearest"], undefined>, undefined>;
+            readonly writeConcern: v.OptionalSchema<v.ObjectSchema<{
+              readonly w: v.OptionalSchema<v.UnionSchema<[v.NumberSchema<undefined>, v.StringSchema<undefined>], undefined>, undefined>;
+              readonly j: v.OptionalSchema<v.BooleanSchema<undefined>, undefined>;
+              readonly wtimeout: v.OptionalSchema<v.NumberSchema<undefined>, undefined>;
+            }, undefined>, undefined>,
+        }, undefined>, undefined>;
+    }, undefined>;
+    readonly name: v.StringSchema<undefined>;
+}, undefined> = v.object({
   /** Connection configuration */
   connection: v.object({
     /** MongoDB connection URI */
@@ -91,7 +111,13 @@ export const DatabaseConfigSchema = v.object({
  * Defines where migration files, schemas, and other resources are located.
  * All paths can be absolute or relative to the project root.
  */
-export const PathsConfigSchema = v.object({
+const PathsConfigSchema: v.ObjectSchema<{
+    readonly migrations: v.StringSchema<undefined>;
+    readonly schemas: v.StringSchema<undefined>;
+    readonly temp: v.OptionalSchema<v.StringSchema<undefined>, undefined>;
+    readonly backup: v.OptionalSchema<v.StringSchema<undefined>, undefined>;
+    readonly logs: v.OptionalSchema<v.StringSchema<undefined>, undefined>;
+}, undefined> = v.object({
   /** Directory containing migration files */
   migrations: v.string(),
 
@@ -113,7 +139,24 @@ export const PathsConfigSchema = v.object({
  *
  * Controls how migrations are executed, validated, and logged.
  */
-export const MigrationConfigSchema = v.object({
+const MigrationConfigSchema: v.ObjectSchema<{
+    readonly dryRun: v.OptionalSchema<v.BooleanSchema<undefined>, undefined>;
+    readonly backup: v.OptionalSchema<v.BooleanSchema<undefined>, undefined>;
+    readonly batchSize: v.OptionalSchema<v.NumberSchema<undefined>, undefined>;
+    readonly operationTimeout: v.OptionalSchema<v.NumberSchema<undefined>, undefined>;
+    readonly continueOnError: v.OptionalSchema<v.BooleanSchema<undefined>, undefined>;
+    readonly logging: v.OptionalSchema<v.ObjectSchema<{
+        readonly level: v.OptionalSchema<v.PicklistSchema<["debug", "info", "warn", "error"], undefined>, undefined>;
+        readonly console: v.OptionalSchema<v.BooleanSchema<undefined>, undefined>;
+        readonly file: v.OptionalSchema<v.BooleanSchema<undefined>, undefined>;
+        readonly format: v.OptionalSchema<v.PicklistSchema<["json", "text", "structured"], undefined>, undefined>;
+    }, undefined>, undefined>;
+    readonly validation: v.OptionalSchema<v.ObjectSchema<{
+      readonly schemas: v.OptionalSchema<v.BooleanSchema<undefined>, undefined>;
+      readonly chain: v.OptionalSchema<v.BooleanSchema<undefined>, undefined>;
+      readonly data: v.OptionalSchema<v.BooleanSchema<undefined>, undefined>;
+    }, undefined>, undefined>
+}, undefined> = v.object({
   /** Whether to run in dry-run mode (simulation only) */
   dryRun: v.optional(v.boolean()),
 
@@ -162,7 +205,13 @@ export const MigrationConfigSchema = v.object({
  *
  * Controls CLI behavior and output formatting.
  */
-export const CliConfigSchema = v.object({
+const CliConfigSchema: v.ObjectSchema<{
+    readonly colors: v.OptionalSchema<v.BooleanSchema<undefined>, undefined>;
+    readonly format: v.OptionalSchema<v.PicklistSchema<["table", "json", "yaml", "text"], undefined>, undefined>;
+    readonly verbose: v.OptionalSchema<v.BooleanSchema<undefined>, undefined>;
+    readonly progress: v.OptionalSchema<v.BooleanSchema<undefined>, undefined>;
+    readonly confirmDestructive: v.OptionalSchema<v.BooleanSchema<undefined>, undefined>;
+}, undefined> = v.object({
   /** Whether to use colored output */
   colors: v.optional(v.boolean()),
 
@@ -184,7 +233,22 @@ export const CliConfigSchema = v.object({
  *
  * Combines all configuration aspects into a single, validated structure.
  */
-export const MigrationSystemConfigSchema = v.object({
+export const MigrationSystemConfigSchema: v.ObjectSchema<{
+    readonly database: typeof DatabaseConfigSchema;
+    readonly paths: typeof PathsConfigSchema;
+    readonly migration: v.OptionalSchema<typeof MigrationConfigSchema, undefined>;
+    readonly cli: v.OptionalSchema<typeof CliConfigSchema, undefined>;
+    readonly environments: v.OptionalSchema<v.RecordSchema<
+      v.StringSchema<undefined>,
+      v.ObjectSchema<{
+        readonly database: v.OptionalSchema<v.SchemaWithPartial<typeof DatabaseConfigSchema, undefined>, undefined>;
+        readonly paths: v.OptionalSchema<v.SchemaWithPartial<typeof PathsConfigSchema, undefined>, undefined>;
+        readonly migration: v.OptionalSchema<v.SchemaWithPartial<typeof MigrationConfigSchema, undefined>, undefined>;
+        readonly cli: v.OptionalSchema<v.SchemaWithPartial<typeof CliConfigSchema, undefined>, undefined>;
+      }, undefined>,
+      undefined>,
+    undefined>
+}, undefined> = v.object({
   /** Database connection settings */
   database: DatabaseConfigSchema,
 

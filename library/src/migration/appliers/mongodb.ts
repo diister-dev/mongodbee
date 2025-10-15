@@ -55,7 +55,12 @@ export function createMongodbApplier(
   db: Db,
   migration: MigrationDefinition,
   options: MongodbApplierOptions = {},
-) {
+): {
+  applyOperation: (operation: MigrationRule) => Promise<void>;
+  reverseOperation: (operation: MigrationRule) => Promise<void>;
+  applyMigration: (operations: MigrationRule[], direction: 'up' | 'down') => Promise<void>;
+  setCurrentMigrationId: (migrationId: string) => void;
+} {
   const opts = { ...DEFAULT_OPTIONS, ...options };
 
   // Track which multi-model instances have been recorded for this migration

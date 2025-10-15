@@ -41,12 +41,8 @@ export type {
 
 // Re-export schemas for external validation
 export {
-  CliConfigSchema,
-  DatabaseConfigSchema,
   DEFAULT_CONFIG,
-  MigrationConfigSchema,
   MigrationSystemConfigSchema,
-  PathsConfigSchema,
 } from "./types.ts";
 
 // Re-export all utility functions

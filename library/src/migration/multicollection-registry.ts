@@ -24,13 +24,73 @@ import type { MigrationDefinition } from "./types.ts";
 export const MULTI_COLLECTION_INFO_TYPE = "_information";
 export const MULTI_COLLECTION_MIGRATIONS_TYPE = "_migrations";
 
+const metadataSchema: readonly [
+  v.ObjectSchema<{
+    readonly _id: v.LiteralSchema<"_information", undefined>;
+    readonly _type: v.LiteralSchema<"_information", undefined>;
+    readonly collectionType: v.StringSchema<undefined>;
+    readonly createdAt: v.DateSchema<undefined>;
+  }, undefined>,
+  v.ObjectSchema<{
+    readonly _id: v.LiteralSchema<"_migrations", undefined>;
+    readonly _type: v.LiteralSchema<"_migrations", undefined>;
+    readonly fromMigrationId: v.StringSchema<undefined>;
+    readonly mongodbeeVersion: v.StringSchema<undefined>;
+    readonly appliedMigrations: v.ArraySchema<v.ObjectSchema<{
+      readonly id: v.StringSchema<undefined>;
+      readonly operation: v.UnionSchema<[
+        v.LiteralSchema<"applied", undefined>,
+        v.LiteralSchema<"reverted", undefined>,
+        v.LiteralSchema<"failed", undefined>
+      ], undefined>;
+      readonly appliedAt: v.DateSchema<undefined>;
+      readonly duration: v.OptionalSchema<v.NumberSchema<undefined>, undefined>;
+      readonly error: v.OptionalSchema<v.StringSchema<undefined>, undefined>;
+      readonly status: v.UnionSchema<[
+        v.LiteralSchema<"success", undefined>,
+        v.LiteralSchema<"failure", undefined>
+      ], undefined>;
+      readonly mongodbeeVersion: v.StringSchema<undefined>;
+    }, undefined>, undefined>;
+  }, undefined>
+] = [
+  v.object({
+    _id: v.literal(MULTI_COLLECTION_INFO_TYPE),
+    _type: v.literal(MULTI_COLLECTION_INFO_TYPE),
+    collectionType: v.string(),
+    createdAt: v.date(),
+  }),
+  v.object({
+    _id: v.literal(MULTI_COLLECTION_MIGRATIONS_TYPE),
+    _type: v.literal(MULTI_COLLECTION_MIGRATIONS_TYPE),
+    fromMigrationId: v.string(),
+    mongodbeeVersion: v.string(),
+    appliedMigrations: v.array(v.object({
+      id: v.string(),
+      operation: v.union([
+        v.literal("applied"),
+        v.literal("reverted"),
+        v.literal("failed"),
+      ]),
+      appliedAt: v.date(),
+      duration: v.optional(v.number()),
+      error: v.optional(v.string()),
+      status: v.union([
+        v.literal("success"),
+        v.literal("failure"),
+      ]),
+      mongodbeeVersion: v.string(),
+    })),
+  }),
+] as const;
+
 /**
  * Creates valibot schemas for multi-collection metadata documents
  * These schemas are used for validator creation in MongoDB
- * 
+ *
  * @returns Array of valibot object schemas for metadata documents
  */
-export function createMetadataSchemas() {
+export function createMetadataSchemas() : typeof metadataSchema {
   return [
     v.object({
       _id: v.literal(MULTI_COLLECTION_INFO_TYPE),
