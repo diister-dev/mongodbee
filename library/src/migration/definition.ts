@@ -252,11 +252,13 @@ export function validateMigrationChain(migrations: MigrationDefinition[]): {
  */
 export function generateMigrationId(name?: string): string {
   const date = new Date();
-  const datePart = date.toISOString().split("T")[0].replace(/-/g, "_") + "_" +
-    date.toTimeString().slice(0, 5).replace(/:/g, "");
+  // Use UTC for both date and time to ensure consistency
+  const dateISO = date.toISOString(); // e.g. "2025-10-15T23:58:30.123Z"
+  const datePart = dateISO.split("T")[0].replace(/-/g, "_"); // "2025_10_15"
+  const timePart = dateISO.split("T")[1].slice(0, 5).replace(/:/g, ""); // "2358"
   const uniquePart = ulid().slice(4, 14); // Shorten ULID for brevity
   const namePart = name ? `@${name.replace(/\s+/g, "-").toLowerCase()}` : "";
-  return `${datePart}_${uniquePart}${namePart}`;
+  return `${datePart}_${timePart}_${uniquePart}${namePart}`;
 }
 
 /**

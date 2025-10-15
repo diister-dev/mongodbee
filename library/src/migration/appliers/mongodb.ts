@@ -98,13 +98,59 @@ export function createMongodbApplier(
   }
 
   /**
+   * Helper to create a single index with conflict resolution
+   */
+  async function createIndexSafely(
+    collectionName: string,
+    indexName: string,
+    keySpec: Record<string, number>,
+    options: { unique: boolean; sparse: boolean }
+  ): Promise<void> {
+    const collection = db.collection(collectionName);
+
+    try {
+      await collection.createIndex(keySpec, {
+        name: indexName,
+        ...options,
+      });
+    } catch (error) {
+      // Tolerate duplicate index errors and index conflicts
+      // MongoDB error code 86 (IndexKeySpecsConflict) is thrown when an index with the same name exists but has different options
+      const isIndexError = error instanceof Error && (
+        error.message.includes("already exists") ||
+        // @ts-ignore - MongoDB driver error has code property
+        error.code === 86 ||
+        error.message.includes("IndexKeySpecsConflict")
+      );
+
+      if (!isIndexError) {
+        throw error;
+      }
+
+      // If there's a conflict, we should drop the old index and recreate it
+      // @ts-ignore - MongoDB driver error has code property
+      if (error.code === 86 || error.message.includes("IndexKeySpecsConflict")) {
+        try {
+          await collection.dropIndex(indexName);
+          await collection.createIndex(keySpec, {
+            name: indexName,
+            ...options,
+          });
+        } catch (dropError) {
+          // If we can't drop and recreate, just log a warning
+          console.warn(`Could not recreate index ${indexName} on ${collectionName}:`, dropError);
+        }
+      }
+    }
+  }
+
+  /**
    * Helper to apply indexes to a collection
    */
   async function applyIndexes(
     collectionName: string,
     schema: Record<string, unknown>,
   ): Promise<void> {
-    const collection = db.collection(collectionName);
     const wrappedSchema = v.object(schema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
     const indexes = extractIndexes(wrappedSchema);
 
@@ -112,18 +158,10 @@ export function createMongodbApplier(
       const indexName = sanitizePathName(index.path);
       const keySpec: Record<string, number> = { [index.path]: 1 };
 
-      try {
-        await collection.createIndex(keySpec, {
-          name: indexName,
-          unique: index.metadata.unique || false,
-          sparse: false,
-        });
-      } catch (error) {
-        // Tolerate duplicate index errors
-        if (!(error instanceof Error && error.message.includes("already exists"))) {
-          throw error;
-        }
-      }
+      await createIndexSafely(collectionName, indexName, keySpec, {
+        unique: index.metadata.unique || false,
+        sparse: false,
+      });
     }
   }
 
@@ -135,7 +173,6 @@ export function createMongodbApplier(
     typeName: string,
     typeSchema: Record<string, unknown>,
   ): Promise<void> {
-    const collection = db.collection(collectionName);
     const typeSchemaWithType = {
       _type: v.literal(typeName),
       ...(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>),
@@ -147,17 +184,10 @@ export function createMongodbApplier(
       const indexName = sanitizePathName(index.path);
       const keySpec: Record<string, number> = { [index.path]: 1 };
 
-      try {
-        await collection.createIndex(keySpec, {
-          name: indexName,
-          unique: index.metadata.unique || false,
-          sparse: false,
-        });
-      } catch (error) {
-        if (!(error instanceof Error && error.message.includes("already exists"))) {
-          throw error;
-        }
-      }
+      await createIndexSafely(collectionName, indexName, keySpec, {
+        unique: index.metadata.unique || false,
+        sparse: false,
+      });
     }
   }
 
@@ -419,31 +449,8 @@ export function createMongodbApplier(
         }
 
         // Apply indexes for each type
-        const collection = db.collection(operation.collectionName);
         for (const [typeName, typeSchema] of Object.entries(operation.schema)) {
-          const typeSchemaWithType = {
-            _type: v.literal(typeName),
-            ...(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>),
-          };
-          const wrappedTypeSchema = v.object(typeSchemaWithType);
-          const indexes = extractIndexes(wrappedTypeSchema);
-
-          for (const index of indexes) {
-            const indexName = sanitizePathName(index.path);
-            const keySpec: Record<string, number> = { [index.path]: 1 };
-
-            try {
-              await collection.createIndex(keySpec, {
-                name: indexName,
-                unique: index.metadata.unique || false,
-                sparse: false,
-              });
-            } catch (error) {
-              if (!(error instanceof Error && error.message.includes("already exists"))) {
-                throw error;
-              }
-            }
-          }
+          await applyIndexesForType(operation.collectionName, typeName, typeSchema as Record<string, unknown>);
         }
       },
       reverse: async (operation) => {
@@ -496,34 +503,18 @@ export function createMongodbApplier(
             operation.modelType,
             opts.currentMigrationId,
           );
+
+          // Mark this migration as already recorded for this instance
+          // createMultiCollectionInfo already added it to the appliedMigrations array
+          if (opts.currentMigrationId) {
+            const recordKey = `${operation.collectionName}:${opts.currentMigrationId}:applied`;
+            recordedInstances.add(recordKey);
+          }
         }
 
         // Apply indexes for each type
-        const collection = db.collection(operation.collectionName);
         for (const [typeName, typeSchema] of Object.entries(operation.schema)) {
-          const typeSchemaWithType = {
-            _type: v.literal(typeName),
-            ...(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>),
-          };
-          const wrappedTypeSchema = v.object(typeSchemaWithType);
-          const indexes = extractIndexes(wrappedTypeSchema);
-
-          for (const index of indexes) {
-            const indexName = sanitizePathName(index.path);
-            const keySpec: Record<string, number> = { [index.path]: 1 };
-
-            try {
-              await collection.createIndex(keySpec, {
-                name: indexName,
-                unique: index.metadata.unique || false,
-                sparse: false,
-              });
-            } catch (error) {
-              if (!(error instanceof Error && error.message.includes("already exists"))) {
-                throw error;
-              }
-            }
-          }
+          await applyIndexesForType(operation.collectionName, typeName, typeSchema as Record<string, unknown>);
         }
       },
       reverse: async (operation) => {
@@ -537,7 +528,7 @@ export function createMongodbApplier(
     mark_as_multimodel: {
       apply: async (operation) => {
         const collection = db.collection(operation.collectionName);
-        
+
         if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
           // throw new Error(`Collection ${operation.collectionName} does not exist`);
           console.warn(`Collection ${operation.collectionName} does not exist, creating it first.`);
@@ -554,6 +545,13 @@ export function createMongodbApplier(
           operation.modelType,
           opts.currentMigrationId,
         );
+
+        // Mark this migration as already recorded for this instance
+        // createMultiCollectionInfo already added it to the appliedMigrations array
+        if (opts.currentMigrationId) {
+          const recordKey = `${operation.collectionName}:${opts.currentMigrationId}:applied`;
+          recordedInstances.add(recordKey);
+        }
       },
       reverse: async (operation) => {
         const collection = db.collection(operation.collectionName);

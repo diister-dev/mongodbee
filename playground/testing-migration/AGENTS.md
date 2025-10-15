@@ -68,6 +68,49 @@ You must simulate the creation of an application that evolves over time through 
    - Adding multi-model instances dynamically
    - Testing edge cases and error scenarios
 
+## Important Notes for Testing
+
+### 💡 Utility Scripts
+
+The template includes helpful utility scripts in the `scripts/` directory:
+
+**scripts/drop_database.ts** - Quickly reset your test database:
+```bash
+deno run -A --env-file=.env scripts/drop_database.ts
+```
+
+**scripts/check_indexes.ts** - Inspect indexes on a collection:
+```bash
+deno run -A --env-file=.env scripts/check_indexes.ts users
+```
+
+**scripts/list_collections.ts** - List all collections with document counts:
+```bash
+deno run -A --env-file=.env scripts/list_collections.ts
+```
+
+See `scripts/README.md` for more details and usage examples.
+
+### ⚠️ Common Pitfalls & Solutions
+
+**Pitfall #1: Testing with duplicate data when creating unique indexes**
+- Problem: If you seed data with duplicate values and then try to evolve an index to be unique, MongoDB will reject it
+- Solution: Always ensure your seed data has unique values for fields that will have unique indexes
+
+**Pitfall #2: Multi-model discovery**
+- Problem: There's NO external `__mongodbee_multi_collection_metadata` collection
+- Reality: MongoDBee discovers multi-model instances by scanning ALL collections and checking for the `_information` document inside each one
+- Use: `discoverMultiCollectionInstances(db, "modelType")` to find instances
+
+**Pitfall #3: Testing index evolution**
+- Tip: Create test scenarios where you evolve indexes (simple → unique, add/remove options)
+- Use `migration.updateIndexes("collectionName")` to trigger index synchronization
+- Test rollback to ensure indexes are properly restored
+
+**Pitfall #4: Generating multiple migrations quickly**
+- Problem: If you generate migrations too fast (same second), they might get the same timestamp
+- Solution: The ULID part ensures ordering even within the same second, but it's safer to add a small delay (`sleep 3`) between generation commands
+
 ## Testing Methodology: Be Exploratory!
 
 The goal is to **break things on purpose** to verify the system catches errors. Think like a developer who:
@@ -87,7 +130,7 @@ deno task mongodbee status  # What's the current state?
 
 # After applying a migration
 deno task mongodbee status  # Was it applied?
-deno run --allow-all --env-file=.env app.ts  # Does the app still work?
+deno run -A --env-file=.env app.ts  # Does the app still work?
 ```
 
 ### 🧪 Things to test
@@ -338,11 +381,60 @@ migration.collection("collectionName")
     },
   })
   .end();
+
+// Update indexes (when you change index options in the schema)
+migration.updateIndexes("collectionName");
+```
+
+### Working with Indexes
+
+You can add indexes to fields using `withIndex()`:
+
+```ts
+import { dbId, withIndex } from "@diister/mongodbee";
+import * as v from "valibot";
+
+// Simple index (non-unique)
+email: withIndex(v.string())
+
+// Unique index (case-insensitive)
+email: withIndex(v.string(), { unique: true, insensitive: true })
+
+// Index on a reference field
+userId: withIndex(refId("user"))
+```
+
+**Evolving Indexes:**
+When you change index options between migrations (e.g., making an index unique), use `migration.updateIndexes()`:
+
+```ts
+// Migration 1: Simple index
+schemas: {
+  collections: {
+    users: {
+      email: withIndex(v.string())  // Non-unique
+    }
+  }
+}
+
+// Migration 2: Make it unique
+schemas: {
+  collections: {
+    users: {
+      email: withIndex(v.string(), { unique: true })  // Now unique!
+    }
+  }
+}
+migrate(migration) {
+  migration.updateIndexes("users");  // This will drop and recreate the index
+  return migration.compile();
+}
 ```
 
 **Important Notes:**
 - There is NO `migration.updateCollection()` method
 - Use `migration.collection()` with `.transform()` to modify existing documents
+- Use `migration.updateIndexes()` to synchronize index changes
 - Always call `.end()` to finish a builder chain
 - Always `return migration.compile()` at the end of `migrate()`
 
