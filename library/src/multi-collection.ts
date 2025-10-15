@@ -1,42 +1,65 @@
-import * as v from './schema.ts';
+import * as v from "./schema.ts";
 import * as m from "mongodb";
 import { ulid } from "@std/ulid";
 import { toMongoValidator } from "./validator.ts";
 import { sanitizeForMongoDB } from "./sanitizer.ts";
 import { createDotNotationSchema } from "./dot-notation.ts";
 import { getSessionContext } from "./session.ts";
-import { extractIndexes, withIndex, keyEqual, normalizeIndexOptions } from "./indexes.ts";
+import {
+  extractIndexes,
+  keyEqual,
+  normalizeIndexOptions,
+  withIndex,
+} from "./indexes.ts";
 import { sanitizePathName } from "./schema-navigator.ts";
 import type { FlatType } from "../types/flat.ts";
 import type { Db } from "./mongodb.ts";
 import { dirtyEquivalent } from "./utils/object.ts";
 import { mongoOperationQueue } from "./operation.ts";
+import type { MultiCollectionModel } from "./multi-collection-model.ts";
+import {
+  createMultiCollectionInfo,
+  createMetadataSchemas,
+  multiCollectionInstanceExists,
+} from "./migration/multicollection-registry.ts";
+import { getLastAppliedMigration } from "./migration/state.ts";
 
 type CollectionOptions = {
-    safeDelete?: boolean,
-    enableWatching?: boolean,
-    /** How to handle undefined values in updates: 'remove' | 'ignore' | 'error' */
-    undefinedBehavior?: 'remove' | 'ignore' | 'error',
-}
+  safeDelete?: boolean;
+  enableWatching?: boolean;
+  /** How to handle undefined values in updates: 'remove' | 'ignore' | 'error' */
+  undefinedBehavior?: "remove" | "ignore" | "error";
+};
 
 // Use _id if the schema is a literal schema, otherwise use dbId
-type DynId<T> = T extends v.LiteralSchema<any, any> ? T : ReturnType<typeof dbId>;
+type DynId<T> = T extends v.LiteralSchema<any, AnyMessage> ? T
+  : ReturnType<typeof dbId>;
+
+type AnyMessage = any;
 
 type Elements<T extends Record<string, any>> = {
-    [key in keyof T]: {
-        _id: DynId<T[key]["_id"]>,
-        _type: v.LiteralSchema<key, any>,
-    } & T[key]
+  [key in keyof T]: {
+    _id: DynId<T[key]["_id"]>;
+    _type: v.LiteralSchema<key, AnyMessage>;
+  } & T[key];
 }[keyof T];
 
-type OutputElementSchema<T extends Record<string, any>, K extends keyof T> = v.ObjectSchema<{
-    _id: DynId<T[K]["_id"]>,
-    _type: v.LiteralSchema<K, any>,
-} & T[K], any>;
+type OutputElementSchema<T extends Record<string, any>, K extends keyof T> =
+  v.ObjectSchema<
+    {
+      _id: DynId<T[K]["_id"]>;
+      _type: v.LiteralSchema<K, AnyMessage>;
+    } & T[K],
+    any
+  >;
 
-type ElementSchema<T extends Record<string, any>, K extends keyof T> = v.ObjectSchema<{
-    _id: DynId<T[K]["_id"]>,
-} & T[K], any>;
+type ElementSchema<T extends Record<string, any>, K extends keyof T> =
+  v.ObjectSchema<
+    {
+      _id: DynId<T[K]["_id"]>;
+    } & T[K],
+    any
+  >;
 
 type AnySchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
 type MultiSchema<T extends Record<string, any>> = Elements<T>;
@@ -45,324 +68,442 @@ type MultiCollectionSchema = Record<string, Record<string, AnySchema>>;
 
 /**
  * Generates a new unique ID using ULID
- * 
+ *
  * @returns A new ULID string in lowercase
  */
 function newId() {
-    return ulid().toLowerCase();
+  return ulid().toLowerCase();
 }
 
 /**
  * Creates an optional ID field for a document type with automatic generation
- * 
+ *
  * @param type - The document type identifier to use in the ID prefix
  * @returns A Valibot schema for an ID field with optional auto-generation
  */
-export function dbId(type: string): v.OptionalSchema<v.SchemaWithPipe<readonly [v.StringSchema<undefined>, v.RegexAction<string, undefined>]>, () => string> {
-    return v.optional(refId(type), () => `${type}:${newId()}`);
+export function dbId(
+  type: string,
+): v.OptionalSchema<
+  v.SchemaWithPipe<
+    readonly [v.StringSchema<undefined>, v.RegexAction<string, undefined>]
+  >,
+  () => string
+> {
+  return v.optional(refId(type), () => `${type}:${newId()}`);
 }
 
 /**
  * Creates a reference ID field that must match a specific type prefix
- * 
+ *
  * @param type - The document type identifier that must prefix the ID
  * @returns A Valibot schema for validating reference IDs
  */
-export function refId(type: string): v.SchemaWithPipe<readonly [v.StringSchema<undefined>, v.RegexAction<string, undefined>]> {
-    return v.pipe(v.string(), v.regex(new RegExp(`^${type}:`)));
+export function refId(
+  type: string,
+): v.SchemaWithPipe<
+  readonly [v.StringSchema<undefined>, v.RegexAction<string, undefined>]
+> {
+  return v.pipe(v.string(), v.regex(new RegExp(`^${type}:[a-zA-Z0-9]+`)));
 }
 
 // Type for aggregation pipeline stages
 type AggregationStage = Record<string, unknown>;
 type StageBuilder<T extends MultiCollectionSchema> = {
-    match: <E extends keyof T>(key: E, filter: Record<string, unknown>) => AggregationStage;
-    unwind: <E extends keyof T>(key: E, field: string) => AggregationStage;
-    lookup: <E extends keyof T>(key: E, localField: string, foreignField: string, others?: Record<string, any>) => AggregationStage;
-    project: (projection: Record<string, 1 | 0>) => AggregationStage;
-    group: (grouping: Record<string, unknown>) => AggregationStage;
-    sort: (sort: Record<string, 1 | -1>) => AggregationStage;
-    limit: (limit: number) => AggregationStage;
-    skip: (skip: number) => AggregationStage;
+  match: <E extends keyof T>(
+    key: E,
+    filter: Record<string, unknown>,
+  ) => AggregationStage;
+  unwind: <E extends keyof T>(key: E, field: string) => AggregationStage;
+  lookup: <E extends keyof T>(
+    key: E,
+    localField: string,
+    foreignField: string,
+    others?: Record<string, any>,
+  ) => AggregationStage;
+  project: (projection: Record<string, 1 | 0>) => AggregationStage;
+  group: (grouping: Record<string, unknown>) => AggregationStage;
+  sort: (sort: Record<string, 1 | -1>) => AggregationStage;
+  limit: (limit: number) => AggregationStage;
+  skip: (skip: number) => AggregationStage;
 };
 
-type Input<T extends MultiCollectionSchema> = v.InferInput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>;
-type Output<T extends MultiCollectionSchema> = v.InferOutput<v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>>;
+type Input<T extends MultiCollectionSchema> = v.InferInput<
+  v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>
+>;
+type Output<T extends MultiCollectionSchema> = v.InferOutput<
+  v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>
+>;
 
 /**
  * Type representing the enhanced MongoDB collection for storing multiple document types
  * @template T - Record mapping document type names to their schemas
  */
 type MultiCollectionResult<T extends MultiCollectionSchema> = {
-    withSession: Awaited<ReturnType<typeof getSessionContext>>["withSession"],
-    insertOne<E extends keyof T>(key: E, doc: v.InferInput<ElementSchema<T, E>>): Promise<string>;
-    insertMany<E extends keyof T>(key: E, docs: v.InferInput<ElementSchema<T, E>>[]): Promise<(string)[]>;
-    getById<E extends keyof T>(key: E, id: string): Promise<v.InferOutput<OutputElementSchema<T, E>>>;
-    findOne<E extends keyof T>(key: E, filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>): Promise<v.InferOutput<OutputElementSchema<T, E>> | null>;
-    find<E extends keyof T>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, options?: m.FindOptions): Promise<v.InferOutput<OutputElementSchema<T, E>>[]>;
-    paginate<E extends keyof T, EN = v.InferOutput<OutputElementSchema<T, E>>, R = EN>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, options?: {
-        limit?: number,
-        afterId?: string,
-        beforeId?: string,
-        sort?: m.Sort | m.SortDirection,
-        prepare?: (doc: v.InferOutput<OutputElementSchema<T, E>>) => Promise<EN> | EN,
-        filter?: (doc: EN) => Promise<boolean> | boolean,
-        format?: (doc: EN) => Promise<R> | R,
-    }): Promise<{
-        total: number,
-        position: number,
-        data: R[],
-    }>;
-    countDocuments<E extends keyof T>(key: E, filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, options?: m.CountDocumentsOptions): Promise<number>;
-    deleteId<E extends keyof T>(key: E, id: string): Promise<number>;
-    deleteIds<E extends keyof T>(key: E, ids: string[]): Promise<number>;
-    deleteMany<E extends keyof T>(key: E, filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>): Promise<number>;
-    deleteAny(filter: m.Filter<Input<T>>): Promise<number>;
-    updateOne<E extends keyof T>(key: E, id: string, doc: Omit<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>, "_id" | "type">): Promise<number>;
-    updateMany(operation: {
-        [key in keyof T]?: {
-            [id: string]: Omit<Partial<FlatType<v.InferInput<ElementSchema<T, key>>>>, "_id" | "type">;
-        }
-    }): Promise<number>;
-    aggregate(stageBuilder: (stage: StageBuilder<T>) => AggregationStage[]): Promise<any[]>;
-}
+  withSession: Awaited<ReturnType<typeof getSessionContext>>["withSession"];
+  insertOne<E extends keyof T>(
+    key: E,
+    doc: v.InferInput<ElementSchema<T, E>>,
+  ): Promise<string>;
+  insertMany<E extends keyof T>(
+    key: E,
+    docs: v.InferInput<ElementSchema<T, E>>[],
+  ): Promise<(string)[]>;
+  getById<E extends keyof T>(
+    key: E,
+    id: string,
+  ): Promise<v.InferOutput<OutputElementSchema<T, E>>>;
+  findOne<E extends keyof T>(
+    key: E,
+    filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
+  ): Promise<v.InferOutput<OutputElementSchema<T, E>> | null>;
+  find<E extends keyof T>(
+    key: E,
+    filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
+    options?: m.FindOptions,
+  ): Promise<v.InferOutput<OutputElementSchema<T, E>>[]>;
+  paginate<E extends keyof T, EN = v.InferOutput<OutputElementSchema<T, E>>, R = EN>(
+    key: E,
+    filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
+    options?: {
+      limit?: number;
+      afterId?: string;
+      beforeId?: string;
+      sort?: m.Sort | m.SortDirection;
+      prepare?: (
+        doc: v.InferOutput<OutputElementSchema<T, E>>,
+      ) => Promise<EN> | EN;
+      filter?: (doc: EN) => Promise<boolean> | boolean;
+      format?: (doc: EN) => Promise<R> | R;
+    },
+  ): Promise<{
+    total: number;
+    position: number;
+    data: R[];
+  }>;
+  countDocuments<E extends keyof T>(
+    key: E,
+    filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
+    options?: m.CountDocumentsOptions,
+  ): Promise<number>;
+  deleteId<E extends keyof T>(key: E, id: string): Promise<number>;
+  deleteIds<E extends keyof T>(key: E, ids: string[]): Promise<number>;
+  deleteMany<E extends keyof T>(
+    key: E,
+    filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
+  ): Promise<number>;
+  deleteAny(filter: m.Filter<Input<T>>): Promise<number>;
+  updateOne<E extends keyof T>(
+    key: E,
+    id: string,
+    doc: Omit<
+      Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>,
+      "_id" | "type"
+    >,
+  ): Promise<number>;
+  updateMany(
+    operation: {
+      [key in keyof T]?: {
+        [id: string]: Omit<
+          Partial<FlatType<v.InferInput<ElementSchema<T, key>>>>,
+          "_id" | "type"
+        >;
+      };
+    },
+  ): Promise<number>;
+  aggregate(
+    stageBuilder: (stage: StageBuilder<T>) => AggregationStage[],
+  ): Promise<any[]>;
+};
 
 /**
  * Creates a single MongoDB collection that can store multiple document types with validation
- * 
+ *
  * This function creates or updates a MongoDB collection that can store different document types
  * in a single collection while maintaining type safety and validation for each type.
- * 
+ *
  * @param db - MongoDB database instance
  * @param collectionName - Name of the collection to create or use
- * @param collectionSchema - Record mapping document type names to their Valibot schemas
+ * @param model - MultiCollectionModel defining the schema
  * @param options - Additional options for the collection
  * @returns A Promise resolving to an enhanced MongoDB collection with multi-document-type support
- * 
+ *
  * @example
  * ```typescript
- * const catalog = await multiCollection(db, "catalog", {
+ * const catalogModel = defineModel("catalog", {
  *   product: {
  *     name: v.string(),
  *     price: v.number(),
- *     category: v.string()
  *   },
  *   category: {
  *     name: v.string(),
- *     parentId: v.optional(v.string())
  *   }
  * });
- * 
+ *
+ * const catalog = await multiCollection(db, "catalog_louvre", catalogModel);
+ *
  * const categoryId = await catalog.insertOne("category", { name: "Electronics" });
  * await catalog.insertOne("product", { name: "Phone", price: 499, category: categoryId });
  * ```
  */
 export async function multiCollection<const T extends MultiCollectionSchema>(
-    db: Db,
-    collectionName: string,
-    collectionSchema: T,
-    options?: m.CollectionOptions & CollectionOptions
+  db: Db,
+  collectionName: string,
+  model: (T | MultiCollectionModel<T>),
+  options?: (m.CollectionOptions & CollectionOptions),
 ): Promise<MultiCollectionResult<T>> {
-    type TInput = Input<T>;
-    type TOutput = Output<T>;
+  // Extract schema from model
+  const useModel = (model && (model as MultiCollectionModel<T>).schema && (typeof model.expose === "function"));
+  const collectionSchema = (useModel
+    ? (model as MultiCollectionModel<T>).schema
+    : model) as T;
+  type TInput = Input<T>;
+  type TOutput = Output<T>;
 
-    const schemaWithId = Object.entries(collectionSchema).reduce((acc, [key, value]) => {
-        return {
-            ...acc,
-            [key]: {
-                _id: dbId(key),
-                _type: withIndex(v.optional(v.literal(key), () => key)),
-                ...value,
-            }
-        }
-    }, {} as { [key in keyof T]: Elements<T> });
-
-    const schemaElements = Object.entries(schemaWithId).reduce((acc, [key, value]) => {
-        return {
-            ...acc,
-            [key]: v.object(value),
-        }
-    }, {} as  { [key in keyof T]: ElementSchema<T, key> });
-
-    const dotSchemaElements = Object.entries(schemaElements).reduce((acc, [key, value]) => {
-        return {
-            ...acc,
-            [key]: createDotNotationSchema(value),
-        }
-    }, {} as Record<keyof T, v.BaseSchema<any, any, any>>);
-
-    const schema = v.union([
-        ...Object.values(schemaElements),
-    ]);
-    
-    const opts: m.CollectionOptions & CollectionOptions = {
-        ...{
-            safeDelete: true,
-            undefinedBehavior: 'remove', // Default behavior
+  const schemaWithId = Object.entries(collectionSchema).reduce(
+    (acc, [key, value]) => {
+      return {
+        ...acc,
+        [key]: {
+          _id: dbId(key),
+          _type: withIndex(v.optional(v.literal(key), () => key)),
+          ...value,
         },
-        ...options,
+      };
+    },
+    {} as { [key in keyof T]: Elements<T> },
+  );
+
+  const schemaElements = Object.entries(schemaWithId).reduce(
+    (acc, [key, value]) => {
+      return {
+        ...acc,
+        [key]: v.object(value),
+      };
+    },
+    {} as { [key in keyof T]: ElementSchema<T, key> },
+  );
+
+  const dotSchemaElements = Object.entries(schemaElements).reduce(
+    (acc, [key, value]) => {
+      return {
+        ...acc,
+        [key]: createDotNotationSchema(value),
+      };
+    },
+    {} as Record<keyof T, v.BaseSchema<any, any, any>>,
+  );
+
+  const schema = v.union([
+    ...Object.values(schemaElements),
+  ]);
+
+  const opts: m.CollectionOptions & CollectionOptions = {
+    ...{
+      safeDelete: true,
+      undefinedBehavior: "remove", // Default behavior
+    },
+    ...options,
+  };
+
+  async function applyValidator() {
+    const collections = await db.listCollections({ name: collectionName })
+      .toArray();
+
+    const modelValidators = createMetadataSchemas();
+
+    const validator = toMongoValidator(
+      v.union([
+        // User-defined types
+        ...Object.entries(schemaWithId).map(([key, value]) => {
+          return v.object({
+            ...value,
+            _type: v.literal(key as string),
+          });
+        }),
+        ...(useModel ? modelValidators : [])
+      ]),
+    );
+
+    if (collections.length === 0) {
+      // Create the collection with the validator
+      await db.createCollection(collectionName, {
+        validator,
+      });
+    } else {
+      // Check collection options
+      const existingOptions = await db.command({
+        listCollections: 1,
+        filter: { name: collectionName },
+      });
+      const currentSchema =
+        existingOptions.cursor?.firstBatch?.[0]?.options?.validator || {};
+
+      const sameSchema = dirtyEquivalent(currentSchema, validator);
+
+      if (sameSchema) {
+        return; // No need to update
+      }
+
+      // Update the collection with the validator
+      await db.command({
+        collMod: collectionName,
+        validator,
+      });
+    }
+  }
+
+  async function applyIndexes() {
+    const currentIndexes = await collection.indexes();
+    const allIndexes = Object.entries(schemaElements).map(([key, value]) => {
+      const indexes = extractIndexes(value);
+      return {
+        type: key,
+        indexes,
+      };
+    });
+
+    // Collect all indexes that need to be created or recreated
+    const indexesToCreate: Array<{
+      key: Record<string, number>;
+      options: m.CreateIndexesOptions;
+    }> = [];
+    const indexesToDrop: string[] = [];
+
+    // Collect all expected index names from the current schema
+    const expectedIndexNames = new Set<string>();
+    for (const { type, indexes } of allIndexes) {
+      for (const index of indexes) {
+        const indexName = sanitizePathName(`${type}_${index.path}`);
+        expectedIndexNames.add(indexName);
+      }
     }
 
-    async function applyValidator() {
-        const collections = await db.listCollections({ name: collectionName }).toArray();
-        const validator = toMongoValidator(
-            v.union([
-                ...Object.entries(schemaWithId).map(([key, value]) => {
-                    return v.object({
-                        ...value,
-                        _type: v.literal(key as string)
-                    })
-                })
-            ])
-        );
+    // Find orphaned indexes that were created by mongodbee but are no longer in the schema
+    for (const existingIndex of currentIndexes) {
+      const indexName = existingIndex.name;
+      if (!indexName || indexName === "_id_") continue; // Skip default _id index
 
-        if (collections.length === 0) {
-            // Create the collection with the validator
-            await db.createCollection(collectionName, {
-                validator,
-            });
-        } else {
-            // Check collection options
-            const existingOptions = await db.command({ listCollections: 1, filter: { name: collectionName } });
-            const currentSchema = existingOptions.cursor?.firstBatch?.[0]?.options?.validator || {};
-            
-            const sameSchema = dirtyEquivalent(currentSchema, validator);
-            
-            if (sameSchema) {
-                return; // No need to update
-            }
+      // Check if this looks like a mongodbee-created index (has type prefix)
+      const hasTypePrefix = Object.keys(schemaElements).some((type) =>
+        indexName.startsWith(`${type}_`)
+      );
 
-            // Update the collection with the validator
-            await db.command({
-                collMod: collectionName,
-                validator,
-            });
+      if (hasTypePrefix && !expectedIndexNames.has(indexName)) {
+        // This is an orphaned mongodbee index that should be removed
+        indexesToDrop.push(indexName);
+      }
+    }
+
+    for (const { type, indexes } of allIndexes) {
+      for (const index of indexes) {
+        const keySpec = { [index.path]: 1 };
+        const indexName = sanitizePathName(`${type}_${index.path}`);
+
+        const existingIndex = currentIndexes.find((i) =>
+          i.name === indexName
+        ) || currentIndexes.find((i) => keyEqual(i.key || {}, keySpec));
+
+        const desiredOptions = {
+          ...index.metadata,
+          partialFilterExpression: {
+            _type: { $eq: type },
+          },
+          name: indexName,
+        };
+
+        let needsRecreate = true;
+        if (existingIndex) {
+          const existingNorm = normalizeIndexOptions(existingIndex);
+          const desiredNorm = normalizeIndexOptions(desiredOptions);
+          if (
+            existingNorm.unique === desiredNorm.unique &&
+            existingNorm.collation === desiredNorm.collation &&
+            existingNorm.partialFilterExpression ===
+              desiredNorm.partialFilterExpression
+          ) {
+            needsRecreate = false;
+          }
         }
-    }
 
-    async function applyIndexes() {
-        const currentIndexes = await collection.indexes();
-        const allIndexes = Object.entries(schemaElements).map(([key, value]) => {
-            const indexes = extractIndexes(value);
-            return {
-                type: key,
-                indexes,
-            };
+        if (!needsRecreate) {
+          continue;
+        }
+
+        if (existingIndex) {
+          indexesToDrop.push(existingIndex.name!);
+        }
+
+        indexesToCreate.push({
+          key: keySpec,
+          options: desiredOptions,
         });
-
-        // Collect all indexes that need to be created or recreated
-        const indexesToCreate: Array<{
-            key: Record<string, number>;
-            options: m.CreateIndexesOptions;
-        }> = [];
-        const indexesToDrop: string[] = [];
-
-        // Collect all expected index names from the current schema
-        const expectedIndexNames = new Set<string>();
-        for (const { type, indexes } of allIndexes) {
-            for (const index of indexes) {
-                const indexName = sanitizePathName(`${type}_${index.path}`);
-                expectedIndexNames.add(indexName);
-            }
-        }
-
-        // Find orphaned indexes that were created by mongodbee but are no longer in the schema
-        for (const existingIndex of currentIndexes) {
-            const indexName = existingIndex.name;
-            if (!indexName || indexName === '_id_') continue; // Skip default _id index
-            
-            // Check if this looks like a mongodbee-created index (has type prefix)
-            const hasTypePrefix = Object.keys(schemaElements).some(type => 
-                indexName.startsWith(`${type}_`)
-            );
-            
-            if (hasTypePrefix && !expectedIndexNames.has(indexName)) {
-                // This is an orphaned mongodbee index that should be removed
-                indexesToDrop.push(indexName);
-            }
-        }
-
-        for (const { type, indexes } of allIndexes) {
-            for (const index of indexes) {
-                const keySpec = { [index.path]: 1 };
-                const indexName = sanitizePathName(`${type}_${index.path}`);
-
-                const existingIndex = currentIndexes.find(i => i.name === indexName) || currentIndexes.find(i => keyEqual(i.key || {}, keySpec));
-
-                const desiredOptions = {
-                    ...index.metadata,
-                    partialFilterExpression: {
-                        _type: { $eq: type },
-                    },
-                    name: indexName,
-                };
-
-                let needsRecreate = true;
-                if (existingIndex) {
-                    const existingNorm = normalizeIndexOptions(existingIndex);
-                    const desiredNorm = normalizeIndexOptions(desiredOptions);
-                    if (existingNorm.unique === desiredNorm.unique
-                        && existingNorm.collation === desiredNorm.collation
-                        && existingNorm.partialFilterExpression === desiredNorm.partialFilterExpression) {
-                        needsRecreate = false;
-                    }
-                }
-
-                if (!needsRecreate) {
-                    continue;
-                }
-
-                if (existingIndex) {
-                    indexesToDrop.push(existingIndex.name!);
-                }
-
-                indexesToCreate.push({
-                    key: keySpec,
-                    options: desiredOptions,
-                });
-            }
-        }
-
-        // Use the queue system to manage index operations
-        if (indexesToDrop.length > 0) {
-            await Promise.all(indexesToDrop.map(indexName => {
-                return mongoOperationQueue.add(() => {
-                    return collection.dropIndex(indexName).catch(e => {
-                        // tolerate index already
-                        if (e instanceof m.MongoServerError && e.codeName === "IndexNotFound") {
-                            // already gone, continue
-                            return;
-                        }
-                        throw e;
-                    });
-                });
-            }));
-        }
-
-        if (indexesToCreate.length > 0) {
-            await Promise.all(indexesToCreate.map(indexSpec => {
-                return mongoOperationQueue.add(() => {
-                    return collection.createIndex(
-                        indexSpec.key,
-                        indexSpec.options
-                    );
-                });
-            }));
-        }
+      }
     }
 
-    let sessionContext: Awaited<ReturnType<typeof getSessionContext>>;
-    
-    async function init() {
-        await applyValidator();
-        await applyIndexes();
-        sessionContext = await getSessionContext(db.client);
+    // Use the queue system to manage index operations
+    if (indexesToDrop.length > 0) {
+      await Promise.all(indexesToDrop.map((indexName) => {
+        return mongoOperationQueue.add(() => {
+          return collection.dropIndex(indexName).catch((e) => {
+            // tolerate index already
+            if (
+              e instanceof m.MongoServerError && e.codeName === "IndexNotFound"
+            ) {
+              // already gone, continue
+              return;
+            }
+            throw e;
+          });
+        });
+      }));
     }
 
-    const collection = db.collection<TOutput>(collectionName, opts);
-    await init();
+    if (indexesToCreate.length > 0) {
+      await Promise.all(indexesToCreate.map((indexSpec) => {
+        return mongoOperationQueue.add(() => {
+          return collection.createIndex(
+            indexSpec.key,
+            indexSpec.options,
+          );
+        });
+      }));
+    }
+  }
 
-    return {
-        withSession: sessionContext!.withSession,
+  let sessionContext: Awaited<ReturnType<typeof getSessionContext>>;
+
+  async function init() {
+    await applyValidator();
+    await applyIndexes();
+
+    // Auto-initialize metadata for multi-collection model
+    // Check if metadata already exists
+    const exists = await multiCollectionInstanceExists(db, collectionName);
+
+    if (!exists) {
+      // Get the current migration version
+      const lastMigration = await getLastAppliedMigration(db);
+      const currentMigrationId = lastMigration?.id || "current";
+
+      // Create metadata for this instance
+      if(useModel) {
+        await createMultiCollectionInfo(
+          db,
+          collectionName,
+          (model as MultiCollectionModel<T>).name,
+          currentMigrationId,
+        );
+      }
+    }
+
+    sessionContext = await getSessionContext(db.client);
+  }
+
+  const collection = db.collection<TOutput>(collectionName, opts);
+  await init();
+
+  return {
+    withSession: sessionContext!.withSession,
         async insertOne(key, doc) {
             const _id = doc._id ?? `${key as string}:${newId()}`;
             const schema = schemaElements[key];
@@ -792,5 +933,70 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             
             return await cursor.toArray();
         },
-    }
+  };
+}
+
+/**
+ * Creates a NEW instance of a multi-collection from a model
+ *
+ * This function creates a brand new multi-collection instance with metadata tracking
+ * for migrations. Use this when you want to create a new instance in production that
+ * should start with the current schema state.
+ *
+ * The function will:
+ * 1. Create the physical MongoDB collection
+ * 2. Register it with metadata linking to the model and current migration version
+ * 3. Return a fully functional multi-collection instance
+ *
+ * @param db - MongoDB database instance
+ * @param collectionName - Name of the collection to create
+ * @param model - The multi-collection model to use as template
+ * @param options - Additional options for the collection
+ * @returns A Promise resolving to an enhanced MongoDB collection
+ *
+ * @example
+ * ```typescript
+ * import { defineModel, newMultiCollection } from "@diister/mongodbee";
+ * import * as v from "valibot";
+ *
+ * // Define a reusable model
+ * const catalogModel = defineModel("catalog", {
+ *   schema: {
+ *     product: {
+ *       name: v.string(),
+ *       price: v.number(),
+ *     },
+ *     category: {
+ *       name: v.string(),
+ *     }
+ *   }
+ * });
+ *
+ * // Create a new instance in production
+ * const catalogLouvre = await newMultiCollection(db, "catalog_louvre", catalogModel);
+ *
+ * // This instance is now tracked and will only receive future migrations
+ * await catalogLouvre.insertOne("category", { name: "Paintings" });
+ * ```
+ */
+export async function newMultiCollection<const T extends MultiCollectionSchema>(
+  db: Db,
+  collectionName: string,
+  model: MultiCollectionModel<T>,
+  options?: m.CollectionOptions & CollectionOptions,
+): Promise<MultiCollectionResult<T>> {
+  // Get the current migration version
+  const lastMigration = await getLastAppliedMigration(db);
+  const currentMigrationId = lastMigration?.id || "current";
+
+  // Create metadata for this new instance
+  await createMultiCollectionInfo(
+    db,
+    collectionName,
+    model.name,
+    currentMigrationId,
+  );
+
+  // Create and return the multi-collection instance
+  return await multiCollection(db, collectionName, model, options);
 }

@@ -1,0 +1,206 @@
+/**
+ * @fileoverview MongoDBee Migration System - Main Module
+ *
+ * This is the main entry point for the MongoDBee migration system. It provides
+ * a comprehensive, type-safe, and functional approach to MongoDB migrations
+ * with schema validation, simulation capabilities, and robust error handling.
+ *
+ * ## Features
+ *
+ * - **Type-Safe Migrations**: Full TypeScript support with Valibot schema validation
+ * - **Functional Design**: Pure functions and immutable data structures
+ * - **Simulation Support**: Test migrations without touching your database
+ * - **Schema Validation**: Validate data integrity throughout the migration process
+ * - **Flexible Configuration**: Support for multiple environments and configurations
+ * - **Template System**: Generate migrations from built-in or custom templates
+ * - **JSR Compatible**: Designed for the JavaScript Registry with proper documentation
+ *
+ * ## Basic Usage
+ *
+ * ### Creating a Migration
+ *
+ * ```typescript
+ * import { migrationBuilder } from "@diister/mongodbee/migration";
+ * import * as v from "@diister/mongodbee/schema";
+ *
+ * const userSchema = v.object({
+ *   _id: v.string(),
+ *   name: v.string(),
+ *   email: v.pipe(v.string(), v.email()),
+ *   createdAt: v.date(),
+ * });
+ *
+ * const migration = migrationBuilder({
+ *   schemas: {
+ *     collections: { users: userSchema }
+ *   }
+ * })
+ *   .createCollection("users")
+ *     .seed([
+ *       { name: "Admin", email: "admin@example.com", createdAt: new Date() }
+ *     ])
+ *     .done()
+ *   .compile();
+ * ```
+ *
+ * @module
+ */
+
+// Core types and interfaces
+export type {
+  CreateCollectionRule,
+  // Database state
+  DatabaseState,
+  // Applier interfaces
+  MigrationApplier,
+  MigrationBuilder,
+  CollectionBuilder as MigrationCollectionBuilder,
+  // Migration definitions
+  MigrationDefinition,
+  MigrationProperty,
+  // Operation types
+  MigrationRule,
+  MigrationState,
+  // Schema types
+  SchemasDefinition,
+  SeedCollectionRule,
+  TransformCollectionRule,
+  TransformRule,
+} from "./types.ts";
+
+// Builder system
+export {
+  getMigrationSummary,
+  isCreateCollectionRule,
+  isSeedCollectionRule,
+  isTransformCollectionRule,
+  migrationBuilder,
+} from "./builder.ts";
+export type { MigrationBuilderOptions } from "./builder.ts";
+
+// Import for default export
+import { migrationBuilder } from "./builder.ts";
+
+// Definition management
+export {
+  createMigrationSummary,
+  findCommonAncestor,
+  generateMigrationId,
+  getMigrationAncestors,
+  getMigrationPath,
+  isMigrationAncestor,
+  migrationDefinition,
+  validateMigrationChain,
+} from "./definition.ts";
+export type { MigrationDefinitionOptions } from "./definition.ts";
+
+// Appliers
+export { createMongodbApplier } from "./appliers/mongodb.ts";
+export type { MongodbApplierOptions } from "./appliers/mongodb.ts";
+
+// Configuration
+export * from "./config/mod.ts";
+
+// Validators (partial export of working functions)
+export {
+  createChainValidator,
+  type MigrationValidator,
+  type ValidationResult,
+} from "./validators/mod.ts";
+
+// Multi-collection registry
+export {
+  createMetadataSchemas,
+  createMultiCollectionInfo,
+  discoverMultiCollectionInstances,
+  getMultiCollectionInfo,
+  getMultiCollectionMigrations,
+  getMultiModelAppliedMigrationIds,
+  getMultiModelCurrentState,
+  getMultiModelMigrationHistory,
+  isInstanceCreatedAfterMigration,
+  markAsMultiCollection,
+  markMultiModelMigrationAsFailed,
+  markMultiModelMigrationAsReverted,
+  MULTI_COLLECTION_INFO_TYPE,
+  MULTI_COLLECTION_MIGRATIONS_TYPE,
+  multiCollectionInstanceExists,
+  recordMultiCollectionMigration,
+  shouldInstanceReceiveMigration,
+  shouldInstanceReceiveMigrationByChain,
+} from "./multicollection-registry.ts";
+export type {
+  MultiCollectionInfo,
+  MultiCollectionMigrations,
+  MultiModelMigrationOperation,
+  MultiModelMigrationOperationType,
+  MultiModelOperationStatus,
+} from "./multicollection-registry.ts";
+
+// Catch-up system for orphaned multi-model instances
+export {
+  detectInstancesNeedingCatchUp,
+  filterOperationsForModelType,
+  getMigrationsForCatchUp,
+} from "./catch-up.ts";
+export type {
+  CatchUpSummary,
+  InstanceCatchUpInfo,
+} from "./catch-up.ts";
+
+// Generic event sourcing utilities
+export {
+  calculateMigrationStateFromHistory,
+  getAppliedMigrationIdsFromHistory,
+  groupOperationsByMigrationId,
+} from "./migration-history.ts";
+export type { BaseMigrationOperation } from "./migration-history.ts";
+
+// Migration ID utilities
+export {
+  extractMigrationTimestamp,
+  compareMigrationTimestamps,
+  isMigrationBefore,
+  isMigrationAfter,
+} from "./utils/migration-id.ts";
+
+// Status checking utilities
+export {
+  assertMigrationSystemHealthy,
+  checkMigrationStatus,
+} from "./check-status.ts";
+export type {
+  CheckMigrationStatusOptions,
+  DatabaseStatusDetails,
+  MigrationCounts,
+  MigrationInfo,
+  MigrationStatusResult,
+  MigrationValidationDetails,
+} from "./check-status.ts";
+
+/**
+ * Version information for the migration system
+ */
+export const VERSION = "1.0.0";
+
+/**
+ * Default export providing the most commonly used functions
+ *
+ * @example
+ * ```typescript
+ * import mongodbee from "@diister/mongodbee/migration";
+ *
+ * // Build a migration
+ * const migration = mongodbee.builder({ schemas: mySchemas })
+ *   .createCollection("users")
+ *   .done()
+ *   .compile();
+ * ```
+ */
+export default {
+  // Core functions
+  builder: migrationBuilder,
+
+  // Version
+  VERSION,
+};

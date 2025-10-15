@@ -1,0 +1,159 @@
+/**
+ * @fileoverview Multi-Collection Model System
+ *
+ * This module provides a model/template system for multi-collections, enabling:
+ * - Reusable schema definitions across multiple collection instances
+ * - Type-safe model creation and instance management
+ * - Version tracking for migration consistency
+ *
+ * @module
+ */
+
+import type * as v from "./schema.ts";
+
+/**
+ * Base schema type constraint
+ */
+type AnySchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
+
+/**
+ * Schema definition for a multi-collection model
+ */
+export type MultiModelSchema = Record<string, Record<string, AnySchema>>;
+
+/**
+ * Multi-collection model metadata
+ */
+export type MultiCollectionModel<
+  T extends MultiModelSchema = MultiModelSchema,
+> = {
+  /** Unique name of the model (used as template identifier) */
+  readonly name: string;
+
+  /** Schema definition for each document type in this model */
+  readonly schema: T;
+
+  /** Model version for tracking schema evolution */
+  readonly version: string;
+
+  /** Metadata for additional model information */
+  readonly metadata?: Record<string, unknown>;
+
+  /**
+   * Expose the schema in the format expected by schemas.ts
+   * Returns an object with the model name as key and schema as value
+   */
+  expose(): { [K in typeof name]: T };
+
+  /**
+   * Get a summary of the model structure
+   */
+  getSummary(): {
+    name: string;
+    version: string;
+    types: string[];
+    fieldCount: number;
+  };
+};
+
+/**
+ * Options for creating a multi-collection model
+ */
+export type MultiCollectionModelOptions<T extends MultiModelSchema> = {
+  /** Schema definition */
+  schema: T;
+
+  /** Optional version identifier (defaults to '1.0.0') */
+  version?: string;
+
+  /** Optional metadata */
+  metadata?: Record<string, unknown>;
+};
+
+/**
+ * Creates a multi-collection model (template) that can be reused across multiple instances
+ *
+ * A model defines the structure and types that can be stored in collections using this template.
+ * Multiple physical MongoDB collections can use the same model.
+ *
+ * @param name - Unique identifier for this model
+ * @param options - Model configuration including schema and optional version
+ * @returns A reusable multi-collection model
+ *
+ * @example
+ * ```typescript
+ * import { defineModel } from "@diister/mongodbee";
+ * import * as v from "valibot";
+ *
+ * // Define a reusable catalog model
+ * const catalogModel = defineModel("catalog", {
+ *   schema: {
+ *     product: {
+ *       name: v.string(),
+ *       price: v.number(),
+ *       category: v.string()
+ *     },
+ *     category: {
+ *       name: v.string(),
+ *       parentId: v.optional(v.string())
+ *     }
+ *   },
+ *   version: "1.0.0"
+ * });
+ *
+ * // Use in schemas.ts
+ * export const schemas = {
+ *   collections: {},
+ *   multiModels: {
+ *     ...catalogModel.expose() // { "catalog": { product: {...}, category: {...} } }
+ *   }
+ * };
+ *
+ * // Create instances using this model
+ * const louvre = await newMultiCollection(db, "catalog_louvre", catalogModel);
+ * const orsay = await multiCollection(db, "catalog_orsay", catalogModel);
+ * ```
+ */
+export function defineModel<const T extends MultiModelSchema>(
+  name: string,
+  options: MultiCollectionModelOptions<T>,
+): MultiCollectionModel<T> {
+  const { schema, version = "1.0.0", metadata } = options;
+
+  // Validate model name
+  if (!name || typeof name !== "string") {
+    throw new Error("Model name must be a non-empty string");
+  }
+
+  // Validate schema has at least one type
+  if (Object.keys(schema).length === 0) {
+    throw new Error(`Model "${name}" must define at least one document type`);
+  }
+
+  const model: MultiCollectionModel<T> = {
+    name,
+    schema,
+    version,
+    metadata,
+
+    expose() {
+      return { [this.name]: this.schema } as { [K in typeof this.name]: T };
+    },
+
+    getSummary() {
+      const types = Object.keys(this.schema);
+      const fieldCount = types.reduce((acc, type) => {
+        return acc + Object.keys(this.schema[type]).length;
+      }, 0);
+
+      return {
+        name: this.name,
+        version: this.version,
+        types,
+        fieldCount,
+      };
+    },
+  };
+
+  return Object.freeze(model);
+}
