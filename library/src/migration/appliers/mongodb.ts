@@ -215,11 +215,11 @@ export function createMongodbApplier(
       }
     }
 
-    // Synchronize multi-collections (WITHOUT metadata)
+    // Synchronize multi-collections (WITH metadata)
     if (schemas.multiCollections) {
       for (const [collectionName, multiSchema] of Object.entries(schemas.multiCollections)) {
         if (await collectionExists(collectionName)) {
-          // Build union validator without metadata schemas
+          // Build union validator with metadata schemas
           const typeSchemas = Object.entries(multiSchema).map(
             ([typeName, typeSchema]) => v.object({
               _type: v.literal(typeName),
@@ -227,9 +227,12 @@ export function createMongodbApplier(
             })
           );
 
-          const unionSchema = typeSchemas.length > 0
+          // Include metadata schemas so _information and _migrations documents can be inserted
+          const allSchemas = [...typeSchemas, ...createMetadataSchemas()];
+
+          const unionSchema = allSchemas.length > 0
             // deno-lint-ignore no-explicit-any
-            ? v.union(typeSchemas as any)
+            ? v.union(allSchemas as any)
             : v.object({ _type: v.string() });
 
           const validator = toMongoValidator(unionSchema);
@@ -417,7 +420,7 @@ export function createMongodbApplier(
       apply: async (operation) => {
         const collExist = await collectionExists(operation.collectionName);
 
-        // Create union validator for all types (without metadata schemas)
+        // Create union validator for all types (including metadata schemas)
         const typeSchemas = Object.entries(operation.schema).map(
           ([typeName, typeSchema]) => v.object({
             _type: v.literal(typeName),
@@ -425,9 +428,12 @@ export function createMongodbApplier(
           })
         );
 
-        const unionSchema = typeSchemas.length > 0
+        // Include metadata schemas so _information and _migrations documents can be inserted
+        const allSchemas = [...typeSchemas, ...createMetadataSchemas()];
+
+        const unionSchema = allSchemas.length > 0
           // deno-lint-ignore no-explicit-any
-          ? v.union(typeSchemas as any)
+          ? v.union(allSchemas as any)
           : v.object({ _type: v.string() });
 
         const validator = toMongoValidator(unionSchema);
@@ -539,6 +545,33 @@ export function createMongodbApplier(
           throw new Error(`Collection ${operation.collectionName} is already marked as multi-model`);
         }
 
+        // Get the schema for this model type from the migration schemas
+        const modelSchema = migration.schemas.multiModels?.[operation.modelType];
+        if (!modelSchema) {
+          throw new Error(`Model type ${operation.modelType} not found in migration schemas`);
+        }
+
+        // Update validator to include metadata schemas BEFORE inserting _information document
+        const typeSchemas = Object.entries(modelSchema).map(
+          ([typeName, typeSchema]) => v.object({
+            _type: v.literal(typeName),
+            ...(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>),
+          })
+        );
+
+        const allSchemas = [...typeSchemas, ...createMetadataSchemas()];
+        const unionSchema = allSchemas.length > 0
+          // deno-lint-ignore no-explicit-any
+          ? v.union(allSchemas as any)
+          : v.object({ _type: v.string() });
+
+        const validator = toMongoValidator(unionSchema);
+        await db.command({
+          collMod: operation.collectionName,
+          validator,
+          validationLevel: "strict",
+        });
+
         await createMultiCollectionInfo(
           db,
           operation.collectionName,
@@ -558,6 +591,32 @@ export function createMongodbApplier(
         await collection.deleteMany({
           _type: { $in: [MULTI_COLLECTION_INFO_TYPE, MULTI_COLLECTION_MIGRATIONS_TYPE] },
         });
+
+        // Restore validator WITHOUT metadata schemas (back to plain multi-collection)
+        // Get schema from the model type definition in current migration
+        const modelSchema = migration.schemas.multiModels?.[operation.modelType];
+
+        if (modelSchema) {
+          const typeSchemas = Object.entries(modelSchema).map(
+            ([typeName, typeSchema]) => v.object({
+              _type: v.literal(typeName),
+              ...(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>),
+            })
+          );
+
+          // NO metadata schemas - just type schemas
+          const unionSchema = typeSchemas.length > 0
+            // deno-lint-ignore no-explicit-any
+            ? v.union(typeSchemas as any)
+            : v.object({ _type: v.string() });
+
+          const validator = toMongoValidator(unionSchema);
+          await db.command({
+            collMod: operation.collectionName,
+            validator,
+            validationLevel: "strict",
+          });
+        }
       }
     },
 
