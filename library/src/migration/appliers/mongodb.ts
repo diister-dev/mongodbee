@@ -13,7 +13,7 @@ import type { MigrationDefinition, MigrationRule, SchemasDefinition } from "../t
 import { ulid } from "@std/ulid";
 import * as v from "valibot";
 import { toMongoValidator } from "../../validator.ts";
-import { extractIndexes } from "../../indexes.ts";
+import { extractIndexes, keyEqual, normalizeIndexOptions } from "../../indexes.ts";
 import { sanitizePathName } from "../../schema-navigator.ts";
 import {
   createMultiCollectionInfo,
@@ -108,14 +108,64 @@ export function createMongodbApplier(
   ): Promise<void> {
     const collection = db.collection(collectionName);
 
+    // Check if the index already exists with the same specifications
+    // Uses the same logic as collection.ts and multi-collection.ts
+    const existingIndexes = await collection.indexes();
+    const existingIndex = existingIndexes.find(idx => idx.name === indexName) ||
+      existingIndexes.find(idx => keyEqual(idx.key || {}, keySpec));
+
+    const desiredOptions = {
+      unique: options.unique,
+      sparse: options.sparse,
+      name: indexName,
+    };
+
+    // Use the shared normalization logic for comparison
+    let needsRecreate = true;
+    if (existingIndex) {
+      const existingNorm = normalizeIndexOptions(existingIndex);
+      const desiredNorm = normalizeIndexOptions(desiredOptions);
+
+      // Compare normalized options
+      if (
+        existingNorm.unique === desiredNorm.unique &&
+        existingNorm.collation === desiredNorm.collation &&
+        existingNorm.partialFilterExpression === desiredNorm.partialFilterExpression &&
+        keyEqual(existingIndex.key || {}, keySpec)
+      ) {
+        needsRecreate = false;
+      }
+    }
+
+    if (!needsRecreate) {
+      // Index already exists with the same specifications, no need to recreate
+      return;
+    }
+
+    // Drop existing index if it exists but with different specifications
+    if (existingIndex) {
+      try {
+        await collection.dropIndex(existingIndex.name!);
+      } catch (dropError) {
+        // Tolerate IndexNotFound errors (race condition)
+        // @ts-ignore - MongoDB driver error has code property
+        const isNotFound = dropError instanceof Error && (
+          // @ts-ignore
+          dropError.code === 27 ||
+          dropError.message.includes("IndexNotFound")
+        );
+        if (!isNotFound) {
+          console.warn(`Could not drop index ${indexName} on ${collectionName}:`, dropError);
+          return;
+        }
+      }
+    }
+
+    // Create the index
     try {
-      await collection.createIndex(keySpec, {
-        name: indexName,
-        ...options,
-      });
+      await collection.createIndex(keySpec, desiredOptions);
     } catch (error) {
-      // Tolerate duplicate index errors and index conflicts
-      // MongoDB error code 86 (IndexKeySpecsConflict) is thrown when an index with the same name exists but has different options
+      // Tolerate race conditions where the index was already created
       const isIndexError = error instanceof Error && (
         error.message.includes("already exists") ||
         // @ts-ignore - MongoDB driver error has code property
@@ -127,20 +177,8 @@ export function createMongodbApplier(
         throw error;
       }
 
-      // If there's a conflict, we should drop the old index and recreate it
-      // @ts-ignore - MongoDB driver error has code property
-      if (error.code === 86 || error.message.includes("IndexKeySpecsConflict")) {
-        try {
-          await collection.dropIndex(indexName);
-          await collection.createIndex(keySpec, {
-            name: indexName,
-            ...options,
-          });
-        } catch (dropError) {
-          // If we can't drop and recreate, just log a warning
-          console.warn(`Could not recreate index ${indexName} on ${collectionName}:`, dropError);
-        }
-      }
+      // If there's still a conflict after dropping, log a warning
+      console.warn(`Index ${indexName} on ${collectionName} already exists or has conflicts, skipping`);
     }
   }
 
