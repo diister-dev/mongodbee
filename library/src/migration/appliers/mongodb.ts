@@ -13,8 +13,7 @@ import type { MigrationDefinition, MigrationRule, SchemasDefinition } from "../t
 import { ulid } from "@std/ulid";
 import * as v from "valibot";
 import { toMongoValidator } from "../../validator.ts";
-import { extractIndexes, keyEqual, normalizeIndexOptions } from "../../indexes.ts";
-import { sanitizePathName } from "../../schema-navigator.ts";
+import { applyCollectionIndexes, applyMultiCollectionIndexes } from "../../indexes-applier.ts";
 import {
   createMultiCollectionInfo,
   createMetadataSchemas,
@@ -98,138 +97,6 @@ export function createMongodbApplier(
   }
 
   /**
-   * Helper to create a single index with conflict resolution
-   */
-  async function createIndexSafely(
-    collectionName: string,
-    indexName: string,
-    keySpec: Record<string, number>,
-    options: { unique: boolean; sparse: boolean }
-  ): Promise<void> {
-    const collection = db.collection(collectionName);
-
-    // Check if the index already exists with the same specifications
-    // Uses the same logic as collection.ts and multi-collection.ts
-    const existingIndexes = await collection.indexes();
-    const existingIndex = existingIndexes.find(idx => idx.name === indexName) ||
-      existingIndexes.find(idx => keyEqual(idx.key || {}, keySpec));
-
-    const desiredOptions = {
-      unique: options.unique,
-      sparse: options.sparse,
-      name: indexName,
-    };
-
-    // Use the shared normalization logic for comparison
-    let needsRecreate = true;
-    if (existingIndex) {
-      const existingNorm = normalizeIndexOptions(existingIndex);
-      const desiredNorm = normalizeIndexOptions(desiredOptions);
-
-      // Compare normalized options
-      if (
-        existingNorm.unique === desiredNorm.unique &&
-        existingNorm.collation === desiredNorm.collation &&
-        existingNorm.partialFilterExpression === desiredNorm.partialFilterExpression &&
-        keyEqual(existingIndex.key || {}, keySpec)
-      ) {
-        needsRecreate = false;
-      }
-    }
-
-    if (!needsRecreate) {
-      // Index already exists with the same specifications, no need to recreate
-      return;
-    }
-
-    // Drop existing index if it exists but with different specifications
-    if (existingIndex) {
-      try {
-        await collection.dropIndex(existingIndex.name!);
-      } catch (dropError) {
-        // Tolerate IndexNotFound errors (race condition)
-        // @ts-ignore - MongoDB driver error has code property
-        const isNotFound = dropError instanceof Error && (
-          // @ts-ignore
-          dropError.code === 27 ||
-          dropError.message.includes("IndexNotFound")
-        );
-        if (!isNotFound) {
-          console.warn(`Could not drop index ${indexName} on ${collectionName}:`, dropError);
-          return;
-        }
-      }
-    }
-
-    // Create the index
-    try {
-      await collection.createIndex(keySpec, desiredOptions);
-    } catch (error) {
-      // Tolerate race conditions where the index was already created
-      const isIndexError = error instanceof Error && (
-        error.message.includes("already exists") ||
-        // @ts-ignore - MongoDB driver error has code property
-        error.code === 86 ||
-        error.message.includes("IndexKeySpecsConflict")
-      );
-
-      if (!isIndexError) {
-        throw error;
-      }
-
-      // If there's still a conflict after dropping, log a warning
-      console.warn(`Index ${indexName} on ${collectionName} already exists or has conflicts, skipping`);
-    }
-  }
-
-  /**
-   * Helper to apply indexes to a collection
-   */
-  async function applyIndexes(
-    collectionName: string,
-    schema: Record<string, unknown>,
-  ): Promise<void> {
-    const wrappedSchema = v.object(schema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
-    const indexes = extractIndexes(wrappedSchema);
-
-    for (const index of indexes) {
-      const indexName = sanitizePathName(index.path);
-      const keySpec: Record<string, number> = { [index.path]: 1 };
-
-      await createIndexSafely(collectionName, indexName, keySpec, {
-        unique: index.metadata.unique || false,
-        sparse: false,
-      });
-    }
-  }
-
-  /**
-   * Helper to apply indexes for a specific type in a multi-collection
-   */
-  async function applyIndexesForType(
-    collectionName: string,
-    typeName: string,
-    typeSchema: Record<string, unknown>,
-  ): Promise<void> {
-    const typeSchemaWithType = {
-      _type: v.literal(typeName),
-      ...(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>),
-    };
-    const wrappedTypeSchema = v.object(typeSchemaWithType);
-    const indexes = extractIndexes(wrappedTypeSchema);
-
-    for (const index of indexes) {
-      const indexName = sanitizePathName(index.path);
-      const keySpec: Record<string, number> = { [index.path]: 1 };
-
-      await createIndexSafely(collectionName, indexName, keySpec, {
-        unique: index.metadata.unique || false,
-        sparse: false,
-      });
-    }
-  }
-
-  /**
    * Synchronizes validators and indexes for all collections, multi-collections, and multi-models
    * based on the target schemas
    */
@@ -239,16 +106,17 @@ export function createMongodbApplier(
       for (const [collectionName, schema] of Object.entries(schemas.collections)) {
         if (await collectionExists(collectionName)) {
           // Update validator
-          const wrappedSchema = v.object(schema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
-          const validator = toMongoValidator(wrappedSchema);
+          const collectionSchema = v.object(schema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
+          const validator = toMongoValidator(collectionSchema);
           await db.command({
             collMod: collectionName,
             validator,
             validationLevel: "strict",
           });
 
-          // Synchronize indexes
-          await applyIndexes(collectionName, schema);
+          // Synchronize indexes using shared applier
+          const collection = db.collection(collectionName);
+          await applyCollectionIndexes(collection, collectionSchema);
         }
       }
     }
@@ -280,10 +148,13 @@ export function createMongodbApplier(
             validationLevel: "strict",
           });
 
-          // Synchronize indexes for each type
-          for (const [typeName, typeSchema] of Object.entries(multiSchema)) {
-            await applyIndexesForType(collectionName, typeName, typeSchema as Record<string, unknown>);
-          }
+          // Synchronize indexes using shared applier
+          const collection = db.collection(collectionName);
+          const schemasPerType = Object.entries(multiSchema).reduce<Record<string, v.ObjectSchema<Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>, undefined>>>((acc, [typeName, typeSchema]) => {
+            acc[typeName] = v.object(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
+            return acc;
+          }, {});
+          await applyMultiCollectionIndexes(collection, schemasPerType);
         }
       }
     }
@@ -317,10 +188,13 @@ export function createMongodbApplier(
               validationLevel: "strict",
             });
 
-            // Synchronize indexes for each type
-            for (const [typeName, typeSchema] of Object.entries(multiSchema)) {
-              await applyIndexesForType(instanceName, typeName, typeSchema as Record<string, unknown>);
-            }
+            // Synchronize indexes using shared applier
+            const collection = db.collection(instanceName);
+            const schemasPerType = Object.entries(multiSchema).reduce((acc, [typeName, typeSchema]) => {
+              acc[typeName] = v.object(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
+              return acc;
+            }, {} as Record<string, v.ObjectSchema<Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>, undefined>>);
+            await applyMultiCollectionIndexes(collection, schemasPerType);
           }
         }
       }
@@ -430,7 +304,9 @@ export function createMongodbApplier(
 
           // If collection exists, still apply indexes && update validator if schema provided
           if (operation.schema) {
-            await applyIndexes(operation.collectionName, operation.schema);
+            const collection = db.collection(operation.collectionName);
+            const collectionSchema = v.object(operation.schema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
+            await applyCollectionIndexes(collection, collectionSchema);
 
             await db.command({
               collMod: operation.collectionName,
@@ -443,7 +319,9 @@ export function createMongodbApplier(
         }
 
         if (operation.schema) {
-          await applyIndexes(operation.collectionName, operation.schema);
+          const collection = db.collection(operation.collectionName);
+          const collectionSchema = v.object(operation.schema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
+          await applyCollectionIndexes(collection, collectionSchema);
         }
       },
       reverse: async (operation) => {
@@ -492,10 +370,13 @@ export function createMongodbApplier(
           await db.createCollection(operation.collectionName, collOptions);
         }
 
-        // Apply indexes for each type
-        for (const [typeName, typeSchema] of Object.entries(operation.schema)) {
-          await applyIndexesForType(operation.collectionName, typeName, typeSchema as Record<string, unknown>);
-        }
+        // Apply indexes using shared applier
+        const collection = db.collection(operation.collectionName);
+        const schemasPerType = Object.entries(operation.schema).reduce((acc, [typeName, typeSchema]) => {
+          acc[typeName] = v.object(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
+          return acc;
+        }, {} as Record<string, v.ObjectSchema<Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>, undefined>>);
+        await applyMultiCollectionIndexes(collection, schemasPerType);
       },
       reverse: async (operation) => {
         if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
@@ -556,10 +437,13 @@ export function createMongodbApplier(
           }
         }
 
-        // Apply indexes for each type
-        for (const [typeName, typeSchema] of Object.entries(operation.schema)) {
-          await applyIndexesForType(operation.collectionName, typeName, typeSchema as Record<string, unknown>);
-        }
+        // Apply indexes using shared applier
+        const multiCollection = db.collection(operation.collectionName);
+        const schemasPerType = Object.entries(operation.schema).reduce((acc, [typeName, typeSchema]) => {
+          acc[typeName] = v.object(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
+          return acc;
+        }, {} as Record<string, v.ObjectSchema<Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>, undefined>>);
+        await applyMultiCollectionIndexes(multiCollection, schemasPerType);
       },
       reverse: async (operation) => {
         if (opts.strictValidation && !await multiCollectionInstanceExists(db, operation.collectionName)) {
@@ -623,6 +507,14 @@ export function createMongodbApplier(
           const recordKey = `${operation.collectionName}:${opts.currentMigrationId}:applied`;
           recordedInstances.add(recordKey);
         }
+
+        // Apply indexes using shared applier (critical for multi-model tracking)
+        const modelCollection = db.collection(operation.collectionName);
+        const schemasPerType = Object.entries(modelSchema).reduce((acc, [typeName, typeSchema]) => {
+          acc[typeName] = v.object(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
+          return acc;
+        }, {} as Record<string, v.ObjectSchema<Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>, undefined>>);
+        await applyMultiCollectionIndexes(modelCollection, schemasPerType);
       },
       reverse: async (operation) => {
         const collection = db.collection(operation.collectionName);
@@ -1033,7 +925,9 @@ export function createMongodbApplier(
         if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
           throw new Error(`Collection ${operation.collectionName} does not exist`);
         }
-        await applyIndexes(operation.collectionName, operation.schema as Record<string, unknown>);
+        const collection = db.collection(operation.collectionName);
+        const collectionSchema = v.object(operation.schema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
+        await applyCollectionIndexes(collection, collectionSchema);
       },
       reverse: (_operation) => {
         // Index updates are idempotent, no reversal needed

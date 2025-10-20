@@ -6,10 +6,9 @@ import { EventEmitter } from "./events.ts";
 import { watchEvent } from "./change-stream.ts";
 import { getSessionContext } from "./session.ts";
 import type { Db } from "./mongodb.ts";
-import { extractIndexes, keyEqual, normalizeIndexOptions } from "./indexes.ts";
-import { sanitizePathName } from "./schema-navigator.ts";
 import { dirtyEquivalent } from "./utils/object.ts";
 import { mongoOperationQueue } from "./operation.ts";
+import { applyCollectionIndexes } from "./indexes-applier.ts";
 
 type CollectionOptions = {
   safeDelete?: boolean;
@@ -286,125 +285,9 @@ export async function collection<
   }
 
   async function applyIndexes() {
-    const currentIndexes = await collection.indexes();
-    const indexes = extractIndexes(schema);
-
-    // Collect all indexes that need to be created or recreated
-    const indexesToCreate: Array<{
-      key: Record<string, number>;
-      options: m.CreateIndexesOptions;
-    }> = [];
-    const indexesToDrop: string[] = [];
-
-    // Collect all expected index names from the current schema
-    const expectedIndexNames = new Set<string>();
-    for (const index of indexes) {
-      const indexPath = sanitizePathName(index.path);
-      expectedIndexNames.add(indexPath);
-    }
-
-    // Get all possible field paths from the current schema to detect potential mongodbee indexes
-    const allSchemaPaths = new Set<string>();
-    function collectPaths(obj: Object, prefix = "") {
-      for (const [key, value] of Object.entries(obj)) {
-        const fullPath = prefix ? `${prefix}.${key}` : key;
-        const sanitizedPath = sanitizePathName(fullPath);
-        allSchemaPaths.add(sanitizedPath);
-
-        if (value && typeof value === "object" && "entries" in value) {
-          collectPaths(value.entries, fullPath);
-        }
-      }
-    }
-    collectPaths(schema.entries);
-
-    // Find orphaned indexes that were created by mongodbee but are no longer in the schema
-    for (const existingIndex of currentIndexes) {
-      const indexName = existingIndex.name;
-      if (!indexName || indexName === "_id_") continue; // Skip default _id index
-
-      // Check if this index name matches any field in our schema
-      const isSchemaField = allSchemaPaths.has(indexName);
-
-      if (isSchemaField && !expectedIndexNames.has(indexName)) {
-        // This is an orphaned mongodbee index that should be removed
-        indexesToDrop.push(indexName);
-      }
-    }
-
-    for (const index of indexes) {
-      const keySpec = { [index.path]: 1 };
-      const indexPath = sanitizePathName(index.path);
-
-      // Try to find an existing index: prefer exact name, fallback to key match
-      const existingIndex = currentIndexes.find((i) => i.name === indexPath) ||
-        currentIndexes.find((i) => keyEqual(i.key || {}, keySpec));
-
-      const desiredOptions = {
-        ...index.metadata,
-        name: indexPath,
-      };
-
-      let needsRecreate = true;
-      if (existingIndex) {
-        const existingNorm = normalizeIndexOptions(existingIndex);
-        const desiredNorm = normalizeIndexOptions(desiredOptions);
-        if (
-          existingNorm.unique === desiredNorm.unique &&
-          existingNorm.collation === desiredNorm.collation &&
-          existingNorm.partialFilterExpression ===
-            desiredNorm.partialFilterExpression
-        ) {
-          needsRecreate = false;
-        }
-      }
-
-      if (!needsRecreate) continue;
-
-      if (existingIndex) {
-        indexesToDrop.push(existingIndex.name!);
-      }
-
-      indexesToCreate.push({
-        key: keySpec,
-        options: desiredOptions,
-      });
-    }
-
-    // Use the queue system to manage index operations
-    if (indexesToDrop.length > 0) {
-      await Promise.all(indexesToDrop.map((indexName) => {
-        return mongoOperationQueue.add(() => {
-          return collection.dropIndex(indexName).catch((err: unknown) => {
-            // tolerate race / already dropped
-            if (
-              err instanceof m.MongoServerError &&
-              err.codeName === "IndexNotFound"
-            ) {
-              // ignore
-              return;
-            }
-            const maybe = err as { code?: number };
-            if (maybe.code === 27) {
-              // legacy IndexNotFound code
-              return;
-            }
-            throw err;
-          });
-        });
-      }));
-    }
-
-    if (indexesToCreate.length > 0) {
-      await Promise.all(indexesToCreate.map((indexSpec) => {
-        return mongoOperationQueue.add(() => {
-          return collection.createIndex(
-            indexSpec.key,
-            indexSpec.options,
-          );
-        });
-      }));
-    }
+    await applyCollectionIndexes(collection, schema, {
+      queue: mongoOperationQueue,
+    })
   }
 
   async function startWatching() {

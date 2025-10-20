@@ -23,6 +23,7 @@ import {
   multiCollectionInstanceExists,
 } from "./migration/multicollection-registry.ts";
 import { getLastAppliedMigration } from "./migration/state.ts";
+import { applyMultiCollectionIndexes } from "./indexes-applier.ts";
 
 type CollectionOptions = {
   safeDelete?: boolean;
@@ -353,121 +354,9 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
   }
 
   async function applyIndexes() {
-    const currentIndexes = await collection.indexes();
-    const allIndexes = Object.entries(schemaElements).map(([key, value]) => {
-      const indexes = extractIndexes(value);
-      return {
-        type: key,
-        indexes,
-      };
-    });
-
-    // Collect all indexes that need to be created or recreated
-    const indexesToCreate: Array<{
-      key: Record<string, number>;
-      options: m.CreateIndexesOptions;
-    }> = [];
-    const indexesToDrop: string[] = [];
-
-    // Collect all expected index names from the current schema
-    const expectedIndexNames = new Set<string>();
-    for (const { type, indexes } of allIndexes) {
-      for (const index of indexes) {
-        const indexName = sanitizePathName(`${type}_${index.path}`);
-        expectedIndexNames.add(indexName);
-      }
-    }
-
-    // Find orphaned indexes that were created by mongodbee but are no longer in the schema
-    for (const existingIndex of currentIndexes) {
-      const indexName = existingIndex.name;
-      if (!indexName || indexName === "_id_") continue; // Skip default _id index
-
-      // Check if this looks like a mongodbee-created index (has type prefix)
-      const hasTypePrefix = Object.keys(schemaElements).some((type) =>
-        indexName.startsWith(`${type}_`)
-      );
-
-      if (hasTypePrefix && !expectedIndexNames.has(indexName)) {
-        // This is an orphaned mongodbee index that should be removed
-        indexesToDrop.push(indexName);
-      }
-    }
-
-    for (const { type, indexes } of allIndexes) {
-      for (const index of indexes) {
-        const keySpec = { [index.path]: 1 };
-        const indexName = sanitizePathName(`${type}_${index.path}`);
-
-        const existingIndex = currentIndexes.find((i) =>
-          i.name === indexName
-        ) || currentIndexes.find((i) => keyEqual(i.key || {}, keySpec));
-
-        const desiredOptions = {
-          ...index.metadata,
-          partialFilterExpression: {
-            _type: { $eq: type },
-          },
-          name: indexName,
-        };
-
-        let needsRecreate = true;
-        if (existingIndex) {
-          const existingNorm = normalizeIndexOptions(existingIndex);
-          const desiredNorm = normalizeIndexOptions(desiredOptions);
-          if (
-            existingNorm.unique === desiredNorm.unique &&
-            existingNorm.collation === desiredNorm.collation &&
-            existingNorm.partialFilterExpression ===
-              desiredNorm.partialFilterExpression
-          ) {
-            needsRecreate = false;
-          }
-        }
-
-        if (!needsRecreate) {
-          continue;
-        }
-
-        if (existingIndex) {
-          indexesToDrop.push(existingIndex.name!);
-        }
-
-        indexesToCreate.push({
-          key: keySpec,
-          options: desiredOptions,
-        });
-      }
-    }
-
-    // Use the queue system to manage index operations
-    if (indexesToDrop.length > 0) {
-      await Promise.all(indexesToDrop.map((indexName) => {
-        return mongoOperationQueue.add(() => {
-          return collection.dropIndex(indexName).catch((e) => {
-            // tolerate index already
-            if (
-              e instanceof m.MongoServerError && e.codeName === "IndexNotFound"
-            ) {
-              // already gone, continue
-              return;
-            }
-            throw e;
-          });
-        });
-      }));
-    }
-
-    if (indexesToCreate.length > 0) {
-      await Promise.all(indexesToCreate.map((indexSpec) => {
-        return mongoOperationQueue.add(() => {
-          return collection.createIndex(
-            indexSpec.key,
-            indexSpec.options,
-          );
-        });
-      }));
-    }
+    await applyMultiCollectionIndexes(collection, schemaElements, {
+      queue: mongoOperationQueue,
+    })
   }
 
   let sessionContext: Awaited<ReturnType<typeof getSessionContext>>;
