@@ -17,6 +17,7 @@ import type { Db } from "./mongodb.ts";
 import { dirtyEquivalent } from "./utils/object.ts";
 import { mongoOperationQueue } from "./operation.ts";
 import type { MultiCollectionModel } from "./multi-collection-model.ts";
+import { retryOnWriteConflict } from "./utils/retry.ts";
 import {
   createMultiCollectionInfo,
   createMetadataSchemas,
@@ -706,6 +707,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             return result.deletedCount;
         },
         async updateOne(key, id, doc) {
+            // Validation happens outside retry - no need to retry validation errors
             const dotSchema = dotSchemaElements[key];
             if(!dotSchema) {
                 throw new Error(`Invalid element type`);
@@ -713,70 +715,70 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
             v.parse(dotSchema, doc);
 
-            const session = sessionContext.getSession();
+            return retryOnWriteConflict(async () => {
+                const session = sessionContext.getSession();
 
-            const result = await collection.updateOne({
-                _id: id,
-                _type: key as string,
-            } as any, {
-                $set: doc,
-            } as any, { session });
+                const result = await collection.updateOne({
+                    _id: id,
+                    _type: key as string,
+                } as any, {
+                    $set: doc,
+                } as any, { session });
 
-            if(!result.acknowledged) {
-                throw new Error("Update failed");
-            }
+                if(!result.acknowledged) {
+                    throw new Error("Update failed");
+                }
 
-            if (result.matchedCount === 0) {
-                throw new Error("No element that match the filter to update");
-            }
+                if (result.matchedCount === 0) {
+                    throw new Error("No element that match the filter to update");
+                }
 
-            if (result.modifiedCount === 0) {
-                throw new Error("No element that match the filter to update");
-            }
-
-            return result.modifiedCount;
+                // Note: modifiedCount can be 0 if the values didn't actually change
+                // This is not an error condition
+                return result.modifiedCount;
+            });
         },
         async updateMany(operation) {
-            const bulkOps: any[] = [];
-            for(const type in operation) {
-                const elements = operation[type];
-                for(const id in elements) {
-                    const element = elements[id];
-                    const dotSchema = dotSchemaElements[type];
-                    if(!id.startsWith(`${type}:`)) {
-                        throw new Error(`Invalid id format`);
-                    }
-                    if(!dotSchema) {
-                        throw new Error(`Invalid element type`);
-                    }
-                    v.parse(dotSchema, element);
-
-                    bulkOps.push({
-                        updateOne: {
-                            filter: { _id: id },
-                            update: { $set: element },
+            return retryOnWriteConflict(async () => {
+                const bulkOps: any[] = [];
+                for(const type in operation) {
+                    const elements = operation[type];
+                    for(const id in elements) {
+                        const element = elements[id];
+                        const dotSchema = dotSchemaElements[type];
+                        if(!id.startsWith(`${type}:`)) {
+                            throw new Error(`Invalid id format`);
                         }
-                    });
+                        if(!dotSchema) {
+                            throw new Error(`Invalid element type`);
+                        }
+                        v.parse(dotSchema, element);
+
+                        bulkOps.push({
+                            updateOne: {
+                                filter: { _id: id },
+                                update: { $set: element },
+                            }
+                        });
+                    }
                 }
-            }
 
-            if (bulkOps.length === 0) {
-                throw new Error("No element to update");
-            }
+                if (bulkOps.length === 0) {
+                    throw new Error("No element to update");
+                }
 
-            const session = sessionContext.getSession();
+                const session = sessionContext.getSession();
 
-            const result = await collection.bulkWrite(bulkOps, { session });
+                const result = await collection.bulkWrite(bulkOps, { session });
 
-            if (result.matchedCount === 0) {
-                throw new Error("No element that match the filter to update");
-            }
+                if (result.matchedCount === 0) {
+                    throw new Error("No element that match the filter to update");
+                }
 
-            if (result.modifiedCount === 0) {
-                throw new Error("No element that match the filter to update");
-            }
-
-            return result.modifiedCount;
+                // Note: modifiedCount can be 0 if the values didn't actually change
+                // This is not an error condition
+                return result.modifiedCount;
+            });
         },
         async aggregate(stageBuilder) {
             const stage: StageBuilder<T> = {

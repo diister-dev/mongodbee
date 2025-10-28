@@ -1,14 +1,15 @@
 import * as v from "./schema.ts";
 import { toMongoValidator } from "./validator.ts";
 import { sanitizeForMongoDB } from "./sanitizer.ts";
-import * as m from "mongodb";
 import { EventEmitter } from "./events.ts";
 import { watchEvent } from "./change-stream.ts";
 import { getSessionContext } from "./session.ts";
-import type { Db } from "./mongodb.ts";
 import { dirtyEquivalent } from "./utils/object.ts";
 import { mongoOperationQueue } from "./operation.ts";
 import { applyCollectionIndexes } from "./indexes-applier.ts";
+import { retryOnWriteConflict } from "./utils/retry.ts";
+import type { Db } from "./mongodb.ts";
+import type * as m from "mongodb";
 
 type CollectionOptions = {
   safeDelete?: boolean;
@@ -685,16 +686,20 @@ export async function collection<
     },
     updateOne(filter, update, options?) {
       // @TODO: check if update is valid
-      const session = sessionContext.getSession();
-      return collection.updateOne(filter as any, update, {
-        session,
-        ...options,
+      return retryOnWriteConflict(async () => {
+        const session = sessionContext.getSession();
+        return await collection.updateOne(filter as any, update, {
+          session,
+          ...options,
+        });
       });
     },
     updateMany(filter, update, options?) {
       // @TODO: check if update is valid
-      const session = sessionContext.getSession();
-      return collection.updateMany(filter, update, { session, ...options });
+      return retryOnWriteConflict(async () => {
+        const session = sessionContext.getSession();
+        return await collection.updateMany(filter, update, { session, ...options });
+      });
     },
 
     // Document delete operations
