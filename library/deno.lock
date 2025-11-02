@@ -1,14 +1,15 @@
 {
   "version": "5",
   "specifiers": {
-    "jsr:@diister/valibot-mock@^0.0.2": "0.0.2",
+    "jsr:@diister/valibot-mock@^0.0.3": "0.0.3",
     "jsr:@std/assert@*": "1.0.10",
     "jsr:@std/assert@^1.0.8": "1.0.10",
     "jsr:@std/cli@^1.0.8": "1.0.23",
     "jsr:@std/fmt@^1.0.2": "1.0.8",
     "jsr:@std/fs@^1.0.5": "1.0.19",
     "jsr:@std/internal@^1.0.10": "1.0.12",
-    "jsr:@std/internal@^1.0.5": "1.0.10",
+    "jsr:@std/internal@^1.0.12": "1.0.12",
+    "jsr:@std/internal@^1.0.5": "1.0.12",
     "jsr:@std/internal@^1.0.9": "1.0.12",
     "jsr:@std/path@^1.0.7": "1.1.2",
     "jsr:@std/path@^1.1.1": "1.1.2",
@@ -17,12 +18,12 @@
     "npm:@types/node@*": "22.12.0",
     "npm:mongodb@^6.16.0": "6.16.0",
     "npm:randexp@0.5.3": "0.5.3",
-    "npm:valibot@1": "1.0.0",
+    "npm:valibot@1": "1.1.0",
     "npm:valibot@1.1.0": "1.1.0"
   },
   "jsr": {
-    "@diister/valibot-mock@0.0.2": {
-      "integrity": "5e64d739d3ae50f432a9c29d3b9444d326b29c53c38b48313c2c8dda4c78633b",
+    "@diister/valibot-mock@0.0.3": {
+      "integrity": "50d94b23fb656eda4d34014ef1487f4578b7fd381950f1f9ce325806d5b1d99a",
       "dependencies": [
         "npm:@faker-js/faker",
         "npm:randexp",
@@ -39,7 +40,10 @@
       "integrity": "cd25b050bdf6282e321854e3822bee624f07aca7636a3a76d95f77a3a919ca2a"
     },
     "@std/cli@1.0.23": {
-      "integrity": "bf95b7a9425ba2af1ae5a6359daf58c508f2decf711a76ed2993cd352498ccca"
+      "integrity": "bf95b7a9425ba2af1ae5a6359daf58c508f2decf711a76ed2993cd352498ccca",
+      "dependencies": [
+        "jsr:@std/internal@^1.0.12"
+      ]
     },
     "@std/fmt@1.0.8": {
       "integrity": "71e1fc498787e4434d213647a6e43e794af4fd393ef8f52062246e06f7e372b7"
@@ -153,9 +157,6 @@
     "undici-types@6.20.0": {
       "integrity": "sha512-Ny6QZ2Nju20vw1SRHe3d9jVu6gJ+4e3+MMpqu7pqE5HT6WsTSlce++GQmK5UXS8mzV8DSYHrQH+Xrf2jVcuKNg=="
     },
-    "valibot@1.0.0": {
-      "integrity": "sha512-1Hc0ihzWxBar6NGeZv7fPLY0QuxFMyxwYR2sF1Blu7Wq7EnremwY2W02tit2ij2VJT8HcSkHAQqmFfl77f73Yw=="
-    },
     "valibot@1.1.0": {
       "integrity": "sha512-Nk8lX30Qhu+9txPYTwM0cFlWLdPFsFr6LblzqIySfbZph9+BFsAHsNvHOymEviUepeIW6KFHzpX8TKhbptBXXw=="
     },
@@ -210,7 +211,7 @@
   },
   "workspace": {
     "dependencies": [
-      "jsr:@diister/valibot-mock@^0.0.2",
+      "jsr:@diister/valibot-mock@^0.0.3",
       "jsr:@std/assert@^1.0.8",
       "jsr:@std/cli@^1.0.8",
       "jsr:@std/fmt@^1.0.2",

@@ -243,10 +243,10 @@ async function loadFromFile(
       const fullPath = path.isAbsolute(filePath)
         ? filePath
         : path.resolve(cwd, filePath);
-      // Convert Windows path to file:// URL for dynamic import
+      // Convert path to file:// URL for dynamic import (required for Deno)
       const importPath = Deno.build.os === "windows"
         ? `file:///${fullPath.replace(/\\/g, "/")}`
-        : fullPath;
+        : `file://${fullPath}`;
       const mod = await import(importPath);
       if (mod.default) return mod.default;
       if (mod.config) return mod.config;
