@@ -1,7 +1,7 @@
 {
   "version": "5",
   "specifiers": {
-    "jsr:@diister/valibot-mock@^0.0.3": "0.0.3",
+    "jsr:@diister/valibot-mock@^0.0.4": "0.0.4",
     "jsr:@std/assert@*": "1.0.10",
     "jsr:@std/assert@^1.0.8": "1.0.10",
     "jsr:@std/cli@^1.0.8": "1.0.23",
@@ -22,8 +22,8 @@
     "npm:valibot@1.1.0": "1.1.0"
   },
   "jsr": {
-    "@diister/valibot-mock@0.0.3": {
-      "integrity": "50d94b23fb656eda4d34014ef1487f4578b7fd381950f1f9ce325806d5b1d99a",
+    "@diister/valibot-mock@0.0.4": {
+      "integrity": "8be251a70a8e091e017005bee1aaf24f0db3f7afc25eefbb8036ccc54f8198b2",
       "dependencies": [
         "npm:@faker-js/faker",
         "npm:randexp",
@@ -211,7 +211,7 @@
   },
   "workspace": {
     "dependencies": [
-      "jsr:@diister/valibot-mock@^0.0.3",
+      "jsr:@diister/valibot-mock@^0.0.4",
       "jsr:@std/assert@^1.0.8",
       "jsr:@std/cli@^1.0.8",
       "jsr:@std/fmt@^1.0.2",
