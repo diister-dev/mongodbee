@@ -245,13 +245,12 @@ Deno.test("DeleteIds: Ensure delete correct type", async (t) => {
   });
 });
 
-Deno.test("RANDOM TEST - TO DELETE", async (t) => {
+Deno.test("Aggregate: lookup with string 'as' parameter", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {
         user: {
           name: v.string(),
-          mail: v.string(),
           age: v.number(),
         },
         group: {
@@ -264,42 +263,112 @@ Deno.test("RANDOM TEST - TO DELETE", async (t) => {
     const collection = await multiCollection(db, "test", model);
 
     const usersId = await collection.insertMany("user", [{
-      name: "John",
-      mail: "john@doe.d",
-      age: 20,
-    }, {
-      name: "Jane",
-      mail: "jane@doe.d",
+      name: "Alice",
       age: 25,
     }, {
-      name: "Jack",
-      mail: "jack@doe.d",
-      age: 30,
-    }, {
-      name: "Jill",
-      mail: "jill@doe.d",
+      name: "Bob",
       age: 30,
     }]);
 
     await collection.insertMany("group", [{
-      name: "John",
-      members: [usersId[0], usersId[1], usersId[3]],
-    }, {
-      name: "Jane",
-      members: [usersId[1]],
-    }, {
-      name: "Jack",
-      members: [usersId[2]],
-    }, {
-      name: "Jill",
-      members: [usersId[3]],
+      name: "Team A",
+      members: [usersId[0], usersId[1]],
     }]);
 
-    await collection.aggregate((stage) => [
+    const results = await collection.aggregate((stage) => [
       stage.match("group", {}),
       stage.unwind("group", "members"),
-      stage.lookup("group", "members", "_id"),
+      stage.lookup("user", "members", "_id", "userDetails"),
     ]);
+
+    assertEquals(results.length, 2);
+    assert(results[0].userDetails);
+  });
+});
+
+Deno.test("Aggregate: lookup with pipeline for filtering", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const model = defineModel("test", {
+      schema: {
+        invitation: {
+          type: v.string(),
+          exhibitorId: v.string(),
+        },
+        visitor: {
+          invitationId: v.string(),
+          status: v.string(),
+        },
+        exhibitor: {
+          company: v.string(),
+        },
+      },
+    });
+
+    const collection = await multiCollection(db, "test", model);
+
+    // Create exhibitors
+    const exhibitorId1 = await collection.insertOne("exhibitor", {
+      company: "Tech Corp",
+    });
+    const exhibitorId2 = await collection.insertOne("exhibitor", {
+      company: "Innovation Ltd",
+    });
+
+    // Create invitations
+    const invitation1 = await collection.insertOne("invitation", {
+      type: "exhibitor@visitors_invitation",
+      exhibitorId: exhibitorId1,
+    });
+    const invitation2 = await collection.insertOne("invitation", {
+      type: "exhibitor@visitors_invitation",
+      exhibitorId: exhibitorId2,
+    });
+
+    // Create visitors (some accepted, some pending)
+    await collection.insertMany("visitor", [
+      { invitationId: invitation1, status: "accepted" },
+      { invitationId: invitation1, status: "accepted" },
+      { invitationId: invitation1, status: "pending" },
+      { invitationId: invitation2, status: "accepted" },
+    ]);
+
+    // Aggregate: count accepted visitors per exhibitor
+    const topExhibitors = await collection.aggregate((stage) => [
+      // Match all invitations from exhibitors
+      stage.match("invitation", {
+        type: "exhibitor@visitors_invitation",
+      }),
+      // Lookup visitors with pipeline filter
+      stage.lookup("visitor", "_id", "invitationId", {
+        as: "visitors",
+        pipeline: (stage) => [
+          stage.match("visitor", { status: "accepted" }),
+        ],
+      }),
+      // Add visitor count
+      stage.addFields({
+        visitorCount: { $size: "$visitors" },
+      }),
+      // Lookup exhibitor details
+      stage.lookup("exhibitor", "exhibitorId", "_id", "exhibitorDetails"),
+      // Unwind exhibitor array
+      stage.unwind("exhibitor", "exhibitorDetails"),
+      // Sort by visitor count
+      stage.sort({ visitorCount: -1 }),
+      // Project final format
+      stage.project({
+        _id: 1,
+        exhibitorId: 1,
+        company: "$exhibitorDetails.company",
+        visitorCount: 1,
+      }),
+    ]);
+
+    assertEquals(topExhibitors.length, 2);
+    assertEquals(topExhibitors[0].company, "Tech Corp");
+    assertEquals(topExhibitors[0].visitorCount, 2);
+    assertEquals(topExhibitors[1].company, "Innovation Ltd");
+    assertEquals(topExhibitors[1].visitorCount, 1);
   });
 });
 

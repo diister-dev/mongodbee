@@ -120,9 +120,14 @@ type StageBuilder<T extends MultiCollectionSchema> = {
     key: E,
     localField: string,
     foreignField: string,
-    others?: Record<string, any>,
+    asOrOptions?: string | {
+      as?: string;
+      pipeline?: (stage: StageBuilder<T>) => AggregationStage[];
+      let?: Record<string, unknown>;
+    },
   ) => AggregationStage;
-  project: (projection: Record<string, 1 | 0>) => AggregationStage;
+  project: (projection: Record<string, 1 | 0 | string | Record<string, unknown>>) => AggregationStage;
+  addFields: (fields: Record<string, unknown>) => AggregationStage;
   group: (grouping: Record<string, unknown>) => AggregationStage;
   sort: (sort: Record<string, 1 | -1>) => AggregationStage;
   limit: (limit: number) => AggregationStage;
@@ -791,17 +796,46 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 unwind: (key, field) => ({
                     $unwind: `$${field}`,
                 }),
-                lookup: (key, localField, foreignField, others) => ({
-                    $lookup: {
+                lookup: (key, localField, foreignField, asOrOptions) => {
+                    // Simple case: string parameter is the 'as' field name
+                    if (typeof asOrOptions === 'string') {
+                        return {
+                            $lookup: {
+                                from: collectionName,
+                                localField,
+                                foreignField,
+                                as: asOrOptions,
+                            },
+                        };
+                    }
+
+                    // Advanced case: object with options
+                    const options = asOrOptions || {};
+                    const as = options.as || localField;
+                    const lookupStage: Record<string, unknown> = {
                         from: collectionName,
                         localField,
                         foreignField,
-                        as: localField,
-                        ...(others || {})
-                    },
-                }),
+                        as,
+                    };
+
+                    // Add let variables if provided
+                    if (options.let) {
+                        lookupStage.let = options.let;
+                    }
+
+                    // Add pipeline if provided (execute the builder function)
+                    if (options.pipeline) {
+                        lookupStage.pipeline = options.pipeline(stage);
+                    }
+
+                    return { $lookup: lookupStage };
+                },
                 project: (projection) => ({
                     $project: projection,
+                }),
+                addFields: (fields) => ({
+                    $addFields: fields,
                 }),
                 group: (grouping) => ({
                     $group: grouping,
