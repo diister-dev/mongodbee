@@ -1,4 +1,5 @@
 import {
+  extractFieldsToRemove,
   removeField,
   removeUndefined,
   sanitizeDocument,
@@ -503,4 +504,138 @@ Deno.test("Type consistency: Results should be properly typed", () => {
   const typedResult = result as TestInterface;
   assertEquals(typedResult.required, "value");
   assert(!("optional" in typedResult)); // Field should not exist after sanitization
+});
+
+// Tests for extractFieldsToRemove with deep objects
+
+Deno.test("extractFieldsToRemove - simple flat object", () => {
+  const result = extractFieldsToRemove({
+    name: "John",
+    email: removeField(),
+    age: 30,
+  });
+
+  assertEquals(result.set, { name: "John", age: 30 });
+  assertEquals(result.unset, { email: 1 });
+});
+
+Deno.test("extractFieldsToRemove - nested object with removeField", () => {
+  const result = extractFieldsToRemove({
+    name: "John",
+    settings: {
+      theme: removeField(),
+      language: "fr",
+    },
+  });
+
+  assertEquals(result.set, {
+    name: "John",
+    "settings.language": "fr",
+  });
+  assertEquals(result.unset, { "settings.theme": 1 });
+});
+
+Deno.test("extractFieldsToRemove - deeply nested object", () => {
+  const result = extractFieldsToRemove({
+    user: {
+      profile: {
+        avatar: removeField(),
+        bio: "Hello",
+        social: {
+          twitter: removeField(),
+          github: "user123",
+        },
+      },
+    },
+  });
+
+  assertEquals(result.set, {
+    "user.profile.bio": "Hello",
+    "user.profile.social.github": "user123",
+  });
+  assertEquals(result.unset, {
+    "user.profile.avatar": 1,
+    "user.profile.social.twitter": 1,
+  });
+});
+
+Deno.test("extractFieldsToRemove - mixed with arrays", () => {
+  const result = extractFieldsToRemove({
+    name: "John",
+    tags: ["a", "b", "c"], // Arrays should not be recursed into
+    metadata: {
+      created: removeField(),
+      updated: "2024-01-01",
+    },
+  });
+
+  assertEquals(result.set, {
+    name: "John",
+    tags: ["a", "b", "c"],
+    "metadata.updated": "2024-01-01",
+  });
+  assertEquals(result.unset, { "metadata.created": 1 });
+});
+
+Deno.test("extractFieldsToRemove - entire nested object removal", () => {
+  const result = extractFieldsToRemove({
+    name: "John",
+    settings: removeField(), // Remove entire nested object
+    profile: {
+      bio: "Hello",
+    },
+  });
+
+  assertEquals(result.set, {
+    name: "John",
+    "profile.bio": "Hello",
+  });
+  assertEquals(result.unset, { settings: 1 });
+});
+
+Deno.test("extractFieldsToRemove - empty nested object", () => {
+  const result = extractFieldsToRemove({
+    name: "John",
+    empty: {},
+    settings: {
+      theme: removeField(),
+    },
+  });
+
+  assertEquals(result.set, { name: "John" });
+  assertEquals(result.unset, { "settings.theme": 1 });
+});
+
+Deno.test("extractFieldsToRemove - all fields removed in nested", () => {
+  const result = extractFieldsToRemove({
+    name: "John",
+    settings: {
+      theme: removeField(),
+      language: removeField(),
+    },
+  });
+
+  assertEquals(result.set, { name: "John" });
+  assertEquals(result.unset, {
+    "settings.theme": 1,
+    "settings.language": 1,
+  });
+});
+
+Deno.test("extractFieldsToRemove - preserves null values", () => {
+  const result = extractFieldsToRemove({
+    name: "John",
+    email: null,
+    settings: {
+      theme: null,
+      language: removeField(),
+    },
+  });
+
+  assertEquals(result.set, {
+    name: "John",
+    email: null,
+    "settings.theme": null,
+  });
+  assertEquals(result.unset, { "settings.language": 1 });
 });

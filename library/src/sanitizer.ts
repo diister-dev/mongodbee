@@ -125,11 +125,13 @@ export function removeField(): symbol {
 /**
  * Extracts fields marked for removal and separates them from regular updates
  * Used for building MongoDB $set and $unset operations
+ * Handles nested objects by converting to dot notation
  *
  * @param obj - The object containing updates
+ * @param prefix - Internal prefix for building dot notation paths
  * @returns Object with 'set' and 'unset' fields
  */
-export function extractFieldsToRemove(obj: Record<string, unknown>): {
+export function extractFieldsToRemove(obj: Record<string, unknown>, prefix = ""): {
   set: Record<string, unknown>;
   unset: Record<string, 1>;
 } {
@@ -137,10 +139,17 @@ export function extractFieldsToRemove(obj: Record<string, unknown>): {
   const unset: Record<string, 1> = {};
 
   for (const [key, value] of Object.entries(obj)) {
+    const fullKey = prefix ? `${prefix}.${key}` : key;
+
     if (value === REMOVE_FIELD) {
-      unset[key] = 1;
+      unset[fullKey] = 1;
+    } else if (value !== null && typeof value === "object" && !Array.isArray(value) && value.constructor === Object) {
+      // Recursively process nested objects
+      const nested = extractFieldsToRemove(value as Record<string, unknown>, fullKey);
+      Object.assign(set, nested.set);
+      Object.assign(unset, nested.unset);
     } else {
-      set[key] = value;
+      set[fullKey] = value;
     }
   }
 
