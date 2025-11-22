@@ -118,7 +118,7 @@ export const REMOVE_FIELD = Symbol("REMOVE_FIELD");
  * @example
  * collection.updateOne(filter, { $set: { fieldToRemove: removeField() } })
  */
-export function removeField() {
+export function removeField(): symbol {
   return REMOVE_FIELD;
 }
 
