@@ -43,7 +43,106 @@ export async function loadProjectSchema(
 }
 
 /**
+ * Gets a simplified type string from a Valibot schema
+ *
+ * @param schema - Valibot schema object
+ * @returns Simplified type string like "string", "number?", "string[]"
+ */
+function getSchemaTypeString(schema: any): string {
+  if (!schema || typeof schema !== "object") {
+    return "unknown";
+  }
+
+  const type = schema.type;
+
+  switch (type) {
+    case "optional":
+      return `${getSchemaTypeString(schema.wrapped)}?`;
+    case "nullable":
+      return `${getSchemaTypeString(schema.wrapped)} | null`;
+    case "nullish":
+      return `${getSchemaTypeString(schema.wrapped)}?`;
+    case "array":
+      return `${getSchemaTypeString(schema.item)}[]`;
+    case "union":
+      if (Array.isArray(schema.options)) {
+        return schema.options.map(getSchemaTypeString).join(" | ");
+      }
+      return "union";
+    case "intersect":
+      if (Array.isArray(schema.options)) {
+        return schema.options.map(getSchemaTypeString).join(" & ");
+      }
+      return "intersect";
+    case "picklist":
+      if (Array.isArray(schema.options)) {
+        return schema.options.map((o: string) => `"${o}"`).join(" | ");
+      }
+      return "picklist";
+    case "literal":
+      return JSON.stringify(schema.literal);
+    case "object":
+      return "object";
+    case "record":
+      return `Record<string, ${getSchemaTypeString(schema.value)}>`;
+    case "tuple":
+      if (Array.isArray(schema.items)) {
+        return `[${schema.items.map(getSchemaTypeString).join(", ")}]`;
+      }
+      return "tuple";
+    default:
+      return type || "unknown";
+  }
+}
+
+/**
+ * Simplifies a Valibot schema to a flat representation with field paths and types
+ * This avoids exposing internal Valibot metadata like ~run, ~standard, etc.
+ *
+ * @param schema - Schema object (collection or model schema)
+ * @param prefix - Current path prefix
+ * @returns Flattened object with paths as keys and type strings as values
+ */
+export function simplifySchema(schema: any, prefix = ""): Record<string, string> {
+  const result: Record<string, string> = {};
+
+  if (!schema || typeof schema !== "object") {
+    return result;
+  }
+
+  for (const key in schema) {
+    // Skip internal Valibot properties
+    if (key.startsWith("~") || key === "async" || key === "kind" || key === "type" ||
+        key === "message" || key === "pipe" || key === "reference" || key === "expects" ||
+        key === "requirement" || key === "wrapped" || key === "item" || key === "options" ||
+        key === "entries" || key === "rest" || key === "default" || key === "literal" ||
+        key === "value" || key === "items") {
+      continue;
+    }
+
+    const value = schema[key];
+    const newKey = prefix ? `${prefix}.${key}` : key;
+
+    // Check if this is a Valibot schema (has 'kind' and 'type' properties)
+    if (value && typeof value === "object" && value.kind === "schema") {
+      result[newKey] = getSchemaTypeString(value);
+
+      // If it's an object schema, recurse into its entries
+      if (value.type === "object" && value.entries) {
+        Object.assign(result, simplifySchema(value.entries, newKey));
+      }
+    } else if (value && typeof value === "object" && !Array.isArray(value)) {
+      // This might be a nested structure (like multiModels with models inside)
+      Object.assign(result, simplifySchema(value, newKey));
+    }
+  }
+
+  return result;
+}
+
+/**
  * Flattens an object into dot-notation keys
+ * @deprecated Use simplifySchema for Valibot schema comparison
  *
  * @param obj - Object to flatten
  * @param prefix - Prefix for keys
@@ -70,24 +169,25 @@ function flattenObject(obj: any, prefix = ""): Record<string, any> {
 }
 
 /**
- * Compares two schema objects for equality
+ * Compares two schema objects for equality using simplified representation
  *
  * @param schema1 - First schema
  * @param schema2 - Second schema
- * @returns True if schemas are equal (same keys)
+ * @returns True if schemas are equal (same fields and types)
  */
 function schemasEqual(schema1: any, schema2: any): boolean {
-  const flat1 = flattenObject(schema1);
-  const flat2 = flattenObject(schema2);
+  const simple1 = simplifySchema(schema1);
+  const simple2 = simplifySchema(schema2);
 
-  const keys1 = Object.keys(flat1).sort();
-  const keys2 = Object.keys(flat2).sort();
+  const keys1 = Object.keys(simple1).sort();
+  const keys2 = Object.keys(simple2).sort();
 
   if (keys1.length !== keys2.length) {
     return false;
   }
 
-  return keys1.every((key, i) => key === keys2[i]);
+  // Check both keys and values (types)
+  return keys1.every((key, i) => key === keys2[i] && simple1[key] === simple2[key]);
 }
 
 /**
@@ -95,22 +195,30 @@ function schemasEqual(schema1: any, schema2: any): boolean {
  *
  * @param schema1 - First schema (migration)
  * @param schema2 - Second schema (project)
- * @returns Object with added, removed, and modified keys
+ * @returns Object with added, removed, and modified fields
  */
 function findSchemaDifferences(
   schema1: any,
   schema2: any,
 ): { added: string[]; removed: string[]; modified: string[] } {
-  const flat1 = flattenObject(schema1);
-  const flat2 = flattenObject(schema2);
+  const simple1 = simplifySchema(schema1);
+  const simple2 = simplifySchema(schema2);
 
-  const keys1 = new Set(Object.keys(flat1));
-  const keys2 = new Set(Object.keys(flat2));
+  const keys1 = new Set(Object.keys(simple1));
+  const keys2 = new Set(Object.keys(simple2));
 
   const added = [...keys2].filter((k) => !keys1.has(k)).sort();
   const removed = [...keys1].filter((k) => !keys2.has(k)).sort();
 
-  return { added, removed, modified: [] };
+  // Find fields that exist in both but have different types
+  const modified: string[] = [];
+  for (const key of keys1) {
+    if (keys2.has(key) && simple1[key] !== simple2[key]) {
+      modified.push(`${key}: ${simple1[key]} → ${simple2[key]}`);
+    }
+  }
+
+  return { added, removed, modified };
 }
 
 /**
@@ -123,8 +231,8 @@ function findSchemaDifferences(
 function findDifferingItems(
   migrationItems: Record<string, any>,
   projectItems: Record<string, any>,
-): { name: string; added: string[]; removed: string[] }[] {
-  const differences: { name: string; added: string[]; removed: string[] }[] = [];
+): { name: string; added: string[]; removed: string[]; modified: string[] }[] {
+  const differences: { name: string; added: string[]; removed: string[]; modified: string[] }[] = [];
 
   // Check items that exist in both
   const migrationNames = new Set(Object.keys(migrationItems));
@@ -141,6 +249,7 @@ function findDifferingItems(
           name,
           added: diff.added,
           removed: diff.removed,
+          modified: diff.modified,
         });
       }
     }
@@ -202,6 +311,9 @@ export function validateLastMigrationMatchesProjectSchema(
           if (diff.removed.length > 0) {
             details.push(`removed: ${diff.removed.join(", ")}`);
           }
+          if (diff.modified.length > 0) {
+            details.push(`changed: ${diff.modified.join(", ")}`);
+          }
           errors.push(
             `Collection "${diff.name}" schema differs: ${details.join("; ")}`,
           );
@@ -248,6 +360,9 @@ export function validateLastMigrationMatchesProjectSchema(
           if (diff.removed.length > 0) {
             details.push(`removed: ${diff.removed.join(", ")}`);
           }
+          if (diff.modified.length > 0) {
+            details.push(`changed: ${diff.modified.join(", ")}`);
+          }
           errors.push(
             `Multi-collection "${diff.name}" schema differs: ${details.join("; ")}`,
           );
@@ -292,6 +407,9 @@ export function validateLastMigrationMatchesProjectSchema(
           }
           if (diff.removed.length > 0) {
             details.push(`removed: ${diff.removed.join(", ")}`);
+          }
+          if (diff.modified.length > 0) {
+            details.push(`changed: ${diff.modified.join(", ")}`);
           }
           errors.push(
             `Multi-model "${diff.name}" schema differs: ${details.join("; ")}`,
