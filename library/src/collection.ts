@@ -24,12 +24,20 @@ type WithId<T> = T extends { _id: infer U } ? T
   : m.WithId<T> | { _id: string } & T;
 
 /**
+ * Helper type that recursively allows symbol values (for removeField()) in nested objects
+ */
+type DeepWithRemovable<T> = T extends Record<string, unknown>
+  ? { [K in keyof T]?: DeepWithRemovable<T[K]> | symbol }
+  : T;
+
+/**
  * Helper type that allows symbol values (for removeField()) in update operations
  * This makes all field values accept either their original type or symbol
  * Also accepts string keys for MongoDB dot notation (e.g., "items.0.price")
+ * Recursively applies to nested objects
  */
 type WithRemovableFields<T> = {
-  [K in keyof T]?: T[K] | symbol;
+  [K in keyof T]?: DeepWithRemovable<T[K]> | symbol;
 } & {
   [key: string]: unknown;
 };

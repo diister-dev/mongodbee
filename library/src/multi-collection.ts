@@ -71,9 +71,14 @@ type MultiCollectionSchema = Record<string, Record<string, AnySchema>>;
 /**
  * Type helper to allow field removal with removeField()
  * Makes all fields accept either their original type or a symbol (for removeField())
+ * Recursively applies to nested objects
  */
+type DeepWithRemovable<T> = T extends Record<string, unknown>
+  ? { [K in keyof T]: DeepWithRemovable<T[K]> | symbol }
+  : T;
+
 type WithRemovable<T> = {
-  [K in keyof T]: T[K] | symbol;
+  [K in keyof T]: DeepWithRemovable<T[K]> | symbol;
 };
 
 /**

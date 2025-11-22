@@ -502,3 +502,164 @@ Deno.test("UpdateOne: Remove field with removeField() vs undefined", async (t) =
     assertEquals(updatedUser.phone, "123-456"); // Unchanged because undefined is ignored
   });
 });
+
+Deno.test("UpdateOne: Remove nested field with removeField()", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const testModel = defineModel("test", {
+      schema: {
+        user: {
+          name: v.string(),
+          settings: v.optional(v.object({
+            theme: v.optional(v.string()),
+            language: v.optional(v.string()),
+            notifications: v.optional(v.object({
+              email: v.optional(v.boolean()),
+              push: v.optional(v.boolean()),
+            })),
+          })),
+        },
+      },
+    });
+
+    const collection = await multiCollection(db, "test", testModel);
+
+    // Insert user with nested settings
+    const userId = await collection.insertOne("user", {
+      name: "John",
+      settings: {
+        theme: "dark",
+        language: "en",
+        notifications: {
+          email: true,
+          push: false,
+        },
+      },
+    });
+
+    // Verify initial state
+    const initialUser = await collection.findOne("user", { _id: userId });
+    assert(initialUser !== null);
+    assertEquals(initialUser.settings?.theme, "dark");
+    assertEquals(initialUser.settings?.language, "en");
+    assertEquals(initialUser.settings?.notifications?.email, true);
+
+    // Remove nested field using removeField()
+    await collection.updateOne("user", userId, {
+      settings: {
+        theme: removeField(),
+        language: "fr", // Update this one
+      },
+    });
+
+    // Verify nested removal
+    const afterUpdate = await collection.findOne("user", { _id: userId });
+    assert(afterUpdate !== null);
+    assertEquals(afterUpdate.name, "John");
+    assertEquals(afterUpdate.settings?.theme, undefined); // Removed
+    assertEquals(afterUpdate.settings?.language, "fr"); // Updated
+    assertEquals(afterUpdate.settings?.notifications?.email, true); // Unchanged
+  });
+});
+
+Deno.test("UpdateOne: Remove deeply nested field with removeField()", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const testModel = defineModel("test", {
+      schema: {
+        user: {
+          name: v.string(),
+          profile: v.optional(v.object({
+            bio: v.optional(v.string()),
+            social: v.optional(v.object({
+              twitter: v.optional(v.string()),
+              github: v.optional(v.string()),
+              linkedin: v.optional(v.string()),
+            })),
+          })),
+        },
+      },
+    });
+
+    const collection = await multiCollection(db, "test", testModel);
+
+    // Insert user with deeply nested data
+    const userId = await collection.insertOne("user", {
+      name: "John",
+      profile: {
+        bio: "Developer",
+        social: {
+          twitter: "@john",
+          github: "john123",
+          linkedin: "john-doe",
+        },
+      },
+    });
+
+    // Remove deeply nested fields
+    await collection.updateOne("user", userId, {
+      profile: {
+        social: {
+          twitter: removeField(),
+          linkedin: removeField(),
+          github: "john-updated", // Update this one
+        },
+      },
+    });
+
+    // Verify deep removal
+    const afterUpdate = await collection.findOne("user", { _id: userId });
+    assert(afterUpdate !== null);
+    assertEquals(afterUpdate.name, "John");
+    assertEquals(afterUpdate.profile?.bio, "Developer"); // Unchanged
+    assertEquals(afterUpdate.profile?.social?.twitter, undefined); // Removed
+    assertEquals(afterUpdate.profile?.social?.github, "john-updated"); // Updated
+    assertEquals(afterUpdate.profile?.social?.linkedin, undefined); // Removed
+  });
+});
+
+Deno.test("UpdateOne: Remove entire nested object with removeField()", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const testModel = defineModel("test", {
+      schema: {
+        user: {
+          name: v.string(),
+          metadata: v.optional(v.object({
+            createdAt: v.optional(v.string()),
+            updatedAt: v.optional(v.string()),
+          })),
+          preferences: v.optional(v.object({
+            theme: v.optional(v.string()),
+          })),
+        },
+      },
+    });
+
+    const collection = await multiCollection(db, "test", testModel);
+
+    // Insert user with nested objects
+    const userId = await collection.insertOne("user", {
+      name: "John",
+      metadata: {
+        createdAt: "2024-01-01",
+        updatedAt: "2024-01-02",
+      },
+      preferences: {
+        theme: "dark",
+      },
+    });
+
+    // Remove entire nested object
+    await collection.updateOne("user", userId, {
+      metadata: removeField(), // Remove entire object
+      preferences: {
+        theme: "light", // Update nested field
+      },
+    });
+
+    // Verify removal
+    const afterUpdate = await collection.findOne("user", { _id: userId });
+    assert(afterUpdate !== null);
+    assertEquals(afterUpdate.name, "John");
+    assertEquals(afterUpdate.metadata, undefined); // Entire object removed
+    assertEquals(afterUpdate.preferences?.theme, "light"); // Updated
+  });
+});
