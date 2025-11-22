@@ -31,3 +31,4 @@ export * from "./src/mongodb.ts";
 export * from "./src/indexes.ts";
 export * from "./src/config.ts";
 export * from "./src/security.ts";
+export { removeField } from "./src/sanitizer.ts";
