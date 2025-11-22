@@ -91,6 +91,65 @@ function schemasEqual(schema1: any, schema2: any): boolean {
 }
 
 /**
+ * Finds detailed differences between two schemas
+ *
+ * @param schema1 - First schema (migration)
+ * @param schema2 - Second schema (project)
+ * @returns Object with added, removed, and modified keys
+ */
+function findSchemaDifferences(
+  schema1: any,
+  schema2: any,
+): { added: string[]; removed: string[]; modified: string[] } {
+  const flat1 = flattenObject(schema1);
+  const flat2 = flattenObject(schema2);
+
+  const keys1 = new Set(Object.keys(flat1));
+  const keys2 = new Set(Object.keys(flat2));
+
+  const added = [...keys2].filter((k) => !keys1.has(k)).sort();
+  const removed = [...keys1].filter((k) => !keys2.has(k)).sort();
+
+  return { added, removed, modified: [] };
+}
+
+/**
+ * Finds which items in a collection have different schemas
+ *
+ * @param migrationItems - Items from migration schema
+ * @param projectItems - Items from project schema
+ * @returns Array of item names with differences and their details
+ */
+function findDifferingItems(
+  migrationItems: Record<string, any>,
+  projectItems: Record<string, any>,
+): { name: string; added: string[]; removed: string[] }[] {
+  const differences: { name: string; added: string[]; removed: string[] }[] = [];
+
+  // Check items that exist in both
+  const migrationNames = new Set(Object.keys(migrationItems));
+  const projectNames = new Set(Object.keys(projectItems));
+
+  for (const name of migrationNames) {
+    if (projectNames.has(name)) {
+      const migrationSchema = migrationItems[name];
+      const projectSchema = projectItems[name];
+
+      if (!schemasEqual(migrationSchema, projectSchema)) {
+        const diff = findSchemaDifferences(migrationSchema, projectSchema);
+        differences.push({
+          name,
+          added: diff.added,
+          removed: diff.removed,
+        });
+      }
+    }
+  }
+
+  return differences;
+}
+
+/**
  * Validates that the last migration's schema matches the project schema
  *
  * @param lastMigration - The last migration in the chain
@@ -129,9 +188,24 @@ export function validateLastMigrationMatchesProjectSchema(
       }
 
       if (missingInMigration.size === 0 && extraInMigration.size === 0) {
-        errors.push(
-          `Collections schemas differ between last migration and project schema.`,
+        // Same collection names but different schemas - find which ones differ
+        const differingCollections = findDifferingItems(
+          migrationCollections,
+          projectCollections,
         );
+
+        for (const diff of differingCollections) {
+          const details: string[] = [];
+          if (diff.added.length > 0) {
+            details.push(`added: ${diff.added.join(", ")}`);
+          }
+          if (diff.removed.length > 0) {
+            details.push(`removed: ${diff.removed.join(", ")}`);
+          }
+          errors.push(
+            `Collection "${diff.name}" schema differs: ${details.join("; ")}`,
+          );
+        }
       }
     }
   }
@@ -160,9 +234,24 @@ export function validateLastMigrationMatchesProjectSchema(
       }
 
       if (missingInMigration.size === 0 && extraInMigration.size === 0) {
-        errors.push(
-          `Multi-collections schemas differ between last migration and project schema.`,
+        // Same multi-collection names but different schemas
+        const differingMultiCollections = findDifferingItems(
+          migrationMultiCollections,
+          projectMultiCollections,
         );
+
+        for (const diff of differingMultiCollections) {
+          const details: string[] = [];
+          if (diff.added.length > 0) {
+            details.push(`added: ${diff.added.join(", ")}`);
+          }
+          if (diff.removed.length > 0) {
+            details.push(`removed: ${diff.removed.join(", ")}`);
+          }
+          errors.push(
+            `Multi-collection "${diff.name}" schema differs: ${details.join("; ")}`,
+          );
+        }
       }
     }
   }
@@ -190,9 +279,24 @@ export function validateLastMigrationMatchesProjectSchema(
       }
 
       if (missingInMigration.size === 0 && extraInMigration.size === 0) {
-        errors.push(
-          `Multi-models schemas differ between last migration and project schema.`,
+        // Same multi-model names but different schemas
+        const differingMultiModels = findDifferingItems(
+          migrationMultiModels,
+          projectMultiModels,
         );
+
+        for (const diff of differingMultiModels) {
+          const details: string[] = [];
+          if (diff.added.length > 0) {
+            details.push(`added: ${diff.added.join(", ")}`);
+          }
+          if (diff.removed.length > 0) {
+            details.push(`removed: ${diff.removed.join(", ")}`);
+          }
+          errors.push(
+            `Multi-model "${diff.name}" schema differs: ${details.join("; ")}`,
+          );
+        }
       }
     }
   }
