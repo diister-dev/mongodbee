@@ -4,6 +4,7 @@ import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import assert from "node:assert";
 import { defineModel } from "../../src/multi-collection-model.ts";
+import { removeField } from "../../src/sanitizer.ts";
 
 Deno.test("UpdateOne: Basic update test", async (t) => {
   await withDatabase(t.name, async (db) => {
@@ -356,5 +357,148 @@ Deno.test("UpdateOne: Update Complex array", async (t) => {
     assertEquals(updatedUser2.tags[2].value, "new");
     assertEquals(updatedUser2.name, "Jane Doe");
     assertEquals(updatedUser.email, "john@example.com");
+  });
+});
+
+Deno.test("UpdateOne: Remove optional field with removeField()", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const testModel = defineModel("test", {
+      schema: {
+        user: {
+          name: v.string(),
+          email: v.string(),
+          phone: v.optional(v.string()),
+          bio: v.optional(v.string()),
+          age: v.optional(v.number()),
+        },
+      },
+    });
+
+    const collection = await multiCollection(db, "test", testModel);
+
+    // Insert test user with optional fields
+    const userId = await collection.insertOne("user", {
+      name: "John Doe",
+      email: "john@example.com",
+      phone: "123-456-7890",
+      bio: "Software developer",
+      age: 30,
+    });
+
+    // Verify initial state
+    const initialUser = await collection.findOne("user", { _id: userId });
+    assert(initialUser !== null);
+    assertEquals(initialUser.phone, "123-456-7890");
+    assertEquals(initialUser.bio, "Software developer");
+    assertEquals(initialUser.age, 30);
+
+    // Remove phone field using removeField()
+    await collection.updateOne("user", userId, {
+      phone: removeField(),
+    });
+
+    // Verify phone was removed
+    const afterPhoneRemoval = await collection.findOne("user", { _id: userId });
+    assert(afterPhoneRemoval !== null);
+    assertEquals(afterPhoneRemoval.name, "John Doe");
+    assertEquals(afterPhoneRemoval.email, "john@example.com");
+    assertEquals(afterPhoneRemoval.phone, undefined);
+    assertEquals(afterPhoneRemoval.bio, "Software developer");
+    assertEquals(afterPhoneRemoval.age, 30);
+
+    // Remove multiple fields at once
+    await collection.updateOne("user", userId, {
+      bio: removeField(),
+      age: removeField(),
+    });
+
+    // Verify both fields were removed
+    const afterMultipleRemoval = await collection.findOne("user", { _id: userId });
+    assert(afterMultipleRemoval !== null);
+    assertEquals(afterMultipleRemoval.name, "John Doe");
+    assertEquals(afterMultipleRemoval.email, "john@example.com");
+    assertEquals(afterMultipleRemoval.phone, undefined);
+    assertEquals(afterMultipleRemoval.bio, undefined);
+    assertEquals(afterMultipleRemoval.age, undefined);
+  });
+});
+
+Deno.test("UpdateOne: Mix update and remove fields", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const testModel = defineModel("test", {
+      schema: {
+        product: {
+          name: v.string(),
+          price: v.number(),
+          description: v.optional(v.string()),
+          stock: v.optional(v.number()),
+          category: v.optional(v.string()),
+        },
+      },
+    });
+
+    const collection = await multiCollection(db, "test", testModel);
+
+    // Insert test product
+    const productId = await collection.insertOne("product", {
+      name: "Laptop",
+      price: 999.99,
+      description: "High-performance laptop",
+      stock: 50,
+      category: "Electronics",
+    });
+
+    // Update some fields and remove others in a single operation
+    await collection.updateOne("product", productId, {
+      name: "Gaming Laptop",
+      price: 1299.99,
+      description: removeField(),
+      category: "Gaming",
+    });
+
+    // Verify mixed update/remove
+    const updatedProduct = await collection.findOne("product", { _id: productId });
+    assert(updatedProduct !== null);
+    assertEquals(updatedProduct.name, "Gaming Laptop");
+    assertEquals(updatedProduct.price, 1299.99);
+    assertEquals(updatedProduct.description, undefined); // Removed
+    assertEquals(updatedProduct.stock, 50); // Unchanged
+    assertEquals(updatedProduct.category, "Gaming");
+  });
+});
+
+Deno.test("UpdateOne: Remove field with removeField() vs undefined", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const testModel = defineModel("test", {
+      schema: {
+        user: {
+          name: v.string(),
+          email: v.optional(v.string()),
+          phone: v.optional(v.string()),
+        },
+      },
+    });
+
+    const collection = await multiCollection(db, "test", testModel);
+
+    // Insert test user
+    const userId = await collection.insertOne("user", {
+      name: "John",
+      email: "john@example.com",
+      phone: "123-456",
+    });
+
+    // removeField() explicitly removes, undefined is ignored (field not touched)
+    await collection.updateOne("user", userId, {
+      email: removeField(), // Explicit removal - will be unset
+      phone: undefined, // Ignored - field remains unchanged
+    });
+
+    // email should be removed, phone should remain unchanged
+    const updatedUser = await collection.findOne("user", { _id: userId });
+    assert(updatedUser !== null);
+    assertEquals(updatedUser.name, "John");
+    assertEquals(updatedUser.email, undefined); // Removed by removeField()
+    assertEquals(updatedUser.phone, "123-456"); // Unchanged because undefined is ignored
   });
 });

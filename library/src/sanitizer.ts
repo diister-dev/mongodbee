@@ -123,18 +123,43 @@ export function removeField() {
 }
 
 /**
+ * Extracts fields marked for removal and separates them from regular updates
+ * Used for building MongoDB $set and $unset operations
+ *
+ * @param obj - The object containing updates
+ * @returns Object with 'set' and 'unset' fields
+ */
+export function extractFieldsToRemove(obj: Record<string, unknown>): {
+  set: Record<string, unknown>;
+  unset: Record<string, 1>;
+} {
+  const set: Record<string, unknown> = {};
+  const unset: Record<string, 1> = {};
+
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === REMOVE_FIELD) {
+      unset[key] = 1;
+    } else {
+      set[key] = value;
+    }
+  }
+
+  return { set, unset };
+}
+
+/**
  * Enhanced sanitization that handles explicit field removal
  *
  * @param obj - The object to sanitize
  * @param options - Sanitization options
  * @returns Sanitized object with proper field removal handling
  */
-export function sanitizeForMongoDB(obj: unknown, options: {
+export function sanitizeForMongoDB<T = unknown>(obj: T, options: {
   /** How to handle undefined values: 'remove' | 'ignore' | 'error' */
   undefinedBehavior: "remove" | "ignore" | "error";
   /** Whether to sanitize nested objects (should always be true) */
   deep: boolean;
-} = { undefinedBehavior: "remove", deep: true }): unknown {
+} = { undefinedBehavior: "remove", deep: true }): T {
   function processValue(value: unknown): unknown {
     if (value === REMOVE_FIELD) {
       return undefined; // Will be removed by removeUndefined
@@ -182,7 +207,7 @@ export function sanitizeForMongoDB(obj: unknown, options: {
     return value;
   }
 
-  return processValue(obj);
+  return processValue(obj) as T;
 }
 
 // Special marker for fields to ignore during updates

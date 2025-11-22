@@ -210,7 +210,7 @@ Deno.test("Enhanced sanitization with field removal", () => {
     deep: true,
   });
 
-  assertEquals(result, {
+  assertEquals(result as any, {
     keep: "this",
     nested: {
       keep: "nested value",
@@ -263,7 +263,7 @@ Deno.test("Explicit field removal vs undefined", () => {
     deep: true,
   });
 
-  assertEquals(withRemove, {
+  assertEquals(withRemove as any, {
     name: "John Updated",
   });
 
@@ -273,7 +273,7 @@ Deno.test("Explicit field removal vs undefined", () => {
     deep: true,
   });
 
-  assertEquals(withIgnore, {
+  assertEquals(withIgnore as any, {
     name: "John Updated",
   });
 });
@@ -390,7 +390,7 @@ Deno.test("Configuration: error behavior throws on undefined", () => {
     deep: true,
   });
 
-  assertEquals(result, {
+  assertEquals(result as any, {
     field1: "value1",
     field3: "value3",
   });
@@ -427,7 +427,7 @@ Deno.test("Real-world scenario: User profile update with different field intenti
   });
 
   // Should only include fields that were explicitly set or removed
-  assertEquals(updateForIgnore, {
+  assertEquals(updateForIgnore as any, {
     name: "John Smith",
     avatar: "http://example.com/new-avatar.jpg",
     // Note: phone and bio are removed, email is not included
@@ -440,7 +440,7 @@ Deno.test("Real-world scenario: User profile update with different field intenti
   });
 
   // Same result in this case since removeField() and undefined both remove
-  assertEquals(updateForRemove, {
+  assertEquals(updateForRemove as any, {
     name: "John Smith",
     avatar: "http://example.com/new-avatar.jpg",
   });
@@ -463,7 +463,7 @@ Deno.test("Edge case: Empty objects and arrays after sanitization", () => {
     deep: true,
   });
 
-  assertEquals(result, {
+  assertEquals(result as any, {
     emptyAfterSanitization: {}, // Empty object remains
     arrayWithUndefined: [], // Empty array remains
     mixedArray: ["keep", "also keep"], // Only defined values remain

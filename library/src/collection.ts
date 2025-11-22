@@ -1,6 +1,6 @@
 import * as v from "./schema.ts";
 import { toMongoValidator } from "./validator.ts";
-import { sanitizeForMongoDB } from "./sanitizer.ts";
+import { sanitizeForMongoDB, extractFieldsToRemove, REMOVE_FIELD } from "./sanitizer.ts";
 import { EventEmitter } from "./events.ts";
 import { watchEvent } from "./change-stream.ts";
 import { getSessionContext } from "./session.ts";
@@ -22,6 +22,49 @@ type CollectionOptions = {
 
 type WithId<T> = T extends { _id: infer U } ? T
   : m.WithId<T> | { _id: string } & T;
+
+/**
+ * Helper type that allows symbol values (for removeField()) in update operations
+ * This makes all field values accept either their original type or symbol
+ * Also accepts string keys for MongoDB dot notation (e.g., "items.0.price")
+ */
+type WithRemovableFields<T> = {
+  [K in keyof T]?: T[K] | symbol;
+} & {
+  [key: string]: unknown;
+};
+
+/**
+ * Update filter type that supports removeField() symbols in $set and other operators
+ */
+type UpdateFilterWithRemovable<T> = Omit<m.UpdateFilter<T>, "$set" | "$setOnInsert"> & {
+  $set?: WithRemovableFields<T>;
+  $setOnInsert?: WithRemovableFields<T>;
+};
+
+/**
+ * Process update filter to extract removeField() symbols from $set and convert to $unset
+ */
+function processUpdateWithRemoveField(update: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...update };
+
+  // Process $set to extract removeField() symbols
+  if (result.$set && typeof result.$set === "object") {
+    const { set, unset } = extractFieldsToRemove(result.$set as Record<string, unknown>);
+
+    if (Object.keys(set).length > 0) {
+      result.$set = set;
+    } else {
+      delete result.$set;
+    }
+
+    if (Object.keys(unset).length > 0) {
+      result.$unset = { ...(result.$unset as Record<string, 1> || {}), ...unset };
+    }
+  }
+
+  return result;
+}
 
 type TInput<
   T extends Record<
@@ -63,6 +106,8 @@ export type CollectionResult<
     | "findOne"
     | "find"
     | "insertOne"
+    | "updateOne"
+    | "updateMany"
     | "distinct"
     | "findOneAndDelete"
     | "findOneAndReplace"
@@ -119,7 +164,12 @@ export type CollectionResult<
     // From mongodb.Collection
     updateOne(
       filter: m.Filter<WithId<TInput<T>>>,
-      update: m.UpdateFilter<TInput<T>> | m.Document[],
+      update: UpdateFilterWithRemovable<TInput<T>> | m.Document[],
+      options?: m.UpdateOptions,
+    ): Promise<m.UpdateResult<TInput<T>>>;
+    updateMany(
+      filter: m.Filter<TInput<T>>,
+      update: UpdateFilterWithRemovable<TInput<T>> | m.Document[],
       options?: m.UpdateOptions,
     ): Promise<m.UpdateResult<TInput<T>>>;
     distinct<Key extends keyof WithId<TInput<T>>>(
@@ -138,7 +188,7 @@ export type CollectionResult<
     ): Promise<m.ModifyResult<TInput<T>> | null>;
     findOneAndUpdate(
       filter: m.Filter<TInput<T>>,
-      update: m.UpdateFilter<TInput<T>> | m.Document[],
+      update: UpdateFilterWithRemovable<TInput<T>> | m.Document[],
       options?: m.FindOneAndUpdateOptions & { includeResultMetadata: boolean },
     ): Promise<m.WithId<TInput<T>> | null>;
     indexInformation(
@@ -401,7 +451,7 @@ export async function collection<
       const safeDoc = sanitizeForMongoDB(validatedDoc, {
         undefinedBehavior: opts.undefinedBehavior || "remove",
         deep: true,
-      }) as m.OptionalUnlessRequiredId<TInput>;
+      }) as unknown as m.OptionalUnlessRequiredId<TInput>;
 
       const session = sessionContext.getSession();
       const inserted = await collection.insertOne(safeDoc, {
@@ -421,7 +471,7 @@ export async function collection<
         sanitizeForMongoDB(doc, {
           undefinedBehavior: opts.undefinedBehavior || "remove",
           deep: true,
-        }) as m.OptionalUnlessRequiredId<TInput>
+        }) as unknown as m.OptionalUnlessRequiredId<TInput>
       );
 
       const session = sessionContext.getSession();
@@ -677,7 +727,7 @@ export async function collection<
       const sanitizedReplacement = sanitizeForMongoDB(validation.output, {
         undefinedBehavior: opts.undefinedBehavior || "remove",
         deep: true,
-      }) as TInput;
+      }) as unknown as TInput;
       const session = sessionContext.getSession();
       return collection.replaceOne(filter, sanitizedReplacement, {
         session,
@@ -687,8 +737,14 @@ export async function collection<
     updateOne(filter, update, options?) {
       // @TODO: check if update is valid
       return retryOnWriteConflict(async () => {
+        // Process removeField() symbols in $set before sanitization
+        const processedUpdate = processUpdateWithRemoveField(update as Record<string, unknown>);
+        const sanitizedUpdate = sanitizeForMongoDB(processedUpdate, {
+          undefinedBehavior: opts.undefinedBehavior || "remove",
+          deep: true,
+        });
         const session = sessionContext.getSession();
-        return await collection.updateOne(filter as any, update, {
+        return await collection.updateOne(filter as any, sanitizedUpdate as any, {
           session,
           ...options,
         });
@@ -697,8 +753,14 @@ export async function collection<
     updateMany(filter, update, options?) {
       // @TODO: check if update is valid
       return retryOnWriteConflict(async () => {
+        // Process removeField() symbols in $set before sanitization
+        const processedUpdate = processUpdateWithRemoveField(update as Record<string, unknown>);
+        const sanitizedUpdate = sanitizeForMongoDB(processedUpdate, {
+          undefinedBehavior: opts.undefinedBehavior || "remove",
+          deep: true,
+        });
         const session = sessionContext.getSession();
-        return await collection.updateMany(filter, update, { session, ...options });
+        return await collection.updateMany(filter, sanitizedUpdate as any, { session, ...options });
       });
     },
 
@@ -737,15 +799,34 @@ export async function collection<
       return collection.findOneAndDelete(filter, { session, ...options });
     },
     findOneAndReplace(filter, replacement, options?) {
+      const validation = v.safeParse(schema, replacement);
+      if (!validation.success) {
+        throw {
+          message: "Validation error",
+          errors: validation,
+        };
+      }
+
+      const sanitizedReplacement = sanitizeForMongoDB(validation.output, {
+        undefinedBehavior: opts.undefinedBehavior || "remove",
+        deep: true,
+      }) as unknown as TInput;
+
       const session = sessionContext.getSession();
-      return collection.findOneAndReplace(filter, replacement, {
+      return collection.findOneAndReplace(filter, sanitizedReplacement, {
         session,
         ...options,
       });
     },
     findOneAndUpdate(filter, update, options?) {
+      // Process removeField() symbols in $set before sanitization
+      const processedUpdate = processUpdateWithRemoveField(update as Record<string, unknown>);
+      const sanitizedUpdate = sanitizeForMongoDB(processedUpdate, {
+        undefinedBehavior: opts.undefinedBehavior || "remove",
+        deep: true,
+      });
       const session = sessionContext.getSession();
-      return collection.findOneAndUpdate(filter, update, {
+      return collection.findOneAndUpdate(filter, sanitizedUpdate as any, {
         session,
         ...options,
       });

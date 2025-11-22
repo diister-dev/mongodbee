@@ -2,7 +2,7 @@ import * as v from "./schema.ts";
 import * as m from "mongodb";
 import { ulid } from "@std/ulid";
 import { toMongoValidator } from "./validator.ts";
-import { sanitizeForMongoDB } from "./sanitizer.ts";
+import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
 import { createDotNotationSchema } from "./dot-notation.ts";
 import { getSessionContext } from "./session.ts";
 import {
@@ -67,6 +67,14 @@ type AnySchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
 type MultiSchema<T extends Record<string, any>> = Elements<T>;
 
 type MultiCollectionSchema = Record<string, Record<string, AnySchema>>;
+
+/**
+ * Type helper to allow field removal with removeField()
+ * Makes all fields accept either their original type or a symbol (for removeField())
+ */
+type WithRemovable<T> = {
+  [K in keyof T]: T[K] | symbol;
+};
 
 /**
  * Generates a new unique ID using ULID
@@ -203,7 +211,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
     key: E,
     id: string,
     doc: Omit<
-      Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>,
+      WithRemovable<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>>,
       "_id" | "type"
     >,
   ): Promise<number>;
@@ -211,7 +219,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
     operation: {
       [key in keyof T]?: {
         [id: string]: Omit<
-          Partial<FlatType<v.InferInput<ElementSchema<T, key>>>>,
+          WithRemovable<Partial<FlatType<v.InferInput<ElementSchema<T, key>>>>>,
           "_id" | "type"
         >;
       };
@@ -718,17 +726,41 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 throw new Error(`Invalid element type`);
             }
 
-            v.parse(dotSchema, doc);
+            // Extract fields to remove before validation (symbols would fail validation)
+            const { set, unset } = extractFieldsToRemove(doc as Record<string, unknown>);
+
+            // Validate only the fields that will be set (not the removed ones)
+            if (Object.keys(set).length > 0) {
+                v.parse(dotSchema, set);
+            }
 
             return retryOnWriteConflict(async () => {
                 const session = sessionContext.getSession();
 
+                // Sanitize the remaining fields
+                const sanitizedDoc = sanitizeForMongoDB(set, {
+                    undefinedBehavior: opts.undefinedBehavior || "remove",
+                    deep: true,
+                });
+
+                // Build update operations
+                const updateOps: Record<string, unknown> = {};
+                if (Object.keys(sanitizedDoc as Record<string, unknown>).length > 0) {
+                    updateOps.$set = sanitizedDoc;
+                }
+                if (Object.keys(unset).length > 0) {
+                    updateOps.$unset = unset;
+                }
+
+                // If no operations, return early
+                if (Object.keys(updateOps).length === 0) {
+                    return 0; // No modifications
+                }
+
                 const result = await collection.updateOne({
                     _id: id,
                     _type: key as string,
-                } as any, {
-                    $set: doc,
-                } as any, { session });
+                } as m.Filter<TOutput>, updateOps as m.UpdateFilter<TOutput>, { session });
 
                 if(!result.acknowledged) {
                     throw new Error("Update failed");
@@ -757,12 +789,39 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                         if(!dotSchema) {
                             throw new Error(`Invalid element type`);
                         }
-                        v.parse(dotSchema, element);
+
+                        // Extract fields to remove before validation (symbols would fail validation)
+                        const { set, unset } = extractFieldsToRemove(element as Record<string, unknown>);
+
+                        // Validate only the fields that will be set (not the removed ones)
+                        if (Object.keys(set).length > 0) {
+                            v.parse(dotSchema, set);
+                        }
+
+                        // Sanitize the remaining fields
+                        const sanitizedElement = sanitizeForMongoDB(set, {
+                            undefinedBehavior: opts.undefinedBehavior || "remove",
+                            deep: true,
+                        });
+
+                        // Build update operations
+                        const updateOps: Record<string, unknown> = {};
+                        if (Object.keys(sanitizedElement as Record<string, unknown>).length > 0) {
+                            updateOps.$set = sanitizedElement;
+                        }
+                        if (Object.keys(unset).length > 0) {
+                            updateOps.$unset = unset;
+                        }
+
+                        // Skip if no operations
+                        if (Object.keys(updateOps).length === 0) {
+                            continue;
+                        }
 
                         bulkOps.push({
                             updateOne: {
                                 filter: { _id: id },
-                                update: { $set: element },
+                                update: updateOps,
                             }
                         });
                     }

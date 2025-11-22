@@ -2,6 +2,7 @@ import * as v from "../src/schema.ts";
 import { collection } from "../src/collection.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { type Db, MongoClient } from "../src/mongodb.ts";
+import { removeField } from "../src/sanitizer.ts";
 
 // Mock MongoDB setup for testing
 let client: MongoClient;
@@ -299,6 +300,101 @@ Deno.test("Behavior consistency across insert and replace operations", async () 
     assert(!("age" in replacedDoc));
     assertEquals(insertedDoc.name, "Consistency Test");
     assertEquals(insertedDoc.phone, "123-456-7890");
+  } finally {
+    await cleanupTestDb();
+  }
+});
+
+Deno.test("Collection updateOne with removeField()", async () => {
+  await setupTestDb();
+
+  try {
+    const users = await collection(db, "users_remove_field", userSchema);
+
+    // Insert document with optional fields
+    const userId = await users.insertOne({
+      name: "John",
+      email: "john@example.com",
+      phone: "123-456",
+      age: 30,
+    });
+
+    // Verify initial state
+    const initialUser = await users.findOne({ _id: userId });
+    assert(initialUser !== null);
+    assertEquals(initialUser.email, "john@example.com");
+    assertEquals(initialUser.phone, "123-456");
+    assertEquals(initialUser.age, 30);
+
+    // Remove email field using $set with removeField()
+    await users.updateOne({ _id: userId }, {
+      $set: {
+        email: removeField(),
+      },
+    });
+
+    // Verify email was removed
+    const afterEmailRemoval = await users.findOne({ _id: userId });
+    assert(afterEmailRemoval !== null);
+    assertEquals(afterEmailRemoval.name, "John");
+    assertEquals(afterEmailRemoval.email, undefined);
+    assertEquals(afterEmailRemoval.phone, "123-456");
+    assertEquals(afterEmailRemoval.age, 30);
+
+    // Mix update and remove in same operation
+    await users.updateOne({ _id: userId }, {
+      $set: {
+        name: "John Doe",
+        phone: removeField(),
+        age: removeField(),
+      },
+    });
+
+    // Verify mixed operation
+    const afterMixedUpdate = await users.findOne({ _id: userId });
+    assert(afterMixedUpdate !== null);
+    assertEquals(afterMixedUpdate.name, "John Doe");
+    assertEquals(afterMixedUpdate.email, undefined);
+    assertEquals(afterMixedUpdate.phone, undefined);
+    assertEquals(afterMixedUpdate.age, undefined);
+  } finally {
+    await cleanupTestDb();
+  }
+});
+
+Deno.test("Collection findOneAndUpdate with removeField()", async () => {
+  await setupTestDb();
+
+  try {
+    const users = await collection(db, "users_find_and_update", userSchema);
+
+    // Insert document
+    await users.insertOne({
+      name: "Jane",
+      email: "jane@example.com",
+      phone: "555-1234",
+    });
+
+    // Update and remove field in one operation
+    const result = await users.findOneAndUpdate(
+      { name: "Jane" },
+      {
+        $set: {
+          name: "Jane Doe",
+          email: removeField(),
+        },
+      },
+      { returnDocument: "after", includeResultMetadata: false },
+    );
+
+    assert(result !== null);
+
+    // Verify the update
+    const updatedUser = await users.findOne({ name: "Jane Doe" });
+    assert(updatedUser !== null);
+    assertEquals(updatedUser.name, "Jane Doe");
+    assertEquals(updatedUser.email, undefined);
+    assertEquals(updatedUser.phone, "555-1234");
   } finally {
     await cleanupTestDb();
   }
