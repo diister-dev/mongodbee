@@ -7,7 +7,7 @@
  * @module
  */
 
-import type { Db } from "../mongodb.ts";
+import type { Db, MongoClient } from "../mongodb.ts";
 import { getCurrentVersion } from "./utils/package-info.ts";
 import * as v from "valibot";
 import {
@@ -17,6 +17,18 @@ import {
 } from "./migration-history.ts";
 import { isMigrationAncestor } from "./definition.ts";
 import type { MigrationDefinition } from "./types.ts";
+import { getSessionContext } from "../session.ts";
+
+/**
+ * Helper to get session from database client
+ * @internal
+ */
+function getSessionFromDb(db: Db) {
+  const client = (db as unknown as { client: MongoClient }).client;
+  if (!client) return undefined;
+  const { getSession } = getSessionContext(client);
+  return getSession();
+}
 
 /**
  * Special document types reserved for multi-collection metadata
@@ -191,7 +203,10 @@ export async function discoverMultiCollectionInstances(
   db: Db,
   collectionType: string,
 ): Promise<string[]> {
+  const session = getSessionFromDb(db);
+
   // List all collections in the database
+  // Note: listCollections cannot run in a transaction, so we don't pass session here
   const collections = await db.listCollections().toArray();
   const instances: string[] = [];
 
@@ -210,7 +225,7 @@ export async function discoverMultiCollectionInstances(
       // Check if this collection has multi-collection info
       const info = await collection.findOne({
         _type: MULTI_COLLECTION_INFO_TYPE,
-      }) as MultiCollectionInfo | null;
+      }, { session }) as MultiCollectionInfo | null;
 
       if (info && info.collectionType === collectionType) {
         instances.push(collName); // Return the full collection name
@@ -235,11 +250,12 @@ export async function getMultiCollectionInfo(
   db: Db,
   collectionName: string,
 ): Promise<MultiCollectionInfo | null> {
+  const session = getSessionFromDb(db);
   const collection = db.collection(collectionName);
 
   return await collection.findOne({
     _type: MULTI_COLLECTION_INFO_TYPE,
-  }) as MultiCollectionInfo | null;
+  }, { session }) as MultiCollectionInfo | null;
 }
 
 /**
@@ -256,6 +272,7 @@ export async function createMultiCollectionInfo(
   collectionType: string,
   migrationId: string = "unknown",
 ): Promise<void> {
+  const session = getSessionFromDb(db);
   const collection = db.collection(collectionName);
   const mongodbeeVersion = getCurrentVersion();
 
@@ -266,7 +283,7 @@ export async function createMultiCollectionInfo(
     createdAt: new Date(),
   };
 
-  await collection.insertOne(info as Record<string, unknown>);
+  await collection.insertOne(info as Record<string, unknown>, { session });
 
   // Also create the migrations tracking document with initial migration
   const initialOperation: MultiModelMigrationOperation = {
@@ -285,7 +302,7 @@ export async function createMultiCollectionInfo(
     appliedMigrations: [initialOperation],
   };
 
-  await collection.insertOne(migrations as Record<string, unknown>);
+  await collection.insertOne(migrations as Record<string, unknown>, { session });
 }
 
 /**
@@ -306,6 +323,7 @@ export async function recordMultiCollectionMigration(
   duration?: number,
   error?: string,
 ): Promise<void> {
+  const session = getSessionFromDb(db);
   const collection = db.collection(collectionName);
   const mongodbeeVersion = getCurrentVersion();
 
@@ -333,6 +351,7 @@ export async function recordMultiCollectionMigration(
         appliedMigrations: record,
       },
     } as Record<string, unknown>,
+    { session },
   );
 }
 
@@ -347,11 +366,12 @@ export async function getMultiCollectionMigrations(
   db: Db,
   collectionName: string,
 ): Promise<MultiCollectionMigrations | null> {
+  const session = getSessionFromDb(db);
   const collection = db.collection(collectionName);
 
   return await collection.findOne({
     _type: MULTI_COLLECTION_MIGRATIONS_TYPE,
-  }) as MultiCollectionMigrations | null;
+  }, { session }) as MultiCollectionMigrations | null;
 }
 
 /**
@@ -500,10 +520,11 @@ export async function multiCollectionInstanceExists(
   collectionName: string,
 ): Promise<boolean> {
   try {
+    const session = getSessionFromDb(db);
     const collection = db.collection(collectionName);
     const info = await collection.findOne({
       _type: MULTI_COLLECTION_INFO_TYPE,
-    }) as MultiCollectionInfo | null;
+    }, { session }) as MultiCollectionInfo | null;
     return info !== null;
   } catch (_error) {
     return false;
@@ -617,10 +638,11 @@ export async function shouldInstanceReceiveMigration(
   migrationId: string,
 ): Promise<boolean> {
   try {
+    const session = getSessionFromDb(db);
     const collection = db.collection(collectionName);
     const migrations = await collection.findOne({
       _type: MULTI_COLLECTION_MIGRATIONS_TYPE,
-    }) as MultiCollectionMigrations | null;
+    }, { session }) as MultiCollectionMigrations | null;
 
     if (!migrations) {
       // No migrations document, can't receive migration
@@ -667,12 +689,13 @@ export async function markAsMultiCollection(
   collectionType: string,
   fromMigrationId?: string,
 ): Promise<void> {
+  const session = getSessionFromDb(db);
   const collection = db.collection(collectionName);
 
   // Check if already marked
   const existing = await collection.findOne({
     _type: MULTI_COLLECTION_INFO_TYPE,
-  });
+  }, { session });
 
   if (existing) {
     throw new Error(

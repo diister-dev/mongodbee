@@ -8,6 +8,7 @@ import { dirtyEquivalent } from "./utils/object.ts";
 import { mongoOperationQueue } from "./operation.ts";
 import { applyCollectionIndexes } from "./indexes-applier.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
+import { isSchemaManaged } from "./runtime-config.ts";
 import type { Db } from "./mongodb.ts";
 import type * as m from "mongodb";
 
@@ -18,6 +19,13 @@ type CollectionOptions = {
   undefinedBehavior?: "remove" | "ignore" | "error";
   // Initialization options
   noInit?: boolean; // If true, skip all initialization (validator, indexes, watching)
+  /**
+   * Override global schema management for this collection
+   * - "auto": Apply validators/indexes automatically
+   * - "managed": Skip auto-apply (migrations handle this)
+   * - "inherit": Use global runtime config (default)
+   */
+  schemaManagement?: "auto" | "managed" | "inherit";
 };
 
 type WithId<T> = T extends { _id: infer U } ? T
@@ -398,8 +406,19 @@ export async function collection<
     // If raw mode, skip all initialization
     if (opts.noInit) return;
 
-    await applyValidator();
-    await applyIndexes();
+    // Determine if we should auto-apply schema and indexes
+    const shouldAutoApply = (() => {
+      // Local option takes precedence
+      if (opts.schemaManagement === "auto") return true;
+      if (opts.schemaManagement === "managed") return false;
+      // Default to "inherit" - use global config
+      return !isSchemaManaged();
+    })();
+
+    if (shouldAutoApply) {
+      await applyValidator();
+      await applyIndexes();
+    }
 
     // Only start watching if explicitly enabled
     if (opts.enableWatching) {

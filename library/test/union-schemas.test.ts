@@ -22,7 +22,7 @@ Deno.test("withIndex - Union schemas with unique constraints", async (t) => {
       description: v.optional(v.string()),
     };
 
-    const coll = await collection(db, "union_test", testSchema);
+    const coll = await collection(db, "union_test", testSchema, { schemaManagement: "auto" });
 
     // First document with string value
     await coll.insertOne({
@@ -96,7 +96,7 @@ Deno.test("withIndex - Complex nested union schemas", async (t) => {
       name: v.string(),
     };
 
-    const coll = await collection(db, "complex_union_test", companySchema);
+    const coll = await collection(db, "complex_union_test", companySchema, { schemaManagement: "auto" });
 
     // Insert company with SIRET (14 digits)
     await coll.insertOne({
@@ -167,6 +167,7 @@ Deno.test("withIndex - Multi-collection with union schemas", async (t) => {
       db,
       "multi_union_test",
       catalogModel,
+      { schemaManagement: "auto" },
     );
 
     // Insert user with string ID

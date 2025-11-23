@@ -16,7 +16,7 @@ Deno.test("applyIndexes - skip recreate when index spec and options identical", 
     };
 
     // create collection first time
-    const coll1 = await collection(db, "users", schema1);
+    const coll1 = await collection(db, "users", schema1, { schemaManagement: "auto" });
     const indexesBefore = await coll1.collection.listIndexes().toArray();
     const idx = indexesBefore.find((i: { key?: Record<string, number> }) =>
       i.key && i.key.username === 1
@@ -24,7 +24,7 @@ Deno.test("applyIndexes - skip recreate when index spec and options identical", 
     assertExists(idx);
 
     // Re-init collection with identical schema
-    const coll2 = await collection(db, "users", schema1);
+    const coll2 = await collection(db, "users", schema1, { schemaManagement: "auto" });
     const indexesAfter = await coll2.collection.listIndexes().toArray();
     const idxAfter = indexesAfter.find((i: { key?: Record<string, number> }) =>
       i.key && i.key.username === 1
@@ -58,14 +58,14 @@ Deno.test("applyIndexes - recreate index when options change", async (t) => {
       }),
     };
 
-    const cA = await collection(db, "people", schemaA);
+    const cA = await collection(db, "people", schemaA, { schemaManagement: "auto" });
     const before = (await cA.collection.listIndexes().toArray()).find((
       i: { key?: Record<string, number> },
     ) => i.key && i.key.name === 1)!;
     assertExists(before);
 
     // Re-init with modified options
-    const cB = await collection(db, "people", schemaB);
+    const cB = await collection(db, "people", schemaB, { schemaManagement: "auto" });
     const after = (await cB.collection.listIndexes().toArray()).find((
       i: { key?: Record<string, number> },
     ) => i.key && i.key.name === 1)!;
@@ -97,6 +97,7 @@ Deno.test("multiCollection - index is created with partialFilterExpression scope
       db,
       "catalog",
       defineModel("catalog", { schema }),
+      { schemaManagement: "auto" },
     );
     const indexes = await db.collection("catalog").listIndexes().toArray();
 
@@ -131,7 +132,7 @@ Deno.test("applyIndexes - schema delta: adding an index creates it; removing fro
     };
 
     // initial create
-    const cA = await collection(db, "delta", schemaA);
+    const cA = await collection(db, "delta", schemaA, { schemaManagement: "auto" });
     let idxs = await cA.collection.listIndexes().toArray();
     const aIdx = idxs.find((i: { key?: Record<string, number> }) =>
       i.key && i.key.a === 1
@@ -144,7 +145,7 @@ Deno.test("applyIndexes - schema delta: adding an index creates it; removing fro
       c: withIndex(v.string(), { unique: true }),
     };
 
-    const cB = await collection(db, "delta", schemaB);
+    const cB = await collection(db, "delta", schemaB, { schemaManagement: "auto" });
     idxs = await cB.collection.listIndexes().toArray();
 
     // New behavior: orphaned index 'a' is automatically removed, new index 'c' is created

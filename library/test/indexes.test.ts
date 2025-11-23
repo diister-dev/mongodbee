@@ -17,7 +17,7 @@ Deno.test("withIndex - Basic index creation", async (t) => {
     };
 
     // Create collection with basic index on username field
-    const users = await collection(db, "users", userSchema);
+    const users = await collection(db, "users", userSchema, { schemaManagement: "auto" });
 
     // Verify the collection was created
     assertExists(users);
@@ -44,7 +44,7 @@ Deno.test("withIndex - Unique index constraint", async (t) => {
     };
 
     // Create collection with unique index on email field
-    const users = await collection(db, "users", userSchema);
+    const users = await collection(db, "users", userSchema, { schemaManagement: "auto" });
 
     // Insert first user
     await users.insertOne({
@@ -74,7 +74,7 @@ Deno.test("withIndex - Case insensitive index", async (t) => {
     };
 
     // Create collection with case insensitive unique index on email field
-    const users = await collection(db, "users", userSchema);
+    const users = await collection(db, "users", userSchema, { schemaManagement: "auto" });
 
     // Insert first user
     await users.insertOne({
@@ -107,7 +107,7 @@ Deno.test("withIndex - Custom collation", async (t) => {
     };
 
     // Create collection with custom collation on name field
-    const users = await collection(db, "users", userSchema);
+    const users = await collection(db, "users", userSchema, { schemaManagement: "auto" });
 
     // Insert first user
     await users.insertOne({
@@ -139,7 +139,7 @@ Deno.test("withIndex - Multiple indexes on different fields", async (t) => {
     };
 
     // Create collection with multiple indexes on different fields
-    const users = await collection(db, "users", userSchema);
+    const users = await collection(db, "users", userSchema, { schemaManagement: "auto" });
 
     // Verify all indexes were created
     const indexes = await users.collection.listIndexes().toArray();
@@ -182,6 +182,7 @@ Deno.test("withIndex - Multi-collection with type scoped indexes", async (t) => 
       defineModel("catalog", {
         schema: catalogSchema,
       }),
+      { schemaManagement: "auto" },
     );
 
     // Insert products with unique SKUs
@@ -261,6 +262,7 @@ Deno.test("withIndex - Multi-collection with scoped indexes by type", async (e) 
       db,
       "catalog",
       defineModel("catalog", { schema: catalogSchema }),
+      { schemaManagement: "auto" },
     );
 
     // Insert product with unique slug
@@ -346,6 +348,7 @@ Deno.test("withIndex - Multi-collection with scoped deep indexes by type", async
       db,
       "catalog",
       defineModel("catalog", { schema: catalogSchema }),
+      { schemaManagement: "auto" },
     );
 
     // Insert product with unique slug
@@ -434,6 +437,7 @@ Deno.test("withIndex - Automatic type field in multi-collection", async (t) => {
       db,
       "catalog",
       defineModel("catalog", { schema: catalogSchema }),
+      { schemaManagement: "auto" },
     );
 
     // Insert documents
@@ -468,7 +472,7 @@ Deno.test("withIndex - Union schemas with unique constraints", async (t) => {
       description: v.optional(v.string()),
     };
 
-    const coll = await collection(db, "union_test", testSchema);
+    const coll = await collection(db, "union_test", testSchema, { schemaManagement: "auto" });
 
     // Insert documents with different union types
     await coll.insertOne({

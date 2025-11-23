@@ -23,6 +23,16 @@ export type MongodbeeConfig = {
     /** Path to schemas file (default: "./schemas.ts") */
     schemas?: string;
   };
+
+  /** Runtime behavior configuration */
+  runtime?: {
+    /**
+     * Schema management mode:
+     * - "auto": Collections apply validators/indexes automatically
+     * - "managed": Migrations handle schema/indexes, collections skip auto-apply (default)
+     */
+    schemaManagement?: "auto" | "managed";
+  };
 };
 
 /**
@@ -66,5 +76,8 @@ export const DEFAULT_MONGODBEE_CONFIG: MongodbeeConfig = {
   paths: {
     migrations: "./migrations",
     schemas: "./schemas.ts",
+  },
+  runtime: {
+    schemaManagement: "managed",
   },
 };

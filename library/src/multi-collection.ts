@@ -25,12 +25,20 @@ import {
 } from "./migration/multicollection-registry.ts";
 import { getLastAppliedMigration } from "./migration/state.ts";
 import { applyMultiCollectionIndexes } from "./indexes-applier.ts";
+import { isSchemaManaged } from "./runtime-config.ts";
 
 type CollectionOptions = {
   safeDelete?: boolean;
   enableWatching?: boolean;
   /** How to handle undefined values in updates: 'remove' | 'ignore' | 'error' */
   undefinedBehavior?: "remove" | "ignore" | "error";
+  /**
+   * Override global schema management for this collection
+   * - "auto": Apply validators/indexes automatically
+   * - "managed": Skip auto-apply (migrations handle this)
+   * - "inherit": Use global runtime config (default)
+   */
+  schemaManagement?: "auto" | "managed" | "inherit";
 };
 
 // Use _id if the schema is a literal schema, otherwise use dbId
@@ -381,30 +389,42 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
   let sessionContext: Awaited<ReturnType<typeof getSessionContext>>;
 
   async function init() {
-    await applyValidator();
-    await applyIndexes();
+    // Determine if we should auto-apply schema and indexes
+    const shouldAutoApply = (() => {
+      // Local option takes precedence
+      if (opts.schemaManagement === "auto") return true;
+      if (opts.schemaManagement === "managed") return false;
+      // Default to "inherit" - use global config
+      return !isSchemaManaged();
+    })();
 
-    // Auto-initialize metadata for multi-collection model
-    // Check if metadata already exists
-    const exists = await multiCollectionInstanceExists(db, collectionName);
+    if (shouldAutoApply) {
+      await applyValidator();
+      await applyIndexes();
 
-    if (!exists) {
-      // Get the current migration version
-      const lastMigration = await getLastAppliedMigration(db);
-      const currentMigrationId = lastMigration?.id || "current";
+      // Auto-initialize metadata for multi-collection model (only in auto mode)
+      // In managed mode, migrations handle metadata creation
+      // Check if metadata already exists
+      const exists = await multiCollectionInstanceExists(db, collectionName);
 
-      // Create metadata for this instance
-      if(useModel) {
-        await createMultiCollectionInfo(
-          db,
-          collectionName,
-          (model as MultiCollectionModel<T>).name,
-          currentMigrationId,
-        );
+      if (!exists) {
+        // Get the current migration version
+        const lastMigration = await getLastAppliedMigration(db);
+        const currentMigrationId = lastMigration?.id || "current";
+
+        // Create metadata for this instance
+        if(useModel) {
+          await createMultiCollectionInfo(
+            db,
+            collectionName,
+            (model as MultiCollectionModel<T>).name,
+            currentMigrationId,
+          );
+        }
       }
     }
 
-    sessionContext = await getSessionContext(db.client);
+    sessionContext = getSessionContext(db.client);
   }
 
   const collection = db.collection<TOutput>(collectionName, opts);
@@ -989,3 +1009,53 @@ export async function newMultiCollection<const T extends MultiCollectionSchema>(
   // Create and return the multi-collection instance
   return await multiCollection(db, collectionName, model, options);
 }
+
+/**
+ * Creates a multi-collection instance without returning the collection object.
+ *
+ * Use this in migrations to create new instances that should be tracked
+ * in the migration system. This only creates the metadata, not the collection
+ * operations wrapper.
+ *
+ * @param db - MongoDB database instance
+ * @param collectionName - Name of the collection to create
+ * @param modelName - The name of the multi-collection model
+ * @param options - Additional options
+ * @returns A Promise that resolves when the instance is created
+ *
+ * @example
+ * ```typescript
+ * // In a migration
+ * await createMultiCollectionInstance(db, "catalog_louvre", "catalog", {
+ *   migrationId: migration.id
+ * });
+ * ```
+ */
+export async function createMultiCollectionInstance(
+  db: Db,
+  collectionName: string,
+  modelName: string,
+  options?: { migrationId?: string },
+): Promise<void> {
+  const migrationId = options?.migrationId || "current";
+
+  // Check if already exists
+  const exists = await multiCollectionInstanceExists(db, collectionName);
+  if (exists) {
+    throw new Error(`Multi-collection instance "${collectionName}" already exists`);
+  }
+
+  // Create the metadata
+  await createMultiCollectionInfo(db, collectionName, modelName, migrationId);
+}
+
+// Re-export utility functions from multicollection-registry for public use
+export {
+  discoverMultiCollectionInstances,
+  getMultiCollectionInfo,
+  getMultiCollectionMigrations,
+  markAsMultiCollection,
+  multiCollectionInstanceExists,
+  type MultiCollectionInfo,
+  type MultiCollectionMigrations,
+} from "./migration/multicollection-registry.ts";
