@@ -39,9 +39,6 @@ async function discoverAndLoadConfig(): Promise<void> {
   configLoaded = true;
 }
 
-// Auto-load configuration at module initialization (top-level await)
-await discoverAndLoadConfig();
-
 /**
  * Sets the runtime configuration for MongoDBee
  *
