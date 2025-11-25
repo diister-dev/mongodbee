@@ -241,6 +241,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
   aggregate(
     stageBuilder: (stage: StageBuilder<T>) => AggregationStage[],
   ): Promise<any[]>;
+  drop(options: { force: true }): Promise<boolean>;
 };
 
 /**
@@ -936,11 +937,19 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             };
 
             const session = sessionContext.getSession();
-            
+
             const pipeline = stageBuilder(stage);
             const cursor = collection.aggregate(pipeline, { session });
-            
+
             return await cursor.toArray();
+        },
+        async drop(options) {
+            if (!options?.force) {
+                throw new Error("Must provide { force: true } to drop the collection");
+            }
+
+            const session = sessionContext.getSession();
+            return await collection.drop({ session });
         },
   };
 }
