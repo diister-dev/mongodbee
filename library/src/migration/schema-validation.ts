@@ -235,7 +235,7 @@ function diffSchemas(
   schema2: Record<string, any>,
 ): Array<{ key: string; before?: any; after?: any }> {
   const diffs: Array<{ key: string; before?: any; after?: any }> = [];
-  const keys = new Set([...Object.keys(schema1), ...Object.keys(schema2)].sort((a, b) => a.localeCompare(b)));
+  const keys = new Set([...Object.keys(schema1), ...Object.keys(schema2)]);
 
   // Properties to skip in diff output (too verbose/technical for users)
   const skipProperties = ["kind", ...CLEANUP_PROPERTIES];
