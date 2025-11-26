@@ -3,6 +3,7 @@ import { assertEquals, assertExists } from "@std/assert";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
 import { MongoClient, ObjectId } from "mongodb";
+import { closeAllWatchers } from "../src/change-stream.ts";
 
 Deno.test("Collection watcher events test", async (t) => {
   await withDatabase(t.name, async (db) => {
@@ -338,6 +339,9 @@ Deno.test("Database drop and recreate test", async (t) => {
 
     assertEquals(insertEvents, 1, "Insert event should be triggered once");
     assertEquals(updateEvents, 1, "Update event should be triggered once");
+
+    // Close all watchers before dropping the database
+    await closeAllWatchers(db);
 
     // Drop the entire database
     await db.dropDatabase();

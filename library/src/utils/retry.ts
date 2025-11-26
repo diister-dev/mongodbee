@@ -79,6 +79,42 @@ export interface RetryOptions {
    * Callback invoked before each retry attempt
    */
   onRetry?: (error: Error, attempt: number, delay: number) => void;
+
+  /**
+   * Abort signal to cancel pending retries
+   */
+  signal?: AbortSignal;
+}
+
+/**
+ * Helper function to create a delay that can be aborted
+ */
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("Aborted"));
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      cleanup();
+      // Defer resolution to next tick to allow Deno test sanitizer to properly track the async op
+      queueMicrotask(() => resolve());
+    }, ms);
+
+    const onAbort = () => {
+      cleanup();
+      // Defer rejection to next tick
+      queueMicrotask(() => reject(new Error("Aborted")));
+    };
+
+    const cleanup = () => {
+      clearTimeout(timeoutId);
+      signal?.removeEventListener("abort", onAbort);
+    };
+
+    signal?.addEventListener("abort", onAbort);
+  });
 }
 
 /**
@@ -115,12 +151,18 @@ export async function retryOnWriteConflict<T>(
     jitter = true,
     shouldRetry = isWriteConflictError,
     onRetry,
+    signal,
   } = options;
 
   let lastError: Error | undefined;
   let attempt = 0;
 
   while (attempt <= maxRetries) {
+    // Check if aborted
+    if (signal?.aborted) {
+      throw new Error("Operation aborted");
+    }
+
     try {
       // Try to execute the operation
       return await operation();
@@ -138,27 +180,32 @@ export async function retryOnWriteConflict<T>(
       }
 
       // Calculate delay for next retry
-      let delay = initialDelay;
+      let delayMs = initialDelay;
 
       if (exponentialBackoff) {
         // Exponential backoff: delay = initialDelay * 2^attempt
-        delay = Math.min(initialDelay * Math.pow(2, attempt), maxDelay);
+        delayMs = Math.min(initialDelay * Math.pow(2, attempt), maxDelay);
       }
 
       // Add jitter to prevent thundering herd problem
       if (jitter) {
         // Add random jitter up to 20% of the delay
-        const jitterAmount = delay * 0.2 * Math.random();
-        delay = delay + jitterAmount;
+        const jitterAmount = delayMs * 0.2 * Math.random();
+        delayMs = delayMs + jitterAmount;
       }
 
       // Call retry callback if provided
       if (onRetry) {
-        onRetry(lastError, attempt + 1, delay);
+        onRetry(lastError, attempt + 1, delayMs);
       }
 
-      // Wait before retrying
-      await new Promise((resolve) => setTimeout(resolve, delay));
+      // Wait before retrying with proper cleanup
+      try {
+        await delay(delayMs, signal);
+      } catch (abortError) {
+        // If delay was aborted, throw the abort error
+        throw abortError;
+      }
 
       attempt++;
     }

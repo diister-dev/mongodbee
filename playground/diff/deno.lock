@@ -1,0 +1,18 @@
+{
+  "version": "5",
+  "specifiers": {
+    "npm:valibot@^1.2.0": "1.2.0"
+  },
+  "npm": {
+    "valibot@1.2.0": {
+      "integrity": "sha512-mm1rxUsmOxzrwnX5arGS+U4T25RdvpPjPN4yR0u9pUBov9+zGVtO84tif1eY4r6zWxVxu3KzIyknJy3rxfRZZg=="
+    }
+  },
+  "workspace": {
+    "dependencies": [
+      "jsr:@std/ulid@1",
+      "npm:mongodb@^6.16.0",
+      "npm:valibot@^1.2.0"
+    ]
+  }
+}

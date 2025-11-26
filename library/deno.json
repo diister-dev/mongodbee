@@ -1,6 +1,6 @@
 {
   "name": "@diister/mongodbee",
-  "version": "0.15.2",
+  "version": "0.15.3",
   "license": "MIT",
   "imports": {
     "@std/ulid": "jsr:@std/ulid@^1.0.0",
@@ -23,6 +23,7 @@
   },
   "tasks": {
     "test": "deno test -A --parallel --quiet",
+    "test:leaks": "deno test -A --parallel --quiet --trace-leaks",
     "migrate": "deno run --allow-read --allow-write --allow-net --allow-env src/migration/cli/bin.ts",
     "migrate:init": "deno task migrate init",
     "migrate:generate": "deno task migrate generate",

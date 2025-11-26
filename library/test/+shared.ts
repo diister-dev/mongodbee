@@ -41,7 +41,7 @@ export async function withDatabase(
     await work(db);
   } finally {
     // Close all change streams before dropping the database
-    closeAllWatchers(db);
+    await closeAllWatchers(db);
     await db.dropDatabase(); // Uncomment to debug after test
     await client.close();
   }

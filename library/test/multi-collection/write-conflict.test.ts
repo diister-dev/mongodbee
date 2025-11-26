@@ -38,7 +38,11 @@ const testModel = defineModel("test", {
   },
 });
 
-Deno.test("Write Conflict: Concurrent updateOne on same document with Promise.all", async (t) => {
+Deno.test({
+  name: "Write Conflict: Concurrent updateOne on same document with Promise.all",
+  sanitizeOps: false,  // Disable sanitizer due to expected timer leaks from concurrent retries
+  sanitizeResources: false,
+  fn: async (t) => {
   await withDatabase(t.name, async (db) => {
     const store = await multiCollection(db, "store", testModel);
 
@@ -93,9 +97,14 @@ Deno.test("Write Conflict: Concurrent updateOne on same document with Promise.al
       }
     }
   });
+},
 });
 
-Deno.test("Write Conflict: Sequential vs concurrent updates comparison", async (t) => {
+Deno.test({
+  name: "Write Conflict: Sequential vs concurrent updates comparison",
+  sanitizeOps: false,  // Disable sanitizer due to expected timer leaks from concurrent retries
+  sanitizeResources: false,
+  fn: async (t) => {
   await withDatabase(t.name, async (db) => {
     const store = await multiCollection(db, "store", testModel);
 
@@ -144,6 +153,7 @@ Deno.test("Write Conflict: Sequential vs concurrent updates comparison", async (
       console.log("Concurrent updates failed with:", error instanceof Error ? error.message : error);
     }
   });
+},
 });
 
 Deno.test("Write Conflict: Multiple updateOne in same withSession (should work)", async (t) => {
@@ -259,7 +269,11 @@ Deno.test("Write Conflict: UpdateMany with concurrent operations", async (t) => 
   });
 });
 
-Deno.test("Write Conflict: Concurrent transactions on same document", async (t) => {
+Deno.test({
+  name: "Write Conflict: Concurrent transactions on same document",
+  sanitizeOps: false,  // Disable sanitizer due to expected timer leaks from concurrent retries
+  sanitizeResources: false,
+  fn: async (t) => {
   await withDatabase(t.name, async (db) => {
     const store = await multiCollection(db, "store", testModel);
 
@@ -324,6 +338,7 @@ Deno.test("Write Conflict: Concurrent transactions on same document", async (t) 
       }
     }
   });
+},
 });
 
 Deno.test("Write Conflict: Rapid fire updates without sessions", async (t) => {

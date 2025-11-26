@@ -151,10 +151,12 @@ export function watchEvent<TSchema extends m.Document = m.Document>(
  *
  * @param db - The MongoDB database to clean up watchers for
  */
-export function closeAllWatchers(db: m.Db): void {
+export async function closeAllWatchers(db: m.Db): Promise<void> {
   const watchers = watchingMap.get(db);
   if (watchers) {
-    watchers.changeStream.close();
+    await watchers.changeStream.close();
     watchingMap.delete(db);
+    // Give the change stream time to fully close and release resources
+    await new Promise(resolve => setTimeout(resolve, 100));
   }
 }

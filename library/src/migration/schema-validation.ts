@@ -43,97 +43,180 @@ export async function loadProjectSchema(
 }
 
 /**
- * Gets a simplified type string from a Valibot schema
+ * Properties to remove from Valibot schemas during simplification
+ */
+const CLEANUP_PROPERTIES = [
+  "~standard",
+  "async",
+  "expects",
+  "message",
+  "default",
+];
+
+/**
+ * Schema kinds to ignore during simplification
+ */
+const CLEANUP_KINDS = [
+  "transformation",
+  "metadata",
+];
+
+/**
+ * Type-specific handlers for simplifying Valibot schemas
+ */
+const simplifyHandlers: Record<string, (schema: any) => any> = {
+  "map": (schema: any) => ({
+    ...schema,
+    key: simplifySchema(schema.key),
+    value: simplifySchema(schema.value),
+  }),
+  "record": (schema: any) => ({
+    ...schema,
+    key: simplifySchema(schema.key),
+    value: simplifySchema(schema.value),
+  }),
+  "set": (schema: any) => ({
+    ...schema,
+    value: simplifySchema(schema.value),
+  }),
+  "object": (schema: any) => ({
+    ...schema,
+    entries: Object.fromEntries(
+      Object.entries(schema.entries).map(
+        ([key, value]) => [key, simplifySchema(value)],
+      ),
+    ),
+  }),
+  "loose_object": (schema: any) => simplifyHandlers["object"](schema),
+  "object_with_rest": (schema: any) => ({
+    ...simplifyHandlers["object"](schema),
+    rest: simplifySchema(schema.rest),
+  }),
+  "strict_object": (schema: any) => simplifyHandlers["object"](schema),
+  "array": (schema: any) => ({
+    ...schema,
+    item: simplifySchema(schema.item),
+  }),
+  "tuple": (schema: any) => ({
+    ...schema,
+    items: schema.items.map((s: any) => simplifySchema(s)),
+  }),
+  "loose_tuple": (schema: any) => simplifyHandlers["tuple"](schema),
+  "strict_tuple": (schema: any) => simplifyHandlers["tuple"](schema),
+  "tuple_with_rest": (schema: any) => ({
+    ...simplifyHandlers["tuple"](schema),
+    rest: simplifySchema(schema.rest),
+  }),
+  "union": (schema: any) => schema.options.map((s: any) => simplifySchema(s)),
+  "intersect": (schema: any) => ({
+    ...schema,
+    options: schema.options.map((s: any) => simplifySchema(s)),
+  }),
+  "variant": (schema: any) => ({
+    ...schema,
+    options: schema.options.map((s: any) => simplifySchema(s)),
+  }),
+  "#wrapped": (schema: any) => ({
+    ...schema,
+    wrapped: simplifySchema(schema.wrapped),
+  }),
+  "optional": (schema: any) => simplifyHandlers["#wrapped"](schema),
+  "non_optional": (schema: any) => simplifyHandlers["#wrapped"](schema),
+  "undefinedable": (schema: any) => simplifyHandlers["#wrapped"](schema),
+  "nullable": (schema: any) => simplifyHandlers["#wrapped"](schema),
+  "non_nullable": (schema: any) => simplifyHandlers["#wrapped"](schema),
+  "nullish": (schema: any) => simplifyHandlers["#wrapped"](schema),
+  "non_nullish": (schema: any) => simplifyHandlers["#wrapped"](schema),
+  "exact_optional": (schema: any) => simplifyHandlers["#wrapped"](schema),
+};
+
+/**
+ * Simplifies a Valibot schema by removing internal metadata and recursively
+ * processing nested schemas
  *
  * @param schema - Valibot schema object
- * @returns Simplified type string like "string", "number?", "string[]"
+ * @returns Simplified schema with metadata removed
  */
-function getSchemaTypeString(schema: any): string {
+export function simplifySchema(schema: any): any {
   if (!schema || typeof schema !== "object") {
-    return "unknown";
+    return schema;
   }
 
-  const type = schema.type;
-
-  switch (type) {
-    case "optional":
-      return `${getSchemaTypeString(schema.wrapped)}?`;
-    case "nullable":
-      return `${getSchemaTypeString(schema.wrapped)} | null`;
-    case "nullish":
-      return `${getSchemaTypeString(schema.wrapped)}?`;
-    case "array":
-      return `${getSchemaTypeString(schema.item)}[]`;
-    case "union":
-      if (Array.isArray(schema.options)) {
-        return schema.options.map(getSchemaTypeString).join(" | ");
-      }
-      return "union";
-    case "intersect":
-      if (Array.isArray(schema.options)) {
-        return schema.options.map(getSchemaTypeString).join(" & ");
-      }
-      return "intersect";
-    case "picklist":
-      if (Array.isArray(schema.options)) {
-        return schema.options.map((o: string) => `"${o}"`).join(" | ");
-      }
-      return "picklist";
-    case "literal":
-      return JSON.stringify(schema.literal);
-    case "object":
-      return "object";
-    case "record":
-      return `Record<string, ${getSchemaTypeString(schema.value)}>`;
-    case "tuple":
-      if (Array.isArray(schema.items)) {
-        return `[${schema.items.map(getSchemaTypeString).join(", ")}]`;
-      }
-      return "tuple";
-    default:
-      return type || "unknown";
+  // Skip schemas marked for cleanup
+  if (CLEANUP_KINDS.includes(schema.kind)) {
+    return undefined;
   }
+
+  // Create a shallow copy to avoid mutating the original
+  const simplified = { ...schema };
+
+  // Remove cleanup properties
+  for (const prop of CLEANUP_PROPERTIES) {
+    delete simplified[prop];
+  }
+
+  // Process pipe array if present
+  if ("pipe" in simplified && Array.isArray(simplified.pipe)) {
+    simplified.pipe = simplified.pipe
+      .map((s: any) => simplifySchema(s))
+      .filter((s: any) => s !== undefined);
+  }
+
+  // Use type-specific handler if available
+  const handler = simplifyHandlers[schema.type];
+  if (handler) {
+    return handler(simplified);
+  }
+
+  return simplified;
 }
 
 /**
- * Simplifies a Valibot schema to a flat representation with field paths and types
- * This avoids exposing internal Valibot metadata like ~run, ~standard, etc.
+ * Flattens a simplified schema into dot-notation keys
  *
- * @param schema - Schema object (collection or model schema)
- * @param prefix - Current path prefix
- * @returns Flattened object with paths as keys and type strings as values
+ * @param schema - Simplified schema object
+ * @returns Flattened object with dot-notation paths as keys
  */
-export function simplifySchema(schema: any, prefix = ""): Record<string, string> {
-  const result: Record<string, string> = {};
+function flattenSchema(schema: any): Record<string, any> {
+  const result: Record<string, any> = {};
 
   if (!schema || typeof schema !== "object") {
     return result;
   }
 
-  for (const key in schema) {
-    // Skip internal Valibot properties
-    if (key.startsWith("~") || key === "async" || key === "kind" || key === "type" ||
-        key === "message" || key === "pipe" || key === "reference" || key === "expects" ||
-        key === "requirement" || key === "wrapped" || key === "item" || key === "options" ||
-        key === "entries" || key === "rest" || key === "default" || key === "literal" ||
-        key === "value" || key === "items") {
+  const keys = Object.keys(schema);
+  for (const key of keys) {
+    // Skip ~standard properties as they add noise
+    if (key === "~standard" || key.endsWith(".~standard")) {
       continue;
     }
 
     const value = schema[key];
-    const newKey = prefix ? `${prefix}.${key}` : key;
 
-    // Check if this is a Valibot schema (has 'kind' and 'type' properties)
-    if (value && typeof value === "object" && value.kind === "schema") {
-      result[newKey] = getSchemaTypeString(value);
-
-      // If it's an object schema, recurse into its entries
-      if (value.type === "object" && value.entries) {
-        Object.assign(result, simplifySchema(value.entries, newKey));
+    if (Array.isArray(value)) {
+      for (const [index, subValue] of value.entries()) {
+        if (typeof subValue === "object" && subValue !== null) {
+          for (const [subKey, subSubValue] of Object.entries(flattenSchema(subValue))) {
+            // Skip ~standard in nested paths
+            if (subKey.includes(".~standard") || subKey === "~standard") {
+              continue;
+            }
+            result[`${key}[${index}].${subKey}`] = subSubValue;
+          }
+        } else {
+          result[`${key}[${index}]`] = subValue;
+        }
       }
-    } else if (value && typeof value === "object" && !Array.isArray(value)) {
-      // This might be a nested structure (like multiModels with models inside)
-      Object.assign(result, simplifySchema(value, newKey));
+    } else if (typeof value === "object" && value !== null) {
+      for (const [subKey, subValue] of Object.entries(flattenSchema(value))) {
+        // Skip ~standard in nested paths
+        if (subKey.includes(".~standard") || subKey === "~standard") {
+          continue;
+        }
+        result[`${key}.${subKey}`] = subValue;
+      }
+    } else {
+      result[key] = value;
     }
   }
 
@@ -141,31 +224,46 @@ export function simplifySchema(schema: any, prefix = ""): Record<string, string>
 }
 
 /**
- * Flattens an object into dot-notation keys
- * @deprecated Use simplifySchema for Valibot schema comparison
+ * Compares two flattened schemas and returns differences
  *
- * @param obj - Object to flatten
- * @param prefix - Prefix for keys
- * @returns Flattened object
+ * @param schema1 - First flattened schema
+ * @param schema2 - Second flattened schema
+ * @returns Array of differences with key and before/after values
  */
-function flattenObject(obj: any, prefix = ""): Record<string, any> {
-  const result: Record<string, any> = {};
+function diffSchemas(
+  schema1: Record<string, any>,
+  schema2: Record<string, any>,
+): Array<{ key: string; before?: any; after?: any }> {
+  const diffs: Array<{ key: string; before?: any; after?: any }> = [];
+  const keys = new Set([...Object.keys(schema1), ...Object.keys(schema2)].sort((a, b) => a.localeCompare(b)));
 
-  for (const key in obj) {
-    const value = obj[key];
-    const newKey = prefix ? `${prefix}.${key}` : key;
+  // Properties to skip in diff output (too verbose/technical for users)
+  const skipProperties = ["kind", ...CLEANUP_PROPERTIES];
 
-    if (
-      value && typeof value === "object" && !Array.isArray(value) &&
-      value.constructor === Object
-    ) {
-      Object.assign(result, flattenObject(value, newKey));
-    } else {
-      result[newKey] = value;
+  for (const key of keys) {
+    // Skip if key matches or ends with any skip property
+    const shouldSkip = skipProperties.some((prop) =>
+      key === prop || key.endsWith(`.${prop}`)
+    );
+
+    if (shouldSkip) {
+      continue;
+    }
+
+    const valA = schema1[key];
+    const valB = schema2[key];
+
+    // Use JSON.stringify for deep comparison
+    if (JSON.stringify(valA) !== JSON.stringify(valB)) {
+      diffs.push({
+        key,
+        ...(key in schema1 ? { before: valA } : {}),
+        ...(key in schema2 ? { after: valB } : {}),
+      });
     }
   }
 
-  return result;
+  return diffs;
 }
 
 /**
@@ -176,86 +274,51 @@ function flattenObject(obj: any, prefix = ""): Record<string, any> {
  * @returns True if schemas are equal (same fields and types)
  */
 function schemasEqual(schema1: any, schema2: any): boolean {
-  const simple1 = simplifySchema(schema1);
-  const simple2 = simplifySchema(schema2);
+  const simple1 = flattenSchema(simplifySchema(schema1));
+  const simple2 = flattenSchema(simplifySchema(schema2));
 
-  const keys1 = Object.keys(simple1).sort();
-  const keys2 = Object.keys(simple2).sort();
-
-  if (keys1.length !== keys2.length) {
-    return false;
-  }
-
-  // Check both keys and values (types)
-  return keys1.every((key, i) => key === keys2[i] && simple1[key] === simple2[key]);
+  const diffs = diffSchemas(simple1, simple2);
+  return diffs.length === 0;
 }
 
 /**
- * Finds detailed differences between two schemas
+ * Formats schema differences as a human-readable string with color codes
  *
- * @param schema1 - First schema (migration)
- * @param schema2 - Second schema (project)
- * @returns Object with added, removed, and modified fields
+ * @param diffs - Array of differences from diffSchemas
+ * @returns Formatted string with ANSI color codes
  */
-function findSchemaDifferences(
-  schema1: any,
-  schema2: any,
-): { added: string[]; removed: string[]; modified: string[] } {
-  const simple1 = simplifySchema(schema1);
-  const simple2 = simplifySchema(schema2);
+function formatSchemaDifferences(
+  diffs: Array<{ key: string; before?: any; after?: any }>,
+): string {
+  if (diffs.length === 0) {
+    return "\x1b[32m    ✓ No differences\x1b[0m";
+  }
 
-  const keys1 = new Set(Object.keys(simple1));
-  const keys2 = new Set(Object.keys(simple2));
+  const lines: string[] = [];
 
-  const added = [...keys2].filter((k) => !keys1.has(k)).sort();
-  const removed = [...keys1].filter((k) => !keys2.has(k)).sort();
+  for (const diff of diffs) {
+    const hasBefore = "before" in diff;
+    const hasAfter = "after" in diff;
 
-  // Find fields that exist in both but have different types
-  const modified: string[] = [];
-  for (const key of keys1) {
-    if (keys2.has(key) && simple1[key] !== simple2[key]) {
-      modified.push(`${key}: ${simple1[key]} → ${simple2[key]}`);
+    if (!hasBefore && hasAfter) {
+      // Added field
+      lines.push(
+        `\x1b[32m    + ${diff.key} = ${JSON.stringify(diff.after)}\x1b[0m`,
+      );
+    } else if (hasBefore && !hasAfter) {
+      // Removed field
+      lines.push(
+        `\x1b[31m    - ${diff.key} = ${JSON.stringify(diff.before)}\x1b[0m`,
+      );
+    } else {
+      // Modified field
+      lines.push(`\x1b[33m    ~ ${diff.key}\x1b[0m`);
+      lines.push(`\x1b[31m      - ${JSON.stringify(diff.before)}\x1b[0m`);
+      lines.push(`\x1b[32m      + ${JSON.stringify(diff.after)}\x1b[0m`);
     }
   }
 
-  return { added, removed, modified };
-}
-
-/**
- * Finds which items in a collection have different schemas
- *
- * @param migrationItems - Items from migration schema
- * @param projectItems - Items from project schema
- * @returns Array of item names with differences and their details
- */
-function findDifferingItems(
-  migrationItems: Record<string, any>,
-  projectItems: Record<string, any>,
-): { name: string; added: string[]; removed: string[]; modified: string[] }[] {
-  const differences: { name: string; added: string[]; removed: string[]; modified: string[] }[] = [];
-
-  // Check items that exist in both
-  const migrationNames = new Set(Object.keys(migrationItems));
-  const projectNames = new Set(Object.keys(projectItems));
-
-  for (const name of migrationNames) {
-    if (projectNames.has(name)) {
-      const migrationSchema = migrationItems[name];
-      const projectSchema = projectItems[name];
-
-      if (!schemasEqual(migrationSchema, projectSchema)) {
-        const diff = findSchemaDifferences(migrationSchema, projectSchema);
-        differences.push({
-          name,
-          added: diff.added,
-          removed: diff.removed,
-          modified: diff.modified,
-        });
-      }
-    }
-  }
-
-  return differences;
+  return lines.join("\n");
 }
 
 /**
@@ -298,25 +361,19 @@ export function validateLastMigrationMatchesProjectSchema(
 
       if (missingInMigration.size === 0 && extraInMigration.size === 0) {
         // Same collection names but different schemas - find which ones differ
-        const differingCollections = findDifferingItems(
-          migrationCollections,
-          projectCollections,
-        );
+        for (const name of migrationNameSet) {
+          const migrationSchema = migrationCollections[name];
+          const projectSchema = projectCollections[name];
 
-        for (const diff of differingCollections) {
-          const details: string[] = [];
-          if (diff.added.length > 0) {
-            details.push(`added: ${diff.added.join(", ")}`);
+          if (!schemasEqual(migrationSchema, projectSchema)) {
+            const simple1 = flattenSchema(simplifySchema(migrationSchema));
+            const simple2 = flattenSchema(simplifySchema(projectSchema));
+            const diffs = diffSchemas(simple1, simple2);
+
+            errors.push(
+              `Collection "${name}" schema differs:\n${formatSchemaDifferences(diffs)}`,
+            );
           }
-          if (diff.removed.length > 0) {
-            details.push(`removed: ${diff.removed.join(", ")}`);
-          }
-          if (diff.modified.length > 0) {
-            details.push(`changed: ${diff.modified.join(", ")}`);
-          }
-          errors.push(
-            `Collection "${diff.name}" schema differs: ${details.join("; ")}`,
-          );
         }
       }
     }
@@ -347,25 +404,46 @@ export function validateLastMigrationMatchesProjectSchema(
 
       if (missingInMigration.size === 0 && extraInMigration.size === 0) {
         // Same multi-collection names but different schemas
-        const differingMultiCollections = findDifferingItems(
-          migrationMultiCollections,
-          projectMultiCollections,
-        );
+        for (const name of migrationNameSet) {
+          const migrationSchema = migrationMultiCollections[name];
+          const projectSchema = projectMultiCollections[name];
 
-        for (const diff of differingMultiCollections) {
-          const details: string[] = [];
-          if (diff.added.length > 0) {
-            details.push(`added: ${diff.added.join(", ")}`);
+          const migrationTypesSet = new Set(Object.keys(migrationSchema));
+          const projectTypesSet = new Set(Object.keys(projectSchema));
+
+          const missingTypesInMigration = projectTypesSet.difference(migrationTypesSet);
+          const extraTypesInMigration = migrationTypesSet.difference(projectTypesSet);
+
+          if (missingTypesInMigration.size > 0) {
+            errors.push(
+              `Multi-collection "${name}" is missing types in last migration: ${[...missingTypesInMigration].sort().join(", ")}`,
+            );
           }
-          if (diff.removed.length > 0) {
-            details.push(`removed: ${diff.removed.join(", ")}`);
+
+          if (extraTypesInMigration.size > 0) {
+            errors.push(
+              `Multi-collection "${name}" has extra types in last migration not in project schema: ${[...extraTypesInMigration].sort().join(", ")}`,
+            );
           }
-          if (diff.modified.length > 0) {
-            details.push(`changed: ${diff.modified.join(", ")}`);
+
+          if (missingTypesInMigration.size > 0 || extraTypesInMigration.size > 0) {
+            // Skip further type comparison if types differ
+            continue;
           }
-          errors.push(
-            `Multi-collection "${diff.name}" schema differs: ${details.join("; ")}`,
-          );
+
+          const commonTypes = [...projectTypesSet.intersection(migrationTypesSet)];
+          for(const typeName of commonTypes) {
+            const migrationTypeSchema = migrationSchema[typeName];
+            const projectTypeSchema = projectSchema[typeName];
+            if (!schemasEqual(migrationTypeSchema, projectTypeSchema)) {
+              const simple1 = flattenSchema(simplifySchema(migrationTypeSchema));
+              const simple2 = flattenSchema(simplifySchema(projectTypeSchema));
+              const diffs = diffSchemas(simple1, simple2);
+              errors.push(
+                `Multi-collection "${name}" type "${typeName}" schema differs:\n${formatSchemaDifferences(diffs)}`,
+              );
+            }
+          }
         }
       }
     }
@@ -395,25 +473,45 @@ export function validateLastMigrationMatchesProjectSchema(
 
       if (missingInMigration.size === 0 && extraInMigration.size === 0) {
         // Same multi-model names but different schemas
-        const differingMultiModels = findDifferingItems(
-          migrationMultiModels,
-          projectMultiModels,
-        );
+        for (const name of migrationNameSet) {
+          const migrationSchema = migrationMultiModels[name];
+          const projectSchema = projectMultiModels[name];
 
-        for (const diff of differingMultiModels) {
-          const details: string[] = [];
-          if (diff.added.length > 0) {
-            details.push(`added: ${diff.added.join(", ")}`);
+          const migrationTypesSet = new Set(Object.keys(migrationSchema));
+          const projectTypesSet = new Set(Object.keys(projectSchema));
+
+          const missingTypesInMigration = projectTypesSet.difference(migrationTypesSet);
+          const extraTypesInMigration = migrationTypesSet.difference(projectTypesSet);
+
+          if (missingTypesInMigration.size > 0) {
+            errors.push(
+              `Multi-model "${name}" is missing types in last migration: ${[...missingTypesInMigration].sort().join(", ")}`,
+            );
           }
-          if (diff.removed.length > 0) {
-            details.push(`removed: ${diff.removed.join(", ")}`);
+          if (extraTypesInMigration.size > 0) {
+            errors.push(
+              `Multi-model "${name}" has extra types in last migration not in project schema: ${[...extraTypesInMigration].sort().join(", ")}`,
+            );
           }
-          if (diff.modified.length > 0) {
-            details.push(`changed: ${diff.modified.join(", ")}`);
+
+          if (missingTypesInMigration.size > 0 || extraTypesInMigration.size > 0) {
+            // Skip further type comparison if types differ
+            continue;
           }
-          errors.push(
-            `Multi-model "${diff.name}" schema differs: ${details.join("; ")}`,
-          );
+
+          const commonTypes = [...projectTypesSet.intersection(migrationTypesSet)];
+          for(const typeName of commonTypes) {
+            const migrationTypeSchema = migrationSchema[typeName];
+            const projectTypeSchema = projectSchema[typeName];
+            if (!schemasEqual(migrationTypeSchema, projectTypeSchema)) {
+              const simple1 = flattenSchema(simplifySchema(migrationTypeSchema));
+              const simple2 = flattenSchema(simplifySchema(projectTypeSchema));
+              const diffs = diffSchemas(simple1, simple2);
+              errors.push(
+                `Multi-model "${name}" type "${typeName}" schema differs:\n${formatSchemaDifferences(diffs)}`,
+              );
+            }
+          }
         }
       }
     }
