@@ -1,6 +1,6 @@
 {
   "name": "@diister/mongodbee",
-  "version": "0.15.4",
+  "version": "0.15.5",
   "license": "MIT",
   "imports": {
     "@std/ulid": "jsr:@std/ulid@^1.0.0",
