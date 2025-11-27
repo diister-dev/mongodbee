@@ -31,6 +31,15 @@ const catalogModel = defineModel("catalog", {
   },
 });
 
+const inventoryModel = defineModel("inventory", {
+  schema: {
+    item: {
+      name: v.string(),
+      quantity: v.number(),
+    },
+  },
+});
+
 const userSchema = {
   name: v.string(),
   email: v.string(),
@@ -288,13 +297,8 @@ Deno.test("Utility functions in session: createMultiCollectionInstance", async (
     const { withSession } = getSessionContext(db.client);
 
     // Create instance metadata OUTSIDE session (DDL operations incompatible with transactions)
-    await createMultiCollectionInstance(db, "catalog_store1", "catalog", {
-      migrationId: "test-migration-001",
-    });
-
-    await createMultiCollectionInstance(db, "catalog_store2", "catalog", {
-      migrationId: "test-migration-001",
-    });
+    await createMultiCollectionInstance(db, "catalog_store1", catalogModel);
+    await createMultiCollectionInstance(db, "catalog_store2", catalogModel);
 
     // Verify instances were created, checking within a session to ensure session-aware reads work
     const result = await withSession(async () => {
@@ -313,7 +317,7 @@ Deno.test("Utility functions in session: multiCollectionInstanceExists", async (
     const { withSession } = getSessionContext(db.client);
 
     // Create an instance first
-    await createMultiCollectionInstance(db, "existing_catalog", "catalog");
+    await createMultiCollectionInstance(db, "existing_catalog", catalogModel);
 
     // Check existence in a session
     const result = await withSession(async () => {
@@ -331,10 +335,10 @@ Deno.test("Utility functions in session: multiCollectionInstanceExists", async (
 Deno.test("Utility functions in session: discoverMultiCollectionInstances", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create multiple instances OUTSIDE session (DDL operations incompatible with transactions)
-    await createMultiCollectionInstance(db, "catalog_paris", "catalog");
-    await createMultiCollectionInstance(db, "catalog_lyon", "catalog");
-    await createMultiCollectionInstance(db, "catalog_marseille", "catalog");
-    await createMultiCollectionInstance(db, "inventory_warehouse1", "inventory");
+    await createMultiCollectionInstance(db, "catalog_paris", catalogModel);
+    await createMultiCollectionInstance(db, "catalog_lyon", catalogModel);
+    await createMultiCollectionInstance(db, "catalog_marseille", catalogModel);
+    await createMultiCollectionInstance(db, "inventory_warehouse1", inventoryModel);
 
     // Note: discoverMultiCollectionInstances uses listCollections which cannot run
     // in a transaction (MongoDB limitation), so we call it outside the session.
@@ -359,9 +363,7 @@ Deno.test("Utility functions in session: getMultiCollectionInfo", async (t) => {
     const { withSession } = getSessionContext(db.client);
 
     // Create an instance
-    await createMultiCollectionInstance(db, "catalog_info_test", "catalog", {
-      migrationId: "migration-v1",
-    });
+    await createMultiCollectionInstance(db, "catalog_info_test", catalogModel);
 
     // Get info in a session
     const result = await withSession(async () => {
@@ -381,10 +383,8 @@ Deno.test("Utility functions in session: getMultiCollectionMigrations", async (t
   await withDatabase(t.name, async (db) => {
     const { withSession } = getSessionContext(db.client);
 
-    // Create an instance with a migration ID
-    await createMultiCollectionInstance(db, "catalog_migrations_test", "catalog", {
-      migrationId: "migration-001",
-    });
+    // Create an instance
+    await createMultiCollectionInstance(db, "catalog_migrations_test", catalogModel);
 
     // Get migrations in a session
     const result = await withSession(async () => {
@@ -410,7 +410,7 @@ Deno.test("Utility functions in session: markAsMultiCollection", async (t) => {
 
     // Mark it as a multi-collection in a session
     await withSession(async () => {
-      await markAsMultiCollection(db, "legacy_catalog", "catalog", "adoption-migration");
+      await markAsMultiCollection(db, "legacy_catalog", catalogModel.name, "adoption-migration");
     });
 
     // Verify it's now marked
@@ -432,12 +432,8 @@ Deno.test("Utility functions in session: Combined operations", async (t) => {
     const { withSession } = getSessionContext(db.client);
 
     // Create multiple instances OUTSIDE session (DDL operations incompatible with transactions)
-    await createMultiCollectionInstance(db, "store_a", "catalog", {
-      migrationId: "init-001",
-    });
-    await createMultiCollectionInstance(db, "store_b", "catalog", {
-      migrationId: "init-001",
-    });
+    await createMultiCollectionInstance(db, "store_a", catalogModel);
+    await createMultiCollectionInstance(db, "store_b", catalogModel);
 
     // Query info within a session to test session-aware reads
     const result = await withSession(async () => {
@@ -476,7 +472,7 @@ Deno.test("Utility functions in session: createMultiCollectionInstance throws in
     await assertRejects(
       async () => {
         await withSession(async () => {
-          await createMultiCollectionInstance(db, "should_fail", "catalog");
+          await createMultiCollectionInstance(db, "should_fail", catalogModel);
         });
       },
       Error,
