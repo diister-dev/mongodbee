@@ -287,22 +287,24 @@ Deno.test("Utility functions in session: createMultiCollectionInstance", async (
   await withDatabase(t.name, async (db) => {
     const { withSession } = getSessionContext(db.client);
 
-    // Create instance metadata in a session
-    await withSession(async () => {
-      await createMultiCollectionInstance(db, "catalog_store1", "catalog", {
-        migrationId: "test-migration-001",
-      });
-
-      await createMultiCollectionInstance(db, "catalog_store2", "catalog", {
-        migrationId: "test-migration-001",
-      });
+    // Create instance metadata OUTSIDE session (DDL operations incompatible with transactions)
+    await createMultiCollectionInstance(db, "catalog_store1", "catalog", {
+      migrationId: "test-migration-001",
     });
 
-    // Verify instances were created
-    const exists1 = await multiCollectionInstanceExists(db, "catalog_store1");
-    const exists2 = await multiCollectionInstanceExists(db, "catalog_store2");
-    assertEquals(exists1, true, "catalog_store1 should exist");
-    assertEquals(exists2, true, "catalog_store2 should exist");
+    await createMultiCollectionInstance(db, "catalog_store2", "catalog", {
+      migrationId: "test-migration-001",
+    });
+
+    // Verify instances were created, checking within a session to ensure session-aware reads work
+    const result = await withSession(async () => {
+      const exists1 = await multiCollectionInstanceExists(db, "catalog_store1");
+      const exists2 = await multiCollectionInstanceExists(db, "catalog_store2");
+      return { exists1, exists2 };
+    });
+
+    assertEquals(result.exists1, true, "catalog_store1 should exist");
+    assertEquals(result.exists2, true, "catalog_store2 should exist");
   });
 });
 
@@ -328,15 +330,11 @@ Deno.test("Utility functions in session: multiCollectionInstanceExists", async (
 
 Deno.test("Utility functions in session: discoverMultiCollectionInstances", async (t) => {
   await withDatabase(t.name, async (db) => {
-    const { withSession } = getSessionContext(db.client);
-
-    // Create multiple instances in a session
-    await withSession(async () => {
-      await createMultiCollectionInstance(db, "catalog_paris", "catalog");
-      await createMultiCollectionInstance(db, "catalog_lyon", "catalog");
-      await createMultiCollectionInstance(db, "catalog_marseille", "catalog");
-      await createMultiCollectionInstance(db, "inventory_warehouse1", "inventory");
-    });
+    // Create multiple instances OUTSIDE session (DDL operations incompatible with transactions)
+    await createMultiCollectionInstance(db, "catalog_paris", "catalog");
+    await createMultiCollectionInstance(db, "catalog_lyon", "catalog");
+    await createMultiCollectionInstance(db, "catalog_marseille", "catalog");
+    await createMultiCollectionInstance(db, "inventory_warehouse1", "inventory");
 
     // Note: discoverMultiCollectionInstances uses listCollections which cannot run
     // in a transaction (MongoDB limitation), so we call it outside the session.
@@ -433,16 +431,16 @@ Deno.test("Utility functions in session: Combined operations", async (t) => {
   await withDatabase(t.name, async (db) => {
     const { withSession } = getSessionContext(db.client);
 
-    // Complex scenario: create instances, query info, all in one transaction
-    const result = await withSession(async () => {
-      // Create multiple instances
-      await createMultiCollectionInstance(db, "store_a", "catalog", {
-        migrationId: "init-001",
-      });
-      await createMultiCollectionInstance(db, "store_b", "catalog", {
-        migrationId: "init-001",
-      });
+    // Create multiple instances OUTSIDE session (DDL operations incompatible with transactions)
+    await createMultiCollectionInstance(db, "store_a", "catalog", {
+      migrationId: "init-001",
+    });
+    await createMultiCollectionInstance(db, "store_b", "catalog", {
+      migrationId: "init-001",
+    });
 
+    // Query info within a session to test session-aware reads
+    const result = await withSession(async () => {
       // Check they exist
       const existsA = await multiCollectionInstanceExists(db, "store_a");
       const existsB = await multiCollectionInstanceExists(db, "store_b");
@@ -469,33 +467,24 @@ Deno.test("Utility functions in session: Combined operations", async (t) => {
   });
 });
 
-// Test that utility functions properly roll back on error
-// Now that they're session-aware, operations should be rolled back
-Deno.test("Utility functions in session: Rollback on error", async (t) => {
+// Test that createMultiCollectionInstance throws when called in a session
+Deno.test("Utility functions in session: createMultiCollectionInstance throws in session", async (t) => {
   await withDatabase(t.name, async (db) => {
     const { withSession } = getSessionContext(db.client);
 
-    // Try to create instances and then fail
+    // Try to create instance within a session - should throw
     await assertRejects(
       async () => {
         await withSession(async () => {
-          await createMultiCollectionInstance(db, "rollback_store1", "catalog");
-          await createMultiCollectionInstance(db, "rollback_store2", "catalog");
-
-          // Throw to trigger rollback
-          throw new Error("Intentional rollback error");
+          await createMultiCollectionInstance(db, "should_fail", "catalog");
         });
       },
       Error,
-      "Intentional rollback error",
+      "Cannot call createMultiCollectionInstance() within an active session/transaction",
     );
 
-    // Utility functions are now session-aware, so operations should be rolled back
-    const exists1 = await multiCollectionInstanceExists(db, "rollback_store1");
-    const exists2 = await multiCollectionInstanceExists(db, "rollback_store2");
-
-    // These should be false because the transaction was rolled back
-    assertEquals(exists1, false, "rollback_store1 should be rolled back");
-    assertEquals(exists2, false, "rollback_store2 should be rolled back");
+    // Verify nothing was created
+    const exists = await multiCollectionInstanceExists(db, "should_fail");
+    assertEquals(exists, false, "should_fail should not exist");
   });
 });

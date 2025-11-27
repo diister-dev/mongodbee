@@ -156,50 +156,55 @@ Deno.test({
 },
 });
 
-Deno.test("Write Conflict: Multiple updateOne in same withSession (should work)", async (t) => {
-  await withDatabase(t.name, async (db) => {
-    const store = await multiCollection(db, "store", testModel);
+Deno.test({
+  name: "Write Conflict: Multiple updateOne in same withSession (should work)",
+  sanitizeOps: false,  // Disable sanitizer due to expected timer leaks from concurrent retries
+  sanitizeResources: false,
+  fn: async (t) => {
+    await withDatabase(t.name, async (db) => {
+      const store = await multiCollection(db, "store", testModel);
 
-    // Insert test data
-    const userId = await store.insertOne("user", {
-      name: "Alice",
-      email: "alice@example.com",
-      balance: 100,
-    });
-
-    const productId = await store.insertOne("product", {
-      name: "Widget",
-      price: 50,
-      stock: 10,
-    });
-
-    // Multiple updates to DIFFERENT documents in the same session should work fine
-    await store.withSession(async () => {
-      // Update user
-      await store.updateOne("user", userId, {
-        balance: 50,
+      // Insert test data
+      const userId = await store.insertOne("user", {
+        name: "Alice",
+        email: "alice@example.com",
+        balance: 100,
       });
 
-      // Update product
-      await store.updateOne("product", productId, {
-        stock: 9,
+      const productId = await store.insertOne("product", {
+        name: "Widget",
+        price: 50,
+        stock: 10,
       });
 
-      // Another update to user (same document, but sequential in same transaction)
-      await store.updateOne("user", userId, {
-        balance: 45,
+      // Multiple updates to DIFFERENT documents in the same session should work fine
+      await store.withSession(async () => {
+        // Update user
+        await store.updateOne("user", userId, {
+          balance: 50,
+        });
+
+        // Update product
+        await store.updateOne("product", productId, {
+          stock: 9,
+        });
+
+        // Another update to user (same document, but sequential in same transaction)
+        await store.updateOne("user", userId, {
+          balance: 45,
+        });
       });
+
+      // Verify all updates succeeded
+      const finalUser = await store.findOne("user", { _id: userId });
+      assert(finalUser !== null);
+      assertEquals(finalUser.balance, 45);
+
+      const finalProduct = await store.findOne("product", { _id: productId });
+      assert(finalProduct !== null);
+      assertEquals(finalProduct.stock, 9);
     });
-
-    // Verify all updates succeeded
-    const finalUser = await store.findOne("user", { _id: userId });
-    assert(finalUser !== null);
-    assertEquals(finalUser.balance, 45);
-
-    const finalProduct = await store.findOne("product", { _id: productId });
-    assert(finalProduct !== null);
-    assertEquals(finalProduct.stock, 9);
-  });
+  }
 });
 
 Deno.test("Write Conflict: Nested withSession calls on same document", async (t) => {

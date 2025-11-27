@@ -955,22 +955,22 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 }
 
 /**
- * Creates a NEW instance of a multi-collection from a model
+ * Creates a NEW multi-collection instance from a known model
  *
- * This function creates a brand new multi-collection instance with metadata tracking
- * for migrations. Use this when you want to create a new instance in production that
- * should start with the current schema state.
+ * This creates a physical collection with validators and indexes applied immediately.
+ * The model defined in code is the source of truth - no metadata tracking is created.
  *
- * The function will:
- * 1. Create the physical MongoDB collection
- * 2. Register it with metadata linking to the model and current migration version
- * 3. Return a fully functional multi-collection instance
+ * Use this to create production collections based on models defined in your code.
+ * The collection will have its schema and indexes applied automatically.
  *
  * @param db - MongoDB database instance
  * @param collectionName - Name of the collection to create
  * @param model - The multi-collection model to use as template
  * @param options - Additional options for the collection
  * @returns A Promise resolving to an enhanced MongoDB collection
+ *
+ * @throws {Error} If called within an active session/transaction (DDL operations incompatible)
+ * @throws {Error} If collection already exists
  *
  * @example
  * ```typescript
@@ -990,11 +990,13 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
  *   }
  * });
  *
- * // Create a new instance in production
+ * // ✅ Create collection outside session
  * const catalogLouvre = await newMultiCollection(db, "catalog_louvre", catalogModel);
  *
- * // This instance is now tracked and will only receive future migrations
- * await catalogLouvre.insertOne("category", { name: "Paintings" });
+ * // ✓ Then use it inside session for data operations
+ * await catalogLouvre.withSession(async () => {
+ *   await catalogLouvre.insertOne("category", { name: "Paintings" });
+ * });
  * ```
  */
 export async function newMultiCollection<const T extends MultiCollectionSchema>(
@@ -1003,39 +1005,79 @@ export async function newMultiCollection<const T extends MultiCollectionSchema>(
   model: MultiCollectionModel<T>,
   options?: m.CollectionOptions & CollectionOptions,
 ): Promise<MultiCollectionResult<T>> {
-  // Get the current migration version
-  const lastMigration = await getLastAppliedMigration(db);
-  const currentMigrationId = lastMigration?.id || "current";
+  // Check if we're in a session - DDL operations are incompatible with transactions
+  const { getSession } = getSessionContext(db.client);
+  const activeSession = getSession();
 
-  // Create metadata for this new instance
-  await createMultiCollectionInfo(
-    db,
-    collectionName,
-    model.name,
-    currentMigrationId,
-  );
+  if (activeSession) {
+    throw new Error(
+      `Cannot call newMultiCollection() within an active session/transaction.\n` +
+      `This function applies validators and indexes using DDL operations (createCollection, collMod, createIndex)\n` +
+      `which are incompatible with transactions.\n\n` +
+      `Solution: Call newMultiCollection() BEFORE entering a session:\n\n` +
+      `  // ✅ Create collection outside session\n` +
+      `  const catalog = await newMultiCollection(db, "catalog_paris", catalogModel);\n` +
+      `  \n` +
+      `  // ✓ Then use it inside session for data operations\n` +
+      `  await catalog.withSession(async () => {\n` +
+      `    await catalog.insertOne("product", { name: "Item", price: 100 });\n` +
+      `  });`
+    );
+  }
 
-  // Create and return the multi-collection instance
-  return await multiCollection(db, collectionName, model, options);
+  // Check if collection already exists
+  const collections = await db.listCollections({ name: collectionName }).toArray();
+  if (collections.length > 0) {
+    throw new Error(
+      `Collection "${collectionName}" already exists.\n` +
+      `Use multiCollection() to connect to an existing collection.`
+    );
+  }
+
+  // Create the collection with validators and indexes applied immediately
+  // No metadata needed - the model in code is the source of truth
+  return await multiCollection(db, collectionName, model, {
+    ...options,
+    schemaManagement: "auto", // Force immediate application of schema/indexes
+  });
 }
 
 /**
- * Creates a multi-collection instance without returning the collection object.
+ * Creates a multi-collection instance WITH metadata tracking
  *
- * Use this in migrations to create new instances that should be tracked
- * in the migration system. This only creates the metadata, not the collection
- * operations wrapper.
+ * Use this to create ad-hoc collection instances that don't have a
+ * corresponding model in the code. The metadata allows the migration
+ * system to track and manage this collection.
+ *
+ * This function will:
+ * 1. Create the physical MongoDB collection (if needed)
+ * 2. Apply validators and indexes based on the provided schema (if given)
+ * 3. Create metadata documents (_information, _migrations)
  *
  * @param db - MongoDB database instance
  * @param collectionName - Name of the collection to create
- * @param modelName - The name of the multi-collection model
+ * @param modelName - The name of the multi-collection model (for reference)
  * @param options - Additional options
  * @returns A Promise that resolves when the instance is created
  *
+ * @throws {Error} If called within an active session/transaction (DDL operations incompatible)
+ * @throws {Error} If instance already exists
+ *
  * @example
  * ```typescript
- * // In a migration
+ * // In a migration - create with schema
  * await createMultiCollectionInstance(db, "catalog_louvre", "catalog", {
+ *   migrationId: migration.id,
+ *   schema: {
+ *     product: {
+ *       name: v.string(),
+ *       price: v.number(),
+ *     }
+ *   }
+ * });
+ *
+ * // Or create without schema (just metadata)
+ * await createMultiCollectionInstance(db, "catalog_legacy", "catalog", {
  *   migrationId: migration.id
  * });
  * ```
@@ -1044,17 +1086,57 @@ export async function createMultiCollectionInstance(
   db: Db,
   collectionName: string,
   modelName: string,
-  options?: { migrationId?: string },
+  options?: {
+    migrationId?: string;
+    schema?: MultiCollectionSchema;
+  },
 ): Promise<void> {
+  // Check if we're in a session - DDL operations are incompatible with transactions
+  const { getSession } = getSessionContext(db.client);
+  const activeSession = getSession();
+
+  if (activeSession) {
+    throw new Error(
+      `Cannot call createMultiCollectionInstance() within an active session/transaction.\n` +
+      `This function creates the collection and applies validators/indexes using DDL operations\n` +
+      `which are incompatible with transactions.\n\n` +
+      `Solution: Call this function OUTSIDE of any session/transaction.`
+    );
+  }
+
   const migrationId = options?.migrationId || "current";
 
   // Check if already exists
   const exists = await multiCollectionInstanceExists(db, collectionName);
   if (exists) {
-    throw new Error(`Multi-collection instance "${collectionName}" already exists`);
+    throw new Error(
+      `Multi-collection instance "${collectionName}" already exists.`
+    );
   }
 
-  // Create the metadata
+  // If schema provided, create collection with validators/indexes
+  if (options?.schema) {
+    // Create a temporary model to use multiCollection's schema application
+    const tempModel = {
+      name: modelName,
+      schema: options.schema,
+      expose: () => ({}),
+    } as MultiCollectionModel<typeof options.schema>;
+
+    // Create collection with schema (this will apply validators and indexes)
+    // We use schemaManagement: "auto" to force immediate application
+    await multiCollection(db, collectionName, tempModel, {
+      schemaManagement: "auto",
+    });
+  } else {
+    // Just ensure the collection exists (no schema validation)
+    const collections = await db.listCollections({ name: collectionName }).toArray();
+    if (collections.length === 0) {
+      await db.createCollection(collectionName);
+    }
+  }
+
+  // Create metadata to track this ad-hoc instance
   await createMultiCollectionInfo(db, collectionName, modelName, migrationId);
 }
 
