@@ -1090,7 +1090,7 @@ export async function createMultiCollectionInstance<const T extends MultiCollect
   collectionName: string,
   model: MultiCollectionModel<T>,
   options?: m.CollectionOptions & CollectionOptions,
-): Promise<void> {
+): Promise<MultiCollectionResult<T>> {
   // Check if we're in a session - DDL operations are incompatible with transactions
   const { getSession } = getSessionContext(db.client);
   const activeSession = getSession();
@@ -1116,13 +1116,10 @@ export async function createMultiCollectionInstance<const T extends MultiCollect
   // This will apply validators, indexes, AND create metadata automatically
   // because we're using schemaManagement: "auto" with a model
   // The migration ID is determined from the current migration state
-  await multiCollection(db, collectionName, model, {
+  return await multiCollection(db, collectionName, model, {
     ...options,
     schemaManagement: "auto", // Force immediate application + metadata creation
   });
-
-  // Note: Metadata is already created by multiCollection's init() function
-  // when using a model with schemaManagement: "auto"
 }
 
 // Re-export utility functions from multicollection-registry for public use
