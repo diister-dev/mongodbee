@@ -23,6 +23,7 @@ export function dirtyEquivalent(a: unknown, b: unknown): boolean {
 export function deepSortObject(obj: any): any {
   const t = typeof obj;
   if (t !== "object") return obj;
+  if (obj === null) return obj; // null is of type "object"
 
   // Only sort keys
   if (Array.isArray(obj)) {
