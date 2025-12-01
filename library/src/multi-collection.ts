@@ -147,6 +147,34 @@ type StageBuilder<T extends MultiCollectionSchema> = {
       let?: Record<string, unknown>;
     },
   ) => AggregationStage;
+  /** 
+   * Lookup without _type constraint - useful for polymorphic references 
+   * where the ID prefix (e.g., "collaborator:xxx") already guarantees uniqueness.
+   * Returns documents from any type in the collection.
+   */
+  anyLookup: (
+    localField: string,
+    foreignField: string,
+    asOrOptions?: string | {
+      as?: string;
+      pipeline?: (stage: StageBuilder<T>) => AggregationStage[];
+      let?: Record<string, unknown>;
+    },
+  ) => AggregationStage;
+  /**
+   * Lookup into an external collection (outside this multi-collection).
+   * Useful for joining with other MongoDB collections or other multi-collections.
+   */
+  externalLookup: (
+    fromCollection: string,
+    localField: string,
+    foreignField: string,
+    asOrOptions?: string | {
+      as?: string;
+      pipeline?: AggregationStage[];
+      let?: Record<string, unknown>;
+    },
+  ) => AggregationStage;
   project: (projection: Record<string, 1 | 0 | string | Record<string, unknown>>) => AggregationStage;
   addFields: (fields: Record<string, unknown>) => AggregationStage;
   group: (grouping: Record<string, unknown>) => AggregationStage;
@@ -197,6 +225,8 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
       afterId?: string;
       beforeId?: string;
       sort?: m.Sort | m.SortDirection;
+      /** Pipeline stages to execute server-side before pagination (lookups, addFields, etc.) */
+      pipeline?: (stage: StageBuilder<T>) => AggregationStage[];
       prepare?: (
         doc: v.InferOutput<OutputElementSchema<T, E>>,
       ) => Promise<EN> | EN;
@@ -540,12 +570,13 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 afterId?: string,
                 beforeId?: string,
                 sort?: m.Sort | m.SortDirection,
+                pipeline?: (stage: StageBuilder<T>) => AggregationStage[],
                 prepare?: (doc: v.InferOutput<OutputElementSchema<T, E>>) => Promise<EN>,
                 filter?: (doc: EN) => Promise<boolean> | boolean,
                 format?: (doc: EN) => Promise<R>,
             }
         ) {
-            let { limit = 100, afterId, beforeId, sort, prepare, filter: customFilter, format } = options || {};
+            let { limit = 100, afterId, beforeId, sort, pipeline: pipelineBuilder, prepare, filter: customFilter, format } = options || {};
             const session = sessionContext.getSession();
             
             const typeChecker = {
@@ -611,7 +642,185 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 }
             }
 
-            const cursor = collection.find(query as never, { session }).sort(sort as m.Sort);
+            // Create StageBuilder for pipeline support
+            const createStageBuilder = (): StageBuilder<T> => ({
+                match: (matchKey, matchFilter) => ({
+                    $match: {
+                        _type: matchKey as string,
+                        ...matchFilter,
+                    },
+                }),
+                unwind: (_unwindKey, field) => ({
+                    $unwind: `$${field}`,
+                }),
+                lookup: (lookupKey, localField, foreignField, asOrOptions) => {
+                    // Simple case: string parameter is the 'as' field name
+                    // Automatically filter by _type for multi-collection support
+                    if (typeof asOrOptions === 'string') {
+                        return {
+                            $lookup: {
+                                from: collectionName,
+                                let: { localValue: `$${localField}` },
+                                pipeline: [
+                                    {
+                                        $match: {
+                                            $expr: {
+                                                $and: [
+                                                    { $eq: [`$${foreignField}`, "$$localValue"] },
+                                                    { $eq: ["$_type", lookupKey as string] },
+                                                ],
+                                            },
+                                        },
+                                    },
+                                ],
+                                as: asOrOptions,
+                            },
+                        };
+                    }
+
+                    // Advanced case: object with options
+                    const lookupOptions = asOrOptions || {};
+                    const as = lookupOptions.as || localField;
+                    
+                    // Build the lookup with automatic _type filter
+                    const lookupStage: Record<string, unknown> = {
+                        from: collectionName,
+                        let: { localValue: `$${localField}`, ...(lookupOptions.let || {}) },
+                        as,
+                    };
+
+                    // Build pipeline: start with _type match, then add user pipeline if provided
+                    const basePipeline: AggregationStage[] = [
+                        {
+                            $match: {
+                                $expr: {
+                                    $and: [
+                                        { $eq: [`$${foreignField}`, "$$localValue"] },
+                                        { $eq: ["$_type", lookupKey as string] },
+                                    ],
+                                },
+                            },
+                        },
+                    ];
+
+                    // Add user-provided pipeline stages after the base filter
+                    if (lookupOptions.pipeline) {
+                        const userPipeline = lookupOptions.pipeline(createStageBuilder());
+                        basePipeline.push(...userPipeline);
+                    }
+
+                    lookupStage.pipeline = basePipeline;
+
+                    return { $lookup: lookupStage };
+                },
+                anyLookup: (localField, foreignField, asOrOptions) => {
+                    // Simple case: string parameter is the 'as' field name
+                    // No _type filter - matches any document type
+                    if (typeof asOrOptions === 'string') {
+                        return {
+                            $lookup: {
+                                from: collectionName,
+                                localField,
+                                foreignField,
+                                as: asOrOptions,
+                            },
+                        };
+                    }
+
+                    // Advanced case: object with options
+                    const anyLookupOptions = asOrOptions || {};
+                    const as = anyLookupOptions.as || localField;
+                    const anyLookupStage: Record<string, unknown> = {
+                        from: collectionName,
+                        localField,
+                        foreignField,
+                        as,
+                    };
+
+                    // Add let variables if provided
+                    if (anyLookupOptions.let) {
+                        anyLookupStage.let = anyLookupOptions.let;
+                    }
+
+                    // Add pipeline if provided (execute the builder function)
+                    if (anyLookupOptions.pipeline) {
+                        anyLookupStage.pipeline = anyLookupOptions.pipeline(createStageBuilder());
+                    }
+
+                    return { $lookup: anyLookupStage };
+                },
+                externalLookup: (fromCollection, localField, foreignField, asOrOptions) => {
+                    // Simple case: string parameter is the 'as' field name
+                    if (typeof asOrOptions === 'string') {
+                        return {
+                            $lookup: {
+                                from: fromCollection,
+                                localField,
+                                foreignField,
+                                as: asOrOptions,
+                            },
+                        };
+                    }
+
+                    // Advanced case: object with options
+                    const extLookupOptions = asOrOptions || {};
+                    const as = extLookupOptions.as || localField;
+                    const extLookupStage: Record<string, unknown> = {
+                        from: fromCollection,
+                        localField,
+                        foreignField,
+                        as,
+                    };
+
+                    // Add let variables if provided
+                    if (extLookupOptions.let) {
+                        extLookupStage.let = extLookupOptions.let;
+                    }
+
+                    // Add pipeline if provided (raw pipeline, not using StageBuilder)
+                    if (extLookupOptions.pipeline) {
+                        extLookupStage.pipeline = extLookupOptions.pipeline;
+                    }
+
+                    return { $lookup: extLookupStage };
+                },
+                project: (projection) => ({
+                    $project: projection,
+                }),
+                addFields: (fields) => ({
+                    $addFields: fields,
+                }),
+                group: (grouping) => ({
+                    $group: grouping,
+                }),
+                sort: (sortSpec) => ({
+                    $sort: sortSpec,
+                }),
+                limit: (limitVal) => ({
+                    $limit: limitVal,
+                }),
+                skip: (skipVal) => ({
+                    $skip: skipVal,
+                })
+            });
+
+            // Build cursor - use aggregate if pipeline is provided, otherwise use find
+            // deno-lint-ignore no-explicit-any
+            let cursor: m.FindCursor<any> | m.AggregationCursor<any>;
+            
+            if (pipelineBuilder) {
+                // Build aggregation pipeline with user stages
+                const userPipeline = pipelineBuilder(createStageBuilder());
+                const aggregatePipeline: AggregationStage[] = [
+                    { $match: query },
+                    ...userPipeline,
+                    { $sort: sort as Record<string, 1 | -1> },
+                ];
+                cursor = collection.aggregate(aggregatePipeline, { session });
+            } else {
+                cursor = collection.find(query as never, { session }).sort(sort as m.Sort);
+            }
+
             let hardLimit = 10_000;
             const elements: R[] = [];
             
@@ -625,7 +834,11 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                     continue; // Skip invalid documents
                 }
 
-                const validatedDoc = validation.output as v.InferOutput<OutputElementSchema<T, E>>;
+                // When pipeline is used, merge validated doc with original doc to preserve
+                // additional fields added by pipeline stages (like $lookup results)
+                const validatedDoc = pipelineBuilder 
+                    ? { ...doc, ...validation.output } as v.InferOutput<OutputElementSchema<T, E>>
+                    : validation.output as v.InferOutput<OutputElementSchema<T, E>>;
                 
                 // Step 1: Prepare - enrich document with external data
                 const enrichedDoc = prepare ? await prepare(validatedDoc) : validatedDoc as unknown as EN;
@@ -878,11 +1091,72 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                         ...filter,
                     },
                 }),
-                unwind: (key, field) => ({
+                unwind: (_key, field) => ({
                     $unwind: `$${field}`,
                 }),
-                lookup: (key, localField, foreignField, asOrOptions) => {
+                lookup: (lookupKey, localField, foreignField, asOrOptions) => {
                     // Simple case: string parameter is the 'as' field name
+                    // Automatically filter by _type for multi-collection support
+                    if (typeof asOrOptions === 'string') {
+                        return {
+                            $lookup: {
+                                from: collectionName,
+                                let: { localValue: `$${localField}` },
+                                pipeline: [
+                                    {
+                                        $match: {
+                                            $expr: {
+                                                $and: [
+                                                    { $eq: [`$${foreignField}`, "$$localValue"] },
+                                                    { $eq: ["$_type", lookupKey as string] },
+                                                ],
+                                            },
+                                        },
+                                    },
+                                ],
+                                as: asOrOptions,
+                            },
+                        };
+                    }
+
+                    // Advanced case: object with options
+                    const options = asOrOptions || {};
+                    const as = options.as || localField;
+                    
+                    // Build the lookup with automatic _type filter
+                    const lookupStage: Record<string, unknown> = {
+                        from: collectionName,
+                        let: { localValue: `$${localField}`, ...(options.let || {}) },
+                        as,
+                    };
+
+                    // Build pipeline: start with _type match, then add user pipeline if provided
+                    const basePipeline: AggregationStage[] = [
+                        {
+                            $match: {
+                                $expr: {
+                                    $and: [
+                                        { $eq: [`$${foreignField}`, "$$localValue"] },
+                                        { $eq: ["$_type", lookupKey as string] },
+                                    ],
+                                },
+                            },
+                        },
+                    ];
+
+                    // Add user-provided pipeline stages after the base filter
+                    if (options.pipeline) {
+                        const userPipeline = options.pipeline(stage);
+                        basePipeline.push(...userPipeline);
+                    }
+
+                    lookupStage.pipeline = basePipeline;
+
+                    return { $lookup: lookupStage };
+                },
+                anyLookup: (localField, foreignField, asOrOptions) => {
+                    // Simple case: string parameter is the 'as' field name
+                    // No _type filter - matches any document type
                     if (typeof asOrOptions === 'string') {
                         return {
                             $lookup: {
@@ -895,9 +1169,9 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                     }
 
                     // Advanced case: object with options
-                    const options = asOrOptions || {};
-                    const as = options.as || localField;
-                    const lookupStage: Record<string, unknown> = {
+                    const anyLookupOptions = asOrOptions || {};
+                    const as = anyLookupOptions.as || localField;
+                    const anyLookupStage: Record<string, unknown> = {
                         from: collectionName,
                         localField,
                         foreignField,
@@ -905,16 +1179,51 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                     };
 
                     // Add let variables if provided
-                    if (options.let) {
-                        lookupStage.let = options.let;
+                    if (anyLookupOptions.let) {
+                        anyLookupStage.let = anyLookupOptions.let;
                     }
 
                     // Add pipeline if provided (execute the builder function)
-                    if (options.pipeline) {
-                        lookupStage.pipeline = options.pipeline(stage);
+                    if (anyLookupOptions.pipeline) {
+                        anyLookupStage.pipeline = anyLookupOptions.pipeline(stage);
                     }
 
-                    return { $lookup: lookupStage };
+                    return { $lookup: anyLookupStage };
+                },
+                externalLookup: (fromCollection, localField, foreignField, asOrOptions) => {
+                    // Simple case: string parameter is the 'as' field name
+                    if (typeof asOrOptions === 'string') {
+                        return {
+                            $lookup: {
+                                from: fromCollection,
+                                localField,
+                                foreignField,
+                                as: asOrOptions,
+                            },
+                        };
+                    }
+
+                    // Advanced case: object with options
+                    const extLookupOptions = asOrOptions || {};
+                    const as = extLookupOptions.as || localField;
+                    const extLookupStage: Record<string, unknown> = {
+                        from: fromCollection,
+                        localField,
+                        foreignField,
+                        as,
+                    };
+
+                    // Add let variables if provided
+                    if (extLookupOptions.let) {
+                        extLookupStage.let = extLookupOptions.let;
+                    }
+
+                    // Add pipeline if provided (raw pipeline, not using StageBuilder)
+                    if (extLookupOptions.pipeline) {
+                        extLookupStage.pipeline = extLookupOptions.pipeline;
+                    }
+
+                    return { $lookup: extLookupStage };
                 },
                 project: (projection) => ({
                     $project: projection,

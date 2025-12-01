@@ -12,6 +12,59 @@ import { isSchemaManaged } from "./runtime-config.ts";
 import type { Db } from "./mongodb.ts";
 import type * as m from "mongodb";
 
+// Type for aggregation pipeline stages in simple collections
+type AggregationStage = Record<string, unknown>;
+
+/**
+ * Stage builder for simple collections (not multi-collection)
+ * Provides helpers for building aggregation pipeline stages
+ */
+type SimpleStageBuilder = {
+  /** Match documents by filter */
+  match: (filter: Record<string, unknown>) => AggregationStage;
+  /** Unwind an array field */
+  unwind: (field: string) => AggregationStage;
+  /** 
+   * Lookup into the same collection 
+   * Useful for self-referential documents
+   */
+  lookup: (
+    localField: string,
+    foreignField: string,
+    asOrOptions?: string | {
+      as?: string;
+      pipeline?: AggregationStage[];
+      let?: Record<string, unknown>;
+    },
+  ) => AggregationStage;
+  /**
+   * Lookup into an external collection
+   * Useful for joining with other MongoDB collections
+   */
+  externalLookup: (
+    fromCollection: string,
+    localField: string,
+    foreignField: string,
+    asOrOptions?: string | {
+      as?: string;
+      pipeline?: AggregationStage[];
+      let?: Record<string, unknown>;
+    },
+  ) => AggregationStage;
+  /** Project specific fields */
+  project: (projection: Record<string, 1 | 0 | string | Record<string, unknown>>) => AggregationStage;
+  /** Add computed fields */
+  addFields: (fields: Record<string, unknown>) => AggregationStage;
+  /** Group documents */
+  group: (grouping: Record<string, unknown>) => AggregationStage;
+  /** Sort documents */
+  sort: (sort: Record<string, 1 | -1>) => AggregationStage;
+  /** Limit number of documents */
+  limit: (limit: number) => AggregationStage;
+  /** Skip documents */
+  skip: (skip: number) => AggregationStage;
+};
+
 type CollectionOptions = {
   safeDelete?: boolean;
   enableWatching?: boolean;
@@ -170,6 +223,7 @@ export type CollectionResult<
         prepare?: (doc: WithId<TOutput<T>>) => Promise<E> | E;
         filter?: (doc: E) => Promise<boolean> | boolean;
         format?: (doc: E) => Promise<R> | R;
+        pipeline?: (stage: SimpleStageBuilder) => AggregationStage[];
       },
     ) => Promise<{
       total: number;
@@ -630,12 +684,13 @@ export async function collection<
         prepare?: (doc: WithId<TOutput>) => Promise<E>,
         filter?: (doc: E) => Promise<boolean> | boolean,
         format?: (doc: E) => Promise<R>,
+        pipeline?: (stage: SimpleStageBuilder) => AggregationStage[],
     }): Promise<{
         total: number,
         position: number,
         data: R[],
     }> {
-        let { limit = 100, afterId, beforeId, sort, prepare, filter: customFilter, format } = options || {};
+        let { limit = 100, afterId, beforeId, sort, prepare, filter: customFilter, format, pipeline: pipelineBuilder } = options || {};
         const session = sessionContext.getSession();
         const baseQuery: m.Filter<TInput> = { ...filter };
         let query: m.Filter<TInput> = { ...filter };
@@ -682,18 +737,118 @@ export async function collection<
             }
         }
 
-        const cursor = collection.find(query, { session }).sort(sort as m.Sort);
+        // Stage builder for simple collections
+        const stageBuilder: SimpleStageBuilder = {
+          match: (matchFilter: Record<string, unknown>) => ({ $match: matchFilter }),
+          unwind: (field: string) => ({ $unwind: field.startsWith('$') ? field : `$${field}` }),
+          lookup: (localField, foreignField, asOrOptions) => {
+            const baseAs = typeof asOrOptions === 'string' ? asOrOptions : asOrOptions?.as ?? localField;
+            if (typeof asOrOptions === 'object' && (asOrOptions.pipeline || asOrOptions.let)) {
+              return {
+                $lookup: {
+                  from: collectionName,
+                  localField,
+                  foreignField,
+                  as: baseAs,
+                  ...(asOrOptions.let ? { let: asOrOptions.let } : {}),
+                  ...(asOrOptions.pipeline ? { pipeline: asOrOptions.pipeline } : {}),
+                },
+              };
+            }
+            return {
+              $lookup: {
+                from: collectionName,
+                localField,
+                foreignField,
+                as: baseAs,
+              },
+            };
+          },
+          externalLookup: (fromCollection, localField, foreignField, asOrOptions) => {
+            const baseAs = typeof asOrOptions === 'string' ? asOrOptions : asOrOptions?.as ?? localField;
+            if (typeof asOrOptions === 'object' && (asOrOptions.pipeline || asOrOptions.let)) {
+              return {
+                $lookup: {
+                  from: fromCollection,
+                  localField,
+                  foreignField,
+                  as: baseAs,
+                  ...(asOrOptions.let ? { let: asOrOptions.let } : {}),
+                  ...(asOrOptions.pipeline ? { pipeline: asOrOptions.pipeline } : {}),
+                },
+              };
+            }
+            return {
+              $lookup: {
+                from: fromCollection,
+                localField,
+                foreignField,
+                as: baseAs,
+              },
+            };
+          },
+          project: (projection) => ({ $project: projection }),
+          addFields: (fields) => ({ $addFields: fields }),
+          group: (grouping) => ({ $group: grouping }),
+          sort: (sortSpec) => ({ $sort: sortSpec }),
+          limit: (limitVal) => ({ $limit: limitVal }),
+          skip: (skipVal) => ({ $skip: skipVal }),
+        };
+
+        // Build aggregation pipeline if provided
+        const customPipeline = pipelineBuilder ? pipelineBuilder(stageBuilder) : [];
+
         let hardLimit = 10_000;
         const elements: R[] = [];
         
-        while(hardLimit-- > 0 && limit > 0) {
+        // Use aggregation pipeline when custom pipeline is provided
+        if (customPipeline.length > 0) {
+          const aggregationPipeline: m.Document[] = [
+            { $match: query },
+            { $sort: sort },
+            ...customPipeline,
+          ];
+
+          const cursor = collection.aggregate(aggregationPipeline, { session });
+          
+          while(hardLimit-- > 0 && limit > 0) {
+            const doc = await cursor.next() as WithId<TOutput> | null;
+            if (!doc) break;
+
+            // Validate document with schema (only original fields, not lookup fields)
+            const validation = v.safeParse(schema, doc);
+            if (!validation.success) {
+              continue; // Skip invalid documents
+            }
+
+            // Merge original doc (with lookup fields) with validated output
+            const validatedDoc = { ...doc, ...validation.output } as WithId<TOutput>;
+            
+            // Step 1: Prepare - enrich document with external data
+            const enrichedDoc = prepare ? await prepare(validatedDoc) : validatedDoc as unknown as E;
+            
+            // Step 2: Filter - apply custom filtering logic
+            const isValid = await customFilter?.(enrichedDoc) ?? true;
+            if (!isValid) continue;
+            
+            // Step 3: Format - transform document to final output format
+            const finalDoc = format ? await format(enrichedDoc) : enrichedDoc as unknown as R;
+            
+            elements.push(finalDoc);
+            limit--;
+          }
+        } else {
+          // Use simple find for non-pipeline queries
+          const cursor = collection.find(query, { session }).sort(sort as m.Sort);
+          
+          while(hardLimit-- > 0 && limit > 0) {
             const doc = await cursor.next() as WithId<TOutput> | null;
             if (!doc) break;
 
             // Validate document with schema
             const validation = v.safeParse(schema, doc);
             if (!validation.success) {
-                continue; // Skip invalid documents
+              continue; // Skip invalid documents
             }
 
             const validatedDoc = validation.output as WithId<TOutput>;
@@ -710,6 +865,7 @@ export async function collection<
             
             elements.push(finalDoc);
             limit--;
+          }
         }
 
         // If paginating backwards (beforeId) and no explicit sort was provided, reverse the results to maintain chronological order
