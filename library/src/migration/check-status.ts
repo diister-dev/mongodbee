@@ -41,6 +41,7 @@
 
 import type { Db } from "../mongodb.ts";
 import type { MigrationDefinition } from "./types.ts";
+import { createEmptyDatabaseState, type SimulationDatabaseState } from "./types.ts";
 import {
   buildMigrationChain,
   getPendingMigrations,
@@ -358,14 +359,19 @@ export async function checkMigrationStatus(
     const simulationValidator = createSimulationValidator({
       strictValidation: true,
       maxOperations: 1000,
+      stateRetentionRatio: 0.5, // Keep 50% of previous state, generate 50% fresh mock
     });
 
     let allValid = true;
+    // Track current state to propagate between migrations (O(n) instead of O(n²))
+    let currentState: SimulationDatabaseState = createEmptyDatabaseState();
 
     for (const migration of allMigrations) {
       try {
+        // Pass the current state to avoid re-simulating all parent migrations
         const validationResult = await simulationValidator.validateMigration(
           migration,
+          currentState,
         );
 
         const migrationInfo: MigrationInfo = {
@@ -389,6 +395,14 @@ export async function checkMigrationStatus(
               validationResult.errors.join(", ")
             }`,
           );
+        } else {
+          // Update state for next migration: apply retention ratio (keep 50%, generate fresh 50%)
+          if (validationResult.data?.stateAfterMigration) {
+            currentState = simulationValidator.prepareStateForNextMigration(
+              validationResult.data.stateAfterMigration as SimulationDatabaseState,
+              migration.schemas,
+            );
+          }
         }
 
         if (validationResult.warnings.length > 0) {

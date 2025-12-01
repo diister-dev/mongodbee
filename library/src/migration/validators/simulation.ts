@@ -72,6 +72,8 @@ const MOCK_GENERATION = {
   DOCS_PER_TYPE_MIN: 1,
   DOCS_PER_TYPE_MAX: 2,
   MIN_SPARSE_THRESHOLD: 2,
+  /** Default ratio of documents to keep from previous state (0.0 to 1.0) */
+  DEFAULT_STATE_RETENTION_RATIO: 0.5,
 } as const;
 
 /**
@@ -86,6 +88,20 @@ export interface SimulationValidatorOptions {
 
   /** Maximum number of operations to validate (for performance) */
   maxOperations?: number;
+
+  /**
+   * Ratio of documents to keep from previous state when propagating state (0.0 to 1.0)
+   * - 0.0 = discard all previous state, generate 100% fresh mock data
+   * - 0.5 = keep 50% of previous state, generate 50% fresh mock data (default)
+   * - 1.0 = keep 100% of previous state, no fresh mock data
+   * 
+   * This allows testing both:
+   * - Existing data transformations (retained portion)
+   * - Edge cases with fresh data (new mock portion)
+   * 
+   * @default 0.5
+   */
+  stateRetentionRatio?: number;
 }
 
 /**
@@ -96,6 +112,7 @@ export const DEFAULT_SIMULATION_VALIDATOR_OPTIONS: SimulationValidatorOptions =
     strictValidation: true,
     trackHistory: true,
     maxOperations: 1000,
+    stateRetentionRatio: MOCK_GENERATION.DEFAULT_STATE_RETENTION_RATIO,
   };
 
 /**
@@ -296,6 +313,8 @@ export class SimulationValidator implements MigrationValidator {
           operationCount: operations.length,
           hasIrreversibleProperty: state.hasProperty("irreversible"),
           simulationCompleted: true,
+          // Include final state for state propagation optimization
+          stateAfterMigration,
         },
       });
     } catch (error) {
@@ -905,6 +924,114 @@ export class SimulationValidator implements MigrationValidator {
 
     return currentState;
   }
+
+  /**
+   * Prepares state for next migration by applying retention ratio
+   * 
+   * This method:
+   * 1. Keeps a percentage of existing documents (based on stateRetentionRatio)
+   * 2. Generates fresh mock data for the remaining percentage
+   * 
+   * This ensures we test both:
+   * - Existing data that went through previous migrations (retained)
+   * - Fresh edge cases with new mock data (generated)
+   * 
+   * @param currentState - The current database state after migration
+   * @param schemas - The schemas to use for generating new mock data
+   * @returns New state with retained + fresh data
+   */
+  prepareStateForNextMigration(
+    currentState: SimulationDatabaseState,
+    schemas: SchemasDefinition,
+  ): SimulationDatabaseState {
+    const ratio = this.options.stateRetentionRatio ?? MOCK_GENERATION.DEFAULT_STATE_RETENTION_RATIO;
+    
+    // Clone the state to avoid mutations
+    const newState = structuredClone(currentState);
+    
+    // Apply retention ratio to collections
+    if (newState.collections) {
+      for (const [collectionName, collection] of Object.entries(newState.collections)) {
+        const originalCount = collection.content.length;
+        const keepCount = Math.floor(originalCount * ratio);
+        
+        // Keep first 'keepCount' documents (the retained portion)
+        collection.content = collection.content.slice(0, keepCount);
+        
+        // Generate fresh mock data for the remaining portion
+        const schema = schemas.collections?.[collectionName];
+        if (schema) {
+          const newDocsCount = originalCount - keepCount;
+          for (let i = 0; i < newDocsCount; i++) {
+            try {
+              const mockDoc = this.generateMockDocument(schema as Record<string, unknown>);
+              collection.content.push(mockDoc);
+            } catch (_error) {
+              break;
+            }
+          }
+        }
+      }
+    }
+    
+    // Apply retention ratio to multi-collections
+    if (newState.multiCollections) {
+      for (const [collectionName, collection] of Object.entries(newState.multiCollections)) {
+        const originalCount = collection.content.length;
+        const keepCount = Math.floor(originalCount * ratio);
+        
+        collection.content = collection.content.slice(0, keepCount);
+        
+        const schema = schemas.multiCollections?.[collectionName];
+        if (schema) {
+          const newDocsCount = originalCount - keepCount;
+          const typeNames = Object.keys(schema);
+          const docsPerType = Math.ceil(newDocsCount / typeNames.length);
+          
+          for (let i = 0; i < docsPerType; i++) {
+            for (const typeName of typeNames) {
+              try {
+                const mockDoc = this.generateMockDocument(schema[typeName] as Record<string, unknown>);
+                collection.content.push({ ...mockDoc, _type: typeName });
+              } catch (_error) {
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    // Apply retention ratio to multi-models
+    if (newState.multiModels) {
+      for (const [instanceName, instance] of Object.entries(newState.multiModels)) {
+        const originalCount = instance.content.length;
+        const keepCount = Math.floor(originalCount * ratio);
+        
+        instance.content = instance.content.slice(0, keepCount);
+        
+        const schema = schemas.multiModels?.[instance.modelType];
+        if (schema) {
+          const newDocsCount = originalCount - keepCount;
+          const typeNames = Object.keys(schema);
+          const docsPerType = Math.ceil(newDocsCount / typeNames.length);
+          
+          for (let i = 0; i < docsPerType; i++) {
+            for (const typeName of typeNames) {
+              try {
+                const mockDoc = this.generateMockDocument(schema[typeName] as Record<string, unknown>);
+                instance.content.push({ ...mockDoc, _type: typeName });
+              } catch (_error) {
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    return newState;
+  }
 }
 
 /**
@@ -920,7 +1047,8 @@ export class SimulationValidator implements MigrationValidator {
  * const validator = createSimulationValidator({
  *   validateReversibility: true,
  *   strictValidation: true,
- *   maxOperations: 500
+ *   maxOperations: 500,
+ *   stateRetentionRatio: 0.5 // Keep 50% of previous state
  * });
  *
  * const result = await validator.validateMigration(migration);

@@ -6,7 +6,8 @@
 
 import { blue, bold, dim, green, red, yellow } from "@std/fmt/colors";
 import type { MigrationDefinition } from "../../types.ts";
-import { createSimulationValidator } from "../../validators/simulation.ts";
+import { createEmptyDatabaseState, type SimulationDatabaseState } from "../../types.ts";
+import { createSimulationValidator, type SimulationValidatorOptions } from "../../validators/simulation.ts";
 
 export interface MigrationValidationResult {
   migration: MigrationDefinition;
@@ -17,10 +18,23 @@ export interface MigrationValidationResult {
 
 export interface ValidateMigrationsOptions {
   verbose?: boolean;
+  /**
+   * Ratio of documents to keep from previous state when propagating state (0.0 to 1.0)
+   * - 0.0 = discard all previous state, generate 100% fresh mock data (like before)
+   * - 0.5 = keep 50% of previous state, generate 50% fresh mock data (default, optimized)
+   * - 1.0 = keep 100% of previous state, no fresh mock data
+   * 
+   * @default 0.5
+   */
+  stateRetentionRatio?: number;
 }
 
 /**
  * Validates all migrations with simulation
+ * 
+ * Uses state propagation with configurable retention ratio to avoid O(n²) complexity.
+ * By default, keeps 50% of the previous state and generates 50% fresh mock data
+ * to balance performance with edge case coverage.
  *
  * @param migrations - Migrations to validate
  * @param options - Validation options
@@ -34,13 +48,21 @@ export async function validateMigrationsWithSimulation(
   console.log(bold("🧪 Validating migrations with simulation..."));
   console.log();
 
-  const simulationValidator = createSimulationValidator({
+  const stateRetentionRatio = options.stateRetentionRatio ?? 0.5;
+  
+  const validatorOptions: SimulationValidatorOptions = {
     strictValidation: true,
     maxOperations: 1000,
-  });
+    stateRetentionRatio,
+  };
+  
+  const simulationValidator = createSimulationValidator(validatorOptions);
 
   let allValid = true;
   const results: MigrationValidationResult[] = [];
+  
+  // Track current state to propagate between migrations (O(n) instead of O(n²))
+  let currentState: SimulationDatabaseState = createEmptyDatabaseState();
 
   for (const migration of migrations) {
     console.log(
@@ -48,8 +70,10 @@ export async function validateMigrationsWithSimulation(
     );
 
     try {
+      // Pass the current state to avoid re-simulating all parent migrations
       const validationResult = await simulationValidator.validateMigration(
         migration,
+        currentState,
       );
 
       results.push({
@@ -75,6 +99,14 @@ export async function validateMigrationsWithSimulation(
           for (const warning of validationResult.warnings) {
             console.log(yellow(`      ⚠ ${warning}`));
           }
+        }
+        
+        // Update state for next migration: apply retention ratio (keep X%, generate fresh X%)
+        if (validationResult.data?.stateAfterMigration) {
+          currentState = simulationValidator.prepareStateForNextMigration(
+            validationResult.data.stateAfterMigration as SimulationDatabaseState,
+            migration.schemas,
+          );
         }
       } else {
         allValid = false;
