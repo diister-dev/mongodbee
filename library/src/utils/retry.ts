@@ -125,7 +125,7 @@ export async function retryOnWriteConflict<T>(
       // Try to execute the operation
       return await operation();
     } catch (error) {
-      console.log("Retry attempt", attempt + 1, "due to error:", error);
+      console.error("Retry attempt", attempt + 1, "due to error:", error);
       lastError = error instanceof Error ? error : new Error(String(error));
 
       // Check if we should retry this error

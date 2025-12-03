@@ -469,7 +469,10 @@ export async function collection<
       return !isSchemaManaged();
     })();
 
-    if (shouldAutoApply) {
+    // Prevent applying validator/indexes if a session is active
+    const insideSession = !!sessionContext.getSession();
+
+    if (shouldAutoApply && !insideSession) {
       await applyValidator();
       await applyIndexes();
     }

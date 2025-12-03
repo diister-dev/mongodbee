@@ -420,6 +420,8 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
   let sessionContext: Awaited<ReturnType<typeof getSessionContext>>;
 
   async function init() {
+    sessionContext = getSessionContext(db.client);
+
     // Determine if we should auto-apply schema and indexes
     const shouldAutoApply = (() => {
       // Local option takes precedence
@@ -429,7 +431,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
       return !isSchemaManaged();
     })();
 
-    if (shouldAutoApply) {
+    // Prevent add validator if a session is active
+    const insideSession = !!sessionContext.getSession();
+
+    if (shouldAutoApply && !insideSession) {
       await applyValidator();
       await applyIndexes();
 
@@ -454,8 +459,6 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         }
       }
     }
-
-    sessionContext = getSessionContext(db.client);
   }
 
   const collection = db.collection<TOutput>(collectionName, opts);
