@@ -563,7 +563,7 @@ export async function migrateCommand(
     }
 
     // STEP 1: Validate ALL pending migrations BEFORE applying any
-    await validateMigrationsWithSimulation(pendingMigrations, {
+    await validateMigrationsWithSimulation(allMigrations, {
       verbose: options.verbose,
     });
 
