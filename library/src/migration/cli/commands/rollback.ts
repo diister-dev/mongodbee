@@ -177,7 +177,7 @@ export async function rollbackCommand(
     throw error;
   } finally {
     if (client) {
-      await client.close();
+      await client.close(true);
     }
   }
 }

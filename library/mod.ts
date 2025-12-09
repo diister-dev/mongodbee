@@ -32,4 +32,5 @@ export * from "./src/indexes.ts";
 export * from "./src/config.ts";
 export * from "./src/security.ts";
 export * from "./src/runtime-config.ts";
+export * from "./src/ids.ts";
 export { removeField } from "./src/sanitizer.ts";

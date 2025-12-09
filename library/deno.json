@@ -1,6 +1,6 @@
 {
   "name": "@diister/mongodbee",
-  "version": "0.16.3",
+  "version": "0.16.4",
   "license": "MIT",
   "imports": {
     "@std/ulid": "jsr:@std/ulid@^1.0.0",
@@ -17,6 +17,7 @@
     ".": "./mod.ts",
     "./schema": "./schema.ts",
     "./session": "./session.ts",
+    "./ids": "./src/ids.ts",
     "./migration": "./src/migration/mod.ts",
     "./migration/cli": "./src/migration/cli/mod.ts",
     "./migration/cli/bin": "./src/migration/cli/bin.ts"

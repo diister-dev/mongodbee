@@ -1,17 +1,11 @@
 import * as v from "./schema.ts";
-import * as m from "mongodb";
-import { ulid } from "@std/ulid";
+import type * as m from "mongodb";
 import { toMongoValidator } from "./validator.ts";
+import { dbId, newId } from "./ids.ts";
 import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
 import { createDotNotationSchema } from "./dot-notation.ts";
 import { getSessionContext } from "./session.ts";
-import {
-  extractIndexes,
-  keyEqual,
-  normalizeIndexOptions,
-  withIndex,
-} from "./indexes.ts";
-import { sanitizePathName } from "./schema-navigator.ts";
+import { withIndex } from "./indexes.ts";
 import type { FlatType } from "../types/flat.ts";
 import type { Db } from "./mongodb.ts";
 import { dirtyEquivalent } from "./utils/object.ts";
@@ -26,6 +20,9 @@ import {
 import { getLastAppliedMigration } from "./migration/state.ts";
 import { applyMultiCollectionIndexes } from "./indexes-applier.ts";
 import { isSchemaManaged } from "./runtime-config.ts";
+
+// Re-export dbId and refId for backwards compatibility
+export { dbId, refId } from "./ids.ts";
 
 type CollectionOptions = {
   safeDelete?: boolean;
@@ -88,46 +85,6 @@ type DeepWithRemovable<T> = T extends Record<string, unknown>
 type WithRemovable<T> = {
   [K in keyof T]: DeepWithRemovable<T[K]> | symbol;
 };
-
-/**
- * Generates a new unique ID using ULID
- *
- * @returns A new ULID string in lowercase
- */
-function newId() {
-  return ulid().toLowerCase();
-}
-
-/**
- * Creates an optional ID field for a document type with automatic generation
- *
- * @param type - The document type identifier to use in the ID prefix
- * @returns A Valibot schema for an ID field with optional auto-generation
- */
-export function dbId(
-  type: string,
-): v.OptionalSchema<
-  v.SchemaWithPipe<
-    readonly [v.StringSchema<undefined>, v.RegexAction<string, undefined>]
-  >,
-  () => string
-> {
-  return v.optional(refId(type), () => `${type}:${newId()}`);
-}
-
-/**
- * Creates a reference ID field that must match a specific type prefix
- *
- * @param type - The document type identifier that must prefix the ID
- * @returns A Valibot schema for validating reference IDs
- */
-export function refId(
-  type: string,
-): v.SchemaWithPipe<
-  readonly [v.StringSchema<undefined>, v.RegexAction<string, undefined>]
-> {
-  return v.pipe(v.string(), v.regex(new RegExp(`^${type}:[a-zA-Z0-9]+`)));
-}
 
 // Type for aggregation pipeline stages
 type AggregationStage = Record<string, unknown>;

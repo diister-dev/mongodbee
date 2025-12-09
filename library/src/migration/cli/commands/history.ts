@@ -171,7 +171,7 @@ export async function historyCommand(
     throw error;
   } finally {
     if (client) {
-      await client.close();
+      await client.close(true);
     }
   }
 }

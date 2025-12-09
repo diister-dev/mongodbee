@@ -354,7 +354,7 @@ export async function statusCommand(
     throw error;
   } finally {
     if (client) {
-      await client.close();
+      await client.close(true);
     }
   }
 }

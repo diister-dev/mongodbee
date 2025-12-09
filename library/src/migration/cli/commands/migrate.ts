@@ -761,7 +761,7 @@ export async function migrateCommand(
     throw error;
   } finally {
     if (client) {
-      await client.close();
+      await client.close(true);
     }
   }
 }
