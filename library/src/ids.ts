@@ -6,7 +6,7 @@ import { ulid } from "@std/ulid";
  *
  * @returns A new ULID string in lowercase
  */
-export function newId() {
+export function newId(): string {
   return ulid().toLowerCase();
 }
 
