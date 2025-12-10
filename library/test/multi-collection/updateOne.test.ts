@@ -4,7 +4,7 @@ import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import assert from "node:assert";
 import { defineModel } from "../../src/multi-collection-model.ts";
-import { removeField } from "../../src/sanitizer.ts";
+import { partial, removeField } from "../../src/sanitizer.ts";
 
 Deno.test("UpdateOne: Basic update test", async (t) => {
   await withDatabase(t.name, async (db) => {
@@ -543,12 +543,12 @@ Deno.test("UpdateOne: Remove nested field with removeField()", async (t) => {
     assertEquals(initialUser.settings?.language, "en");
     assertEquals(initialUser.settings?.notifications?.email, true);
 
-    // Remove nested field using removeField()
+    // Remove nested field using removeField() with partial() for merge behavior
     await collection.updateOne("user", userId, {
-      settings: {
+      settings: partial({
         theme: removeField(),
         language: "fr", // Update this one
-      },
+      }),
     });
 
     // Verify nested removal
@@ -594,15 +594,15 @@ Deno.test("UpdateOne: Remove deeply nested field with removeField()", async (t) 
       },
     });
 
-    // Remove deeply nested fields
+    // Remove deeply nested fields using partial() for merge behavior
     await collection.updateOne("user", userId, {
-      profile: {
-        social: {
+      profile: partial({
+        social: partial({
           twitter: removeField(),
           linkedin: removeField(),
           github: "john-updated", // Update this one
-        },
-      },
+        }),
+      }),
     });
 
     // Verify deep removal

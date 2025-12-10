@@ -123,9 +123,46 @@ export function removeField(): symbol {
 }
 
 /**
+ * Special symbol to mark objects for partial/merge update using dot notation
+ * By default, objects in $set are replaced entirely. Use partial() to merge instead.
+ */
+export const PARTIAL_UPDATE = Symbol("PARTIAL_UPDATE");
+
+/**
+ * Wrapper type for partial updates
+ */
+export type PartialUpdate<T> = T & { [PARTIAL_UPDATE]: true };
+
+/**
+ * Helper to mark an object for partial/merge update using dot notation
+ * By default, objects in $set replace the entire field. Use partial() to merge instead.
+ *
+ * @example
+ * // Without partial() - replaces entire 'settings' object
+ * collection.updateOne(filter, { $set: { settings: { theme: "dark" } } })
+ * // Result: settings = { theme: "dark" } (previous fields removed)
+ *
+ * // With partial() - merges into existing 'settings' object
+ * collection.updateOne(filter, { $set: { settings: partial({ theme: "dark" }) } })
+ * // Result: settings.theme = "dark" (other fields preserved)
+ */
+export function partial<T extends Record<string, unknown>>(obj: T): PartialUpdate<T> {
+  return Object.assign(obj, { [PARTIAL_UPDATE]: true as const });
+}
+
+/**
+ * Check if a value is marked for partial update
+ */
+export function isPartialUpdate(value: unknown): boolean {
+  return typeof value === "object" && value !== null && PARTIAL_UPDATE in value;
+}
+
+/**
  * Extracts fields marked for removal and separates them from regular updates
  * Used for building MongoDB $set and $unset operations
- * Handles nested objects by converting to dot notation
+ *
+ * By default, objects are NOT flattened to dot notation (full replacement).
+ * Use partial() to opt-in to dot notation (merge behavior).
  *
  * @param obj - The object containing updates
  * @param prefix - Internal prefix for building dot notation paths
@@ -143,12 +180,17 @@ export function extractFieldsToRemove(obj: Record<string, unknown>, prefix = "")
 
     if (value === REMOVE_FIELD) {
       unset[fullKey] = 1;
-    } else if (value !== null && typeof value === "object" && !Array.isArray(value) && value.constructor === Object) {
-      // Recursively process nested objects
-      const nested = extractFieldsToRemove(value as Record<string, unknown>, fullKey);
+    } else if (isPartialUpdate(value)) {
+      // partial() marked object: use dot notation (merge behavior)
+      // Remove the PARTIAL_UPDATE symbol before processing
+      const cleanValue = { ...(value as Record<string, unknown>) };
+      delete cleanValue[PARTIAL_UPDATE as unknown as string];
+
+      const nested = extractFieldsToRemove(cleanValue, fullKey);
       Object.assign(set, nested.set);
       Object.assign(unset, nested.unset);
     } else {
+      // Default: keep as-is (full replacement)
       set[fullKey] = value;
     }
   }

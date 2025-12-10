@@ -1,5 +1,6 @@
 import {
   extractFieldsToRemove,
+  partial,
   removeField,
   removeUndefined,
   sanitizeDocument,
@@ -507,6 +508,8 @@ Deno.test("Type consistency: Results should be properly typed", () => {
 });
 
 // Tests for extractFieldsToRemove with deep objects
+// NOTE: Since v2, objects are NOT flattened by default (full replacement).
+// Use partial() to opt-in to dot notation (merge behavior).
 
 Deno.test("extractFieldsToRemove - simple flat object", () => {
   const result = extractFieldsToRemove({
@@ -519,13 +522,34 @@ Deno.test("extractFieldsToRemove - simple flat object", () => {
   assertEquals(result.unset, { email: 1 });
 });
 
-Deno.test("extractFieldsToRemove - nested object with removeField", () => {
+Deno.test("extractFieldsToRemove - nested object WITHOUT partial (full replacement)", () => {
+  // Without partial(), nested objects are kept as-is (full replacement)
   const result = extractFieldsToRemove({
     name: "John",
     settings: {
-      theme: removeField(),
+      theme: "dark",
       language: "fr",
     },
+  });
+
+  assertEquals(result.set, {
+    name: "John",
+    settings: {
+      theme: "dark",
+      language: "fr",
+    },
+  });
+  assertEquals(result.unset, {});
+});
+
+Deno.test("extractFieldsToRemove - nested object WITH partial (merge/dot notation)", () => {
+  // With partial(), nested objects use dot notation for merging
+  const result = extractFieldsToRemove({
+    name: "John",
+    settings: partial({
+      theme: removeField(),
+      language: "fr",
+    }),
   });
 
   assertEquals(result.set, {
@@ -535,18 +559,18 @@ Deno.test("extractFieldsToRemove - nested object with removeField", () => {
   assertEquals(result.unset, { "settings.theme": 1 });
 });
 
-Deno.test("extractFieldsToRemove - deeply nested object", () => {
+Deno.test("extractFieldsToRemove - deeply nested object with partial", () => {
   const result = extractFieldsToRemove({
-    user: {
-      profile: {
+    user: partial({
+      profile: partial({
         avatar: removeField(),
         bio: "Hello",
-        social: {
+        social: partial({
           twitter: removeField(),
           github: "user123",
-        },
-      },
-    },
+        }),
+      }),
+    }),
   });
 
   assertEquals(result.set, {
@@ -563,10 +587,10 @@ Deno.test("extractFieldsToRemove - mixed with arrays", () => {
   const result = extractFieldsToRemove({
     name: "John",
     tags: ["a", "b", "c"], // Arrays should not be recursed into
-    metadata: {
+    metadata: partial({
       created: removeField(),
       updated: "2024-01-01",
-    },
+    }),
   });
 
   assertEquals(result.set, {
@@ -586,9 +610,12 @@ Deno.test("extractFieldsToRemove - entire nested object removal", () => {
     },
   });
 
+  // Without partial(), profile is kept as full object
   assertEquals(result.set, {
     name: "John",
-    "profile.bio": "Hello",
+    profile: {
+      bio: "Hello",
+    },
   });
   assertEquals(result.unset, { settings: 1 });
 });
@@ -597,22 +624,22 @@ Deno.test("extractFieldsToRemove - empty nested object", () => {
   const result = extractFieldsToRemove({
     name: "John",
     empty: {},
-    settings: {
+    settings: partial({
       theme: removeField(),
-    },
+    }),
   });
 
-  assertEquals(result.set, { name: "John" });
+  assertEquals(result.set, { name: "John", empty: {} });
   assertEquals(result.unset, { "settings.theme": 1 });
 });
 
-Deno.test("extractFieldsToRemove - all fields removed in nested", () => {
+Deno.test("extractFieldsToRemove - all fields removed in nested with partial", () => {
   const result = extractFieldsToRemove({
     name: "John",
-    settings: {
+    settings: partial({
       theme: removeField(),
       language: removeField(),
-    },
+    }),
   });
 
   assertEquals(result.set, { name: "John" });
@@ -626,10 +653,10 @@ Deno.test("extractFieldsToRemove - preserves null values", () => {
   const result = extractFieldsToRemove({
     name: "John",
     email: null,
-    settings: {
+    settings: partial({
       theme: null,
       language: removeField(),
-    },
+    }),
   });
 
   assertEquals(result.set, {
@@ -638,4 +665,27 @@ Deno.test("extractFieldsToRemove - preserves null values", () => {
     "settings.theme": null,
   });
   assertEquals(result.unset, { "settings.language": 1 });
+});
+
+Deno.test("extractFieldsToRemove - partial at different nesting levels", () => {
+  // Only the level with partial() gets flattened
+  const result = extractFieldsToRemove({
+    user: partial({
+      name: "John",
+      address: {
+        city: "Paris",
+        country: "France",
+      },
+    }),
+  });
+
+  // user is flattened, but address inside is NOT (no partial on it)
+  assertEquals(result.set, {
+    "user.name": "John",
+    "user.address": {
+      city: "Paris",
+      country: "France",
+    },
+  });
+  assertEquals(result.unset, {});
 });
