@@ -657,8 +657,8 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                         position = 1;
                     }
                 } else if (beforeId) {
-                    // Position calculation for beforeId is complex as results are reversed
-                    position = 0;
+                    // For beforeId, we need to calculate position after we know how many items will be returned
+                    position = -1; // Marker for "needs calculation"
                 } else {
                     position = 0;
                 }
@@ -879,11 +879,19 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             // If paginating backwards (beforeId), reverse to maintain consistent order with forward pagination
             if (beforeId) {
                 elements.reverse();
+                // Calculate position: count of elements before the first returned element
+                const beforeFilter = await buildCursorFilter(beforeId, 'before');
+                if (beforeFilter) {
+                    const beforeCount = await collection.countDocuments({ $and: [...baseQuery, beforeFilter] } as never, { session });
+                    position = Math.max(0, beforeCount - elements.length);
+                } else {
+                    position = 0;
+                }
             }
 
             return {
                 total,
-                position,
+                position: position as number,
                 data: elements,
             };
         },

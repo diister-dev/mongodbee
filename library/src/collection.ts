@@ -790,7 +790,6 @@ export async function collection<
             if (afterId) {
                 // Position is the count of documents before the first returned element
                 // For afterId, this is the count of documents up to and including the anchor
-                // We count documents that would NOT be returned (those before or at anchor)
                 const afterFilter = await buildCursorFilter(afterId, 'after');
                 if (afterFilter) {
                     const afterCount = await collection.countDocuments({ ...baseQuery, ...afterFilter } as m.Filter<TInput>, { session });
@@ -799,9 +798,9 @@ export async function collection<
                     position = 1;
                 }
             } else if (beforeId) {
-                // Position calculation for beforeId is complex as results are reversed
-                // For now, set to 0 as this is mainly used for backward pagination
-                position = 0;
+                // For beforeId, we need to calculate position after we know how many items will be returned
+                // We'll compute it after fetching results - for now mark as needing calculation
+                position = -1; // Marker for "needs calculation"
             } else {
                 position = 0;
             }
@@ -941,11 +940,21 @@ export async function collection<
         // If paginating backwards (beforeId), reverse to maintain consistent order with forward pagination
         if (beforeId) {
             elements.reverse();
+            // Calculate position: count of elements before the first returned element
+            // After reverse, elements[0] is the earliest in the sorted order
+            // Position = total elements before anchor - elements returned
+            const beforeFilter = await buildCursorFilter(beforeId, 'before');
+            if (beforeFilter) {
+                const beforeCount = await collection.countDocuments({ ...baseQuery, ...beforeFilter } as m.Filter<TInput>, { session });
+                position = Math.max(0, beforeCount - elements.length);
+            } else {
+                position = 0;
+            }
         }
 
         return {
             total,
-            position,
+            position: position as number,
             data: elements,
         };
     },
