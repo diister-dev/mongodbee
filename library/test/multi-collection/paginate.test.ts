@@ -610,3 +610,477 @@ Deno.test("Multi-collection paginate with multi-field custom sort and afterId", 
     assertEquals(secondPage.data[2].name, "C-Only");
   });
 });
+
+Deno.test("Multi-collection paginate with _id descending sort", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const catalogModel = defineModel("catalog", {
+      schema: {
+        product: {
+          name: v.string(),
+          value: v.number(),
+        },
+      },
+    });
+
+    const catalog = await multiCollection(db, "catalog", catalogModel);
+
+    // Insert 10 products
+    for (let i = 1; i <= 10; i++) {
+      await catalog.insertOne("product", { name: `Product ${i}`, value: i * 10 });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    // First page with _id descending (newest first)
+    const firstPage = await catalog.paginate("product", {}, {
+      limit: 4,
+      sort: { _id: -1 },
+    });
+
+    assertEquals(firstPage.data.length, 4);
+    assertEquals(firstPage.total, 10);
+
+    // Should be Product 10, 9, 8, 7 (newest to oldest)
+    assertEquals(firstPage.data[0].name, "Product 10");
+    assertEquals(firstPage.data[1].name, "Product 9");
+    assertEquals(firstPage.data[2].name, "Product 8");
+    assertEquals(firstPage.data[3].name, "Product 7");
+
+    // Collect first page IDs
+    const firstPageIds = new Set(firstPage.data.map((item) => item._id));
+
+    // Second page
+    const secondPage = await catalog.paginate("product", {}, {
+      limit: 4,
+      sort: { _id: -1 },
+      afterId: firstPage.data[firstPage.data.length - 1]._id,
+    });
+
+    assertEquals(secondPage.data.length, 4);
+
+    // Should be Product 6, 5, 4, 3
+    assertEquals(secondPage.data[0].name, "Product 6");
+    assertEquals(secondPage.data[1].name, "Product 5");
+    assertEquals(secondPage.data[2].name, "Product 4");
+    assertEquals(secondPage.data[3].name, "Product 3");
+
+    // Verify no duplicates
+    for (const item of secondPage.data) {
+      assertEquals(firstPageIds.has(item._id), false,
+        `Duplicate found: ${item.name} appears in both pages`);
+    }
+
+    // Third page
+    const thirdPage = await catalog.paginate("product", {}, {
+      limit: 4,
+      sort: { _id: -1 },
+      afterId: secondPage.data[secondPage.data.length - 1]._id,
+    });
+
+    assertEquals(thirdPage.data.length, 2); // Only 2 remaining
+
+    // Should be Product 2, 1
+    assertEquals(thirdPage.data[0].name, "Product 2");
+    assertEquals(thirdPage.data[1].name, "Product 1");
+
+    // Verify no duplicates with previous pages
+    const secondPageIds = new Set(secondPage.data.map((item) => item._id));
+    for (const item of thirdPage.data) {
+      assertEquals(firstPageIds.has(item._id), false,
+        `Duplicate found: ${item.name} appears in first page`);
+      assertEquals(secondPageIds.has(item._id), false,
+        `Duplicate found: ${item.name} appears in second page`);
+    }
+  });
+});
+
+Deno.test("Multi-collection paginate with duplicate sort values", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const catalogModel = defineModel("catalog", {
+      schema: {
+        product: {
+          name: v.string(),
+          category: v.string(),
+        },
+      },
+    });
+
+    const catalog = await multiCollection(db, "catalog", catalogModel);
+
+    // Insert products where all have the same category (duplicate sort values)
+    for (let i = 1; i <= 6; i++) {
+      await catalog.insertOne("product", { name: `Product ${i}`, category: "same" });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    // First page with sort on duplicate field
+    const firstPage = await catalog.paginate("product", {}, {
+      limit: 3,
+      sort: { category: 1 },
+    });
+
+    assertEquals(firstPage.data.length, 3);
+    assertEquals(firstPage.total, 6);
+
+    // Collect first page names
+    const firstPageNames = firstPage.data.map((item) => item.name);
+
+    // Second page should get remaining items, no duplicates
+    const secondPage = await catalog.paginate("product", {}, {
+      limit: 3,
+      sort: { category: 1 },
+      afterId: firstPage.data[firstPage.data.length - 1]._id,
+    });
+
+    assertEquals(secondPage.data.length, 3);
+
+    // Verify no overlap between pages
+    const secondPageNames = secondPage.data.map((item) => item.name);
+    for (const name of secondPageNames) {
+      assertEquals(firstPageNames.includes(name), false,
+        `Product "${name}" appears in both pages - duplicate detected`);
+    }
+
+    // Verify all 6 items are covered
+    const allNames = [...firstPageNames, ...secondPageNames];
+    assertEquals(allNames.length, 6);
+    for (let i = 1; i <= 6; i++) {
+      assertEquals(allNames.includes(`Product ${i}`), true,
+        `Product ${i} is missing from pagination results`);
+    }
+  });
+});
+
+Deno.test("Multi-collection paginate with duplicate sort values and beforeId", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const catalogModel = defineModel("catalog", {
+      schema: {
+        product: {
+          name: v.string(),
+          status: v.string(),
+        },
+      },
+    });
+
+    const catalog = await multiCollection(db, "catalog", catalogModel);
+
+    // Insert products where all have the same status
+    const testData = [
+      { name: "A", status: "active" },
+      { name: "B", status: "active" },
+      { name: "C", status: "active" },
+      { name: "D", status: "active" },
+      { name: "E", status: "active" },
+      { name: "F", status: "active" },
+    ];
+
+    for (const item of testData) {
+      await catalog.insertOne("product", item);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    // Get all items to find anchor
+    const allItems = await catalog.paginate("product", {}, {
+      limit: 6,
+      sort: { status: 1 },
+    });
+
+    assertEquals(allItems.data.length, 6);
+
+    // Use beforeId with the 4th item as anchor
+    const beforePage = await catalog.paginate("product", {}, {
+      limit: 3,
+      sort: { status: 1 },
+      beforeId: allItems.data[3]._id,
+    });
+
+    assertEquals(beforePage.data.length, 3);
+
+    // Should return first 3 items in original order
+    const beforeNames = beforePage.data.map((item) => item.name);
+    const expectedNames = allItems.data.slice(0, 3).map((item) => item.name);
+
+    for (let i = 0; i < 3; i++) {
+      assertEquals(beforeNames[i], expectedNames[i],
+        `Position ${i}: expected "${expectedNames[i]}" but got "${beforeNames[i]}"`);
+    }
+  });
+});
+
+Deno.test("Multi-collection paginate with _id descending sort and beforeId", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const catalogModel = defineModel("catalog", {
+      schema: {
+        product: {
+          name: v.string(),
+          value: v.number(),
+        },
+      },
+    });
+
+    const catalog = await multiCollection(db, "catalog", catalogModel);
+
+    // Insert 10 products
+    for (let i = 1; i <= 10; i++) {
+      await catalog.insertOne("product", { name: `Product ${i}`, value: i * 10 });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    // Get all items with _id descending to find anchor
+    const allItems = await catalog.paginate("product", {}, {
+      limit: 10,
+      sort: { _id: -1 },
+    });
+
+    // Order: Product 10, 9, 8, 7, 6, 5, 4, 3, 2, 1
+
+    // Use beforeId with Product 5 (index 5) as anchor
+    // Should return items BEFORE it in the sorted order: Product 10, 9, 8, 7, 6
+    const beforePage = await catalog.paginate("product", {}, {
+      limit: 5,
+      sort: { _id: -1 },
+      beforeId: allItems.data[5]._id, // Product 5
+    });
+
+    assertEquals(beforePage.data.length, 5);
+
+    // Should return in original sort order
+    assertEquals(beforePage.data[0].name, "Product 10");
+    assertEquals(beforePage.data[1].name, "Product 9");
+    assertEquals(beforePage.data[2].name, "Product 8");
+    assertEquals(beforePage.data[3].name, "Product 7");
+    assertEquals(beforePage.data[4].name, "Product 6");
+  });
+});
+
+Deno.test("Multi-collection paginate accumulation with _id descending - no duplicates across 5+ pages", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const catalogModel = defineModel("catalog", {
+      schema: {
+        product: {
+          name: v.string(),
+          value: v.number(),
+        },
+      },
+    });
+
+    const catalog = await multiCollection(db, "catalog", catalogModel);
+
+    // Insert 25 products
+    for (let i = 1; i <= 25; i++) {
+      await catalog.insertOne("product", { name: `Product ${i}`, value: i * 10 });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    const allCollectedIds: string[] = [];
+    const allCollectedNames: string[] = [];
+
+    // Page 1
+    const page1 = await catalog.paginate("product", {}, {
+      limit: 5,
+      sort: { _id: -1 },
+    });
+    for (const item of page1.data) {
+      allCollectedIds.push(item._id);
+      allCollectedNames.push(item.name);
+    }
+
+    // Page 2
+    const page2 = await catalog.paginate("product", {}, {
+      limit: 5,
+      sort: { _id: -1 },
+      afterId: page1.data[page1.data.length - 1]._id,
+    });
+    for (const item of page2.data) {
+      if (allCollectedIds.includes(item._id)) {
+        throw new Error(`DUPLICATE on page 2: ${item.name} (${item._id})`);
+      }
+      allCollectedIds.push(item._id);
+      allCollectedNames.push(item.name);
+    }
+
+    // Page 3
+    const page3 = await catalog.paginate("product", {}, {
+      limit: 5,
+      sort: { _id: -1 },
+      afterId: page2.data[page2.data.length - 1]._id,
+    });
+    for (const item of page3.data) {
+      if (allCollectedIds.includes(item._id)) {
+        throw new Error(`DUPLICATE on page 3: ${item.name} (${item._id})`);
+      }
+      allCollectedIds.push(item._id);
+      allCollectedNames.push(item.name);
+    }
+
+    // Page 4
+    const page4 = await catalog.paginate("product", {}, {
+      limit: 5,
+      sort: { _id: -1 },
+      afterId: page3.data[page3.data.length - 1]._id,
+    });
+    for (const item of page4.data) {
+      if (allCollectedIds.includes(item._id)) {
+        throw new Error(`DUPLICATE on page 4: ${item.name} (${item._id})`);
+      }
+      allCollectedIds.push(item._id);
+      allCollectedNames.push(item.name);
+    }
+
+    // Page 5
+    const page5 = await catalog.paginate("product", {}, {
+      limit: 5,
+      sort: { _id: -1 },
+      afterId: page4.data[page4.data.length - 1]._id,
+    });
+    for (const item of page5.data) {
+      if (allCollectedIds.includes(item._id)) {
+        throw new Error(`DUPLICATE on page 5: ${item.name} (${item._id})`);
+      }
+      allCollectedIds.push(item._id);
+      allCollectedNames.push(item.name);
+    }
+
+    // Verify we got all 25 items with no duplicates
+    assertEquals(allCollectedIds.length, 25, `Expected 25 items but got ${allCollectedIds.length}`);
+
+    // Verify order is correct (descending)
+    assertEquals(allCollectedNames[0], "Product 25");
+    assertEquals(allCollectedNames[24], "Product 1");
+
+    // Verify no duplicates using Set
+    const uniqueIds = new Set(allCollectedIds);
+    assertEquals(uniqueIds.size, 25, "There are duplicate IDs in the accumulated results");
+  });
+});
+
+Deno.test("Multi-collection paginate with nested field sort", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const catalogModel = defineModel("catalog", {
+      schema: {
+        exhibitor: {
+          data: v.object({
+            company: v.string(),
+            email: v.string(),
+          }),
+        },
+      },
+    });
+
+    const catalog = await multiCollection(db, "catalog", catalogModel);
+
+    // Insert exhibitors with nested data
+    const exhibitors = [
+      { data: { company: "Alpha Corp", email: "alpha@test.com" } },
+      { data: { company: "Beta Inc", email: "beta@test.com" } },
+      { data: { company: "Charlie LLC", email: "charlie@test.com" } },
+      { data: { company: "Delta Ltd", email: "delta@test.com" } },
+      { data: { company: "Echo Co", email: "echo@test.com" } },
+      { data: { company: "Foxtrot SA", email: "foxtrot@test.com" } },
+    ];
+
+    for (const exhibitor of exhibitors) {
+      await catalog.insertOne("exhibitor", exhibitor);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    // First page sorted by nested field data.email ascending
+    const page1 = await catalog.paginate("exhibitor", {}, {
+      limit: 3,
+      sort: { "data.email": 1 },
+    });
+
+    assertEquals(page1.data.length, 3);
+    assertEquals(page1.total, 6);
+
+    // Should be alpha, beta, charlie (alphabetical by email)
+    assertEquals(page1.data[0].data.email, "alpha@test.com");
+    assertEquals(page1.data[1].data.email, "beta@test.com");
+    assertEquals(page1.data[2].data.email, "charlie@test.com");
+
+    // Second page with afterId
+    const page2 = await catalog.paginate("exhibitor", {}, {
+      limit: 3,
+      sort: { "data.email": 1 },
+      afterId: page1.data[page1.data.length - 1]._id,
+    });
+
+    assertEquals(page2.data.length, 3);
+
+    // Should be delta, echo, foxtrot
+    assertEquals(page2.data[0].data.email, "delta@test.com");
+    assertEquals(page2.data[1].data.email, "echo@test.com");
+    assertEquals(page2.data[2].data.email, "foxtrot@test.com");
+
+    // Verify no duplicates between pages
+    const page1Ids = new Set(page1.data.map((item) => item._id));
+    for (const item of page2.data) {
+      assertEquals(page1Ids.has(item._id), false, `Duplicate found: ${item.data.email}`);
+    }
+  });
+});
+
+Deno.test("Multi-collection paginate with nested field sort descending", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const catalogModel = defineModel("catalog", {
+      schema: {
+        exhibitor: {
+          data: v.object({
+            company: v.string(),
+            email: v.string(),
+          }),
+        },
+      },
+    });
+
+    const catalog = await multiCollection(db, "catalog", catalogModel);
+
+    // Insert exhibitors with nested data
+    const exhibitors = [
+      { data: { company: "Alpha Corp", email: "alpha@test.com" } },
+      { data: { company: "Beta Inc", email: "beta@test.com" } },
+      { data: { company: "Charlie LLC", email: "charlie@test.com" } },
+      { data: { company: "Delta Ltd", email: "delta@test.com" } },
+      { data: { company: "Echo Co", email: "echo@test.com" } },
+      { data: { company: "Foxtrot SA", email: "foxtrot@test.com" } },
+    ];
+
+    for (const exhibitor of exhibitors) {
+      await catalog.insertOne("exhibitor", exhibitor);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    // First page sorted by nested field data.email descending
+    const page1 = await catalog.paginate("exhibitor", {}, {
+      limit: 3,
+      sort: { "data.email": -1 },
+    });
+
+    assertEquals(page1.data.length, 3);
+    assertEquals(page1.total, 6);
+
+    // Should be foxtrot, echo, delta (reverse alphabetical by email)
+    assertEquals(page1.data[0].data.email, "foxtrot@test.com");
+    assertEquals(page1.data[1].data.email, "echo@test.com");
+    assertEquals(page1.data[2].data.email, "delta@test.com");
+
+    // Second page with afterId
+    const page2 = await catalog.paginate("exhibitor", {}, {
+      limit: 3,
+      sort: { "data.email": -1 },
+      afterId: page1.data[page1.data.length - 1]._id,
+    });
+
+    assertEquals(page2.data.length, 3);
+
+    // Should be charlie, beta, alpha
+    assertEquals(page2.data[0].data.email, "charlie@test.com");
+    assertEquals(page2.data[1].data.email, "beta@test.com");
+    assertEquals(page2.data[2].data.email, "alpha@test.com");
+
+    // Verify no duplicates between pages
+    const page1Ids = new Set(page1.data.map((item) => item._id));
+    for (const item of page2.data) {
+      assertEquals(page1Ids.has(item._id), false, `Duplicate found: ${item.data.email}`);
+    }
+  });
+});

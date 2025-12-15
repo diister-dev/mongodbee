@@ -3,7 +3,7 @@ import type * as m from "mongodb";
 import { toMongoValidator } from "./validator.ts";
 import { dbId, newId } from "./ids.ts";
 import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
-import { createDotNotationSchema } from "./dot-notation.ts";
+import { createDotNotationSchema, getNestedValue } from "./dot-notation.ts";
 import { getSessionContext } from "./session.ts";
 import { withIndex } from "./indexes.ts";
 import type { FlatType } from "../types/flat.ts";
@@ -582,14 +582,14 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 for (let i = 0; i < sortFields.length; i++) {
                     const field = sortFields[i];
                     const sortDir = sortObj[field];
-                    const anchorValue = (anchorDoc as Record<string, unknown>)[field];
+                    const anchorValue = getNestedValue(anchorDoc as Record<string, unknown>, field);
 
                     const condition: Record<string, unknown> = {};
 
                     // All previous fields must be equal
                     for (let j = 0; j < i; j++) {
                         const prevField = sortFields[j];
-                        condition[prevField] = (anchorDoc as Record<string, unknown>)[prevField];
+                        condition[prevField] = getNestedValue(anchorDoc as Record<string, unknown>, prevField);
                     }
 
                     // Current field uses comparison based on sort direction and pagination direction

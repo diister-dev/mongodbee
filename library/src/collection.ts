@@ -9,6 +9,7 @@ import { mongoOperationQueue } from "./operation.ts";
 import { applyCollectionIndexes } from "./indexes-applier.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
 import { isSchemaManaged } from "./runtime-config.ts";
+import { getNestedValue } from "./dot-notation.ts";
 import type { Db } from "./mongodb.ts";
 import type * as m from "mongodb";
 
@@ -735,7 +736,7 @@ export async function collection<
             for (let i = 0; i < sortFields.length; i++) {
                 const field = sortFields[i];
                 const sortDir = sortObj[field];
-                const anchorValue = (anchorDoc as Record<string, unknown>)[field];
+                const anchorValue = getNestedValue(anchorDoc as Record<string, unknown>, field);
 
                 // Build condition for this level
                 const condition: Record<string, unknown> = {};
@@ -743,7 +744,7 @@ export async function collection<
                 // All previous fields must be equal
                 for (let j = 0; j < i; j++) {
                     const prevField = sortFields[j];
-                    condition[prevField] = (anchorDoc as Record<string, unknown>)[prevField];
+                    condition[prevField] = getNestedValue(anchorDoc as Record<string, unknown>, prevField);
                 }
 
                 // Current field uses comparison based on sort direction and pagination direction

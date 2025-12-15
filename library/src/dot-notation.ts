@@ -215,3 +215,32 @@ export type DotNotationSchemaOutput<T extends v.BaseSchema<any, any, any>> =
  */
 export type DotNotationSchemaInput<T extends v.BaseSchema<any, any, any>> =
   Partial<FlatType<v.InferInput<T>>>;
+
+/**
+ * Gets a nested value from an object using dot notation path
+ *
+ * This function retrieves a value from a nested object structure using a
+ * dot-separated path string (e.g., "user.address.street").
+ *
+ * @param obj - The object to retrieve the value from
+ * @param path - The dot notation path string (e.g., "data.email")
+ * @returns The value at the specified path, or undefined if not found
+ * @example
+ * ```typescript
+ * const doc = { data: { email: "test@example.com", name: "John" } };
+ * getNestedValue(doc, "data.email"); // "test@example.com"
+ * getNestedValue(doc, "data.name"); // "John"
+ * getNestedValue(doc, "data.missing"); // undefined
+ * ```
+ */
+export function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
+  const parts = path.split('.');
+  let current: unknown = obj;
+  for (const part of parts) {
+    if (current === null || current === undefined || typeof current !== 'object') {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+}
