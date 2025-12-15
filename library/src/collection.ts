@@ -938,6 +938,10 @@ export async function collection<
           }
         }
 
+        // If paginating backwards (beforeId), reverse to maintain consistent order with forward pagination
+        if (beforeId) {
+            elements.reverse();
+        }
 
         return {
             total,

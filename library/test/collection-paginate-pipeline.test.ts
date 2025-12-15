@@ -194,10 +194,10 @@ Deno.test("Collection paginate with pipeline - cursor pagination beforeId", asyn
 
     expect(result.total).toBe(3);
     expect(result.data.length).toBe(2);
-    // Items are returned in reverse order: User2 (closest to anchor), then User1
-    expect(result.data[0].name).toBe("User2");
+    // Items are returned in the SAME order as forward pagination
+    expect(result.data[0].name).toBe("User1");
     expect((result.data[0] as any).decade).toBe(20);
-    expect(result.data[1].name).toBe("User1");
+    expect(result.data[1].name).toBe("User2");
     expect((result.data[1] as any).decade).toBe(20);
   });
 });

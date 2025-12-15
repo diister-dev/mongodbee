@@ -876,6 +876,11 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 limit--;
             }
 
+            // If paginating backwards (beforeId), reverse to maintain consistent order with forward pagination
+            if (beforeId) {
+                elements.reverse();
+            }
+
             return {
                 total,
                 position,

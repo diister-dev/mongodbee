@@ -548,10 +548,10 @@ Deno.test("Multi-collection paginate with custom sort and beforeId", async (t) =
 
     assertEquals(beforePage.data.length, 3);
 
-    // With beforeId, items are returned in reverse order (closest to anchor first)
-    assertEquals(beforePage.data[0].score, 70);  // MediumHigh (closest to anchor)
+    // With beforeId, items are returned in the SAME order as forward pagination
+    assertEquals(beforePage.data[0].score, 100); // VeryHigh
     assertEquals(beforePage.data[1].score, 90);  // High
-    assertEquals(beforePage.data[2].score, 100); // VeryHigh (furthest from anchor)
+    assertEquals(beforePage.data[2].score, 70);  // MediumHigh (closest to anchor)
   });
 });
 

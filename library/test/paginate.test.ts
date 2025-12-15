@@ -375,6 +375,7 @@ Deno.test("Paginate with string IDs", async (t) => {
     assertEquals(secondPage.data[2]._id, "item:006");
 
     // Test beforeId with string ID
+    // With beforeId, items are returned in the same order as forward pagination
     const beforePage = await items.paginate({}, {
       limit: 3,
       beforeId: "item:003",
@@ -382,8 +383,8 @@ Deno.test("Paginate with string IDs", async (t) => {
     });
 
     assertEquals(beforePage.data.length, 2);
-    assertEquals(beforePage.data[0]._id, "item:002");
-    assertEquals(beforePage.data[1]._id, "item:001");
+    assertEquals(beforePage.data[0]._id, "item:001");
+    assertEquals(beforePage.data[1]._id, "item:002");
   });
 });
 
@@ -569,12 +570,12 @@ Deno.test("Paginate with custom sort and beforeId", async (t) => {
     assertEquals(beforePage.data.length, 3);
 
     // With beforeId, we get items that come BEFORE the anchor in the sorted order
-    // The items are returned in reverse order (closest to anchor first)
+    // Items are returned in the SAME order as forward pagination (reversed internally to maintain consistency)
     // Original order: VeryHigh(100), High(90), MediumHigh(70), [Medium(50)], Low(10), VeryLow(5)
-    // Before Medium(50): VeryHigh, High, MediumHigh - returned in reverse: MediumHigh, High, VeryHigh
-    assertEquals(beforePage.data[0].score, 70);  // MediumHigh (closest to anchor)
+    // Before Medium(50): VeryHigh, High, MediumHigh - returned in original order
+    assertEquals(beforePage.data[0].score, 100); // VeryHigh
     assertEquals(beforePage.data[1].score, 90);  // High
-    assertEquals(beforePage.data[2].score, 100); // VeryHigh (furthest from anchor)
+    assertEquals(beforePage.data[2].score, 70);  // MediumHigh (closest to anchor)
   });
 });
 
