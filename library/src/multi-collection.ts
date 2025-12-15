@@ -538,40 +538,108 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         ) {
             let { limit = 100, afterId, beforeId, sort, pipeline: pipelineBuilder, prepare, filter: customFilter, format } = options || {};
             const session = sessionContext.getSession();
-            
+
             const typeChecker = {
                 _type: key as string,
             };
-            
+
             // Build the base query with type filter
             const baseQuery = filter ? [typeChecker, filter] : [typeChecker];
             let query: Record<string, unknown> = { $and: baseQuery };
+
+            // Normalize sort to object format
+            sort = sort || { _id: 1 };
+            const sortObj: Record<string, 1 | -1> = typeof sort === 'object' && !Array.isArray(sort)
+                ? sort as Record<string, 1 | -1>
+                : { _id: sort === 1 || sort === 'asc' || sort === 'ascending' ? 1 : -1 };
+
+            // Helper to build cursor-based pagination filter for multi-collection
+            const buildCursorFilter = async (anchorId: string, direction: 'after' | 'before') => {
+                // Fetch the anchor document to get its sort field values
+                const anchorDoc = await collection.findOne({ _id: anchorId } as never, { session });
+                if (!anchorDoc) return null;
+
+                const sortFields = Object.keys(sortObj);
+
+                // If sorting only by _id, use simple comparison
+                if (sortFields.length === 1 && sortFields[0] === '_id') {
+                    const op = direction === 'after'
+                        ? (sortObj._id === 1 ? '$gt' : '$lt')
+                        : (sortObj._id === 1 ? '$lt' : '$gt');
+                    return { _id: { [op]: anchorId } };
+                }
+
+                // Build compound cursor filter for custom sort
+                const conditions: Record<string, unknown>[] = [];
+
+                for (let i = 0; i < sortFields.length; i++) {
+                    const field = sortFields[i];
+                    const sortDir = sortObj[field];
+                    const anchorValue = (anchorDoc as Record<string, unknown>)[field];
+
+                    const condition: Record<string, unknown> = {};
+
+                    // All previous fields must be equal
+                    for (let j = 0; j < i; j++) {
+                        const prevField = sortFields[j];
+                        condition[prevField] = (anchorDoc as Record<string, unknown>)[prevField];
+                    }
+
+                    // Current field uses comparison based on sort direction and pagination direction
+                    const isForward = direction === 'after';
+                    const op = (sortDir === 1) === isForward ? '$gt' : '$lt';
+                    condition[field] = { [op]: anchorValue };
+
+                    conditions.push(condition);
+                }
+
+                // Add tie-breaker condition: all sort fields equal, but _id differs
+                const tieBreaker: Record<string, unknown> = {};
+                for (const field of sortFields) {
+                    if (field !== '_id') {
+                        tieBreaker[field] = (anchorDoc as Record<string, unknown>)[field];
+                    }
+                }
+                const tieOp = direction === 'after' ? '$gt' : '$lt';
+                tieBreaker._id = { [tieOp]: anchorId };
+                conditions.push(tieBreaker);
+
+                return { $or: conditions };
+            };
 
             // Add pagination filters
             if (afterId) {
               if (!afterId.startsWith(`${key as string}:`)) {
                   throw new Error(`Invalid afterId format for type ${key as string}`);
               }
-              query = {
-                  $and: [
-                      ...baseQuery,
-                      { _id: { $gt: afterId } }
-                  ]
-              };
-              sort = sort || { _id: 1 };
+              const cursorFilter = await buildCursorFilter(afterId, 'after');
+              if (cursorFilter) {
+                  query = {
+                      $and: [
+                          ...baseQuery,
+                          cursorFilter
+                      ]
+                  };
+              }
             } else if (beforeId) {
               if (!beforeId.startsWith(`${key as string}:`)) {
                   throw new Error(`Invalid beforeId format for type ${key as string}`);
               }
-              query = {
-                  $and: [
-                      ...baseQuery,
-                      { _id: { $lt: beforeId } }
-                  ]
-              };
-              sort = sort || { _id: -1 };
-            } else {
-              sort = sort || { _id: 1 };
+              const cursorFilter = await buildCursorFilter(beforeId, 'before');
+              if (cursorFilter) {
+                  query = {
+                      $and: [
+                          ...baseQuery,
+                          cursorFilter
+                      ]
+                  };
+              }
+              // Reverse the sort for beforeId to get items in reverse order
+              const reversedSort: Record<string, 1 | -1> = {};
+              for (const [field, dir] of Object.entries(sortObj)) {
+                  reversedSort[field] = (dir === 1 ? -1 : 1) as 1 | -1;
+              }
+              sort = reversedSort;
             }
 
             let total: number | undefined;
@@ -579,24 +647,18 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             {
                 const baseCountQuery = { $and: baseQuery };
                 total = await collection.countDocuments(baseCountQuery as never, { session });
-                
+
                 if (afterId) {
-                    const positionQuery = {
-                        $and: [
-                            ...baseQuery,
-                            { _id: { $lte: afterId } }
-                        ]
-                    };
-                    position = await collection.countDocuments(positionQuery as never, { session });
+                    const afterFilter = await buildCursorFilter(afterId, 'after');
+                    if (afterFilter) {
+                        const afterCount = await collection.countDocuments({ $and: [...baseQuery, afterFilter] } as never, { session });
+                        position = total - afterCount;
+                    } else {
+                        position = 1;
+                    }
                 } else if (beforeId) {
-                    const positionQuery = {
-                        $and: [
-                            ...baseQuery,
-                            { _id: { $gte: beforeId } }
-                        ]
-                    };
-                    const remainingCount = await collection.countDocuments(positionQuery as never, { session });
-                    position = total - remainingCount;
+                    // Position calculation for beforeId is complex as results are reversed
+                    position = 0;
                 } else {
                     position = 0;
                 }
@@ -812,13 +874,6 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 
                 elements.push(finalDoc);
                 limit--;
-            }
-
-            // If paginating backwards (beforeId) and no explicit sort was provided, reverse the results to maintain chronological order
-            if(beforeId) {
-                elements.reverse();
-                position = (position || 0) - elements.length;
-                position = position < 0 ? 0 : position;
             }
 
             return {

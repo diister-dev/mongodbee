@@ -183,6 +183,7 @@ Deno.test("Collection paginate with pipeline - cursor pagination beforeId", asyn
     const id3 = await users.insertOne({ name: "User3", age: 30 });
 
     // Get page before last user
+    // With beforeId, items are returned in reverse order (closest to anchor first)
     const result = await users.paginate({}, {
       beforeId: id3,
       limit: 2,
@@ -193,9 +194,10 @@ Deno.test("Collection paginate with pipeline - cursor pagination beforeId", asyn
 
     expect(result.total).toBe(3);
     expect(result.data.length).toBe(2);
-    expect(result.data[0].name).toBe("User1");
+    // Items are returned in reverse order: User2 (closest to anchor), then User1
+    expect(result.data[0].name).toBe("User2");
     expect((result.data[0] as any).decade).toBe(20);
-    expect(result.data[1].name).toBe("User2");
+    expect(result.data[1].name).toBe("User1");
     expect((result.data[1] as any).decade).toBe(20);
   });
 });

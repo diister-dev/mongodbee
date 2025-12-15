@@ -456,3 +456,176 @@ Deno.test("Paginate with mixed ID types", async (t) => {
     assertEquals(secondPage.data.length, 2);
   });
 });
+
+Deno.test("Paginate with custom sort and afterId", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const itemSchema = {
+      name: v.string(),
+      createdAt: v.number(),
+      priority: v.number(),
+    };
+
+    const items = await collection(db, "items", itemSchema);
+
+    // Insert test data with varying createdAt values (not in _id order)
+    // We deliberately insert in a different order than the sort order
+    const testData = [
+      { name: "Item E", createdAt: 500, priority: 1 },  // Should be 1st with createdAt desc
+      { name: "Item A", createdAt: 100, priority: 5 },  // Should be 5th with createdAt desc
+      { name: "Item C", createdAt: 300, priority: 3 },  // Should be 3rd with createdAt desc
+      { name: "Item B", createdAt: 200, priority: 4 },  // Should be 4th with createdAt desc
+      { name: "Item D", createdAt: 400, priority: 2 },  // Should be 2nd with createdAt desc
+      { name: "Item F", createdAt: 600, priority: 0 },  // Should be 0th with createdAt desc (first)
+    ];
+
+    // Insert one by one to ensure different _id timestamps
+    for (const item of testData) {
+      await items.insertOne(item);
+      // Small delay to ensure different ObjectId timestamps
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    // Test 1: Paginate with custom sort (createdAt descending) - first page
+    const firstPage = await items.paginate({}, {
+      limit: 3,
+      sort: { createdAt: -1 },
+    });
+
+    assertEquals(firstPage.data.length, 3);
+    assertEquals(firstPage.total, 6);
+
+    // Verify first page is sorted by createdAt descending
+    assertEquals(firstPage.data[0].createdAt, 600); // Item F
+    assertEquals(firstPage.data[1].createdAt, 500); // Item E
+    assertEquals(firstPage.data[2].createdAt, 400); // Item D
+
+    // Test 2: Get second page using afterId with custom sort
+    // This should return items with createdAt < 400 (Item C, B, A)
+    const secondPage = await items.paginate({}, {
+      limit: 3,
+      sort: { createdAt: -1 },
+      afterId: firstPage.data[firstPage.data.length - 1]._id,
+    });
+
+    assertEquals(secondPage.data.length, 3);
+
+    // Verify second page continues the sort order
+    assertEquals(secondPage.data[0].createdAt, 300); // Item C
+    assertEquals(secondPage.data[1].createdAt, 200); // Item B
+    assertEquals(secondPage.data[2].createdAt, 100); // Item A
+
+    // Verify no overlap between pages
+    const firstPageIds = new Set(firstPage.data.map((item) => item._id.toString()));
+    for (const item of secondPage.data) {
+      assertEquals(firstPageIds.has(item._id.toString()), false,
+        "Second page should not contain items from first page");
+    }
+  });
+});
+
+Deno.test("Paginate with custom sort and beforeId", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const itemSchema = {
+      name: v.string(),
+      score: v.number(),
+    };
+
+    const items = await collection(db, "items", itemSchema);
+
+    // Insert test data with varying scores
+    const testData = [
+      { name: "Low", score: 10 },
+      { name: "High", score: 90 },
+      { name: "Medium", score: 50 },
+      { name: "VeryHigh", score: 100 },
+      { name: "VeryLow", score: 5 },
+      { name: "MediumHigh", score: 70 },
+    ];
+
+    for (const item of testData) {
+      await items.insertOne(item);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    // Get all items sorted by score descending to find anchor point
+    const allItems = await items.paginate({}, {
+      limit: 6,
+      sort: { score: -1 },
+    });
+
+    // allItems should be: VeryHigh(100), High(90), MediumHigh(70), Medium(50), Low(10), VeryLow(5)
+    assertEquals(allItems.data[0].score, 100);
+    assertEquals(allItems.data[1].score, 90);
+    assertEquals(allItems.data[2].score, 70);
+
+    // Use beforeId with the 4th item (Medium, score=50) as anchor
+    // Should return items BEFORE it in the sorted order (higher scores)
+    const beforePage = await items.paginate({}, {
+      limit: 3,
+      sort: { score: -1 },
+      beforeId: allItems.data[3]._id, // Medium (score=50)
+    });
+
+    assertEquals(beforePage.data.length, 3);
+
+    // With beforeId, we get items that come BEFORE the anchor in the sorted order
+    // The items are returned in reverse order (closest to anchor first)
+    // Original order: VeryHigh(100), High(90), MediumHigh(70), [Medium(50)], Low(10), VeryLow(5)
+    // Before Medium(50): VeryHigh, High, MediumHigh - returned in reverse: MediumHigh, High, VeryHigh
+    assertEquals(beforePage.data[0].score, 70);  // MediumHigh (closest to anchor)
+    assertEquals(beforePage.data[1].score, 90);  // High
+    assertEquals(beforePage.data[2].score, 100); // VeryHigh (furthest from anchor)
+  });
+});
+
+Deno.test("Paginate with multi-field custom sort and afterId", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const itemSchema = {
+      category: v.string(),
+      name: v.string(),
+      value: v.number(),
+    };
+
+    const items = await collection(db, "items", itemSchema);
+
+    // Insert test data - sorted by category asc, then value desc
+    const testData = [
+      { category: "A", name: "A-High", value: 100 },
+      { category: "A", name: "A-Low", value: 10 },
+      { category: "A", name: "A-Mid", value: 50 },
+      { category: "B", name: "B-High", value: 90 },
+      { category: "B", name: "B-Low", value: 20 },
+      { category: "C", name: "C-Only", value: 60 },
+    ];
+
+    for (const item of testData) {
+      await items.insertOne(item);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    // Expected order with { category: 1, value: -1 }:
+    // A-High(A,100), A-Mid(A,50), A-Low(A,10), B-High(B,90), B-Low(B,20), C-Only(C,60)
+
+    const firstPage = await items.paginate({}, {
+      limit: 3,
+      sort: { category: 1, value: -1 },
+    });
+
+    assertEquals(firstPage.data.length, 3);
+    assertEquals(firstPage.data[0].name, "A-High");
+    assertEquals(firstPage.data[1].name, "A-Mid");
+    assertEquals(firstPage.data[2].name, "A-Low");
+
+    // Get second page
+    const secondPage = await items.paginate({}, {
+      limit: 3,
+      sort: { category: 1, value: -1 },
+      afterId: firstPage.data[firstPage.data.length - 1]._id,
+    });
+
+    assertEquals(secondPage.data.length, 3);
+    assertEquals(secondPage.data[0].name, "B-High");
+    assertEquals(secondPage.data[1].name, "B-Low");
+    assertEquals(secondPage.data[2].name, "C-Only");
+  });
+});

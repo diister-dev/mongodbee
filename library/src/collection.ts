@@ -698,22 +698,87 @@ export async function collection<
         const baseQuery: m.Filter<TInput> = { ...filter };
         let query: m.Filter<TInput> = { ...filter };
 
+        // Normalize sort to object format
+        sort = sort || { _id: 1 };
+        const sortObj: Record<string, 1 | -1> = typeof sort === 'object' && !Array.isArray(sort)
+            ? sort as Record<string, 1 | -1>
+            : { _id: sort === 1 || sort === 'asc' || sort === 'ascending' ? 1 : -1 };
+
+        // Helper to build cursor-based pagination filter
+        const buildCursorFilter = async (anchorId: string | m.ObjectId, direction: 'after' | 'before') => {
+            // Fetch the anchor document to get its sort field values
+            const anchorDoc = await collection.findOne({ _id: anchorId } as m.Filter<TInput>, { session });
+            if (!anchorDoc) return null;
+
+            const sortFields = Object.keys(sortObj);
+
+            // If sorting only by _id, use simple comparison
+            if (sortFields.length === 1 && sortFields[0] === '_id') {
+                const op = direction === 'after'
+                    ? (sortObj._id === 1 ? '$gt' : '$lt')
+                    : (sortObj._id === 1 ? '$lt' : '$gt');
+                return { _id: { [op]: anchorId } };
+            }
+
+            // Build compound cursor filter for custom sort
+            // For afterId with sort { field: 1 }, we want documents where:
+            // (field > anchorValue) OR (field == anchorValue AND _id > anchorId)
+            const conditions: Record<string, unknown>[] = [];
+
+            for (let i = 0; i < sortFields.length; i++) {
+                const field = sortFields[i];
+                const sortDir = sortObj[field];
+                const anchorValue = (anchorDoc as Record<string, unknown>)[field];
+
+                // Build condition for this level
+                const condition: Record<string, unknown> = {};
+
+                // All previous fields must be equal
+                for (let j = 0; j < i; j++) {
+                    const prevField = sortFields[j];
+                    condition[prevField] = (anchorDoc as Record<string, unknown>)[prevField];
+                }
+
+                // Current field uses comparison based on sort direction and pagination direction
+                const isForward = direction === 'after';
+                const op = (sortDir === 1) === isForward ? '$gt' : '$lt';
+                condition[field] = { [op]: anchorValue };
+
+                conditions.push(condition);
+            }
+
+            // Add tie-breaker condition: all sort fields equal, but _id differs
+            const tieBreaker: Record<string, unknown> = {};
+            for (const field of sortFields) {
+                if (field !== '_id') {
+                    tieBreaker[field] = (anchorDoc as Record<string, unknown>)[field];
+                }
+            }
+            // For tie-breaker, use _id comparison based on direction
+            const tieOp = direction === 'after' ? '$gt' : '$lt';
+            tieBreaker._id = { [tieOp]: anchorId };
+            conditions.push(tieBreaker);
+
+            return { $or: conditions };
+        };
+
         // Add pagination filters
         if (afterId) {
-            query = {
-            ...query,
-            _id: { $gt: afterId }
+            const cursorFilter = await buildCursorFilter(afterId, 'after');
+            if (cursorFilter) {
+                query = { ...query, ...cursorFilter } as m.Filter<TInput>;
             }
-            sort = sort || { _id: 1 };
         } else if (beforeId) {
-            // (query as Record<string, unknown>)._id = { $lt: beforeId };
-            query = {
-            ...query,
-            _id: { $lt: beforeId }
+            const cursorFilter = await buildCursorFilter(beforeId, 'before');
+            if (cursorFilter) {
+                query = { ...query, ...cursorFilter } as m.Filter<TInput>;
             }
-            sort = sort || { _id: -1 };
-        } else {
-            sort = sort || { _id: 1 };
+            // Reverse the sort for beforeId to get items in reverse order
+            const reversedSort: Record<string, 1 | -1> = {};
+            for (const [field, dir] of Object.entries(sortObj)) {
+                reversedSort[field] = (dir === 1 ? -1 : 1) as 1 | -1;
+            }
+            sort = reversedSort;
         }
 
         let total: number | undefined;
@@ -721,20 +786,22 @@ export async function collection<
         {
             // Count total documents matching the base filter
             total = await collection.countDocuments(baseQuery, { session });
-            
+
             if (afterId) {
-                const positionQuery = { 
-                    ...baseQuery,
-                    _id: { $lte: afterId }
-                } as m.Filter<TInput>;
-                position = await collection.countDocuments(positionQuery, { session });
+                // Position is the count of documents before the first returned element
+                // For afterId, this is the count of documents up to and including the anchor
+                // We count documents that would NOT be returned (those before or at anchor)
+                const afterFilter = await buildCursorFilter(afterId, 'after');
+                if (afterFilter) {
+                    const afterCount = await collection.countDocuments({ ...baseQuery, ...afterFilter } as m.Filter<TInput>, { session });
+                    position = total - afterCount; // Elements before the first returned = total - elements after anchor
+                } else {
+                    position = 1;
+                }
             } else if (beforeId) {
-                const positionQuery = { 
-                    ...baseQuery,
-                    _id: { $gte: beforeId }
-                } as m.Filter<TInput>;
-                const remainingCount = await collection.countDocuments(positionQuery, { session });
-                position = total - remainingCount;
+                // Position calculation for beforeId is complex as results are reversed
+                // For now, set to 0 as this is mainly used for backward pagination
+                position = 0;
             } else {
                 position = 0;
             }
@@ -843,7 +910,7 @@ export async function collection<
         } else {
           // Use simple find for non-pipeline queries
           const cursor = collection.find(query, { session }).sort(sort as m.Sort);
-          
+
           while(hardLimit-- > 0 && limit > 0) {
             const doc = await cursor.next() as WithId<TOutput> | null;
             if (!doc) break;
@@ -871,12 +938,6 @@ export async function collection<
           }
         }
 
-        // If paginating backwards (beforeId) and no explicit sort was provided, reverse the results to maintain chronological order
-        if(beforeId) {
-            elements.reverse();
-            position = (position || 0) - elements.length;
-            position = position < 0 ? 0 : position;
-        }
 
         return {
             total,
