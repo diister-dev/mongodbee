@@ -630,3 +630,117 @@ Deno.test("Paginate with multi-field custom sort and afterId", async (t) => {
     assertEquals(secondPage.data[2].name, "C-Only");
   });
 });
+
+Deno.test("Paginate with duplicate sort values", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const itemSchema = {
+      name: v.string(),
+      category: v.string(),
+    };
+
+    const items = await collection(db, "items", itemSchema);
+
+    // Insert items where all have the same category (duplicate sort values)
+    const testData = [
+      { name: "Item 1", category: "same" },
+      { name: "Item 2", category: "same" },
+      { name: "Item 3", category: "same" },
+      { name: "Item 4", category: "same" },
+      { name: "Item 5", category: "same" },
+      { name: "Item 6", category: "same" },
+    ];
+
+    for (const item of testData) {
+      await items.insertOne(item);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    // First page with sort on duplicate field
+    const firstPage = await items.paginate({}, {
+      limit: 3,
+      sort: { category: 1 },
+    });
+
+    assertEquals(firstPage.data.length, 3);
+    assertEquals(firstPage.total, 6);
+
+    // Collect first page names
+    const firstPageNames = firstPage.data.map((item) => item.name);
+
+    // Second page should get remaining items, no duplicates
+    const secondPage = await items.paginate({}, {
+      limit: 3,
+      sort: { category: 1 },
+      afterId: firstPage.data[firstPage.data.length - 1]._id,
+    });
+
+    assertEquals(secondPage.data.length, 3);
+
+    // Verify no overlap between pages
+    const secondPageNames = secondPage.data.map((item) => item.name);
+    for (const name of secondPageNames) {
+      assertEquals(firstPageNames.includes(name), false,
+        `Item "${name}" appears in both pages - duplicate detected`);
+    }
+
+    // Verify all 6 items are covered
+    const allNames = [...firstPageNames, ...secondPageNames];
+    assertEquals(allNames.length, 6);
+    for (let i = 1; i <= 6; i++) {
+      assertEquals(allNames.includes(`Item ${i}`), true,
+        `Item ${i} is missing from pagination results`);
+    }
+  });
+});
+
+Deno.test("Paginate with duplicate sort values and beforeId", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const itemSchema = {
+      name: v.string(),
+      status: v.string(),
+    };
+
+    const items = await collection(db, "items", itemSchema);
+
+    // Insert items where all have the same status
+    const testData = [
+      { name: "A", status: "active" },
+      { name: "B", status: "active" },
+      { name: "C", status: "active" },
+      { name: "D", status: "active" },
+      { name: "E", status: "active" },
+      { name: "F", status: "active" },
+    ];
+
+    for (const item of testData) {
+      await items.insertOne(item);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    // Get all items to find anchor
+    const allItems = await items.paginate({}, {
+      limit: 6,
+      sort: { status: 1 },
+    });
+
+    assertEquals(allItems.data.length, 6);
+
+    // Use beforeId with the 4th item as anchor
+    const beforePage = await items.paginate({}, {
+      limit: 3,
+      sort: { status: 1 },
+      beforeId: allItems.data[3]._id,
+    });
+
+    assertEquals(beforePage.data.length, 3);
+
+    // Should return first 3 items in original order
+    const beforeNames = beforePage.data.map((item) => item.name);
+    const expectedNames = allItems.data.slice(0, 3).map((item) => item.name);
+
+    for (let i = 0; i < 3; i++) {
+      assertEquals(beforeNames[i], expectedNames[i],
+        `Position ${i}: expected "${expectedNames[i]}" but got "${beforeNames[i]}"`);
+    }
+  });
+});

@@ -701,8 +701,15 @@ export async function collection<
         // Normalize sort to object format
         sort = sort || { _id: 1 };
         const sortObj: Record<string, 1 | -1> = typeof sort === 'object' && !Array.isArray(sort)
-            ? sort as Record<string, 1 | -1>
+            ? { ...sort as Record<string, 1 | -1> }
             : { _id: sort === 1 || sort === 'asc' || sort === 'ascending' ? 1 : -1 };
+
+        // Always add _id as tie-breaker if not already in sort (ensures stable ordering for duplicate values)
+        if (!('_id' in sortObj)) {
+            sortObj._id = 1;
+        }
+        // Update sort to include _id tie-breaker
+        sort = sortObj;
 
         // Helper to build cursor-based pagination filter
         const buildCursorFilter = async (anchorId: string | m.ObjectId, direction: 'after' | 'before') => {
@@ -746,18 +753,6 @@ export async function collection<
 
                 conditions.push(condition);
             }
-
-            // Add tie-breaker condition: all sort fields equal, but _id differs
-            const tieBreaker: Record<string, unknown> = {};
-            for (const field of sortFields) {
-                if (field !== '_id') {
-                    tieBreaker[field] = (anchorDoc as Record<string, unknown>)[field];
-                }
-            }
-            // For tie-breaker, use _id comparison based on direction
-            const tieOp = direction === 'after' ? '$gt' : '$lt';
-            tieBreaker._id = { [tieOp]: anchorId };
-            conditions.push(tieBreaker);
 
             return { $or: conditions };
         };
