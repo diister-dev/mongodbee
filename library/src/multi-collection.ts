@@ -825,7 +825,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             // Build cursor - use aggregate if pipeline is provided, otherwise use find
             // deno-lint-ignore no-explicit-any
             let cursor: m.FindCursor<any> | m.AggregationCursor<any>;
-            
+
             if (pipelineBuilder) {
                 // Build aggregation pipeline with user stages
                 const userPipeline = pipelineBuilder(createStageBuilder());
@@ -841,35 +841,39 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
             let hardLimit = 10_000;
             const elements: R[] = [];
-            
-            while(hardLimit-- > 0 && limit > 0) {
-                const doc = await cursor.next();
-                if (!doc) break;
 
-                // Validate document with schema
-                const validation = v.safeParse(schema, doc);
-                if (!validation.success) {
-                    continue; // Skip invalid documents
+            try {
+                while(hardLimit-- > 0 && limit > 0) {
+                    const doc = await cursor.next();
+                    if (!doc) break;
+
+                    // Validate document with schema
+                    const validation = v.safeParse(schema, doc);
+                    if (!validation.success) {
+                        continue; // Skip invalid documents
+                    }
+
+                    // When pipeline is used, merge validated doc with original doc to preserve
+                    // additional fields added by pipeline stages (like $lookup results)
+                    const validatedDoc = pipelineBuilder
+                        ? { ...doc, ...validation.output } as v.InferOutput<OutputElementSchema<T, E>>
+                        : validation.output as v.InferOutput<OutputElementSchema<T, E>>;
+
+                    // Step 1: Prepare - enrich document with external data
+                    const enrichedDoc = prepare ? await prepare(validatedDoc) : validatedDoc as unknown as EN;
+
+                    // Step 2: Filter - apply custom filtering logic
+                    const isValid = await customFilter?.(enrichedDoc) ?? true;
+                    if (!isValid) continue;
+
+                    // Step 3: Format - transform document to final output format
+                    const finalDoc = format ? await format(enrichedDoc) : enrichedDoc as unknown as R;
+
+                    elements.push(finalDoc);
+                    limit--;
                 }
-
-                // When pipeline is used, merge validated doc with original doc to preserve
-                // additional fields added by pipeline stages (like $lookup results)
-                const validatedDoc = pipelineBuilder 
-                    ? { ...doc, ...validation.output } as v.InferOutput<OutputElementSchema<T, E>>
-                    : validation.output as v.InferOutput<OutputElementSchema<T, E>>;
-                
-                // Step 1: Prepare - enrich document with external data
-                const enrichedDoc = prepare ? await prepare(validatedDoc) : validatedDoc as unknown as EN;
-                
-                // Step 2: Filter - apply custom filtering logic
-                const isValid = await customFilter?.(enrichedDoc) ?? true;
-                if (!isValid) continue;
-                
-                // Step 3: Format - transform document to final output format
-                const finalDoc = format ? await format(enrichedDoc) : enrichedDoc as unknown as R;
-                
-                elements.push(finalDoc);
-                limit--;
+            } finally {
+                await cursor.close();
             }
 
             // If paginating backwards (beforeId), reverse to maintain consistent order with forward pagination

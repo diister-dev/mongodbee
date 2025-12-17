@@ -875,61 +875,69 @@ export async function collection<
           ];
 
           const cursor = collection.aggregate(aggregationPipeline, { session });
-          
-          while(hardLimit-- > 0 && limit > 0) {
-            const doc = await cursor.next() as WithId<TOutput> | null;
-            if (!doc) break;
 
-            // Validate document with schema (only original fields, not lookup fields)
-            const validation = v.safeParse(schema, doc);
-            if (!validation.success) {
-              continue; // Skip invalid documents
+          try {
+            while(hardLimit-- > 0 && limit > 0) {
+              const doc = await cursor.next() as WithId<TOutput> | null;
+              if (!doc) break;
+
+              // Validate document with schema (only original fields, not lookup fields)
+              const validation = v.safeParse(schema, doc);
+              if (!validation.success) {
+                continue; // Skip invalid documents
+              }
+
+              // Merge original doc (with lookup fields) with validated output
+              const validatedDoc = { ...doc, ...validation.output } as WithId<TOutput>;
+
+              // Step 1: Prepare - enrich document with external data
+              const enrichedDoc = prepare ? await prepare(validatedDoc) : validatedDoc as unknown as E;
+
+              // Step 2: Filter - apply custom filtering logic
+              const isValid = await customFilter?.(enrichedDoc) ?? true;
+              if (!isValid) continue;
+
+              // Step 3: Format - transform document to final output format
+              const finalDoc = format ? await format(enrichedDoc) : enrichedDoc as unknown as R;
+
+              elements.push(finalDoc);
+              limit--;
             }
-
-            // Merge original doc (with lookup fields) with validated output
-            const validatedDoc = { ...doc, ...validation.output } as WithId<TOutput>;
-            
-            // Step 1: Prepare - enrich document with external data
-            const enrichedDoc = prepare ? await prepare(validatedDoc) : validatedDoc as unknown as E;
-            
-            // Step 2: Filter - apply custom filtering logic
-            const isValid = await customFilter?.(enrichedDoc) ?? true;
-            if (!isValid) continue;
-            
-            // Step 3: Format - transform document to final output format
-            const finalDoc = format ? await format(enrichedDoc) : enrichedDoc as unknown as R;
-            
-            elements.push(finalDoc);
-            limit--;
+          } finally {
+            await cursor.close();
           }
         } else {
           // Use simple find for non-pipeline queries
           const cursor = collection.find(query, { session }).sort(sort as m.Sort);
 
-          while(hardLimit-- > 0 && limit > 0) {
-            const doc = await cursor.next() as WithId<TOutput> | null;
-            if (!doc) break;
+          try {
+            while(hardLimit-- > 0 && limit > 0) {
+              const doc = await cursor.next() as WithId<TOutput> | null;
+              if (!doc) break;
 
-            // Validate document with schema
-            const validation = v.safeParse(schema, doc);
-            if (!validation.success) {
-              continue; // Skip invalid documents
+              // Validate document with schema
+              const validation = v.safeParse(schema, doc);
+              if (!validation.success) {
+                continue; // Skip invalid documents
+              }
+
+              const validatedDoc = validation.output as WithId<TOutput>;
+
+              // Step 1: Prepare - enrich document with external data
+              const enrichedDoc = prepare ? await prepare(validatedDoc) : validatedDoc as unknown as E;
+
+              // Step 2: Filter - apply custom filtering logic
+              const isValid = await customFilter?.(enrichedDoc) ?? true;
+              if (!isValid) continue;
+
+              // Step 3: Format - transform document to final output format
+              const finalDoc = format ? await format(enrichedDoc) : enrichedDoc as unknown as R;
+
+              elements.push(finalDoc);
+              limit--;
             }
-
-            const validatedDoc = validation.output as WithId<TOutput>;
-            
-            // Step 1: Prepare - enrich document with external data
-            const enrichedDoc = prepare ? await prepare(validatedDoc) : validatedDoc as unknown as E;
-            
-            // Step 2: Filter - apply custom filtering logic
-            const isValid = await customFilter?.(enrichedDoc) ?? true;
-            if (!isValid) continue;
-            
-            // Step 3: Format - transform document to final output format
-            const finalDoc = format ? await format(enrichedDoc) : enrichedDoc as unknown as R;
-            
-            elements.push(finalDoc);
-            limit--;
+          } finally {
+            await cursor.close();
           }
         }
 
