@@ -36,6 +36,67 @@ import { dirtyEquivalent } from "../../utils/object.ts";
 import { createMemoryApplier } from "../appliers/memory.ts";
 
 /**
+ * Simulation power levels for controlling mock data generation complexity
+ *
+ * - `quick`: Fast validation with minimal mock data (10-20 docs per collection)
+ *   Best for: Quick checks, CI pipelines, development iterations
+ *
+ * - `normal`: Balanced validation with moderate mock data (100 docs per collection)
+ *   Best for: Regular validation, pre-commit checks
+ *
+ * - `hard`: Comprehensive validation with extensive mock data (500+ docs per collection)
+ *   Best for: Pre-release validation, catching edge cases
+ */
+export type SimulationPowerLevel = "quick" | "normal" | "hard";
+
+/**
+ * Configuration presets for each power level
+ */
+const POWER_LEVEL_PRESETS: Record<SimulationPowerLevel, {
+  docsPerCollectionMin: number;
+  docsPerCollectionMax: number;
+  docsPerTypeMin: number;
+  docsPerTypeMax: number;
+}> = {
+  quick: {
+    docsPerCollectionMin: 10,
+    docsPerCollectionMax: 10,
+    docsPerTypeMin: 1,
+    docsPerTypeMax: 1,
+  },
+  normal: {
+    docsPerCollectionMin: 100,
+    docsPerCollectionMax: 100,
+    docsPerTypeMin: 1,
+    docsPerTypeMax: 2,
+  },
+  hard: {
+    docsPerCollectionMin: 500,
+    docsPerCollectionMax: 500,
+    docsPerTypeMin: 2,
+    docsPerTypeMax: 5,
+  },
+};
+
+/**
+ * Gets the mock generation constants for a given power level
+ *
+ * @param powerLevel - The simulation power level
+ * @returns Mock generation configuration for the specified level
+ */
+export function getMockGenerationConfig(powerLevel: SimulationPowerLevel = "normal") {
+  const preset = POWER_LEVEL_PRESETS[powerLevel];
+  return {
+    DOCS_PER_COLLECTION_MIN: preset.docsPerCollectionMin,
+    DOCS_PER_COLLECTION_MAX: preset.docsPerCollectionMax,
+    DOCS_PER_TYPE_MIN: preset.docsPerTypeMin,
+    DOCS_PER_TYPE_MAX: preset.docsPerTypeMax,
+    MIN_SPARSE_THRESHOLD: MOCK_GENERATION.MIN_SPARSE_THRESHOLD,
+    DEFAULT_STATE_RETENTION_RATIO: MOCK_GENERATION.DEFAULT_STATE_RETENTION_RATIO,
+  };
+}
+
+/**
  * Validation result from validators
  */
 export type ValidationResult = {
@@ -94,14 +155,24 @@ export interface SimulationValidatorOptions {
    * - 0.0 = discard all previous state, generate 100% fresh mock data
    * - 0.5 = keep 50% of previous state, generate 50% fresh mock data (default)
    * - 1.0 = keep 100% of previous state, no fresh mock data
-   * 
+   *
    * This allows testing both:
    * - Existing data transformations (retained portion)
    * - Edge cases with fresh data (new mock portion)
-   * 
+   *
    * @default 0.5
    */
   stateRetentionRatio?: number;
+
+  /**
+   * Simulation power level controlling mock data generation complexity
+   * - `quick`: Fast validation with minimal mock data (10-20 docs)
+   * - `normal`: Balanced validation (100 docs) - default
+   * - `hard`: Comprehensive validation (500+ docs)
+   *
+   * @default "normal"
+   */
+  powerLevel?: SimulationPowerLevel;
 }
 
 /**
@@ -113,6 +184,7 @@ export const DEFAULT_SIMULATION_VALIDATOR_OPTIONS: SimulationValidatorOptions =
     trackHistory: true,
     maxOperations: 1000,
     stateRetentionRatio: MOCK_GENERATION.DEFAULT_STATE_RETENTION_RATIO,
+    powerLevel: "normal",
   };
 
 /**
@@ -123,9 +195,11 @@ export const DEFAULT_SIMULATION_VALIDATOR_OPTIONS: SimulationValidatorOptions =
  */
 export class SimulationValidator implements MigrationValidator {
   private readonly options: SimulationValidatorOptions;
+  private readonly mockConfig: ReturnType<typeof getMockGenerationConfig>;
 
   constructor(options: SimulationValidatorOptions = {}) {
     this.options = { ...DEFAULT_SIMULATION_VALIDATOR_OPTIONS, ...options };
+    this.mockConfig = getMockGenerationConfig(this.options.powerLevel);
   }
 
   /**
@@ -774,9 +848,9 @@ export class SimulationValidator implements MigrationValidator {
       const mockDocs: Record<string, unknown>[] = [];
       const docCount = Math.floor(
         Math.random() *
-          (MOCK_GENERATION.DOCS_PER_COLLECTION_MAX -
-            MOCK_GENERATION.DOCS_PER_COLLECTION_MIN + 1),
-      ) + MOCK_GENERATION.DOCS_PER_COLLECTION_MIN;
+          (this.mockConfig.DOCS_PER_COLLECTION_MAX -
+            this.mockConfig.DOCS_PER_COLLECTION_MIN + 1),
+      ) + this.mockConfig.DOCS_PER_COLLECTION_MIN;
 
       for (let i = 0; i < docCount; i++) {
         try {
@@ -816,9 +890,9 @@ export class SimulationValidator implements MigrationValidator {
 
       const docCount = Math.floor(
         Math.random() *
-          (MOCK_GENERATION.DOCS_PER_COLLECTION_MAX -
-            MOCK_GENERATION.DOCS_PER_COLLECTION_MIN + 1),
-      ) + MOCK_GENERATION.DOCS_PER_COLLECTION_MIN;
+          (this.mockConfig.DOCS_PER_COLLECTION_MAX -
+            this.mockConfig.DOCS_PER_COLLECTION_MIN + 1),
+      ) + this.mockConfig.DOCS_PER_COLLECTION_MIN;
 
       for (let i = 0; i < docCount; i++) {
         try {
@@ -864,9 +938,9 @@ export class SimulationValidator implements MigrationValidator {
 
         const docCount = Math.floor(
           Math.random() *
-            (MOCK_GENERATION.DOCS_PER_COLLECTION_MAX -
-              MOCK_GENERATION.DOCS_PER_COLLECTION_MIN + 1),
-        ) + MOCK_GENERATION.DOCS_PER_COLLECTION_MIN;
+            (this.mockConfig.DOCS_PER_COLLECTION_MAX -
+              this.mockConfig.DOCS_PER_COLLECTION_MIN + 1),
+        ) + this.mockConfig.DOCS_PER_COLLECTION_MIN;
 
         for (let j = 0; j < docCount; j++) {
           try {
@@ -909,13 +983,13 @@ export class SimulationValidator implements MigrationValidator {
       if (!schema) continue;
 
       // Only populate if the instance has no or very few documents
-      if (content.length >= MOCK_GENERATION.DOCS_PER_COLLECTION_MIN) continue;
+      if (content.length >= this.mockConfig.DOCS_PER_COLLECTION_MIN) continue;
 
       const docCount = Math.floor(
         Math.random() *
-          (MOCK_GENERATION.DOCS_PER_COLLECTION_MAX -
-            MOCK_GENERATION.DOCS_PER_COLLECTION_MIN + 1),
-      ) + MOCK_GENERATION.DOCS_PER_COLLECTION_MIN;
+          (this.mockConfig.DOCS_PER_COLLECTION_MAX -
+            this.mockConfig.DOCS_PER_COLLECTION_MIN + 1),
+      ) + this.mockConfig.DOCS_PER_COLLECTION_MIN;
 
       for (let j = 0; j < docCount; j++) {
         try {
@@ -999,7 +1073,7 @@ export class SimulationValidator implements MigrationValidator {
     currentState: SimulationDatabaseState,
     schemas: SchemasDefinition,
   ): SimulationDatabaseState {
-    const ratio = this.options.stateRetentionRatio ?? MOCK_GENERATION.DEFAULT_STATE_RETENTION_RATIO;
+    const ratio = this.options.stateRetentionRatio ?? this.mockConfig.DEFAULT_STATE_RETENTION_RATIO;
     
     // Clone the state to avoid mutations
     const newState = structuredClone(currentState);
@@ -1097,8 +1171,8 @@ export class SimulationValidator implements MigrationValidator {
         if (newState.collections[collectionName].content.length === 0) {
           const schema = schemas.collections[collectionName];
           const docCount = Math.floor(
-            Math.random() * (MOCK_GENERATION.DOCS_PER_COLLECTION_MAX - MOCK_GENERATION.DOCS_PER_COLLECTION_MIN + 1)
-          ) + MOCK_GENERATION.DOCS_PER_COLLECTION_MIN;
+            Math.random() * (this.mockConfig.DOCS_PER_COLLECTION_MAX - this.mockConfig.DOCS_PER_COLLECTION_MIN + 1)
+          ) + this.mockConfig.DOCS_PER_COLLECTION_MIN;
           for (let i = 0; i < docCount; i++) {
             try {
               const mockDoc = this.generateMockDocument(schema as Record<string, unknown>);
@@ -1122,8 +1196,8 @@ export class SimulationValidator implements MigrationValidator {
           const schema = schemas.multiCollections[collectionName];
           const typeNames = Object.keys(schema);
           const docCount = Math.floor(
-            Math.random() * (MOCK_GENERATION.DOCS_PER_COLLECTION_MAX - MOCK_GENERATION.DOCS_PER_COLLECTION_MIN + 1)
-          ) + MOCK_GENERATION.DOCS_PER_COLLECTION_MIN;
+            Math.random() * (this.mockConfig.DOCS_PER_COLLECTION_MAX - this.mockConfig.DOCS_PER_COLLECTION_MIN + 1)
+          ) + this.mockConfig.DOCS_PER_COLLECTION_MIN;
           for (let i = 0; i < docCount; i++) {
             for (const typeName of typeNames) {
               try {

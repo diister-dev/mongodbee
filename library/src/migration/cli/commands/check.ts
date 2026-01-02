@@ -16,11 +16,36 @@ import {
 } from "../../discovery.ts";
 import { validateMigrationChainWithProjectSchema } from "../../schema-validation.ts";
 import { validateMigrationsWithSimulation } from "../utils/validate-migrations.ts";
+import type { SimulationPowerLevel } from "../../validators/simulation.ts";
 
 export interface CheckCommandOptions {
   configPath?: string;
   cwd?: string;
   verbose?: boolean;
+  /**
+   * Simulation mode controlling validation complexity
+   * - `quick`: Fast validation with minimal mock data
+   * - `normal`: Balanced validation (default)
+   * - `hard`: Comprehensive validation with extensive mock data
+   */
+  mode?: string;
+  /**
+   * Only validate the last N migrations
+   */
+  last?: number;
+}
+
+/**
+ * Parse and validate the simulation mode option
+ */
+function parseSimulationMode(mode?: string): SimulationPowerLevel {
+  if (!mode) return "normal";
+  const normalized = mode.toLowerCase();
+  if (normalized === "quick" || normalized === "normal" || normalized === "hard") {
+    return normalized;
+  }
+  console.log(yellow(`⚠ Unknown mode "${mode}", using "normal" instead`));
+  return "normal";
 }
 
 /**
@@ -29,7 +54,16 @@ export interface CheckCommandOptions {
 export async function checkCommand(
   options: CheckCommandOptions = {},
 ): Promise<void> {
+  const powerLevel = parseSimulationMode(options.mode);
+  const lastN = options.last && options.last > 0 ? options.last : undefined;
+
   console.log(bold(blue("🐝 Checking migrations...")));
+  if (powerLevel !== "normal" || lastN) {
+    const modeInfo = powerLevel !== "normal" ? `mode: ${powerLevel}` : "";
+    const lastInfo = lastN ? `last: ${lastN}` : "";
+    const info = [modeInfo, lastInfo].filter(Boolean).join(", ");
+    console.log(dim(`  Options: ${info}`));
+  }
   console.log();
 
   // Load configuration
@@ -91,5 +125,7 @@ export async function checkCommand(
   // Validate each migration with simulation
   await validateMigrationsWithSimulation(allMigrations, {
     verbose: options.verbose,
+    powerLevel,
+    lastN,
   });
 }

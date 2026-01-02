@@ -92,6 +92,10 @@ ${yellow("GLOBAL OPTIONS:")}
   --config          Path to configuration file (default: mongodbee.config.json)
   --env             Environment to use (default: development)
 
+${yellow("CHECK OPTIONS:")}
+  -m, --mode        Simulation mode: quick, normal, hard (default: normal)
+  -l, --last        Only validate the last N migrations
+
 ${yellow("MIGRATE OPTIONS:")}
   --dry-run         Simulate migration without applying changes
   --force           Skip all confirmations (use with caution!)
@@ -113,10 +117,12 @@ function showVersion(): void {
 async function main(): Promise<void> {
   const args = parseArgs(Deno.args, {
     boolean: ["version", "dry-run", "force", "auto-sync", "verbose", "help"],
-    string: ["config", "env", "name"],
+    string: ["config", "env", "name", "mode"],
     alias: {
       v: "version",
       h: "help",
+      m: "mode",
+      l: "last",
     },
   });
 

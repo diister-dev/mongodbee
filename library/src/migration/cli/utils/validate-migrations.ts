@@ -7,7 +7,7 @@
 import { blue, bold, dim, green, red, yellow } from "@std/fmt/colors";
 import type { MigrationDefinition } from "../../types.ts";
 import { createEmptyDatabaseState, type SimulationDatabaseState } from "../../types.ts";
-import { createSimulationValidator, type SimulationValidatorOptions } from "../../validators/simulation.ts";
+import { createSimulationValidator, type SimulationPowerLevel, type SimulationValidatorOptions } from "../../validators/simulation.ts";
 
 export interface MigrationValidationResult {
   migration: MigrationDefinition;
@@ -23,10 +23,26 @@ export interface ValidateMigrationsOptions {
    * - 0.0 = discard all previous state, generate 100% fresh mock data (like before)
    * - 0.5 = keep 50% of previous state, generate 50% fresh mock data (default, optimized)
    * - 1.0 = keep 100% of previous state, no fresh mock data
-   * 
+   *
    * @default 0.5
    */
   stateRetentionRatio?: number;
+
+  /**
+   * Simulation power level controlling mock data generation complexity
+   * - `quick`: Fast validation with minimal mock data (10-20 docs)
+   * - `normal`: Balanced validation (100 docs)
+   * - `thorough`: Comprehensive validation (500+ docs)
+   *
+   * @default "normal"
+   */
+  powerLevel?: SimulationPowerLevel;
+
+  /**
+   * Only validate the last N migrations
+   * If not provided, all migrations are validated
+   */
+  lastN?: number;
 }
 
 /**
@@ -45,26 +61,74 @@ export async function validateMigrationsWithSimulation(
   migrations: MigrationDefinition[],
   options: ValidateMigrationsOptions = {},
 ): Promise<MigrationValidationResult[]> {
-  console.log(bold("🧪 Validating migrations with simulation..."));
+  const { lastN, powerLevel = "normal" } = options;
+
+  // Determine which migrations to validate based on lastN option
+  const migrationsToValidate = lastN && lastN > 0 && lastN < migrations.length
+    ? migrations.slice(-lastN)
+    : migrations;
+
+  const skippedMigrations = lastN && lastN > 0 && lastN < migrations.length
+    ? migrations.slice(0, -lastN)
+    : [];
+
+  const modeLabel = powerLevel === "quick" ? "quick" : powerLevel === "hard" ? "hard" : "normal";
+  const lastNLabel = lastN && lastN > 0 ? ` (last ${Math.min(lastN, migrations.length)})` : "";
+
+  console.log(bold(`🧪 Validating migrations with simulation [${modeLabel}]${lastNLabel}...`));
   console.log();
 
   const stateRetentionRatio = options.stateRetentionRatio ?? 0.5;
-  
+
   const validatorOptions: SimulationValidatorOptions = {
     strictValidation: true,
     maxOperations: 1000,
     stateRetentionRatio,
+    powerLevel,
   };
-  
+
   const simulationValidator = createSimulationValidator(validatorOptions);
 
   let allValid = true;
   const results: MigrationValidationResult[] = [];
-  
+
   // Track current state to propagate between migrations (O(n) instead of O(n²))
   let currentState: SimulationDatabaseState = createEmptyDatabaseState();
 
-  for (const migration of migrations) {
+  // Fast-forward through skipped migrations (just state propagation, minimal output)
+  if (skippedMigrations.length > 0) {
+    console.log(dim(`  Skipping ${skippedMigrations.length} migration(s)...`));
+    for (const migration of skippedMigrations) {
+      try {
+        const validationResult = await simulationValidator.validateMigration(
+          migration,
+          currentState,
+        );
+        if (validationResult.success && validationResult.data?.stateAfterMigration) {
+          currentState = simulationValidator.prepareStateForNextMigration(
+            validationResult.data.stateAfterMigration as SimulationDatabaseState,
+            migration.schemas,
+          );
+        }
+        results.push({
+          migration,
+          valid: true,
+          errors: [],
+          warnings: ["Skipped (--last N mode)"],
+        });
+      } catch {
+        results.push({
+          migration,
+          valid: true,
+          errors: [],
+          warnings: ["Skipped (--last N mode)"],
+        });
+      }
+    }
+    console.log();
+  }
+
+  for (const migration of migrationsToValidate) {
     console.log(
       `  ${blue("→")} ${bold(migration.name)} ${dim(`(${migration.id})`)}`,
     );

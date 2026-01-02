@@ -55,7 +55,9 @@ export {
 export {
   createSimulationValidator,
   DEFAULT_SIMULATION_VALIDATOR_OPTIONS,
+  getMockGenerationConfig,
   SimulationValidator,
+  type SimulationPowerLevel,
   type SimulationValidatorOptions,
   validateMigrationWithSimulation,
   type ValidationResult,

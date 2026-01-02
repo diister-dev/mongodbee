@@ -48,7 +48,7 @@ import {
   loadAllMigrations,
 } from "./discovery.ts";
 import { validateMigrationChainWithProjectSchema } from "./schema-validation.ts";
-import { createSimulationValidator } from "./validators/simulation.ts";
+import { createSimulationValidator, type SimulationPowerLevel } from "./validators/simulation.ts";
 import { getAppliedMigrationIds, getLastAppliedMigration } from "./state.ts";
 import { loadConfig } from "./config/loader.ts";
 import * as path from "@std/path";
@@ -98,6 +98,28 @@ export interface CheckMigrationStatusOptions {
    * @default false
    */
   verbose?: boolean;
+
+  /**
+   * Simulation power level controlling mock data generation complexity
+   * - `quick`: Fast validation with minimal mock data (10-20 docs)
+   * - `normal`: Balanced validation (100 docs)
+   * - `hard`: Comprehensive validation (500+ docs)
+   *
+   * @default "quick"
+   */
+  simulationMode?: SimulationPowerLevel;
+
+  /**
+   * Only validate the last N migrations
+   * If not provided, all migrations are validated
+   *
+   * @example
+   * ```typescript
+   * // Only validate the last 3 migrations
+   * await checkMigrationStatus({ lastN: 3 });
+   * ```
+   */
+  lastN?: number;
 }
 
 /**
@@ -263,6 +285,8 @@ export async function checkMigrationStatus(
     verbose = false,
     configPath,
     cwd = Deno.cwd(),
+    simulationMode = "quick",
+    lastN,
   } = options;
 
   let { migrationsDir, schemaPath } = options;
@@ -359,14 +383,58 @@ export async function checkMigrationStatus(
     const simulationValidator = createSimulationValidator({
       strictValidation: true,
       maxOperations: 1000,
-      stateRetentionRatio: 0.5, // Keep 50% of previous state, generate 50% fresh mock
+      stateRetentionRatio: 0.5,
+      powerLevel: simulationMode,
     });
 
     let allValid = true;
     // Track current state to propagate between migrations (O(n) instead of O(n²))
     let currentState: SimulationDatabaseState = createEmptyDatabaseState();
 
-    for (const migration of allMigrations) {
+    // Determine which migrations to validate based on lastN option
+    const migrationsToValidate = lastN && lastN > 0 && lastN < allMigrations.length
+      ? allMigrations.slice(-lastN)
+      : allMigrations;
+
+    // If using lastN, we need to fast-forward state to the start of validated migrations
+    const skippedMigrations = lastN && lastN > 0 && lastN < allMigrations.length
+      ? allMigrations.slice(0, -lastN)
+      : [];
+
+    // Fast-forward through skipped migrations (minimal validation, just state propagation)
+    for (const migration of skippedMigrations) {
+      try {
+        const validationResult = await simulationValidator.validateMigration(
+          migration,
+          currentState,
+        );
+        if (validationResult.success && validationResult.data?.stateAfterMigration) {
+          currentState = simulationValidator.prepareStateForNextMigration(
+            validationResult.data.stateAfterMigration as SimulationDatabaseState,
+            migration.schemas,
+          );
+        }
+        // Add skipped migrations as valid (not fully validated but passed fast-forward)
+        migrationsInfo.push({
+          id: migration.id,
+          name: migration.name,
+          isValid: true,
+          errors: [],
+          warnings: ["Skipped (--last N mode)"],
+        });
+      } catch {
+        // If fast-forward fails, still continue but mark as not validated
+        migrationsInfo.push({
+          id: migration.id,
+          name: migration.name,
+          isValid: true,
+          errors: [],
+          warnings: ["Skipped (--last N mode, fast-forward failed)"],
+        });
+      }
+    }
+
+    for (const migration of migrationsToValidate) {
       try {
         // Pass the current state to avoid re-simulating all parent migrations
         const validationResult = await simulationValidator.validateMigration(

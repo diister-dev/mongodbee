@@ -105,6 +105,7 @@ export * from "./config/mod.ts";
 export {
   createChainValidator,
   type MigrationValidator,
+  type SimulationPowerLevel,
   type ValidationResult,
 } from "./validators/mod.ts";
 
