@@ -178,6 +178,51 @@ export type MarkAsMultiModelTypeRule = {
 };
 
 /**
+ * Rule for deleting a type from a multi-collection or multi-model
+ *
+ * This removes all documents of a specific type. The down() migration
+ * should handle restoring these documents if needed (usually irreversible).
+ */
+export type DeleteMultiCollectionTypeRule = {
+  type: "delete_multicollection_type";
+  collectionName: string;
+  documentType: string;
+  /** Parent schema for the deleted type (needed for down migration) */
+  parentSchema?: SchemaContent;
+};
+
+export type DeleteMultiModelInstancesTypeRule = {
+  type: "delete_multimodel_instances_type";
+  modelType: string;
+  documentType: string;
+  /** Parent schema for the deleted type (needed for down migration) */
+  parentSchema?: SchemaContent;
+};
+
+/**
+ * Rule for renaming a type in a multi-collection or multi-model
+ *
+ * This changes the _type field of all documents from oldTypeName to newTypeName.
+ */
+export type RenameMultiCollectionTypeRule = {
+  type: "rename_multicollection_type";
+  collectionName: string;
+  oldTypeName: string;
+  newTypeName: string;
+  schema: SchemaContent;
+  parentSchema?: SchemaContent;
+};
+
+export type RenameMultiModelInstancesTypeRule = {
+  type: "rename_multimodel_instances_type";
+  modelType: string;
+  oldTypeName: string;
+  newTypeName: string;
+  schema: SchemaContent;
+  parentSchema?: SchemaContent;
+};
+
+/**
  * Union type representing all possible migration operations
  */
 export type MigrationRule =
@@ -195,6 +240,12 @@ export type MigrationRule =
   | TransformMultiCollectionTypeRule
   | TransformMultiModelInstanceTypeRule
   | TransformMultiModelInstancesTypeRule
+  // Delete type
+  | DeleteMultiCollectionTypeRule
+  | DeleteMultiModelInstancesTypeRule
+  // Rename type
+  | RenameMultiCollectionTypeRule
+  | RenameMultiModelInstancesTypeRule
   // Other
   | UpdateIndexesRule
   | MarkAsMultiModelTypeRule;
@@ -356,7 +407,7 @@ export interface MultiModelInstancesTypeBuilder {
    * @returns The type builder for method chaining
    */
   seed(documents: readonly unknown[]): MultiModelInstancesTypeBuilder;
-  
+
   /**
    * Applies a transformation to all documents of this type across ALL instances of this model type
    * @param rule - The transformation rule with up/down functions
@@ -369,6 +420,38 @@ export interface MultiModelInstancesTypeBuilder {
    * @returns The main migration builder
    */
   end(): MultiModelInstancesBuilder;
+}
+
+export interface MultiModelInstancesBuilder {
+  /**
+   * Configures a specific type within ALL instances of this multi-collection model
+   * @param typeName - The name of the type to configure
+   * @returns A type builder for the specified type
+   */
+  type(typeName: string): MultiModelInstancesTypeBuilder;
+
+  /**
+   * Deletes a type from ALL instances of this multi-collection model
+   * This removes all documents with the specified _type
+   * @param typeName - The name of the type to delete
+   * @returns The instances builder for method chaining
+   */
+  deleteType(typeName: string): MultiModelInstancesBuilder;
+
+  /**
+   * Renames a type in ALL instances of this multi-collection model
+   * This changes the _type field from oldTypeName to newTypeName
+   * @param oldTypeName - The current name of the type
+   * @param newTypeName - The new name for the type
+   * @returns The instances builder for method chaining
+   */
+  renameType(oldTypeName: string, newTypeName: string): MultiModelInstancesBuilder;
+
+  /**
+   * Finishes configuring this model type and returns to the main builder
+   * @returns The main migration builder
+   */
+  end(): MigrationBuilder;
 }
 
 /**
@@ -384,21 +467,6 @@ export interface MultiModelInstanceBuilder {
 
   /**
    * Finishes configuring this instance and returns to the main builder
-   * @returns The main migration builder
-   */
-  end(): MigrationBuilder;
-}
-
-export interface MultiModelInstancesBuilder {
-  /**
-   * Configures a specific type within ALL instances of this multi-collection model
-   * @param typeName - The name of the type to configure
-   * @returns A type builder for the specified type
-   */
-  type(typeName: string): MultiModelInstancesTypeBuilder;
-
-  /**
-   * Finishes configuring this model type and returns to the main builder
    * @returns The main migration builder
    */
   end(): MigrationBuilder;

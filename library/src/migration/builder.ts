@@ -295,7 +295,7 @@ function createMultiModelInstancesBuilder(
   modelType: string,
   mainBuilder: MigrationBuilder,
   options: MigrationBuilderOptions,
-) : MultiModelInstancesBuilder {
+): MultiModelInstancesBuilder {
   const builder: MultiModelInstancesBuilder = {
     type(typeName) {
       return createMultiModelInstancesTypeBuilder(
@@ -306,6 +306,55 @@ function createMultiModelInstancesBuilder(
         options,
       );
     },
+
+    deleteType(typeName) {
+      // Get parent schema for this type (needed for down migration)
+      const parentTypeSchema = options.parentSchemas?.multiModels
+        ?.[modelType]
+        ?.[typeName];
+
+      state.operations.push({
+        type: "delete_multimodel_instances_type",
+        modelType,
+        documentType: typeName,
+        parentSchema: parentTypeSchema,
+      });
+
+      // Deleting a type is irreversible (we can't restore the data)
+      state.mark({ type: "irreversible" });
+
+      return builder;
+    },
+
+    renameType(oldTypeName, newTypeName) {
+      // Get the new schema for the renamed type
+      const typeSchema = options.schemas?.multiModels
+        ?.[modelType]
+        ?.[newTypeName];
+
+      // Get parent schema (old type name)
+      const parentTypeSchema = options.parentSchemas?.multiModels
+        ?.[modelType]
+        ?.[oldTypeName];
+
+      if (!typeSchema) {
+        throw new Error(
+          `Cannot rename type ${oldTypeName} to ${newTypeName} in multi-model ${modelType}: new type schema not found in migration.schemas.multiModels`,
+        );
+      }
+
+      state.operations.push({
+        type: "rename_multimodel_instances_type",
+        modelType,
+        oldTypeName,
+        newTypeName,
+        schema: typeSchema,
+        parentSchema: parentTypeSchema,
+      });
+
+      return builder;
+    },
+
     end() {
       return mainBuilder;
     },
