@@ -24,6 +24,7 @@ import {
   recordMultiCollectionMigration,
   shouldInstanceReceiveMigration,
 } from "../multicollection-registry.ts";
+import { ObjectId } from "mongodb";
 
 /**
  * Generates a new unique ID using ULID
@@ -1003,10 +1004,52 @@ export function createMongodbApplier(
 
         for (const collectionName of instances) {
           const collection = db.collection(collectionName);
-          await collection.updateMany(
-            { _type: operation.oldTypeName } as Record<string, unknown>,
-            { $set: { _type: operation.newTypeName } } as Record<string, unknown>
-          );
+          
+          // Find all documents with the old type name
+          const oldTypePrefix = `${operation.oldTypeName}:`;
+          const newTypePrefix = `${operation.newTypeName}:`;
+          
+          // Process documents in batches to avoid loading everything in memory
+          let processedCount = 0;
+          
+          while (true) {
+            const documents = await collection.find(
+              { _type: operation.oldTypeName } as Record<string, unknown>
+            )
+              .limit(opts.batchSize)
+              .skip(processedCount)
+              .toArray();
+            
+            if (documents.length === 0) break;
+            
+            for (const doc of documents) {
+              const oldId = doc._id as unknown as string;
+              let newId = oldId as unknown as string;
+              
+              // If _id is a string starting with "oldTypeName:", replace the prefix
+              if (typeof oldId === 'string' && oldId.startsWith(oldTypePrefix)) {
+                newId = newTypePrefix + oldId.slice(oldTypePrefix.length);
+              }
+              
+              // If _id changed, we need to delete the old document and insert with new _id
+              if (newId !== oldId) {
+                await collection.deleteOne({ _id: oldId as unknown as ObjectId });
+                await collection.insertOne({
+                  ...doc,
+                  _id: newId as unknown as ObjectId,
+                  _type: operation.newTypeName
+                });
+              } else {
+                // Just update _type if _id doesn't change
+                await collection.updateOne(
+                  { _id: oldId as unknown as ObjectId },
+                  { $set: { _type: operation.newTypeName } } as Record<string, unknown>
+                );
+              }
+            }
+            
+            processedCount += documents.length;
+          }
         }
       },
       reverse: async (operation) => {
@@ -1014,10 +1057,51 @@ export function createMongodbApplier(
 
         for (const collectionName of instances) {
           const collection = db.collection(collectionName);
-          await collection.updateMany(
-            { _type: operation.newTypeName } as Record<string, unknown>,
-            { $set: { _type: operation.oldTypeName } } as Record<string, unknown>
-          );
+          
+          // Find all documents with the new type name
+          const oldTypePrefix = `${operation.oldTypeName}:`;
+          const newTypePrefix = `${operation.newTypeName}:`;
+          
+          // Process documents in batches to avoid loading everything in memory
+          let processedCount = 0;
+          
+          while (true) {
+            const documents = await collection.find(
+              { _type: operation.newTypeName } as Record<string, unknown>
+            )
+              .limit(opts.batchSize)
+              .skip(processedCount)
+              .toArray();
+            
+            if (documents.length === 0) break;
+            
+            for (const doc of documents) {
+              const currentId = doc._id as unknown as string;
+              let restoredId = currentId as unknown as string;
+              
+              // If _id is a string starting with "newTypeName:", replace the prefix back
+              if (typeof currentId === 'string' && currentId.startsWith(newTypePrefix)) {
+                restoredId = oldTypePrefix + currentId.slice(newTypePrefix.length);
+              }
+              
+              // If _id changed, we need to delete the current document and insert with restored _id
+              if (restoredId !== currentId) {
+                await collection.deleteOne({ _id: currentId as unknown as ObjectId });
+                await collection.insertOne({
+                  ...doc,
+                  _id: restoredId as unknown as ObjectId,
+                  _type: operation.oldTypeName
+                });
+              } else {
+                await collection.updateOne(
+                  { _id: currentId as unknown as ObjectId },
+                  { $set: { _type: operation.oldTypeName } } as Record<string, unknown>
+                );
+              }
+            }
+            
+            processedCount += documents.length;
+          }
         }
       }
     },

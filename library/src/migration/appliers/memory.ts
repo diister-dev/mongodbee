@@ -374,12 +374,24 @@ export function createMemoryApplier(_migration: MigrationDefinition) {
     rename_multimodel_instances_type: {
       apply: (state, operation) => {
         const modelType = operation.modelType;
+        const oldTypePrefix = `${operation.oldTypeName}:`;
+        const newTypePrefix = `${operation.newTypeName}:`;
+        
         for (const [_instanceName, instance] of Object.entries(state.multiModels)) {
           if (instance.modelType === modelType) {
             // Rename all documents from oldTypeName to newTypeName
+            // Also update _id if it starts with "oldTypeName:"
             instance.content = instance.content.map(doc => {
               if (doc._type === operation.oldTypeName) {
-                return { ...doc, _type: operation.newTypeName };
+                const oldId = doc._id;
+                let newId = oldId;
+                
+                // If _id is a string starting with "oldTypeName:", replace the prefix
+                if (typeof oldId === 'string' && oldId.startsWith(oldTypePrefix)) {
+                  newId = newTypePrefix + oldId.slice(oldTypePrefix.length);
+                }
+                
+                return { ...doc, _type: operation.newTypeName, _id: newId };
               }
               return doc;
             });
@@ -389,12 +401,24 @@ export function createMemoryApplier(_migration: MigrationDefinition) {
       },
       reverse: (state, operation) => {
         const modelType = operation.modelType;
+        const oldTypePrefix = `${operation.oldTypeName}:`;
+        const newTypePrefix = `${operation.newTypeName}:`;
+        
         for (const [_instanceName, instance] of Object.entries(state.multiModels)) {
           if (instance.modelType === modelType) {
             // Reverse: rename from newTypeName back to oldTypeName
+            // Also restore _id prefix if it starts with "newTypeName:"
             instance.content = instance.content.map(doc => {
               if (doc._type === operation.newTypeName) {
-                return { ...doc, _type: operation.oldTypeName };
+                const currentId = doc._id;
+                let restoredId = currentId;
+                
+                // If _id is a string starting with "newTypeName:", replace the prefix back
+                if (typeof currentId === 'string' && currentId.startsWith(newTypePrefix)) {
+                  restoredId = oldTypePrefix + currentId.slice(newTypePrefix.length);
+                }
+                
+                return { ...doc, _type: operation.oldTypeName, _id: restoredId };
               }
               return doc;
             });
