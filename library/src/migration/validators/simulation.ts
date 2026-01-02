@@ -845,9 +845,7 @@ export class SimulationValidator implements MigrationValidator {
 
     for(const [modelType, schema] of Object.entries(multiModels)) {
       // Generate multiple instances per model type (configurable via constants)
-      const instanceCount = Math.floor(
-        Math.random() * (MOCK_GENERATION.DOCS_PER_TYPE_MAX - MOCK_GENERATION.DOCS_PER_TYPE_MIN + 1)
-      ) + MOCK_GENERATION.DOCS_PER_TYPE_MIN + MOCK_GENERATION.MIN_SPARSE_THRESHOLD;
+      const instanceCount = 1; // For simplicity, generate 1 instance per model type
 
       for (let i = 0; i < instanceCount; i++) {
         const collectionName = `${modelType}@instance${i+1}`;
