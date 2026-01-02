@@ -1064,15 +1064,15 @@ export class SimulationValidator implements MigrationValidator {
       for (const [instanceName, instance] of Object.entries(newState.multiModels)) {
         const originalCount = instance.content.length;
         const keepCount = Math.floor(originalCount * ratio);
-        
+
         instance.content = instance.content.slice(0, keepCount);
-        
+
         const schema = schemas.multiModels?.[instance.modelType];
         if (schema) {
           const newDocsCount = originalCount - keepCount;
           const typeNames = Object.keys(schema);
           const docsPerType = Math.ceil(newDocsCount / typeNames.length);
-          
+
           for (let i = 0; i < docsPerType; i++) {
             for (const typeName of typeNames) {
               try {
@@ -1086,7 +1086,65 @@ export class SimulationValidator implements MigrationValidator {
         }
       }
     }
-    
+
+    // Create mock data for collections/multiCollections/multiModels if none exist but schema defines them
+    // This ensures validation has data to test against even when no instances are created in migrations
+    if (schemas.collections) {
+      newState.collections = newState.collections || {};
+      for (const collectionName of Object.keys(schemas.collections)) {
+        if (!newState.collections[collectionName]) {
+          newState.collections[collectionName] = { content: [] };
+        }
+        // Populate if empty
+        if (newState.collections[collectionName].content.length === 0) {
+          const schema = schemas.collections[collectionName];
+          const docCount = Math.floor(
+            Math.random() * (MOCK_GENERATION.DOCS_PER_COLLECTION_MAX - MOCK_GENERATION.DOCS_PER_COLLECTION_MIN + 1)
+          ) + MOCK_GENERATION.DOCS_PER_COLLECTION_MIN;
+          for (let i = 0; i < docCount; i++) {
+            try {
+              const mockDoc = this.generateMockDocument(schema as Record<string, unknown>);
+              newState.collections[collectionName].content.push(mockDoc);
+            } catch (_error) {
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    if (schemas.multiCollections) {
+      newState.multiCollections = newState.multiCollections || {};
+      for (const collectionName of Object.keys(schemas.multiCollections)) {
+        if (!newState.multiCollections[collectionName]) {
+          newState.multiCollections[collectionName] = { content: [] };
+        }
+        // Populate if empty
+        if (newState.multiCollections[collectionName].content.length === 0) {
+          const schema = schemas.multiCollections[collectionName];
+          const typeNames = Object.keys(schema);
+          const docCount = Math.floor(
+            Math.random() * (MOCK_GENERATION.DOCS_PER_COLLECTION_MAX - MOCK_GENERATION.DOCS_PER_COLLECTION_MIN + 1)
+          ) + MOCK_GENERATION.DOCS_PER_COLLECTION_MIN;
+          for (let i = 0; i < docCount; i++) {
+            for (const typeName of typeNames) {
+              try {
+                const mockDoc = this.generateMockDocument(schema[typeName] as Record<string, unknown>);
+                newState.multiCollections[collectionName].content.push({ ...mockDoc, _type: typeName });
+              } catch (_error) {
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (schemas.multiModels && Object.keys(newState.multiModels || {}).length === 0) {
+      newState.multiModels = newState.multiModels || {};
+      this.populateMultiCollectionsModelMock(newState, schemas.multiModels);
+    }
+
     return newState;
   }
 }
