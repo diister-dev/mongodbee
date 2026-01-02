@@ -306,6 +306,103 @@ export function createMemoryApplier(_migration: MigrationDefinition) {
         return state;
       }
     },
+    delete_multicollection_type: {
+      apply: (state, operation) => {
+        const multiCollection = state.multiCollections[operation.collectionName];
+        if (!multiCollection) {
+          throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
+        }
+        // Remove all documents of this type
+        multiCollection.content = multiCollection.content.filter(
+          doc => doc._type !== operation.documentType
+        );
+        return state;
+      },
+      reverse: (_state, _operation) => {
+        // Cannot restore deleted documents - this is irreversible
+        throw new Error(`Cannot reverse delete_multicollection_type: operation is irreversible`);
+      }
+    },
+    delete_multimodel_instances_type: {
+      apply: (state, operation) => {
+        const modelType = operation.modelType;
+        for (const [_instanceName, instance] of Object.entries(state.multiModels)) {
+          if (instance.modelType === modelType) {
+            // Remove all documents of this type from this instance
+            instance.content = instance.content.filter(
+              doc => doc._type !== operation.documentType
+            );
+          }
+        }
+        return state;
+      },
+      reverse: (_state, _operation) => {
+        // Cannot restore deleted documents - this is irreversible
+        throw new Error(`Cannot reverse delete_multimodel_instances_type: operation is irreversible`);
+      }
+    },
+    rename_multicollection_type: {
+      apply: (state, operation) => {
+        const multiCollection = state.multiCollections[operation.collectionName];
+        if (!multiCollection) {
+          throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
+        }
+        // Rename all documents from oldTypeName to newTypeName
+        multiCollection.content = multiCollection.content.map(doc => {
+          if (doc._type === operation.oldTypeName) {
+            return { ...doc, _type: operation.newTypeName };
+          }
+          return doc;
+        });
+        return state;
+      },
+      reverse: (state, operation) => {
+        const multiCollection = state.multiCollections[operation.collectionName];
+        if (!multiCollection) {
+          throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
+        }
+        // Reverse: rename from newTypeName back to oldTypeName
+        multiCollection.content = multiCollection.content.map(doc => {
+          if (doc._type === operation.newTypeName) {
+            return { ...doc, _type: operation.oldTypeName };
+          }
+          return doc;
+        });
+        return state;
+      }
+    },
+    rename_multimodel_instances_type: {
+      apply: (state, operation) => {
+        const modelType = operation.modelType;
+        for (const [_instanceName, instance] of Object.entries(state.multiModels)) {
+          if (instance.modelType === modelType) {
+            // Rename all documents from oldTypeName to newTypeName
+            instance.content = instance.content.map(doc => {
+              if (doc._type === operation.oldTypeName) {
+                return { ...doc, _type: operation.newTypeName };
+              }
+              return doc;
+            });
+          }
+        }
+        return state;
+      },
+      reverse: (state, operation) => {
+        const modelType = operation.modelType;
+        for (const [_instanceName, instance] of Object.entries(state.multiModels)) {
+          if (instance.modelType === modelType) {
+            // Reverse: rename from newTypeName back to oldTypeName
+            instance.content = instance.content.map(doc => {
+              if (doc._type === operation.newTypeName) {
+                return { ...doc, _type: operation.oldTypeName };
+              }
+              return doc;
+            });
+          }
+        }
+        return state;
+      }
+    },
   }
 
   async function applyOperation(

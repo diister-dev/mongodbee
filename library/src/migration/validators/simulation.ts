@@ -294,6 +294,15 @@ export class SimulationValidator implements MigrationValidator {
         }
       }
 
+      // Populate existing multi-model instances with mock data for validation
+      // This ensures that instances created by the migration have data to validate against
+      if (definition.schemas.multiModels) {
+        this.populateExistingMultiModelInstancesMock(
+          stateAfterMigration,
+          definition.schemas.multiModels,
+        );
+      }
+
       // Validate schema changes require transformations for existing data
       const changeStateResult = await this.validateSchemaChanges(
         definition,
@@ -836,10 +845,8 @@ export class SimulationValidator implements MigrationValidator {
 
     for(const [modelType, schema] of Object.entries(multiModels)) {
       // Generate multiple instances per model type (configurable via constants)
-      const instanceCount = Math.floor(
-        Math.random() * (MOCK_GENERATION.DOCS_PER_TYPE_MAX - MOCK_GENERATION.DOCS_PER_TYPE_MIN + 1)
-      ) + MOCK_GENERATION.DOCS_PER_TYPE_MIN + MOCK_GENERATION.MIN_SPARSE_THRESHOLD;
-      
+      const instanceCount = 1; // For simplicity, generate 1 instance per model type
+
       for (let i = 0; i < instanceCount; i++) {
         const collectionName = `${modelType}@instance${i+1}`;
         currentState.multiModels[collectionName] = {
@@ -847,7 +854,7 @@ export class SimulationValidator implements MigrationValidator {
           content: []
         };
         const modelInstances = currentState.multiModels?.[collectionName];
-        
+
         if(!currentState.multiModels?.[modelType]) {
           currentState.multiModels[modelType] = {
             modelType,
@@ -872,6 +879,54 @@ export class SimulationValidator implements MigrationValidator {
           } catch (_error) {
             break;
           }
+        }
+      }
+    }
+
+    return currentState;
+  }
+
+  /**
+   * Populates existing multi-model instances with mock data for validation
+   *
+   * This is used after a migration creates multi-model instances to ensure
+   * the schema validation has data to validate against.
+   *
+   * @private
+   */
+  private populateExistingMultiModelInstancesMock(
+    state: SimulationDatabaseState,
+    multiModels: NonNullable<SchemasDefinition['multiModels']>,
+  ): SimulationDatabaseState {
+    const currentState = state;
+
+    // Iterate over existing instances in the state
+    for (const [_instanceName, instance] of Object.entries(currentState.multiModels || {})) {
+      const { modelType, content } = instance;
+
+      // Get the schema for this model type
+      const schema = multiModels[modelType];
+      if (!schema) continue;
+
+      // Only populate if the instance has no or very few documents
+      if (content.length >= MOCK_GENERATION.DOCS_PER_COLLECTION_MIN) continue;
+
+      const docCount = Math.floor(
+        Math.random() *
+          (MOCK_GENERATION.DOCS_PER_COLLECTION_MAX -
+            MOCK_GENERATION.DOCS_PER_COLLECTION_MIN + 1),
+      ) + MOCK_GENERATION.DOCS_PER_COLLECTION_MIN;
+
+      for (let j = 0; j < docCount; j++) {
+        try {
+          for (const typeName of Object.keys(schema)) {
+            const mockDoc = this.generateMockDocument(
+              schema[typeName] as Record<string, unknown>,
+            );
+            instance.content.push({ ...mockDoc, _type: typeName });
+          }
+        } catch (_error) {
+          break;
         }
       }
     }
@@ -1007,15 +1062,15 @@ export class SimulationValidator implements MigrationValidator {
       for (const [instanceName, instance] of Object.entries(newState.multiModels)) {
         const originalCount = instance.content.length;
         const keepCount = Math.floor(originalCount * ratio);
-        
+
         instance.content = instance.content.slice(0, keepCount);
-        
+
         const schema = schemas.multiModels?.[instance.modelType];
         if (schema) {
           const newDocsCount = originalCount - keepCount;
           const typeNames = Object.keys(schema);
           const docsPerType = Math.ceil(newDocsCount / typeNames.length);
-          
+
           for (let i = 0; i < docsPerType; i++) {
             for (const typeName of typeNames) {
               try {
@@ -1029,7 +1084,65 @@ export class SimulationValidator implements MigrationValidator {
         }
       }
     }
-    
+
+    // Create mock data for collections/multiCollections/multiModels if none exist but schema defines them
+    // This ensures validation has data to test against even when no instances are created in migrations
+    if (schemas.collections) {
+      newState.collections = newState.collections || {};
+      for (const collectionName of Object.keys(schemas.collections)) {
+        if (!newState.collections[collectionName]) {
+          newState.collections[collectionName] = { content: [] };
+        }
+        // Populate if empty
+        if (newState.collections[collectionName].content.length === 0) {
+          const schema = schemas.collections[collectionName];
+          const docCount = Math.floor(
+            Math.random() * (MOCK_GENERATION.DOCS_PER_COLLECTION_MAX - MOCK_GENERATION.DOCS_PER_COLLECTION_MIN + 1)
+          ) + MOCK_GENERATION.DOCS_PER_COLLECTION_MIN;
+          for (let i = 0; i < docCount; i++) {
+            try {
+              const mockDoc = this.generateMockDocument(schema as Record<string, unknown>);
+              newState.collections[collectionName].content.push(mockDoc);
+            } catch (_error) {
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    if (schemas.multiCollections) {
+      newState.multiCollections = newState.multiCollections || {};
+      for (const collectionName of Object.keys(schemas.multiCollections)) {
+        if (!newState.multiCollections[collectionName]) {
+          newState.multiCollections[collectionName] = { content: [] };
+        }
+        // Populate if empty
+        if (newState.multiCollections[collectionName].content.length === 0) {
+          const schema = schemas.multiCollections[collectionName];
+          const typeNames = Object.keys(schema);
+          const docCount = Math.floor(
+            Math.random() * (MOCK_GENERATION.DOCS_PER_COLLECTION_MAX - MOCK_GENERATION.DOCS_PER_COLLECTION_MIN + 1)
+          ) + MOCK_GENERATION.DOCS_PER_COLLECTION_MIN;
+          for (let i = 0; i < docCount; i++) {
+            for (const typeName of typeNames) {
+              try {
+                const mockDoc = this.generateMockDocument(schema[typeName] as Record<string, unknown>);
+                newState.multiCollections[collectionName].content.push({ ...mockDoc, _type: typeName });
+              } catch (_error) {
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (schemas.multiModels && Object.keys(newState.multiModels || {}).length === 0) {
+      newState.multiModels = newState.multiModels || {};
+      this.populateMultiCollectionsModelMock(newState, schemas.multiModels);
+    }
+
     return newState;
   }
 }

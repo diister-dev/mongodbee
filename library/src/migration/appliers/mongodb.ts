@@ -934,6 +934,93 @@ export function createMongodbApplier(
         return Promise.resolve();
       }
     },
+
+    delete_multicollection_type: {
+      apply: async (operation) => {
+        if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
+          throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
+        }
+        const collection = db.collection(operation.collectionName);
+        await collection.deleteMany({ _type: operation.documentType } as Record<string, unknown>);
+      },
+      reverse: async (_operation) => {
+        // Cannot restore deleted documents - this is irreversible
+        throw new Error(`Cannot reverse delete_multicollection_type: operation is irreversible`);
+      }
+    },
+
+    delete_multimodel_instances_type: {
+      apply: async (operation) => {
+        const instances = await discoverMultiCollectionInstances(db, operation.modelType);
+
+        if (instances.length === 0) {
+          console.warn(`No instances found for model type ${operation.modelType}`);
+          return;
+        }
+
+        for (const collectionName of instances) {
+          const collection = db.collection(collectionName);
+          await collection.deleteMany({ _type: operation.documentType } as Record<string, unknown>);
+        }
+      },
+      reverse: async (_operation) => {
+        // Cannot restore deleted documents - this is irreversible
+        throw new Error(`Cannot reverse delete_multimodel_instances_type: operation is irreversible`);
+      }
+    },
+
+    rename_multicollection_type: {
+      apply: async (operation) => {
+        if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
+          throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
+        }
+        const collection = db.collection(operation.collectionName);
+        await collection.updateMany(
+          { _type: operation.oldTypeName } as Record<string, unknown>,
+          { $set: { _type: operation.newTypeName } } as Record<string, unknown>
+        );
+      },
+      reverse: async (operation) => {
+        if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
+          throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
+        }
+        const collection = db.collection(operation.collectionName);
+        await collection.updateMany(
+          { _type: operation.newTypeName } as Record<string, unknown>,
+          { $set: { _type: operation.oldTypeName } } as Record<string, unknown>
+        );
+      }
+    },
+
+    rename_multimodel_instances_type: {
+      apply: async (operation) => {
+        const instances = await discoverMultiCollectionInstances(db, operation.modelType);
+
+        if (instances.length === 0) {
+          console.warn(`No instances found for model type ${operation.modelType}`);
+          return;
+        }
+
+        for (const collectionName of instances) {
+          const collection = db.collection(collectionName);
+          await collection.updateMany(
+            { _type: operation.oldTypeName } as Record<string, unknown>,
+            { $set: { _type: operation.newTypeName } } as Record<string, unknown>
+          );
+        }
+      },
+      reverse: async (operation) => {
+        const instances = await discoverMultiCollectionInstances(db, operation.modelType);
+
+        for (const collectionName of instances) {
+          const collection = db.collection(collectionName);
+          await collection.updateMany(
+            { _type: operation.newTypeName } as Record<string, unknown>,
+            { $set: { _type: operation.oldTypeName } } as Record<string, unknown>
+          );
+        }
+      }
+    },
   };
 
   async function applyOperation(operation: MigrationRule): Promise<void> {
