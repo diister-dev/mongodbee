@@ -654,3 +654,249 @@ Deno.test("Cross-pagination: backward compatibility - single key still works", a
     }
   });
 });
+
+// ============================================
+// naturalIdSort tests
+// ============================================
+
+Deno.test("Cross-pagination: naturalIdSort sorts by ULID (creation time) across types", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const peopleModel = defineModel("people", {
+      schema: {
+        collaborator: {
+          name: v.string(),
+        },
+        visitor: {
+          name: v.string(),
+        },
+      },
+    });
+
+    const people = await multiCollection(db, "people", peopleModel);
+
+    // Insert interleaved data with delays to ensure ULID ordering
+    await people.insertOne("collaborator", { name: "C1" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await people.insertOne("visitor", { name: "V1" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await people.insertOne("collaborator", { name: "C2" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await people.insertOne("visitor", { name: "V2" });
+
+    // Without naturalIdSort: sorted by full _id (type prefix first)
+    // collaborator:xxx < visitor:xxx alphabetically
+    const withoutNatural = await people.paginate(["collaborator", "visitor"], {}, {
+      limit: 10,
+      sort: { _id: 1 },
+    });
+
+    // With naturalIdSort: sorted by ULID part only (chronological order)
+    const withNatural = await people.paginate(["collaborator", "visitor"], {}, {
+      limit: 10,
+      naturalIdSort: true,
+    });
+
+    // Both should return all 4 items
+    assertEquals(withoutNatural.data.length, 4);
+    assertEquals(withNatural.data.length, 4);
+
+    // With naturalIdSort, order should be chronological: C1, V1, C2, V2
+    assertEquals(withNatural.data[0].name, "C1");
+    assertEquals(withNatural.data[1].name, "V1");
+    assertEquals(withNatural.data[2].name, "C2");
+    assertEquals(withNatural.data[3].name, "V2");
+
+    // Without naturalIdSort, collaborators come before visitors (alphabetical by type prefix)
+    // The exact order depends on type prefix comparison
+    const typesWithout = withoutNatural.data.map((d) => d._type);
+    // All collaborators should come before all visitors
+    const firstVisitorIdx = typesWithout.indexOf("visitor");
+    const lastCollabIdx = typesWithout.lastIndexOf("collaborator");
+    assertEquals(lastCollabIdx < firstVisitorIdx, true,
+      "Without naturalIdSort, collaborators should come before visitors");
+  });
+});
+
+Deno.test("Cross-pagination: naturalIdSort with afterId", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const peopleModel = defineModel("people", {
+      schema: {
+        collaborator: {
+          name: v.string(),
+        },
+        visitor: {
+          name: v.string(),
+        },
+      },
+    });
+
+    const people = await multiCollection(db, "people", peopleModel);
+
+    // Insert interleaved data
+    await people.insertOne("collaborator", { name: "C1" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const v1Id = await people.insertOne("visitor", { name: "V1" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await people.insertOne("collaborator", { name: "C2" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await people.insertOne("visitor", { name: "V2" });
+
+    // Get page after V1 with naturalIdSort
+    const result = await people.paginate(["collaborator", "visitor"], {}, {
+      limit: 10,
+      naturalIdSort: true,
+      afterId: v1Id,
+    });
+
+    // Should get C2 and V2 (the items after V1 chronologically)
+    assertEquals(result.data.length, 2);
+    assertEquals(result.data[0].name, "C2");
+    assertEquals(result.data[1].name, "V2");
+  });
+});
+
+Deno.test("Cross-pagination: naturalIdSort descending order", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const peopleModel = defineModel("people", {
+      schema: {
+        collaborator: {
+          name: v.string(),
+        },
+        visitor: {
+          name: v.string(),
+        },
+      },
+    });
+
+    const people = await multiCollection(db, "people", peopleModel);
+
+    // Insert interleaved data
+    await people.insertOne("collaborator", { name: "C1" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await people.insertOne("visitor", { name: "V1" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await people.insertOne("collaborator", { name: "C2" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await people.insertOne("visitor", { name: "V2" });
+
+    // With naturalIdSort and descending order
+    const result = await people.paginate(["collaborator", "visitor"], {}, {
+      limit: 10,
+      sort: { _id: -1 },
+      naturalIdSort: true,
+    });
+
+    // Should be reverse chronological: V2, C2, V1, C1
+    assertEquals(result.data.length, 4);
+    assertEquals(result.data[0].name, "V2");
+    assertEquals(result.data[1].name, "C2");
+    assertEquals(result.data[2].name, "V1");
+    assertEquals(result.data[3].name, "C1");
+  });
+});
+
+Deno.test("Cross-pagination: naturalIdSort pagination across multiple pages", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const peopleModel = defineModel("people", {
+      schema: {
+        collaborator: {
+          name: v.string(),
+        },
+        visitor: {
+          name: v.string(),
+        },
+      },
+    });
+
+    const people = await multiCollection(db, "people", peopleModel);
+
+    // Insert 10 items interleaved
+    for (let i = 1; i <= 5; i++) {
+      await people.insertOne("collaborator", { name: `C${i}` });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await people.insertOne("visitor", { name: `V${i}` });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    const allCollected: string[] = [];
+    let lastId: string | undefined;
+
+    // Paginate through all items with naturalIdSort
+    for (let page = 1; page <= 5; page++) {
+      const result = await people.paginate(["collaborator", "visitor"], {}, {
+        limit: 3,
+        naturalIdSort: true,
+        afterId: lastId,
+      });
+
+      for (const item of result.data) {
+        if (allCollected.includes(item.name)) {
+          throw new Error(`DUPLICATE: ${item.name}`);
+        }
+        allCollected.push(item.name);
+      }
+
+      if (result.data.length === 0) break;
+      lastId = result.data[result.data.length - 1]._id;
+    }
+
+    // Should have all 10 items in chronological order
+    assertEquals(allCollected.length, 10);
+    assertEquals(allCollected[0], "C1");
+    assertEquals(allCollected[1], "V1");
+    assertEquals(allCollected[2], "C2");
+    assertEquals(allCollected[3], "V2");
+    // ... alternating pattern continues
+    assertEquals(allCollected[8], "C5");
+    assertEquals(allCollected[9], "V5");
+  });
+});
+
+Deno.test("Cross-pagination: naturalIdSort with three types", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const peopleModel = defineModel("people", {
+      schema: {
+        admin: {
+          name: v.string(),
+        },
+        collaborator: {
+          name: v.string(),
+        },
+        visitor: {
+          name: v.string(),
+        },
+      },
+    });
+
+    const people = await multiCollection(db, "people", peopleModel);
+
+    // Insert in order: A1, C1, V1, A2, C2, V2
+    await people.insertOne("admin", { name: "A1" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await people.insertOne("collaborator", { name: "C1" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await people.insertOne("visitor", { name: "V1" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await people.insertOne("admin", { name: "A2" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await people.insertOne("collaborator", { name: "C2" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await people.insertOne("visitor", { name: "V2" });
+
+    // With naturalIdSort
+    const result = await people.paginate(
+      ["admin", "collaborator", "visitor"],
+      {},
+      { limit: 10, naturalIdSort: true }
+    );
+
+    // Should be chronological: A1, C1, V1, A2, C2, V2
+    assertEquals(result.data.length, 6);
+    assertEquals(result.data[0].name, "A1");
+    assertEquals(result.data[1].name, "C1");
+    assertEquals(result.data[2].name, "V1");
+    assertEquals(result.data[3].name, "A2");
+    assertEquals(result.data[4].name, "C2");
+    assertEquals(result.data[5].name, "V2");
+  });
+});

@@ -208,6 +208,13 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
    *   { limit: 10, sort: { createdAt: -1 } }
    * );
    * // result.data is (Collaborator | Visitor)[]
+   *
+   * // With naturalIdSort to sort by ULID creation time (ignoring type prefix)
+   * const result2 = await catalog.paginate(
+   *   ["collaborator", "visitor"],
+   *   {},
+   *   { naturalIdSort: true }
+   * );
    * ```
    */
   paginate<E extends (keyof T)[], EN = v.InferOutput<OutputElementSchema<T, E[number]>>, R = EN>(
@@ -218,6 +225,12 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
       afterId?: string;
       beforeId?: string;
       sort?: m.Sort | m.SortDirection;
+      /**
+       * When true, sorts by the ULID part of _id (after the type prefix),
+       * giving chronological ordering across different types.
+       * Only applies when sort includes _id or when using default sort.
+       */
+      naturalIdSort?: boolean;
       /** Pipeline stages to execute server-side before pagination (lookups, addFields, etc.) */
       pipeline?: (stage: StageBuilder<T>) => AggregationStage[];
       prepare?: (
@@ -568,13 +581,14 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 afterId?: string,
                 beforeId?: string,
                 sort?: m.Sort | m.SortDirection,
+                naturalIdSort?: boolean,
                 pipeline?: (stage: StageBuilder<T>) => AggregationStage[],
                 prepare?: (doc: any) => Promise<any> | any,
                 filter?: (doc: any) => Promise<boolean> | boolean,
                 format?: (doc: any) => Promise<any> | any,
             }
         ) {
-            let { limit = 100, afterId, beforeId, sort, pipeline: pipelineBuilder, prepare, filter: customFilter, format } = options || {};
+            let { limit = 100, afterId, beforeId, sort, naturalIdSort, pipeline: pipelineBuilder, prepare, filter: customFilter, format } = options || {};
             const session = sessionContext.getSession();
 
             // Support both single key and array of keys for cross-pagination
@@ -600,8 +614,24 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             if (!('_id' in sortObj)) {
                 sortObj._id = 1;
             }
-            // Update sort to include _id tie-breaker
-            sort = sortObj;
+
+            // For naturalIdSort, replace _id with _ulid in sort (extracts ULID part after "type:")
+            // This gives chronological ordering across different types
+            const useNaturalIdSort = naturalIdSort && '_id' in sortObj;
+            const effectiveSortObj = useNaturalIdSort
+                ? Object.fromEntries(
+                    Object.entries(sortObj).map(([k, v]) => [k === '_id' ? '_ulid' : k, v])
+                  ) as Record<string, 1 | -1>
+                : sortObj;
+
+            // Update sort to include _id tie-breaker (or _ulid for naturalIdSort)
+            sort = effectiveSortObj;
+
+            // Helper to extract ULID part from an ID (after "type:")
+            const extractUlid = (id: string): string => {
+                const colonIndex = id.indexOf(':');
+                return colonIndex >= 0 ? id.substring(colonIndex + 1) : id;
+            };
 
             // Helper to build cursor-based pagination filter for multi-collection
             const buildCursorFilter = async (anchorId: string, direction: 'after' | 'before') => {
@@ -609,14 +639,24 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 const anchorDoc = await collection.findOne({ _id: anchorId } as never, { session });
                 if (!anchorDoc) return null;
 
-                const sortFields = Object.keys(sortObj);
+                // Add _ulid to anchor doc if using naturalIdSort
+                const enrichedAnchorDoc = useNaturalIdSort
+                    ? { ...anchorDoc, _ulid: extractUlid(anchorId) }
+                    : anchorDoc;
 
-                // If sorting only by _id, use simple comparison
-                if (sortFields.length === 1 && sortFields[0] === '_id') {
+                const sortFields = Object.keys(effectiveSortObj);
+
+                // If sorting only by _id (or _ulid), use simple comparison
+                if (sortFields.length === 1 && (sortFields[0] === '_id' || sortFields[0] === '_ulid')) {
+                    const sortField = sortFields[0];
+                    const sortDir = effectiveSortObj[sortField];
                     const op = direction === 'after'
-                        ? (sortObj._id === 1 ? '$gt' : '$lt')
-                        : (sortObj._id === 1 ? '$lt' : '$gt');
-                    return { _id: { [op]: anchorId } };
+                        ? (sortDir === 1 ? '$gt' : '$lt')
+                        : (sortDir === 1 ? '$lt' : '$gt');
+
+                    // For _ulid, we compare the ULID part directly
+                    const compareValue = sortField === '_ulid' ? extractUlid(anchorId) : anchorId;
+                    return { [sortField]: { [op]: compareValue } };
                 }
 
                 // Build compound cursor filter for custom sort
@@ -624,15 +664,15 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
                 for (let i = 0; i < sortFields.length; i++) {
                     const field = sortFields[i];
-                    const sortDir = sortObj[field];
-                    const anchorValue = getNestedValue(anchorDoc as Record<string, unknown>, field);
+                    const sortDir = effectiveSortObj[field];
+                    const anchorValue = getNestedValue(enrichedAnchorDoc as Record<string, unknown>, field);
 
                     const condition: Record<string, unknown> = {};
 
                     // All previous fields must be equal
                     for (let j = 0; j < i; j++) {
                         const prevField = sortFields[j];
-                        condition[prevField] = getNestedValue(anchorDoc as Record<string, unknown>, prevField);
+                        condition[prevField] = getNestedValue(enrichedAnchorDoc as Record<string, unknown>, prevField);
                     }
 
                     // Current field uses comparison based on sort direction and pagination direction
@@ -652,17 +692,20 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             };
 
             // Add pagination filters
+            // Keep cursorFilter separate for use in aggregation pipeline with naturalIdSort
+            let cursorFilterResult: Record<string, unknown> | null = null;
+
             if (afterId) {
               if (!isValidIdForTypes(afterId, keys)) {
                   const typesStr = keys.map(k => String(k)).join(', ');
                   throw new Error(`Invalid afterId format for type(s) ${typesStr}`);
               }
-              const cursorFilter = await buildCursorFilter(afterId, 'after');
-              if (cursorFilter) {
+              cursorFilterResult = await buildCursorFilter(afterId, 'after');
+              if (cursorFilterResult) {
                   query = {
                       $and: [
                           ...baseQuery,
-                          cursorFilter
+                          cursorFilterResult
                       ]
                   };
               }
@@ -671,12 +714,12 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                   const typesStr = keys.map(k => String(k)).join(', ');
                   throw new Error(`Invalid beforeId format for type(s) ${typesStr}`);
               }
-              const cursorFilter = await buildCursorFilter(beforeId, 'before');
-              if (cursorFilter) {
+              cursorFilterResult = await buildCursorFilter(beforeId, 'before');
+              if (cursorFilterResult) {
                   query = {
                       $and: [
                           ...baseQuery,
-                          cursorFilter
+                          cursorFilterResult
                       ]
                   };
               }
@@ -872,18 +915,45 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 })
             });
 
-            // Build cursor - use aggregate if pipeline is provided, otherwise use find
+            // Build cursor - use aggregate if pipeline is provided or naturalIdSort is enabled
             // deno-lint-ignore no-explicit-any
             let cursor: m.FindCursor<any> | m.AggregationCursor<any>;
 
-            if (pipelineBuilder) {
+            // Stage to extract ULID part from _id for natural sorting across types
+            const ulidExtractStage: AggregationStage = {
+                $addFields: {
+                    _ulid: {
+                        $substr: [
+                            "$_id",
+                            { $add: [{ $indexOfCP: ["$_id", ":"] }, 1] },
+                            -1
+                        ]
+                    }
+                }
+            };
+
+            if (pipelineBuilder || useNaturalIdSort) {
                 // Build aggregation pipeline with user stages
-                const userPipeline = pipelineBuilder(createStageBuilder());
-                const aggregatePipeline: AggregationStage[] = [
-                    { $match: query },
-                    ...userPipeline,
-                    { $sort: sort as Record<string, 1 | -1> },
-                ];
+                const userPipeline = pipelineBuilder ? pipelineBuilder(createStageBuilder()) : [];
+
+                // For naturalIdSort, we need to add _ulid BEFORE the cursor filter can use it
+                // So we split the query: base type filter first, then add _ulid, then cursor filter
+                const aggregatePipeline: AggregationStage[] = useNaturalIdSort
+                    ? [
+                        // First: match the base type filter
+                        { $match: { $and: baseQuery } },
+                        // Add _ulid field before cursor filter needs it
+                        ulidExtractStage,
+                        // Apply cursor filter if present (afterId/beforeId)
+                        ...(cursorFilterResult ? [{ $match: cursorFilterResult }] : []),
+                        ...userPipeline,
+                        { $sort: sort as Record<string, 1 | -1> },
+                    ]
+                    : [
+                        { $match: query },
+                        ...userPipeline,
+                        { $sort: sort as Record<string, 1 | -1> },
+                    ];
                 cursor = collection.aggregate(aggregatePipeline, { session });
             } else {
                 cursor = collection.find(query as never, { session }).sort(sort as m.Sort);
