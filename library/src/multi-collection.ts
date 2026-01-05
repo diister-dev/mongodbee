@@ -195,6 +195,42 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
     position: number;
     data: R[];
   }>;
+  /**
+   * Cross-pagination: paginate across multiple types simultaneously.
+   * Documents from all specified types are merged and sorted together.
+   *
+   * @example
+   * ```typescript
+   * // Paginate collaborators and visitors together
+   * const result = await catalog.paginate(
+   *   ["collaborator", "visitor"],
+   *   { active: true },
+   *   { limit: 10, sort: { createdAt: -1 } }
+   * );
+   * // result.data is (Collaborator | Visitor)[]
+   * ```
+   */
+  paginate<E extends (keyof T)[], EN = v.InferOutput<OutputElementSchema<T, E[number]>>, R = EN>(
+    keys: E,
+    filter?: m.Filter<v.InferInput<OutputElementSchema<T, E[number]>>>,
+    options?: {
+      limit?: number;
+      afterId?: string;
+      beforeId?: string;
+      sort?: m.Sort | m.SortDirection;
+      /** Pipeline stages to execute server-side before pagination (lookups, addFields, etc.) */
+      pipeline?: (stage: StageBuilder<T>) => AggregationStage[];
+      prepare?: (
+        doc: v.InferOutput<OutputElementSchema<T, E[number]>>,
+      ) => Promise<EN> | EN;
+      filter?: (doc: EN) => Promise<boolean> | boolean;
+      format?: (doc: EN) => Promise<R> | R;
+    },
+  ): Promise<{
+    total: number;
+    position: number;
+    data: R[];
+  }>;
   countDocuments<E extends keyof T>(
     key: E,
     filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
@@ -522,26 +558,33 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             
             return output;
         },
-        async paginate<E extends keyof T, EN = v.InferOutput<OutputElementSchema<T, E>>, R = EN>(
-            key: E, 
-            filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>, 
+        // Implementation supports both single key and array of keys
+        // Type safety is enforced through the overload signatures above
+        async paginate(
+            keyOrKeys: keyof T | (keyof T)[],
+            filter?: m.Filter<any>,
             options?: {
                 limit?: number,
                 afterId?: string,
                 beforeId?: string,
                 sort?: m.Sort | m.SortDirection,
                 pipeline?: (stage: StageBuilder<T>) => AggregationStage[],
-                prepare?: (doc: v.InferOutput<OutputElementSchema<T, E>>) => Promise<EN>,
-                filter?: (doc: EN) => Promise<boolean> | boolean,
-                format?: (doc: EN) => Promise<R>,
+                prepare?: (doc: any) => Promise<any> | any,
+                filter?: (doc: any) => Promise<boolean> | boolean,
+                format?: (doc: any) => Promise<any> | any,
             }
         ) {
             let { limit = 100, afterId, beforeId, sort, pipeline: pipelineBuilder, prepare, filter: customFilter, format } = options || {};
             const session = sessionContext.getSession();
 
-            const typeChecker = {
-                _type: key as string,
-            };
+            // Support both single key and array of keys for cross-pagination
+            const keys = Array.isArray(keyOrKeys) ? keyOrKeys as (keyof T)[] : [keyOrKeys as keyof T];
+            const isCrossPagination = Array.isArray(keyOrKeys);
+
+            // Build type checker: single type or $in for multiple types
+            const typeChecker = keys.length === 1
+                ? { _type: keys[0] as string }
+                : { _type: { $in: keys as string[] } };
 
             // Build the base query with type filter
             const baseQuery = filter ? [typeChecker, filter] : [typeChecker];
@@ -603,10 +646,16 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 return { $or: conditions };
             };
 
+            // Helper to validate ID format matches one of the allowed types
+            const isValidIdForTypes = (id: string, allowedTypes: (keyof T)[]): boolean => {
+                return allowedTypes.some(type => id.startsWith(`${type as string}:`));
+            };
+
             // Add pagination filters
             if (afterId) {
-              if (!afterId.startsWith(`${key as string}:`)) {
-                  throw new Error(`Invalid afterId format for type ${key as string}`);
+              if (!isValidIdForTypes(afterId, keys)) {
+                  const typesStr = keys.map(k => String(k)).join(', ');
+                  throw new Error(`Invalid afterId format for type(s) ${typesStr}`);
               }
               const cursorFilter = await buildCursorFilter(afterId, 'after');
               if (cursorFilter) {
@@ -618,8 +667,9 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                   };
               }
             } else if (beforeId) {
-              if (!beforeId.startsWith(`${key as string}:`)) {
-                  throw new Error(`Invalid beforeId format for type ${key as string}`);
+              if (!isValidIdForTypes(beforeId, keys)) {
+                  const typesStr = keys.map(k => String(k)).join(', ');
+                  throw new Error(`Invalid beforeId format for type(s) ${typesStr}`);
               }
               const cursorFilter = await buildCursorFilter(beforeId, 'before');
               if (cursorFilter) {
@@ -840,7 +890,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             }
 
             let hardLimit = 10_000;
-            const elements: R[] = [];
+            const elements: unknown[] = [];
 
             try {
                 while(hardLimit-- > 0 && limit > 0) {
@@ -856,18 +906,18 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                     // When pipeline is used, merge validated doc with original doc to preserve
                     // additional fields added by pipeline stages (like $lookup results)
                     const validatedDoc = pipelineBuilder
-                        ? { ...doc, ...validation.output } as v.InferOutput<OutputElementSchema<T, E>>
-                        : validation.output as v.InferOutput<OutputElementSchema<T, E>>;
+                        ? { ...doc, ...validation.output }
+                        : validation.output;
 
                     // Step 1: Prepare - enrich document with external data
-                    const enrichedDoc = prepare ? await prepare(validatedDoc) : validatedDoc as unknown as EN;
+                    const enrichedDoc = prepare ? await prepare(validatedDoc) : validatedDoc;
 
                     // Step 2: Filter - apply custom filtering logic
                     const isValid = await customFilter?.(enrichedDoc) ?? true;
                     if (!isValid) continue;
 
                     // Step 3: Format - transform document to final output format
-                    const finalDoc = format ? await format(enrichedDoc) : enrichedDoc as unknown as R;
+                    const finalDoc = format ? await format(enrichedDoc) : enrichedDoc;
 
                     elements.push(finalDoc);
                     limit--;
