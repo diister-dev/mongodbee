@@ -24,6 +24,7 @@ import {
 import { createMongodbApplier } from "../../appliers/mongodb.ts";
 import { validateMigrationChainWithProjectSchema } from "../../schema-validation.ts";
 import { validateMigrationsWithSimulation } from "../utils/validate-migrations.ts";
+import type { SimulationPowerLevel } from "../../validators/simulation.ts";
 import { migrationBuilder } from "../../builder.ts";
 import { confirm } from "../utils/confirm.ts";
 import {
@@ -39,6 +40,8 @@ interface CliArgs {
   force?: boolean;
   verbose?: boolean;
   "auto-sync"?: boolean;
+  mode?: string;
+  last?: number;
   [key: string]: unknown;
 }
 
@@ -50,6 +53,30 @@ export interface MigrateCommandOptions {
   verbose?: boolean;
   /** Automatically catch up orphaned multi-model instances without confirmation */
   autoSync?: boolean;
+  /**
+   * Simulation mode controlling validation complexity
+   * - `quick`: Fast validation with minimal mock data
+   * - `normal`: Balanced validation (default)
+   * - `hard`: Comprehensive validation with extensive mock data
+   */
+  mode?: string;
+  /**
+   * Only validate the last N migrations
+   */
+  last?: number;
+}
+
+/**
+ * Parse and validate the simulation mode option
+ */
+function parseSimulationMode(mode?: string): SimulationPowerLevel {
+  if (!mode) return "normal";
+  const normalized = mode.toLowerCase();
+  if (normalized === "quick" || normalized === "normal" || normalized === "hard") {
+    return normalized;
+  }
+  console.log(yellow(`⚠ Unknown mode "${mode}", using "normal" instead`));
+  return "normal";
 }
 
 /**
@@ -73,6 +100,8 @@ export async function migrateCommand(
       force: options.force,
       verbose: options.verbose,
       autoSync: options.autoSync || cliArgs["auto-sync"],
+      mode: options.mode || cliArgs.mode,
+      last: options.last || cliArgs.last,
     };
 
     // Load configuration
@@ -563,8 +592,13 @@ export async function migrateCommand(
     }
 
     // STEP 1: Validate ALL pending migrations BEFORE applying any
+    const powerLevel = parseSimulationMode(opts.mode);
+    const lastN = opts.last && opts.last > 0 ? opts.last : undefined;
+
     await validateMigrationsWithSimulation(allMigrations, {
-      verbose: options.verbose,
+      verbose: opts.verbose,
+      powerLevel,
+      lastN,
     });
 
     // STEP 2: Check for irreversible or lossy migrations

@@ -173,6 +173,8 @@ export {
 export type {
   CheckMigrationStatusOptions,
   DatabaseStatusDetails,
+  IndexIssue,
+  IndexValidationDetails,
   MigrationCounts,
   MigrationInfo,
   MigrationStatusResult,

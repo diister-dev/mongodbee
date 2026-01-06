@@ -52,6 +52,9 @@ import { createSimulationValidator, type SimulationPowerLevel } from "./validato
 import { getAppliedMigrationIds, getLastAppliedMigration } from "./state.ts";
 import { loadConfig } from "./config/loader.ts";
 import * as path from "@std/path";
+import { extractIndexes, keyEqual, normalizeIndexOptions } from "../indexes.ts";
+import { sanitizePathName } from "../schema-navigator.ts";
+import * as v from "../schema.ts";
 
 /**
  * Options for checking migration status
@@ -152,6 +155,57 @@ export interface MigrationInfo {
 }
 
 /**
+ * Information about a specific index issue
+ */
+export interface IndexIssue {
+  /** Collection name */
+  collection: string;
+
+  /** Field path for the index */
+  path: string;
+
+  /** Type of issue */
+  type: "missing" | "outdated" | "orphaned";
+
+  /** Expected index configuration (for missing/outdated) */
+  expected?: {
+    unique?: boolean;
+    collation?: unknown;
+    partialFilterExpression?: unknown;
+  };
+
+  /** Current index configuration (for outdated/orphaned) */
+  current?: {
+    unique?: boolean;
+    collation?: unknown;
+    partialFilterExpression?: unknown;
+  };
+
+  /** Human-readable description of the issue */
+  description: string;
+}
+
+/**
+ * Index validation status for all collections
+ */
+export interface IndexValidationDetails {
+  /** Whether all indexes match the schema definitions */
+  areIndexesValid: boolean;
+
+  /** Number of collections checked */
+  collectionsChecked: number;
+
+  /** Number of indexes that are correct */
+  validIndexCount: number;
+
+  /** Number of indexes with issues */
+  invalidIndexCount: number;
+
+  /** Detailed list of all index issues found */
+  issues: IndexIssue[];
+}
+
+/**
  * Validation details for the migration system
  */
 export interface MigrationValidationDetails {
@@ -236,9 +290,183 @@ export interface MigrationStatusResult {
   database?: DatabaseStatusDetails;
 
   /**
+   * Index validation status (only available when db is provided)
+   */
+  indexes?: IndexValidationDetails;
+
+  /**
    * Detailed information about each migration (only when verbose = true)
    */
   migrations?: MigrationInfo[];
+}
+
+/**
+ * Validates indexes for a collection against its schema definition
+ * @internal
+ */
+async function validateCollectionIndexes(
+  db: Db,
+  collectionName: string,
+  schema: v.ObjectSchema<any, any> | Record<string, any>,
+): Promise<IndexIssue[]> {
+  const issues: IndexIssue[] = [];
+
+  try {
+    const collection = db.collection(collectionName);
+    const currentIndexes = await collection.indexes();
+
+    // If schema is not an ObjectSchema, wrap it
+    const objectSchema = (schema as any).type === "object"
+      ? schema as v.ObjectSchema<any, any>
+      : v.object(schema as any);
+
+    const expectedIndexes = extractIndexes(objectSchema);
+
+    // Build a set of expected index names
+    const expectedIndexNames = new Set<string>();
+    for (const index of expectedIndexes) {
+      expectedIndexNames.add(sanitizePathName(index.path));
+    }
+
+    // Get all possible field paths from schema to detect mongodbee indexes
+    const allSchemaPaths = new Set<string>();
+    function collectPaths(obj: Record<string, unknown> | undefined | null, prefix = "") {
+      if (!obj || typeof obj !== "object") return;
+
+      for (const [key, value] of Object.entries(obj)) {
+        const fullPath = prefix ? `${prefix}.${key}` : key;
+        const sanitizedPath = sanitizePathName(fullPath);
+        allSchemaPaths.add(sanitizedPath);
+
+        if (value && typeof value === "object" && "entries" in value) {
+          collectPaths((value as any).entries, fullPath);
+        }
+      }
+    }
+    const schemaEntries = (schema as any)?.entries;
+    if (schemaEntries) {
+      collectPaths(schemaEntries);
+    }
+
+    // Check for orphaned indexes
+    for (const existingIndex of currentIndexes) {
+      const indexName = existingIndex.name;
+      if (!indexName || indexName === "_id_") continue;
+
+      const isSchemaField = allSchemaPaths.has(indexName);
+
+      if (isSchemaField && !expectedIndexNames.has(indexName)) {
+        issues.push({
+          collection: collectionName,
+          path: indexName,
+          type: "orphaned",
+          current: {
+            unique: existingIndex.unique,
+            collation: existingIndex.collation,
+            partialFilterExpression: existingIndex.partialFilterExpression,
+          },
+          description: `Index "${indexName}" exists in database but is not defined in current schema`,
+        });
+      }
+    }
+
+    // Check each expected index
+    for (const expectedIndex of expectedIndexes) {
+      const keySpec = { [expectedIndex.path]: 1 };
+      const indexPath = sanitizePathName(expectedIndex.path);
+
+      // Find existing index by name or key
+      const existingIndex = currentIndexes.find((i) => i.name === indexPath) ||
+        currentIndexes.find((i) => keyEqual(i.key || {}, keySpec));
+
+      const desiredOptions = {
+        unique: expectedIndex.metadata.unique,
+        collation: expectedIndex.metadata.collation,
+      };
+
+      if (!existingIndex) {
+        // Missing index
+        issues.push({
+          collection: collectionName,
+          path: expectedIndex.path,
+          type: "missing",
+          expected: desiredOptions,
+          description: `Index "${expectedIndex.path}" is defined in schema but missing in database`,
+        });
+      } else {
+        // Check if index configuration matches
+        const existingNorm = normalizeIndexOptions(existingIndex);
+        const desiredNorm = normalizeIndexOptions(desiredOptions);
+
+        if (
+          existingNorm.unique !== desiredNorm.unique ||
+          existingNorm.collation !== desiredNorm.collation ||
+          existingNorm.partialFilterExpression !== desiredNorm.partialFilterExpression
+        ) {
+          issues.push({
+            collection: collectionName,
+            path: expectedIndex.path,
+            type: "outdated",
+            expected: desiredOptions,
+            current: {
+              unique: existingIndex.unique,
+              collation: existingIndex.collation,
+              partialFilterExpression: existingIndex.partialFilterExpression,
+            },
+            description: `Index "${expectedIndex.path}" exists but has different configuration than schema`,
+          });
+        }
+      }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    issues.push({
+      collection: collectionName,
+      path: "_error",
+      type: "missing",
+      description: `Failed to validate indexes for collection "${collectionName}": ${message}`,
+    });
+  }
+
+  return issues;
+}
+
+/**
+ * Validates all indexes across all collections in the final schema
+ * @internal
+ */
+async function validateAllIndexes(
+  db: Db,
+  schemas: Record<string, v.ObjectSchema<any, any> | Record<string, any>>,
+): Promise<IndexValidationDetails> {
+  const allIssues: IndexIssue[] = [];
+  let totalValidIndexes = 0;
+
+  const collectionNames = Object.keys(schemas);
+
+  for (const collectionName of collectionNames) {
+    const schema = schemas[collectionName];
+    const issues = await validateCollectionIndexes(db, collectionName, schema);
+    allIssues.push(...issues);
+
+    // Count valid indexes (expected indexes minus issues for this collection)
+    const objectSchema = (schema as any).type === "object"
+      ? schema as v.ObjectSchema<any, any>
+      : v.object(schema as any);
+    const expectedIndexes = extractIndexes(objectSchema);
+    const collectionIssues = issues.filter(
+      (i) => i.collection === collectionName && (i.type === "missing" || i.type === "outdated")
+    );
+    totalValidIndexes += expectedIndexes.length - collectionIssues.length;
+  }
+
+  return {
+    areIndexesValid: allIssues.length === 0,
+    collectionsChecked: collectionNames.length,
+    validIndexCount: totalValidIndexes,
+    invalidIndexCount: allIssues.length,
+    issues: allIssues,
+  };
 }
 
 /**
@@ -249,6 +477,7 @@ export interface MigrationStatusResult {
  * 2. Schema consistency between migrations and project
  * 3. Migration validity through simulation
  * 4. Database state (if db connection provided)
+ * 5. Index consistency (if db connection provided)
  *
  * @param options - Options for checking migration status
  * @returns Promise resolving to migration status result
@@ -533,16 +762,57 @@ export async function checkMigrationStatus(
     }
   }
 
+  // Step 5: Validate indexes (if db provided and we have schema)
+  let indexValidation: IndexValidationDetails | undefined;
+
+  if (db && allMigrations.length > 0) {
+    try {
+      // Get the final schema from the last migration
+      const lastMigration = allMigrations[allMigrations.length - 1];
+      const finalSchemas = lastMigration.schemas.collections;
+
+      if (finalSchemas && Object.keys(finalSchemas).length > 0) {
+        indexValidation = await validateAllIndexes(db, finalSchemas);
+
+        // Add errors and warnings based on index validation
+        if (!indexValidation.areIndexesValid) {
+          const missingCount = indexValidation.issues.filter((i) => i.type === "missing").length;
+          const outdatedCount = indexValidation.issues.filter((i) => i.type === "outdated").length;
+          const orphanedCount = indexValidation.issues.filter((i) => i.type === "orphaned").length;
+
+          const indexIssues = [];
+          if (missingCount > 0) indexIssues.push(`${missingCount} missing`);
+          if (outdatedCount > 0) indexIssues.push(`${outdatedCount} outdated`);
+          if (orphanedCount > 0) indexIssues.push(`${orphanedCount} orphaned`);
+
+          errors.push(`Index validation failed: ${indexIssues.join(", ")} index(es)`);
+
+          // Add detailed warnings for each issue
+          if (verbose) {
+            for (const issue of indexValidation.issues) {
+              warnings.push(`[${issue.collection}] ${issue.description}`);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      errors.push(`Failed to validate indexes: ${message}`);
+    }
+  }
+
   // Compute final status
   const totalMigrations = allMigrations.length;
   const validMigrations = migrationsInfo.filter((m) => m.isValid).length;
   const invalidMigrations = migrationsInfo.filter((m) => !m.isValid).length;
 
   const isDatabaseUpToDate = db ? pendingMigrations.length === 0 : undefined;
+  const areIndexesValid = indexValidation ? indexValidation.areIndexesValid : true;
 
   const ok = errors.length === 0 &&
     isSchemaConsistent &&
     areMigrationsValid &&
+    areIndexesValid &&
     (db ? (isDatabaseUpToDate === true) : true);
 
   // Generate summary message
@@ -571,6 +841,9 @@ export async function checkMigrationStatus(
     const issues = [];
     if (!isSchemaConsistent) issues.push("schema inconsistencies");
     if (!areMigrationsValid) issues.push("invalid migrations");
+    if (!areIndexesValid && indexValidation) {
+      issues.push(`${indexValidation.invalidIndexCount} invalid index(es)`);
+    }
     if (db && !isDatabaseUpToDate) {
       issues.push(`${pendingMigrations.length} pending migration(s)`);
     }
@@ -606,6 +879,11 @@ export async function checkMigrationStatus(
       lastAppliedName: lastAppliedMigrationName,
       pendingIds: pendingMigrations.map((m) => m.id),
     };
+  }
+
+  // Add index validation details if available
+  if (indexValidation) {
+    result.indexes = indexValidation;
   }
 
   // Add verbose migration info if requested
