@@ -20,6 +20,8 @@ import { getAllOperations } from "../../history.ts";
 import { validateMigrationChainWithProjectSchema } from "../../schema-validation.ts";
 import { migrationBuilder } from "../../builder.ts";
 import { detectInstancesNeedingCatchUp } from "../../catch-up.ts";
+import { validateMigrationsWithSimulation } from "../utils/validate-migrations.ts";
+import type { SimulationPowerLevel } from "../../validators/simulation.ts";
 
 export interface StatusCommandOptions {
   configPath?: string;
@@ -27,6 +29,30 @@ export interface StatusCommandOptions {
   cwd?: string;
   verbose?: boolean;
   validate?: boolean;
+  /**
+   * Simulation mode controlling validation complexity
+   * - `quick`: Fast validation with minimal mock data
+   * - `normal`: Balanced validation (default)
+   * - `hard`: Comprehensive validation with extensive mock data
+   */
+  mode?: string;
+  /**
+   * Only validate the last N migrations
+   */
+  last?: number;
+}
+
+/**
+ * Parse and validate the simulation mode option
+ */
+function parseSimulationMode(mode?: string): SimulationPowerLevel {
+  if (!mode) return "normal";
+  const normalized = mode.toLowerCase();
+  if (normalized === "quick" || normalized === "normal" || normalized === "hard") {
+    return normalized;
+  }
+  console.log(yellow(`⚠ Unknown mode "${mode}", using "normal" instead`));
+  return "normal";
 }
 
 /**
@@ -79,6 +105,9 @@ export async function statusCommand(
 
     // Validate schema consistency if requested
     if (options.validate) {
+      const powerLevel = parseSimulationMode(options.mode);
+      const lastN = options.last && options.last > 0 ? options.last : undefined;
+
       const schemaPath = path.resolve(
         cwd,
         config.paths?.schemas || "./schemas.ts",
@@ -108,6 +137,13 @@ export async function statusCommand(
 
       console.log(green("  ✓ Schema consistency validated"));
       console.log();
+
+      // Validate each migration with simulation
+      await validateMigrationsWithSimulation(allMigrations, {
+        verbose: options.verbose,
+        powerLevel,
+        lastN,
+      });
     }
 
     // Get migration states from database

@@ -159,6 +159,24 @@ export function keyEqual(
 }
 
 /**
+ * Normalize collation options for comparison by extracting only significant fields.
+ * MongoDB adds many default fields (version, caseLevel, etc.) that we should ignore.
+ */
+function normalizeCollation(collation: unknown): Record<string, unknown> | undefined {
+  if (!collation || typeof collation !== "object") return undefined;
+
+  const obj = collation as Record<string, unknown>;
+  const normalized: Record<string, unknown> = {};
+
+  // Only include significant fields that affect index behavior
+  // Ignore MongoDB defaults like version, caseLevel, caseFirst, numericOrdering, etc.
+  if (obj.locale !== undefined) normalized.locale = obj.locale;
+  if (obj.strength !== undefined) normalized.strength = obj.strength;
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+/**
  * Normalize index options for comparison purposes.
  */
 export function normalizeIndexOptions(
@@ -179,7 +197,7 @@ export function normalizeIndexOptions(
       : undefined;
   return {
     unique: hasUnique,
-    collation: collationVal ? JSON.stringify(collationVal) : undefined,
+    collation: collationVal ? JSON.stringify(normalizeCollation(collationVal)) : undefined,
     partialFilterExpression: pfeVal ? JSON.stringify(pfeVal) : undefined,
   };
 }

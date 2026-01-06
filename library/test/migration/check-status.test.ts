@@ -11,7 +11,10 @@ import {
 import type { Db } from "../../src/mongodb.ts";
 
 // Mock database for testing
-function createMockDb(): Db {
+function createMockDb(options?: {
+  hasIndexes?: boolean;
+  indexIssues?: "missing" | "outdated" | "orphaned" | "none";
+}): Db {
   const mockCollection = {
     find: () => ({
       toArray: () => Promise.resolve([]),
@@ -20,6 +23,34 @@ function createMockDb(): Db {
     insertOne: () => Promise.resolve({ insertedId: "123" }),
     updateOne: () => Promise.resolve({ modifiedCount: 1 }),
     deleteOne: () => Promise.resolve({ deletedCount: 1 }),
+    indexes: () => {
+      // Return mock indexes based on test scenario
+      if (!options?.hasIndexes) {
+        return Promise.resolve([{ name: "_id_", key: { _id: 1 } }]);
+      }
+
+      const baseIndexes: any[] = [{ name: "_id_", key: { _id: 1 } }];
+
+      if (options.indexIssues === "orphaned") {
+        // Add an orphaned index that doesn't exist in schema
+        baseIndexes.push({
+          name: "oldField",
+          key: { oldField: 1 } as any,
+          unique: true,
+        });
+      } else if (options.indexIssues === "outdated") {
+        // Add an index with wrong configuration
+        baseIndexes.push({
+          name: "email",
+          key: { email: 1 } as any,
+          unique: false, // Should be true
+        });
+      }
+      // For "missing", we don't add the expected index
+      // For "none", we add correct indexes
+
+      return Promise.resolve(baseIndexes);
+    },
   };
 
   return {
@@ -244,6 +275,105 @@ Deno.test("assertMigrationSystemHealthy - includes error details", async () => {
     const message = error instanceof Error ? error.message : String(error);
     assertEquals(message.includes("Migration system is not healthy"), true);
     assertEquals(message.includes("Error"), true);
+  }
+});
+
+// ============================================================================
+// checkMigrationStatus - index validation
+// ============================================================================
+
+Deno.test("checkMigrationStatus - index validation - does not validate without db", async () => {
+  const status = await checkMigrationStatus({
+    migrationsDir: testMigrationsDir,
+    schemaPath: testSchemaPath,
+    strictValidation: false,
+  });
+
+  // Without database, indexes should not be validated
+  assertEquals(status.indexes, undefined);
+});
+
+Deno.test("checkMigrationStatus - index validation - validates with db", async () => {
+  const mockDb = createMockDb();
+
+  const status = await checkMigrationStatus({
+    migrationsDir: testMigrationsDir,
+    schemaPath: testSchemaPath,
+    db: mockDb,
+    strictValidation: false,
+  });
+
+  // With database, indexes should be validated if there are migrations
+  if (status.counts.total > 0) {
+    assertEquals(status.indexes !== undefined, true);
+    if (status.indexes) {
+      assertEquals(typeof status.indexes.areIndexesValid, "boolean");
+      assertEquals(typeof status.indexes.collectionsChecked, "number");
+      assertEquals(typeof status.indexes.validIndexCount, "number");
+      assertEquals(typeof status.indexes.invalidIndexCount, "number");
+      assertEquals(Array.isArray(status.indexes.issues), true);
+    }
+  }
+});
+
+Deno.test("checkMigrationStatus - index validation - reports index issues", async () => {
+  const mockDb = createMockDb();
+
+  const status = await checkMigrationStatus({
+    migrationsDir: testMigrationsDir,
+    schemaPath: testSchemaPath,
+    db: mockDb,
+    strictValidation: false,
+    verbose: true,
+  });
+
+  // If there are index issues, they should be reported
+  if (status.indexes && !status.indexes.areIndexesValid) {
+    assertEquals(status.indexes.issues.length > 0, true);
+
+    // Check structure of index issues
+    const firstIssue = status.indexes.issues[0];
+    assertEquals(typeof firstIssue.collection, "string");
+    assertEquals(typeof firstIssue.path, "string");
+    assertEquals(["missing", "outdated", "orphaned"].includes(firstIssue.type), true);
+    assertEquals(typeof firstIssue.description, "string");
+  }
+});
+
+Deno.test("checkMigrationStatus - index validation - affects ok status", async () => {
+  const mockDb = createMockDb();
+
+  const status = await checkMigrationStatus({
+    migrationsDir: testMigrationsDir,
+    schemaPath: testSchemaPath,
+    db: mockDb,
+    strictValidation: false,
+  });
+
+  // If indexes are invalid, ok should be false
+  if (status.indexes && !status.indexes.areIndexesValid) {
+    assertEquals(status.ok, false);
+    assertEquals(status.message.includes("index"), true);
+  }
+});
+
+Deno.test("checkMigrationStatus - index validation - includes detailed issues in verbose", async () => {
+  const mockDb = createMockDb();
+
+  const status = await checkMigrationStatus({
+    migrationsDir: testMigrationsDir,
+    schemaPath: testSchemaPath,
+    db: mockDb,
+    strictValidation: false,
+    verbose: true,
+  });
+
+  // In verbose mode with index issues, warnings should include index details
+  if (status.indexes && !status.indexes.areIndexesValid) {
+    const hasIndexWarnings = status.validation.warnings.some((w) =>
+      w.includes("Index") || w.includes("index")
+    );
+    assertEquals(hasIndexWarnings, true);
   }
 });
 

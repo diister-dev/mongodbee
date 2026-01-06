@@ -17,6 +17,7 @@ import { statusCommand } from "./commands/status.ts";
 import { historyCommand } from "./commands/history.ts";
 import { initCommand } from "./commands/init.ts";
 import { checkCommand } from "./commands/check.ts";
+import { syncCommand } from "./commands/sync.ts";
 
 import packageInfo from "../../../deno.json" with { type: "json" };
 
@@ -51,6 +52,11 @@ const commands = [
     handler: migrateCommand,
   },
   {
+    name: "sync",
+    description: "Synchronize schemas and indexes with latest migration",
+    handler: syncCommand,
+  },
+  {
     name: "status",
     description: "Show migration status",
     handler: statusCommand,
@@ -82,6 +88,7 @@ ${yellow("COMMANDS:")}
   ${green("generate")}  Generate a new migration file
   ${green("check")}     Check migrations validity without applying
   ${green("migrate")}   Apply pending migrations
+  ${green("sync")}      Synchronize schemas and indexes with latest migration
   ${green("status")}    Show migration status
   ${green("history")}   Show migration operation history
   ${green("rollback")}  Rollback the last applied migration
@@ -95,12 +102,24 @@ ${yellow("GLOBAL OPTIONS:")}
 ${yellow("CHECK OPTIONS:")}
   -m, --mode        Simulation mode: quick, normal, hard (default: normal)
   -l, --last        Only validate the last N migrations
+  --check-indexes   Check database indexes against schema (requires database connection)
+
+${yellow("STATUS OPTIONS:")}
+  --validate        Run schema and simulation validation checks
+  -m, --mode        Simulation mode: quick, normal, hard (default: normal)
+  -l, --last        Only validate the last N migrations
 
 ${yellow("MIGRATE OPTIONS:")}
   --dry-run         Simulate migration without applying changes
   --force           Skip all confirmations (use with caution!)
   --auto-sync       Automatically catch up orphaned multi-model instances
   --verbose         Show detailed migration information
+  -m, --mode        Simulation mode: quick, normal, hard (default: normal)
+  -l, --last        Only validate the last N migrations
+
+${yellow("SYNC OPTIONS:")}
+  --force           Sync even if pending migrations exist (not recommended)
+  --verbose         Show detailed schema information
 `);
 }
 
@@ -116,7 +135,7 @@ function showVersion(): void {
  */
 async function main(): Promise<void> {
   const args = parseArgs(Deno.args, {
-    boolean: ["version", "dry-run", "force", "auto-sync", "verbose", "help"],
+    boolean: ["version", "dry-run", "force", "auto-sync", "verbose", "help", "check-indexes", "validate"],
     string: ["config", "env", "name", "mode"],
     alias: {
       v: "version",
