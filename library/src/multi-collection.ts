@@ -148,6 +148,13 @@ type Output<T extends MultiCollectionSchema> = v.InferOutput<
 >;
 
 /**
+ * Type helper to extract union members that match specific _type values
+ * This creates a proper discriminated union based on _type by distributing over K
+ */
+type ExtractByType<T extends MultiCollectionSchema, K extends keyof T> =
+  K extends K ? v.InferOutput<OutputElementSchema<T, K>> : never;
+
+/**
  * Type representing the enhanced MongoDB collection for storing multiple document types
  * @template T - Record mapping document type names to their schemas
  */
@@ -217,7 +224,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
    * );
    * ```
    */
-  paginate<E extends (keyof T)[], EN = v.InferOutput<OutputElementSchema<T, E[number]>>, R = EN>(
+  paginate<E extends (keyof T)[], EN = ExtractByType<T, E[number]>, R = EN>(
     keys: E,
     filter?: m.Filter<v.InferInput<OutputElementSchema<T, E[number]>>>,
     options?: {
@@ -234,7 +241,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
       /** Pipeline stages to execute server-side before pagination (lookups, addFields, etc.) */
       pipeline?: (stage: StageBuilder<T>) => AggregationStage[];
       prepare?: (
-        doc: v.InferOutput<OutputElementSchema<T, E[number]>>,
+        doc: ExtractByType<T, E[number]>,
       ) => Promise<EN> | EN;
       filter?: (doc: EN) => Promise<boolean> | boolean;
       format?: (doc: EN) => Promise<R> | R;
