@@ -223,6 +223,24 @@ export async function applyMultiCollectionIndexes(
 ): Promise<void> {
   const currentIndexes = await collection.indexes();
 
+  // Ensure _type index exists - this is critical for multi-collection performance
+  // All queries filter by _type, and partial indexes depend on efficient _type filtering
+  const typeIndexName = "_type_1";
+  const hasTypeIndex = currentIndexes.some((i) => i.name === typeIndexName);
+
+  if (!hasTypeIndex) {
+    const createFn = () => collection.createIndex(
+      { _type: 1 },
+      { name: typeIndexName }
+    );
+
+    if (options.queue) {
+      await options.queue.add(createFn);
+    } else {
+      await createFn();
+    }
+  }
+
   // Extract indexes for all types
   const allIndexes = Object.entries(schemasPerType).map(([type, typeSchema]) => {
     // Wrap the type schema to include _type field
@@ -284,6 +302,8 @@ export async function applyMultiCollectionIndexes(
         i.name === indexName
       ) || currentIndexes.find((i) => keyEqual(i.key || {}, keySpec));
 
+      // partialFilterExpression is needed to scope unique constraints by type
+      // e.g., two different types can have the same value on a unique field
       const desiredOptions = {
         ...index.metadata,
         partialFilterExpression: {
