@@ -7,8 +7,10 @@
  * @module
  */
 
+import * as fs from "node:fs/promises";
 import * as path from "@std/path";
 import type { MigrationDefinition } from "./types.ts";
+import { pathToFileUrl } from "./utils/platform.ts";
 
 /**
  * Discovers all migration files in a directory
@@ -20,15 +22,16 @@ export async function discoverMigrationFiles(
   migrationsDir: string,
 ): Promise<string[]> {
   try {
+    const dirEntries = await fs.readdir(migrationsDir, { withFileTypes: true });
     const entries = [];
-    for await (const entry of Deno.readDir(migrationsDir)) {
-      if (entry.isFile && entry.name.endsWith(".ts")) {
+    for (const entry of dirEntries) {
+      if (entry.isFile() && entry.name.endsWith(".ts")) {
         entries.push(entry.name);
       }
     }
     return entries.sort();
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       throw new Error(`Migrations directory not found: ${migrationsDir}`);
     }
     throw error;
@@ -49,9 +52,7 @@ export async function loadMigrationFile(
   const fullPath = path.resolve(migrationsDir, fileName);
 
   // Convert to file:// URL for dynamic import
-  const importPath = Deno.build.os === "windows"
-    ? `file:///${fullPath.replace(/\\/g, "/")}`
-    : `file://${fullPath}`;
+  const importPath = pathToFileUrl(fullPath);
 
   try {
     const module = await import(importPath);

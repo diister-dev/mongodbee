@@ -9,6 +9,7 @@
 
 import * as path from "@std/path";
 import type { MigrationDefinition, SchemasDefinition } from "./types.ts";
+import { pathToFileUrl } from "./utils/platform.ts";
 
 /**
  * Loads the current project schema from schemas.ts
@@ -22,9 +23,7 @@ export async function loadProjectSchema(
   const fullPath = path.resolve(schemaPath);
 
   // Convert to file:// URL for dynamic import
-  const importPath = Deno.build.os === "windows"
-    ? `file:///${fullPath.replace(/\\/g, "/")}`
-    : `file://${fullPath}`;
+  const importPath = pathToFileUrl(fullPath);
 
   try {
     const module = await import(importPath);

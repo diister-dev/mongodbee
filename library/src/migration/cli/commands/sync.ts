@@ -7,6 +7,7 @@
  * @module
  */
 
+import process from "node:process";
 import { blue, bold, dim, green, red, yellow } from "@std/fmt/colors";
 import { MongoClient } from "../../../mongodb.ts";
 import * as path from "@std/path";
@@ -39,7 +40,7 @@ export async function syncCommand(
 
   try {
     // Load configuration
-    const cwd = options.cwd || Deno.cwd();
+    const cwd = options.cwd || process.cwd();
     const config = await loadConfig({ configPath: options.configPath, cwd });
 
     const migrationsDir = path.resolve(

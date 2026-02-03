@@ -39,6 +39,7 @@
  * @module
  */
 
+import process from "node:process";
 import type { Db } from "../mongodb.ts";
 import type { MigrationDefinition } from "./types.ts";
 import { createEmptyDatabaseState, type SimulationDatabaseState } from "./types.ts";
@@ -80,7 +81,7 @@ export interface CheckMigrationStatusOptions {
 
   /**
    * Current working directory for resolving paths
-   * @default Deno.cwd()
+   * @default process.cwd()
    */
   cwd?: string;
 
@@ -513,7 +514,7 @@ export async function checkMigrationStatus(
     strictValidation = true,
     verbose = false,
     configPath,
-    cwd = Deno.cwd(),
+    cwd = process.cwd(),
     simulationMode = "quick",
     lastN,
   } = options;

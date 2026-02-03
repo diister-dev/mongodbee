@@ -25,6 +25,8 @@
  * @module
  */
 
+import process from "node:process";
+import * as fs from "node:fs/promises";
 import * as v from "../../schema.ts";
 import * as path from "@std/path";
 import {
@@ -35,6 +37,7 @@ import {
   MigrationSystemConfigSchema,
 } from "./types.ts";
 import { red } from "@std/fmt/colors";
+import { pathToFileUrl } from "../utils/platform.ts";
 
 /**
  * Deeply merges two configuration objects
@@ -144,8 +147,8 @@ function loadFromEnvironment(
   const config: Partial<MigrationSystemConfig> = {};
 
   // Database configuration
-  const dbUri = Deno.env.get(`${prefix}DB_URI`);
-  const dbName = Deno.env.get(`${prefix}DB_NAME`);
+  const dbUri = process.env[`${prefix}DB_URI`];
+  const dbName = process.env[`${prefix}DB_NAME`];
 
   if (dbUri && dbName) {
     config.database = {
@@ -156,8 +159,8 @@ function loadFromEnvironment(
     };
 
     // Optional database options
-    const connectTimeout = Deno.env.get(`${prefix}DB_CONNECT_TIMEOUT`);
-    const maxPoolSize = Deno.env.get(`${prefix}DB_MAX_POOL_SIZE`);
+    const connectTimeout = process.env[`${prefix}DB_CONNECT_TIMEOUT`];
+    const maxPoolSize = process.env[`${prefix}DB_MAX_POOL_SIZE`];
 
     if (connectTimeout || maxPoolSize) {
       config.database.connection.options = {
@@ -169,8 +172,8 @@ function loadFromEnvironment(
   }
 
   // Paths configuration
-  const migrationsPath = Deno.env.get(`${prefix}MIGRATIONS_PATH`);
-  const schemasPath = Deno.env.get(`${prefix}SCHEMAS_PATH`);
+  const migrationsPath = process.env[`${prefix}MIGRATIONS_PATH`];
+  const schemasPath = process.env[`${prefix}SCHEMAS_PATH`];
 
   if (migrationsPath && schemasPath) {
     config.paths = {
@@ -179,9 +182,9 @@ function loadFromEnvironment(
     };
 
     // Optional paths
-    const tempPath = Deno.env.get(`${prefix}TEMP_PATH`);
-    const backupPath = Deno.env.get(`${prefix}BACKUP_PATH`);
-    const logsPath = Deno.env.get(`${prefix}LOGS_PATH`);
+    const tempPath = process.env[`${prefix}TEMP_PATH`];
+    const backupPath = process.env[`${prefix}BACKUP_PATH`];
+    const logsPath = process.env[`${prefix}LOGS_PATH`];
 
     if (tempPath) config.paths.temp = tempPath;
     if (backupPath) config.paths.backup = backupPath;
@@ -189,9 +192,9 @@ function loadFromEnvironment(
   }
 
   // Migration configuration
-  const dryRun = Deno.env.get(`${prefix}DRY_RUN`);
-  const backup = Deno.env.get(`${prefix}BACKUP`);
-  const logLevel = Deno.env.get(`${prefix}LOG_LEVEL`);
+  const dryRun = process.env[`${prefix}DRY_RUN`];
+  const backup = process.env[`${prefix}BACKUP`];
+  const logLevel = process.env[`${prefix}LOG_LEVEL`];
 
   if (dryRun || backup || logLevel) {
     config.migration = {
@@ -207,8 +210,8 @@ function loadFromEnvironment(
   }
 
   // CLI configuration
-  const noColors = Deno.env.get(`${prefix}NO_COLORS`);
-  const verbose = Deno.env.get(`${prefix}VERBOSE`);
+  const noColors = process.env[`${prefix}NO_COLORS`];
+  const verbose = process.env[`${prefix}VERBOSE`];
 
   if (noColors || verbose) {
     config.cli = {
@@ -229,24 +232,22 @@ function loadFromEnvironment(
  */
 async function loadFromFile(
   filePath: string,
-  cwd: string = Deno.cwd(),
+  cwd: string = process.cwd(),
 ): Promise<Partial<MigrationSystemConfig>> {
   try {
     if (filePath.endsWith(".json")) {
       const fullPath = path.isAbsolute(filePath)
         ? filePath
         : path.resolve(cwd, filePath);
-      const content = await Deno.readTextFile(fullPath);
+      const content = await fs.readFile(fullPath, "utf-8");
       return JSON.parse(content);
     }
     if (filePath.endsWith(".ts") || filePath.endsWith(".js")) {
       const fullPath = path.isAbsolute(filePath)
         ? filePath
         : path.resolve(cwd, filePath);
-      // Convert path to file:// URL for dynamic import (required for Deno)
-      const importPath = Deno.build.os === "windows"
-        ? `file:///${fullPath.replace(/\\/g, "/")}`
-        : `file://${fullPath}`;
+      // Convert path to file:// URL for dynamic import
+      const importPath = pathToFileUrl(fullPath);
       const mod = await import(importPath);
       if (mod.default) return mod.default;
       if (mod.config) return mod.config;
@@ -258,7 +259,7 @@ async function loadFromFile(
       `Unsupported config file format: ${filePath}. Only .json, .ts, .js are supported.`,
     );
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       throw new Error(`Configuration file not found: ${filePath}`);
     }
     const message = error instanceof Error ? error.message : String(error);
@@ -274,7 +275,7 @@ async function loadFromFile(
  * @param cwd - Current working directory for resolving relative paths
  * @returns Array of potential configuration file paths
  */
-function discoverConfigFiles(cwd: string = Deno.cwd()): string[] {
+function discoverConfigFiles(cwd: string = process.cwd()): string[] {
   return [
     path.resolve(cwd, "./mongodbee.config.ts"),
     path.resolve(cwd, "./mongodbee.config.js"),
@@ -339,7 +340,7 @@ export function createConfig(
 export async function loadConfig(
   options: { configPath?: string; cwd?: string } = {},
 ): Promise<Partial<MigrationSystemConfig>> {
-  const cwd = options.cwd || Deno.cwd();
+  const cwd = options.cwd || process.cwd();
   let config: Partial<MigrationSystemConfig>;
 
   // If explicit config path provided, try to load it
@@ -438,11 +439,11 @@ export async function loadConfigOld(
     }
   } else {
     // Try to discover config files
-    for (const path of discoverConfigFiles()) {
+    for (const configFilePath of discoverConfigFiles()) {
       try {
-        await Deno.stat(path);
-        fileConfig = await loadFromFile(path) as Record<string, unknown>;
-        configSource = path;
+        await fs.stat(configFilePath);
+        fileConfig = await loadFromFile(configFilePath) as Record<string, unknown>;
+        configSource = configFilePath;
         break;
       } catch {
         // Continue to next file
@@ -499,7 +500,7 @@ export async function loadConfigOld(
  */
 export function resolveConfigPaths(
   config: MigrationSystemConfig,
-  basePath: string = Deno.cwd(),
+  basePath: string = process.cwd(),
 ): MigrationSystemConfig {
   const resolved = { ...config };
 
@@ -548,8 +549,8 @@ export async function validateConfigPaths(
 
   // Check migrations directory
   try {
-    const migrationsStat = await Deno.stat(config.paths.migrations);
-    if (!migrationsStat.isDirectory) {
+    const migrationsStat = await fs.stat(config.paths.migrations);
+    if (!migrationsStat.isDirectory()) {
       errors.push(
         `Migrations path is not a directory: ${config.paths.migrations}`,
       );
@@ -562,8 +563,8 @@ export async function validateConfigPaths(
 
   // Check schemas directory
   try {
-    const schemasStat = await Deno.stat(config.paths.schemas);
-    if (!schemasStat.isDirectory) {
+    const schemasStat = await fs.stat(config.paths.schemas);
+    if (!schemasStat.isDirectory()) {
       errors.push(`Schemas path is not a directory: ${config.paths.schemas}`);
     }
   } catch {
@@ -577,12 +578,12 @@ export async function validateConfigPaths(
     ["logs", config.paths.logs],
   ] as const;
 
-  for (const [name, path] of optionalPaths) {
-    if (path) {
+  for (const [name, optPath] of optionalPaths) {
+    if (optPath) {
       try {
-        const stat = await Deno.stat(path);
-        if (!stat.isDirectory) {
-          errors.push(`${name} path is not a directory: ${path}`);
+        const stat = await fs.stat(optPath);
+        if (!stat.isDirectory()) {
+          errors.push(`${name} path is not a directory: ${optPath}`);
         }
       } catch {
         // Optional directories can be created if they don't exist
@@ -617,16 +618,16 @@ export async function ensureConfigDirectories(
     config.paths.logs,
   ].filter(Boolean) as string[];
 
-  for (const path of pathsToCreate) {
+  for (const dirPath of pathsToCreate) {
     try {
-      await Deno.stat(path);
+      await fs.stat(dirPath);
     } catch {
       try {
-        await Deno.mkdir(path, { recursive: true });
-        created.push(path);
+        await fs.mkdir(dirPath, { recursive: true });
+        created.push(dirPath);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`Failed to create directory ${path}: ${message}`);
+        throw new Error(`Failed to create directory ${dirPath}: ${message}`);
       }
     }
   }

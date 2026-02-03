@@ -4,6 +4,7 @@
  * @module
  */
 
+import * as readline from "node:readline";
 import { dim, yellow } from "@std/fmt/colors";
 
 /**
@@ -16,14 +17,18 @@ export async function confirm(message: string): Promise<boolean> {
   console.log(yellow(message));
   console.log(dim("Type 'yes' to confirm: "));
 
-  const buf = new Uint8Array(1024);
-  const n = await Deno.stdin.read(buf);
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
 
-  if (n === null) {
-    return false;
-  }
-
-  const answer = new TextDecoder().decode(buf.subarray(0, n)).trim()
-    .toLowerCase();
-  return answer === "yes";
+  return new Promise((resolve) => {
+    rl.once("line", (line) => {
+      rl.close();
+      resolve(line.trim().toLowerCase() === "yes");
+    });
+    rl.once("close", () => {
+      resolve(false);
+    });
+  });
 }

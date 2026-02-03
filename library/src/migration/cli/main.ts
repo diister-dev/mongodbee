@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-read --allow-write --allow-net --allow-env
+#!/usr/bin/env node
 /**
  * MongoDBee Migration CLI
  *
@@ -7,6 +7,7 @@
  * @module
  */
 
+import process from "node:process";
 import { parseArgs } from "@std/cli/parse-args";
 import { blue, bold, green, red, yellow } from "@std/fmt/colors";
 
@@ -134,7 +135,7 @@ function showVersion(): void {
  * Main CLI entry point
  */
 async function main(): Promise<void> {
-  const args = parseArgs(Deno.args, {
+  const args = parseArgs(process.argv.slice(2), {
     boolean: ["version", "dry-run", "force", "auto-sync", "verbose", "help", "check-indexes", "validate"],
     string: ["config", "env", "name", "mode"],
     alias: {
@@ -180,13 +181,16 @@ async function main(): Promise<void> {
 }
 
 // Run main function if this is the main module
-if (import.meta.main) {
+const isMain = import.meta.url === `file://${process.argv[1]?.replace(/\\/g, "/")}` ||
+  (import.meta as any).main === true;
+
+if (isMain) {
   try {
     await main();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(red(bold("Error:")), message);
-    Deno.exit(1);
+    process.exit(1);
   }
 }
 

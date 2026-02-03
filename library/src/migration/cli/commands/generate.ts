@@ -6,9 +6,11 @@
  * @module
  */
 
+import process from "node:process";
+import * as fs from "node:fs/promises";
+import { readdirSync, existsSync } from "node:fs";
 import { dim, green, red } from "@std/fmt/colors";
 import * as path from "@std/path";
-import { existsSync } from "@std/fs";
 import { generateMigrationId } from "../../definition.ts";
 import { prettyText } from "../utils.ts";
 import { loadConfig } from "../../config/loader.ts";
@@ -16,8 +18,8 @@ import { loadConfig } from "../../config/loader.ts";
 async function extractMigrationDefinitions(
   migrationsDir: string,
 ): Promise<any[]> {
-  const migrations = Deno.readDirSync(migrationsDir);
-  const migrationsPaths = [...migrations].map((mig) => mig.name)
+  const migrations = readdirSync(migrationsDir, { withFileTypes: true });
+  const migrationsPaths = migrations.map((mig) => mig.name)
     .filter((name) => name.endsWith(".ts"))
     .sort((a, b) => a.localeCompare(b))
     .map(async (name) => {
@@ -53,7 +55,7 @@ export const generateCommandOptions = {
 export async function generateCommand(
   options: GenerateCommandOptions,
 ): Promise<void> {
-  const cwd = options.cwd || Deno.cwd();
+  const cwd = options.cwd || process.cwd();
   const config = await loadConfig({ configPath: options.configPath, cwd });
 
   const migrationsDir = config.paths?.migrations || "./migrations";
@@ -139,7 +141,7 @@ export async function generateCommand(
 
   const fileName = `${id.replace(/-/g, "_")}.ts`;
   const filePath = path.join(migrationsDirPath, fileName);
-  await Deno.writeTextFile(filePath, prettyText(generation));
+  await fs.writeFile(filePath, prettyText(generation), "utf-8");
 
   console.log(`${green("Migration file created")}: ${filePath}`);
 }

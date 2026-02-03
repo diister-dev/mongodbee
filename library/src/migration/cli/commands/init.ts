@@ -6,8 +6,10 @@
  * @module
  */
 
+import process from "node:process";
+import * as fs from "node:fs/promises";
+import { existsSync } from "node:fs";
 import * as path from "@std/path";
-import { existsSync } from "@std/fs";
 import { bold, dim, green, yellow } from "@std/fmt/colors";
 import { prettyText } from "../utils.ts";
 
@@ -25,7 +27,7 @@ export async function initCommand(
   console.log(bold("🐝 Initializing MongoDBee configuration..."));
   console.log();
 
-  const cwd = options.cwd || Deno.cwd();
+  const cwd = options.cwd || process.cwd();
   const configFilePath = path.resolve(cwd, "./mongodbee.config.ts");
   const schemasFilePath = path.resolve(cwd, "./schemas.ts");
   const migrationsDir = path.resolve(cwd, "./migrations");
@@ -41,14 +43,14 @@ export async function initCommand(
 
   // Create migrations directory
   if (!existsSync(migrationsDir)) {
-    await Deno.mkdir(migrationsDir, { recursive: true });
+    await fs.mkdir(migrationsDir, { recursive: true });
     console.log(green(`✓ Created migrations directory`));
     console.log(dim(`  ${migrationsDir}`));
   }
 
   // Create schemas file
   if (!existsSync(schemasFilePath) || options.force) {
-    await Deno.writeTextFile(
+    await fs.writeFile(
       schemasFilePath,
       prettyText(`
       /**
@@ -73,6 +75,7 @@ export async function initCommand(
         }
       } satisfies SchemasDefinition;
     `),
+      "utf-8",
     );
 
     console.log(green(`✓ Created schemas file`));
@@ -80,7 +83,7 @@ export async function initCommand(
   }
 
   // Write config file
-  await Deno.writeTextFile(
+  await fs.writeFile(
     configFilePath,
     prettyText(`
     import { defineConfig } from "@diister/mongodbee";
@@ -98,6 +101,7 @@ export async function initCommand(
       }
     });
   `),
+    "utf-8",
   );
 
   console.log(green(`✓ Created configuration file`));
