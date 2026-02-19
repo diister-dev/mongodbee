@@ -1,11 +1,11 @@
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertExists } from "@std/assert";
+import { test, expect } from "vitest";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import { defineModel } from "../../src/multi-collection-model.ts";
 
-Deno.test("Multi-collection paginate basic functionality", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-collection paginate basic functionality", async () => {
+  await withDatabase("Multi-collection paginate basic functionality", async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
         product: {
@@ -53,33 +53,33 @@ Deno.test("Multi-collection paginate basic functionality", async (t) => {
     const firstPageProducts = await catalog.paginate("product", {}, {
       limit: 5,
     });
-    assertEquals(firstPageProducts.data.length, 5);
+    expect(firstPageProducts.data.length).toEqual(5);
 
     // Verify all results are products
     for (const product of firstPageProducts.data) {
-      assertEquals(product._type, "product");
-      assertExists(product.name);
-      assertExists(product.price);
-      assertExists(product.category);
+      expect(product._type).toEqual("product");
+      expect(product.name).toBeDefined();
+      expect(product.price).toBeDefined();
+      expect(product.category).toBeDefined();
     }
 
     // Test basic pagination for categories
     const firstPageCategories = await catalog.paginate("category", {}, {
       limit: 3,
     });
-    assertEquals(firstPageCategories.data.length, 3);
+    expect(firstPageCategories.data.length).toEqual(3);
 
     // Verify all results are categories
     for (const category of firstPageCategories.data) {
-      assertEquals(category._type, "category");
-      assertExists(category.name);
-      assertExists(category.description);
+      expect(category._type).toEqual("category");
+      expect(category.name).toBeDefined();
+      expect(category.description).toBeDefined();
     }
   });
 });
 
-Deno.test("Multi-collection paginate with afterId", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-collection paginate with afterId", async () => {
+  await withDatabase("Multi-collection paginate with afterId", async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
         product: {
@@ -120,21 +120,21 @@ Deno.test("Multi-collection paginate with afterId", async (t) => {
       limit: 5,
       sort: { _id: 1 },
     });
-    assertEquals(firstPageProducts.data.length, 5);
+    expect(firstPageProducts.data.length).toEqual(5);
 
     const secondPageProducts = await catalog.paginate("product", {}, {
       limit: 5,
       afterId: firstPageProducts.data[firstPageProducts.data.length - 1]._id,
       sort: { _id: 1 },
     });
-    assertEquals(secondPageProducts.data.length, 5);
+    expect(secondPageProducts.data.length).toEqual(5);
 
     // Verify no overlap between pages
     const firstPageIds = new Set(firstPageProducts.data.map((p) => p._id));
     const secondPageIds = new Set(secondPageProducts.data.map((p) => p._id));
 
     for (const id of secondPageIds) {
-      assertEquals(firstPageIds.has(id), false);
+      expect(firstPageIds.has(id)).toEqual(false);
     }
 
     // Test pagination with afterId for users
@@ -142,24 +142,24 @@ Deno.test("Multi-collection paginate with afterId", async (t) => {
       limit: 3,
       sort: { _id: 1 },
     });
-    assertEquals(firstPageUsers.data.length, 3);
+    expect(firstPageUsers.data.length).toEqual(3);
 
     const secondPageUsers = await catalog.paginate("user", {}, {
       limit: 3,
       afterId: firstPageUsers.data[firstPageUsers.data.length - 1]._id,
       sort: { _id: 1 },
     });
-    assertEquals(secondPageUsers.data.length, 3);
+    expect(secondPageUsers.data.length).toEqual(3);
 
     // Verify all are users
     for (const user of secondPageUsers.data) {
-      assertEquals(user._type, "user");
+      expect(user._type).toEqual("user");
     }
   });
 });
 
-Deno.test("Multi-collection paginate with beforeId", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-collection paginate with beforeId", async () => {
+  await withDatabase("Multi-collection paginate with beforeId", async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
         product: {
@@ -180,7 +180,7 @@ Deno.test("Multi-collection paginate with beforeId", async (t) => {
     }
 
     // Get all products to find a reference point
-    const allProducts = await catalog.find("product", {}, { sort: { _id: 1 } });
+    const allProducts = await catalog.find("product", {}, { sort: { _id: 1 } }).toArray();
 
     // Get products before the 7th product
     const beforePage = await catalog.paginate("product", {}, {
@@ -189,21 +189,21 @@ Deno.test("Multi-collection paginate with beforeId", async (t) => {
       sort: { _id: -1 },
     });
 
-    assertEquals(beforePage.data.length, 3);
+    expect(beforePage.data.length).toEqual(3);
 
     // Verify items come before the reference point in the sorted order
     // With sort: { _id: -1 }, "before" means items with higher _id
     const referenceId = allProducts[6]._id;
     for (const product of beforePage.data) {
       // Items before the anchor in descending order have _id > referenceId
-      assertEquals(product._id > referenceId, true);
-      assertEquals(product._type, "product");
+      expect(product._id > referenceId).toEqual(true);
+      expect(product._type).toEqual("product");
     }
   });
 });
 
-Deno.test("Multi-collection paginate with filter", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-collection paginate with filter", async () => {
+  await withDatabase("Multi-collection paginate with filter", async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
         product: {
@@ -230,12 +230,12 @@ Deno.test("Multi-collection paginate with filter", async (t) => {
       category: "electronics",
     }, { limit: 10 });
 
-    assertEquals(electronicsProducts.data.length, 10);
+    expect(electronicsProducts.data.length).toEqual(10);
 
     // Verify all are electronics
     for (const product of electronicsProducts.data) {
-      assertEquals(product.category, "electronics");
-      assertEquals(product._type, "product");
+      expect(product.category).toEqual("electronics");
+      expect(product._type).toEqual("product");
     }
 
     // Paginate with custom filter (expensive electronics - price > 100)
@@ -247,17 +247,17 @@ Deno.test("Multi-collection paginate with filter", async (t) => {
     });
 
     // Should get products with price 110, 130, 150, 170, 190
-    assertEquals(expensiveElectronics.data.length, 5);
+    expect(expensiveElectronics.data.length).toEqual(5);
 
     for (const product of expensiveElectronics.data) {
-      assertEquals(product.category, "electronics");
-      assertEquals(product.price > 100, true);
+      expect(product.category).toEqual("electronics");
+      expect(product.price > 100).toEqual(true);
     }
   });
 });
 
-Deno.test("Multi-collection paginate with sorting", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-collection paginate with sorting", async () => {
+  await withDatabase("Multi-collection paginate with sorting", async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
         product: {
@@ -288,27 +288,26 @@ Deno.test("Multi-collection paginate with sorting", async (t) => {
       sort: { price: 1 },
     });
 
-    assertEquals(sortedByPrice.data.length, 5);
+    expect(sortedByPrice.data.length).toEqual(5);
 
     // Verify items are sorted by price
     for (let i = 0; i < sortedByPrice.data.length - 1; i++) {
-      assertEquals(
+      expect(
         sortedByPrice.data[i].price <= sortedByPrice.data[i + 1].price,
-        true,
-      );
+      ).toEqual(true);
     }
 
     // Verify the actual order
-    assertEquals(sortedByPrice.data[0].price, 100);
-    assertEquals(sortedByPrice.data[1].price, 200);
-    assertEquals(sortedByPrice.data[2].price, 300);
-    assertEquals(sortedByPrice.data[3].price, 400);
-    assertEquals(sortedByPrice.data[4].price, 500);
+    expect(sortedByPrice.data[0].price).toEqual(100);
+    expect(sortedByPrice.data[1].price).toEqual(200);
+    expect(sortedByPrice.data[2].price).toEqual(300);
+    expect(sortedByPrice.data[3].price).toEqual(400);
+    expect(sortedByPrice.data[4].price).toEqual(500);
   });
 });
 
-Deno.test("Multi-collection paginate with invalid ID format", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-collection paginate with invalid ID format", async () => {
+  await withDatabase("Multi-collection paginate with invalid ID format", async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
         product: {
@@ -334,29 +333,27 @@ Deno.test("Multi-collection paginate with invalid ID format", async (t) => {
     // Test with wrong ID format for afterId
     try {
       await catalog.paginate("product", {}, { afterId: "user:123" }); // User ID for product pagination
-      assertEquals(true, false, "Should have thrown an error");
+      expect(true).toEqual(false);
     } catch (error) {
-      assertEquals(
+      expect(
         (error as Error).message.includes("Invalid afterId format"),
-        true,
-      );
+      ).toEqual(true);
     }
 
     // Test with wrong ID format for beforeId
     try {
       await catalog.paginate("user", {}, { beforeId: "product:456" }); // Product ID for user pagination
-      assertEquals(true, false, "Should have thrown an error");
+      expect(true).toEqual(false);
     } catch (error) {
-      assertEquals(
+      expect(
         (error as Error).message.includes("Invalid beforeId format"),
-        true,
-      );
+      ).toEqual(true);
     }
   });
 });
 
-Deno.test("Multi-collection paginate with empty results", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-collection paginate with empty results", async () => {
+  await withDatabase("Multi-collection paginate with empty results", async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
         product: {
@@ -374,7 +371,7 @@ Deno.test("Multi-collection paginate with empty results", async (t) => {
 
     // Test empty collection
     const emptyProducts = await catalog.paginate("product", {}, { limit: 10 });
-    assertEquals(emptyProducts.data.length, 0);
+    expect(emptyProducts.data.length).toEqual(0);
 
     // Insert some users but test products (should be empty)
     await catalog.insertOne("user", {
@@ -389,16 +386,16 @@ Deno.test("Multi-collection paginate with empty results", async (t) => {
     const stillEmptyProducts = await catalog.paginate("product", {}, {
       limit: 10,
     });
-    assertEquals(stillEmptyProducts.data.length, 0);
+    expect(stillEmptyProducts.data.length).toEqual(0);
 
     // But users should exist
     const existingUsers = await catalog.paginate("user", {}, { limit: 10 });
-    assertEquals(existingUsers.data.length, 2);
+    expect(existingUsers.data.length).toEqual(2);
   });
 });
 
-Deno.test("Multi-collection paginate with limit boundary conditions", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-collection paginate with limit boundary conditions", async () => {
+  await withDatabase("Multi-collection paginate with limit boundary conditions", async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
         product: {
@@ -422,20 +419,20 @@ Deno.test("Multi-collection paginate with limit boundary conditions", async (t) 
     const largeLimitPage = await catalog.paginate("product", {}, {
       limit: 100,
     });
-    assertEquals(largeLimitPage.data.length, 5);
+    expect(largeLimitPage.data.length).toEqual(5);
 
     // Test with limit of 1
     const singleItemPage = await catalog.paginate("product", {}, { limit: 1 });
-    assertEquals(singleItemPage.data.length, 1);
+    expect(singleItemPage.data.length).toEqual(1);
 
     // Test with limit of 0
     const zeroLimitPage = await catalog.paginate("product", {}, { limit: 0 });
-    assertEquals(zeroLimitPage.data.length, 0);
+    expect(zeroLimitPage.data.length).toEqual(0);
   });
 });
 
-Deno.test("Multi-collection paginate with custom sort and afterId", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-collection paginate with custom sort and afterId", async () => {
+  await withDatabase("Multi-collection paginate with custom sort and afterId", async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
         product: {
@@ -469,13 +466,13 @@ Deno.test("Multi-collection paginate with custom sort and afterId", async (t) =>
       sort: { createdAt: -1 },
     });
 
-    assertEquals(firstPage.data.length, 3);
-    assertEquals(firstPage.total, 6);
+    expect(firstPage.data.length).toEqual(3);
+    expect(firstPage.total).toEqual(6);
 
     // Verify first page is sorted by createdAt descending
-    assertEquals(firstPage.data[0].createdAt, 600); // Product F
-    assertEquals(firstPage.data[1].createdAt, 500); // Product E
-    assertEquals(firstPage.data[2].createdAt, 400); // Product D
+    expect(firstPage.data[0].createdAt).toEqual(600); // Product F
+    expect(firstPage.data[1].createdAt).toEqual(500); // Product E
+    expect(firstPage.data[2].createdAt).toEqual(400); // Product D
 
     // Test 2: Get second page using afterId with custom sort
     const secondPage = await catalog.paginate("product", {}, {
@@ -484,24 +481,23 @@ Deno.test("Multi-collection paginate with custom sort and afterId", async (t) =>
       afterId: firstPage.data[firstPage.data.length - 1]._id,
     });
 
-    assertEquals(secondPage.data.length, 3);
+    expect(secondPage.data.length).toEqual(3);
 
     // Verify second page continues the sort order
-    assertEquals(secondPage.data[0].createdAt, 300); // Product C
-    assertEquals(secondPage.data[1].createdAt, 200); // Product B
-    assertEquals(secondPage.data[2].createdAt, 100); // Product A
+    expect(secondPage.data[0].createdAt).toEqual(300); // Product C
+    expect(secondPage.data[1].createdAt).toEqual(200); // Product B
+    expect(secondPage.data[2].createdAt).toEqual(100); // Product A
 
     // Verify no overlap between pages
     const firstPageIds = new Set(firstPage.data.map((item) => item._id));
     for (const item of secondPage.data) {
-      assertEquals(firstPageIds.has(item._id), false,
-        "Second page should not contain items from first page");
+      expect(firstPageIds.has(item._id)).toEqual(false);
     }
   });
 });
 
-Deno.test("Multi-collection paginate with custom sort and beforeId", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-collection paginate with custom sort and beforeId", async () => {
+  await withDatabase("Multi-collection paginate with custom sort and beforeId", async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
         product: {
@@ -535,9 +531,9 @@ Deno.test("Multi-collection paginate with custom sort and beforeId", async (t) =
     });
 
     // allItems should be: VeryHigh(100), High(90), MediumHigh(70), Medium(50), Low(10), VeryLow(5)
-    assertEquals(allItems.data[0].score, 100);
-    assertEquals(allItems.data[1].score, 90);
-    assertEquals(allItems.data[2].score, 70);
+    expect(allItems.data[0].score).toEqual(100);
+    expect(allItems.data[1].score).toEqual(90);
+    expect(allItems.data[2].score).toEqual(70);
 
     // Use beforeId with the 4th item (Medium, score=50) as anchor
     const beforePage = await catalog.paginate("product", {}, {
@@ -546,17 +542,17 @@ Deno.test("Multi-collection paginate with custom sort and beforeId", async (t) =
       beforeId: allItems.data[3]._id,
     });
 
-    assertEquals(beforePage.data.length, 3);
+    expect(beforePage.data.length).toEqual(3);
 
     // With beforeId, items are returned in the SAME order as forward pagination
-    assertEquals(beforePage.data[0].score, 100); // VeryHigh
-    assertEquals(beforePage.data[1].score, 90);  // High
-    assertEquals(beforePage.data[2].score, 70);  // MediumHigh (closest to anchor)
+    expect(beforePage.data[0].score).toEqual(100); // VeryHigh
+    expect(beforePage.data[1].score).toEqual(90);  // High
+    expect(beforePage.data[2].score).toEqual(70);  // MediumHigh (closest to anchor)
   });
 });
 
-Deno.test("Multi-collection paginate with multi-field custom sort and afterId", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-collection paginate with multi-field custom sort and afterId", async () => {
+  await withDatabase("Multi-collection paginate with multi-field custom sort and afterId", async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
         product: {
@@ -592,10 +588,10 @@ Deno.test("Multi-collection paginate with multi-field custom sort and afterId", 
       sort: { category: 1, value: -1 },
     });
 
-    assertEquals(firstPage.data.length, 3);
-    assertEquals(firstPage.data[0].name, "A-High");
-    assertEquals(firstPage.data[1].name, "A-Mid");
-    assertEquals(firstPage.data[2].name, "A-Low");
+    expect(firstPage.data.length).toEqual(3);
+    expect(firstPage.data[0].name).toEqual("A-High");
+    expect(firstPage.data[1].name).toEqual("A-Mid");
+    expect(firstPage.data[2].name).toEqual("A-Low");
 
     // Get second page
     const secondPage = await catalog.paginate("product", {}, {
@@ -604,15 +600,15 @@ Deno.test("Multi-collection paginate with multi-field custom sort and afterId", 
       afterId: firstPage.data[firstPage.data.length - 1]._id,
     });
 
-    assertEquals(secondPage.data.length, 3);
-    assertEquals(secondPage.data[0].name, "B-High");
-    assertEquals(secondPage.data[1].name, "B-Low");
-    assertEquals(secondPage.data[2].name, "C-Only");
+    expect(secondPage.data.length).toEqual(3);
+    expect(secondPage.data[0].name).toEqual("B-High");
+    expect(secondPage.data[1].name).toEqual("B-Low");
+    expect(secondPage.data[2].name).toEqual("C-Only");
   });
 });
 
-Deno.test("Multi-collection paginate with _id descending sort", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-collection paginate with _id descending sort", async () => {
+  await withDatabase("Multi-collection paginate with _id descending sort", async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
         product: {
@@ -636,14 +632,14 @@ Deno.test("Multi-collection paginate with _id descending sort", async (t) => {
       sort: { _id: -1 },
     });
 
-    assertEquals(firstPage.data.length, 4);
-    assertEquals(firstPage.total, 10);
+    expect(firstPage.data.length).toEqual(4);
+    expect(firstPage.total).toEqual(10);
 
     // Should be Product 10, 9, 8, 7 (newest to oldest)
-    assertEquals(firstPage.data[0].name, "Product 10");
-    assertEquals(firstPage.data[1].name, "Product 9");
-    assertEquals(firstPage.data[2].name, "Product 8");
-    assertEquals(firstPage.data[3].name, "Product 7");
+    expect(firstPage.data[0].name).toEqual("Product 10");
+    expect(firstPage.data[1].name).toEqual("Product 9");
+    expect(firstPage.data[2].name).toEqual("Product 8");
+    expect(firstPage.data[3].name).toEqual("Product 7");
 
     // Collect first page IDs
     const firstPageIds = new Set(firstPage.data.map((item) => item._id));
@@ -655,18 +651,17 @@ Deno.test("Multi-collection paginate with _id descending sort", async (t) => {
       afterId: firstPage.data[firstPage.data.length - 1]._id,
     });
 
-    assertEquals(secondPage.data.length, 4);
+    expect(secondPage.data.length).toEqual(4);
 
     // Should be Product 6, 5, 4, 3
-    assertEquals(secondPage.data[0].name, "Product 6");
-    assertEquals(secondPage.data[1].name, "Product 5");
-    assertEquals(secondPage.data[2].name, "Product 4");
-    assertEquals(secondPage.data[3].name, "Product 3");
+    expect(secondPage.data[0].name).toEqual("Product 6");
+    expect(secondPage.data[1].name).toEqual("Product 5");
+    expect(secondPage.data[2].name).toEqual("Product 4");
+    expect(secondPage.data[3].name).toEqual("Product 3");
 
     // Verify no duplicates
     for (const item of secondPage.data) {
-      assertEquals(firstPageIds.has(item._id), false,
-        `Duplicate found: ${item.name} appears in both pages`);
+      expect(firstPageIds.has(item._id)).toEqual(false);
     }
 
     // Third page
@@ -676,25 +671,23 @@ Deno.test("Multi-collection paginate with _id descending sort", async (t) => {
       afterId: secondPage.data[secondPage.data.length - 1]._id,
     });
 
-    assertEquals(thirdPage.data.length, 2); // Only 2 remaining
+    expect(thirdPage.data.length).toEqual(2); // Only 2 remaining
 
     // Should be Product 2, 1
-    assertEquals(thirdPage.data[0].name, "Product 2");
-    assertEquals(thirdPage.data[1].name, "Product 1");
+    expect(thirdPage.data[0].name).toEqual("Product 2");
+    expect(thirdPage.data[1].name).toEqual("Product 1");
 
     // Verify no duplicates with previous pages
     const secondPageIds = new Set(secondPage.data.map((item) => item._id));
     for (const item of thirdPage.data) {
-      assertEquals(firstPageIds.has(item._id), false,
-        `Duplicate found: ${item.name} appears in first page`);
-      assertEquals(secondPageIds.has(item._id), false,
-        `Duplicate found: ${item.name} appears in second page`);
+      expect(firstPageIds.has(item._id)).toEqual(false);
+      expect(secondPageIds.has(item._id)).toEqual(false);
     }
   });
 });
 
-Deno.test("Multi-collection paginate with duplicate sort values", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-collection paginate with duplicate sort values", async () => {
+  await withDatabase("Multi-collection paginate with duplicate sort values", async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
         product: {
@@ -718,8 +711,8 @@ Deno.test("Multi-collection paginate with duplicate sort values", async (t) => {
       sort: { category: 1 },
     });
 
-    assertEquals(firstPage.data.length, 3);
-    assertEquals(firstPage.total, 6);
+    expect(firstPage.data.length).toEqual(3);
+    expect(firstPage.total).toEqual(6);
 
     // Collect first page names
     const firstPageNames = firstPage.data.map((item) => item.name);
@@ -731,27 +724,25 @@ Deno.test("Multi-collection paginate with duplicate sort values", async (t) => {
       afterId: firstPage.data[firstPage.data.length - 1]._id,
     });
 
-    assertEquals(secondPage.data.length, 3);
+    expect(secondPage.data.length).toEqual(3);
 
     // Verify no overlap between pages
     const secondPageNames = secondPage.data.map((item) => item.name);
     for (const name of secondPageNames) {
-      assertEquals(firstPageNames.includes(name), false,
-        `Product "${name}" appears in both pages - duplicate detected`);
+      expect(firstPageNames.includes(name)).toEqual(false);
     }
 
     // Verify all 6 items are covered
     const allNames = [...firstPageNames, ...secondPageNames];
-    assertEquals(allNames.length, 6);
+    expect(allNames.length).toEqual(6);
     for (let i = 1; i <= 6; i++) {
-      assertEquals(allNames.includes(`Product ${i}`), true,
-        `Product ${i} is missing from pagination results`);
+      expect(allNames.includes(`Product ${i}`)).toEqual(true);
     }
   });
 });
 
-Deno.test("Multi-collection paginate with duplicate sort values and beforeId", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-collection paginate with duplicate sort values and beforeId", async () => {
+  await withDatabase("Multi-collection paginate with duplicate sort values and beforeId", async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
         product: {
@@ -784,7 +775,7 @@ Deno.test("Multi-collection paginate with duplicate sort values and beforeId", a
       sort: { status: 1 },
     });
 
-    assertEquals(allItems.data.length, 6);
+    expect(allItems.data.length).toEqual(6);
 
     // Use beforeId with the 4th item as anchor
     const beforePage = await catalog.paginate("product", {}, {
@@ -793,21 +784,20 @@ Deno.test("Multi-collection paginate with duplicate sort values and beforeId", a
       beforeId: allItems.data[3]._id,
     });
 
-    assertEquals(beforePage.data.length, 3);
+    expect(beforePage.data.length).toEqual(3);
 
     // Should return first 3 items in original order
     const beforeNames = beforePage.data.map((item) => item.name);
     const expectedNames = allItems.data.slice(0, 3).map((item) => item.name);
 
     for (let i = 0; i < 3; i++) {
-      assertEquals(beforeNames[i], expectedNames[i],
-        `Position ${i}: expected "${expectedNames[i]}" but got "${beforeNames[i]}"`);
+      expect(beforeNames[i]).toEqual(expectedNames[i]);
     }
   });
 });
 
-Deno.test("Multi-collection paginate with _id descending sort and beforeId", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-collection paginate with _id descending sort and beforeId", async () => {
+  await withDatabase("Multi-collection paginate with _id descending sort and beforeId", async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
         product: {
@@ -841,19 +831,19 @@ Deno.test("Multi-collection paginate with _id descending sort and beforeId", asy
       beforeId: allItems.data[5]._id, // Product 5
     });
 
-    assertEquals(beforePage.data.length, 5);
+    expect(beforePage.data.length).toEqual(5);
 
     // Should return in original sort order
-    assertEquals(beforePage.data[0].name, "Product 10");
-    assertEquals(beforePage.data[1].name, "Product 9");
-    assertEquals(beforePage.data[2].name, "Product 8");
-    assertEquals(beforePage.data[3].name, "Product 7");
-    assertEquals(beforePage.data[4].name, "Product 6");
+    expect(beforePage.data[0].name).toEqual("Product 10");
+    expect(beforePage.data[1].name).toEqual("Product 9");
+    expect(beforePage.data[2].name).toEqual("Product 8");
+    expect(beforePage.data[3].name).toEqual("Product 7");
+    expect(beforePage.data[4].name).toEqual("Product 6");
   });
 });
 
-Deno.test("Multi-collection paginate accumulation with _id descending - no duplicates across 5+ pages", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-collection paginate accumulation with _id descending - no duplicates across 5+ pages", async () => {
+  await withDatabase("Multi-collection paginate accumulation with _id descending - no duplicates across 5+ pages", async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
         product: {
@@ -941,20 +931,20 @@ Deno.test("Multi-collection paginate accumulation with _id descending - no dupli
     }
 
     // Verify we got all 25 items with no duplicates
-    assertEquals(allCollectedIds.length, 25, `Expected 25 items but got ${allCollectedIds.length}`);
+    expect(allCollectedIds.length).toEqual(25);
 
     // Verify order is correct (descending)
-    assertEquals(allCollectedNames[0], "Product 25");
-    assertEquals(allCollectedNames[24], "Product 1");
+    expect(allCollectedNames[0]).toEqual("Product 25");
+    expect(allCollectedNames[24]).toEqual("Product 1");
 
     // Verify no duplicates using Set
     const uniqueIds = new Set(allCollectedIds);
-    assertEquals(uniqueIds.size, 25, "There are duplicate IDs in the accumulated results");
+    expect(uniqueIds.size).toEqual(25);
   });
 });
 
-Deno.test("Multi-collection paginate with nested field sort", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-collection paginate with nested field sort", async () => {
+  await withDatabase("Multi-collection paginate with nested field sort", async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
         exhibitor: {
@@ -989,13 +979,13 @@ Deno.test("Multi-collection paginate with nested field sort", async (t) => {
       sort: { "data.email": 1 },
     });
 
-    assertEquals(page1.data.length, 3);
-    assertEquals(page1.total, 6);
+    expect(page1.data.length).toEqual(3);
+    expect(page1.total).toEqual(6);
 
     // Should be alpha, beta, charlie (alphabetical by email)
-    assertEquals(page1.data[0].data.email, "alpha@test.com");
-    assertEquals(page1.data[1].data.email, "beta@test.com");
-    assertEquals(page1.data[2].data.email, "charlie@test.com");
+    expect(page1.data[0].data.email).toEqual("alpha@test.com");
+    expect(page1.data[1].data.email).toEqual("beta@test.com");
+    expect(page1.data[2].data.email).toEqual("charlie@test.com");
 
     // Second page with afterId
     const page2 = await catalog.paginate("exhibitor", {}, {
@@ -1004,23 +994,23 @@ Deno.test("Multi-collection paginate with nested field sort", async (t) => {
       afterId: page1.data[page1.data.length - 1]._id,
     });
 
-    assertEquals(page2.data.length, 3);
+    expect(page2.data.length).toEqual(3);
 
     // Should be delta, echo, foxtrot
-    assertEquals(page2.data[0].data.email, "delta@test.com");
-    assertEquals(page2.data[1].data.email, "echo@test.com");
-    assertEquals(page2.data[2].data.email, "foxtrot@test.com");
+    expect(page2.data[0].data.email).toEqual("delta@test.com");
+    expect(page2.data[1].data.email).toEqual("echo@test.com");
+    expect(page2.data[2].data.email).toEqual("foxtrot@test.com");
 
     // Verify no duplicates between pages
     const page1Ids = new Set(page1.data.map((item) => item._id));
     for (const item of page2.data) {
-      assertEquals(page1Ids.has(item._id), false, `Duplicate found: ${item.data.email}`);
+      expect(page1Ids.has(item._id)).toEqual(false);
     }
   });
 });
 
-Deno.test("Multi-collection paginate with nested field sort descending", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-collection paginate with nested field sort descending", async () => {
+  await withDatabase("Multi-collection paginate with nested field sort descending", async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
         exhibitor: {
@@ -1055,13 +1045,13 @@ Deno.test("Multi-collection paginate with nested field sort descending", async (
       sort: { "data.email": -1 },
     });
 
-    assertEquals(page1.data.length, 3);
-    assertEquals(page1.total, 6);
+    expect(page1.data.length).toEqual(3);
+    expect(page1.total).toEqual(6);
 
     // Should be foxtrot, echo, delta (reverse alphabetical by email)
-    assertEquals(page1.data[0].data.email, "foxtrot@test.com");
-    assertEquals(page1.data[1].data.email, "echo@test.com");
-    assertEquals(page1.data[2].data.email, "delta@test.com");
+    expect(page1.data[0].data.email).toEqual("foxtrot@test.com");
+    expect(page1.data[1].data.email).toEqual("echo@test.com");
+    expect(page1.data[2].data.email).toEqual("delta@test.com");
 
     // Second page with afterId
     const page2 = await catalog.paginate("exhibitor", {}, {
@@ -1070,17 +1060,17 @@ Deno.test("Multi-collection paginate with nested field sort descending", async (
       afterId: page1.data[page1.data.length - 1]._id,
     });
 
-    assertEquals(page2.data.length, 3);
+    expect(page2.data.length).toEqual(3);
 
     // Should be charlie, beta, alpha
-    assertEquals(page2.data[0].data.email, "charlie@test.com");
-    assertEquals(page2.data[1].data.email, "beta@test.com");
-    assertEquals(page2.data[2].data.email, "alpha@test.com");
+    expect(page2.data[0].data.email).toEqual("charlie@test.com");
+    expect(page2.data[1].data.email).toEqual("beta@test.com");
+    expect(page2.data[2].data.email).toEqual("alpha@test.com");
 
     // Verify no duplicates between pages
     const page1Ids = new Set(page1.data.map((item) => item._id));
     for (const item of page2.data) {
-      assertEquals(page1Ids.has(item._id), false, `Duplicate found: ${item.data.email}`);
+      expect(page1Ids.has(item._id)).toEqual(false);
     }
   });
 });

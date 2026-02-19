@@ -1,26 +1,26 @@
 /**
  * Integration tests for validation attack scenarios
- * 
+ *
  * These tests verify that the migration system correctly blocks
  * invalid migrations that attempt to bypass validation rules.
- * 
+ *
  * Discovered during aggressive manual testing in playground/sandbox/13
- * 
+ *
  * @module
  */
 
-import { assertEquals } from "@std/assert";
+import { test, expect } from "vitest";
 import * as v from "valibot";
 import { migrationDefinition } from "../../../src/migration/definition.ts";
 import { validateMigrationWithSimulation } from "../../../src/migration/validators/simulation.ts";
 
 /**
  * TEST 1: Schema change without transformation
- * 
+ *
  * Scenario: Adding a required field without providing a transformation
  * to populate existing documents should be blocked.
  */
-Deno.test("Validation Attack 1: Schema change without transformation should fail", async () => {
+test("Validation Attack 1: Schema change without transformation should fail", async () => {
   // Root migration: creates users collection with seed data
   const rootMigration = migrationDefinition("2025_01_01_ROOT", "create_users", {
     parent: null,
@@ -37,7 +37,7 @@ Deno.test("Validation Attack 1: Schema change without transformation should fail
     },
     migrate(migration) {
       migration.createCollection("users");
-      
+
       // Add seed data so transformation validation is triggered
       migration.collection("users").seed([
         {
@@ -53,7 +53,7 @@ Deno.test("Validation Attack 1: Schema change without transformation should fail
           createdAt: new Date("2025-01-01"),
         },
       ]);
-      
+
       return migration.compile();
     },
   });
@@ -74,7 +74,7 @@ Deno.test("Validation Attack 1: Schema change without transformation should fail
       multiModels: {},
     },
     migrate(migration) {
-      // 🚨 ATTACK: No transformation provided for new required field
+      // ATTACK: No transformation provided for new required field
       return migration.compile();
     },
   });
@@ -82,16 +82,16 @@ Deno.test("Validation Attack 1: Schema change without transformation should fail
   const result = await validateMigrationWithSimulation(attackMigration);
 
   // Should detect missing transformation
-  assertEquals(result.success, false, "Should fail validation");
+  expect(result.success).toEqual(false);
 });
 
 /**
  * TEST 2: Multi-collection type removal without transformation
- * 
+ *
  * Scenario: Removing a type from a multi-collection schema without
  * providing a transformation to migrate existing documents.
  */
-Deno.test("Validation Attack 2: Multi-collection type removal without transformation should fail", async () => {
+test("Validation Attack 2: Multi-collection type removal without transformation should fail", async () => {
   // Root migration: creates posts multi-collection with article and video types
   const rootMigration = migrationDefinition("2025_01_01_ROOT", "create_posts", {
     parent: null,
@@ -130,7 +130,7 @@ Deno.test("Validation Attack 2: Multi-collection type removal without transforma
             title: v.string(),
             content: v.string(),
           },
-          // 🚨 ATTACK: video type removed without transformation
+          // ATTACK: video type removed without transformation
         },
       },
     },
@@ -143,19 +143,19 @@ Deno.test("Validation Attack 2: Multi-collection type removal without transforma
   const result = await validateMigrationWithSimulation(attackMigration);
 
   // Should detect missing transformation for type removal
-  assertEquals(result.success, false, "Should fail validation");
+  expect(result.success).toEqual(false);
 });
 
 /**
  * TEST 3: Transformation with invalid values
- * 
+ *
  * Scenario: Providing a transformation that returns values violating
  * the target schema (e.g., null instead of boolean).
- * 
- * ⚠️  CRITICAL TEST: This was discovered during manual testing!
+ *
+ * CRITICAL TEST: This was discovered during manual testing!
  * Before the fix, this attack succeeded and corrupted the database.
  */
-Deno.test("Validation Attack 3: Transformation returning invalid values should fail", async () => {
+test("Validation Attack 3: Transformation returning invalid values should fail", async () => {
   // Root migration: creates users collection WITH SEED DATA
   const rootMigration = migrationDefinition("2025_01_01_ROOT", "create_users", {
     parent: null,
@@ -199,7 +199,7 @@ Deno.test("Validation Attack 3: Transformation returning invalid values should f
       multiModels: {},
     },
     migrate(migration) {
-      // 🚨 ATTACK: Transformation returns null instead of boolean
+      // ATTACK: Transformation returns null instead of boolean
       migration.collection("users").transform({
         up: (doc) => ({
           ...doc,
@@ -217,20 +217,18 @@ Deno.test("Validation Attack 3: Transformation returning invalid values should f
   const result = await validateMigrationWithSimulation(attackMigration);
 
   // Should detect invalid transformed values
-  assertEquals(result.success, false, "Should fail validation");
-  assertEquals(
+  expect(result.success).toEqual(false);
+  expect(
     result.errors.some((e: string) => e.includes("verified") || e.includes("boolean") || e.includes("null")),
-    true,
-    "Error should mention validation issue with verified field",
-  );
+  ).toEqual(true);
 });
 
 /**
  * TEST 4: Transformation with type mismatch
- * 
+ *
  * Scenario: Transformation returns wrong type (string when number expected)
  */
-Deno.test("Validation Attack 4: Transformation with type mismatch should fail", async () => {
+test("Validation Attack 4: Transformation with type mismatch should fail", async () => {
   const rootMigration = migrationDefinition("2025_01_01_ROOT", "create_users", {
     parent: null,
     schemas: {
@@ -272,7 +270,7 @@ Deno.test("Validation Attack 4: Transformation with type mismatch should fail", 
       multiModels: {},
     },
     migrate(migration) {
-      // 🚨 ATTACK: Returns string instead of number
+      // ATTACK: Returns string instead of number
       migration.collection("users").transform({
         up: (doc) => ({
           ...doc,
@@ -289,20 +287,18 @@ Deno.test("Validation Attack 4: Transformation with type mismatch should fail", 
 
   const result = await validateMigrationWithSimulation(attackMigration);
 
-  assertEquals(result.success, false, "Should fail validation");
-  assertEquals(
+  expect(result.success).toEqual(false);
+  expect(
     result.errors.some((e: string) => e.includes("age") || e.includes("number") || e.includes("string")),
-    true,
-    "Error should mention validation issue with age field",
-  );
+  ).toEqual(true);
 });
 
 /**
  * TEST 5: Transformation missing required field
- * 
+ *
  * Scenario: Transformation doesn't add a required field
  */
-Deno.test("Validation Attack 5: Transformation missing required field should fail", async () => {
+test("Validation Attack 5: Transformation missing required field should fail", async () => {
   const rootMigration = migrationDefinition("2025_01_01_ROOT", "create_users", {
     parent: null,
     schemas: {
@@ -344,7 +340,7 @@ Deno.test("Validation Attack 5: Transformation missing required field should fai
       multiModels: {},
     },
     migrate(migration) {
-      // 🚨 ATTACK: Transformation doesn't add the 'status' field
+      // ATTACK: Transformation doesn't add the 'status' field
       migration.collection("users").transform({
         up: (doc) => ({
           ...doc,
@@ -361,20 +357,18 @@ Deno.test("Validation Attack 5: Transformation missing required field should fai
 
   const result = await validateMigrationWithSimulation(attackMigration);
 
-  assertEquals(result.success, false, "Should fail validation");
-  assertEquals(
+  expect(result.success).toEqual(false);
+  expect(
     result.errors.some((e: string) => e.includes("status")),
-    true,
-    "Error should mention missing 'status' field",
-  );
+  ).toEqual(true);
 });
 
 /**
  * TEST 6: Valid transformation should pass
- * 
+ *
  * Positive test: A properly written transformation should pass validation
  */
-Deno.test("Valid transformation with correct values should pass", async () => {
+test("Valid transformation with correct values should pass", async () => {
   const rootMigration = migrationDefinition("2025_01_01_ROOT", "create_users", {
     parent: null,
     schemas: {
@@ -409,7 +403,7 @@ Deno.test("Valid transformation with correct values should pass", async () => {
       multiModels: {},
     },
     migrate(migration) {
-      // ✅ VALID: Proper transformation with correct type
+      // VALID: Proper transformation with correct type
       migration.collection("users").transform({
         up: (doc) => ({
           ...doc,
@@ -426,15 +420,15 @@ Deno.test("Valid transformation with correct values should pass", async () => {
 
   const result = await validateMigrationWithSimulation(validMigration);
 
-  assertEquals(result.success, true, "Valid migration should pass without errors");
+  expect(result.success).toEqual(true);
 });
 
 /**
  * TEST 7: Multi-collection transformation with invalid values
- * 
+ *
  * Scenario: Multi-collection type transformation returns invalid values
  */
-Deno.test("Validation Attack 7: Multi-collection transformation with invalid values should fail", async () => {
+test("Validation Attack 7: Multi-collection transformation with invalid values should fail", async () => {
   const rootMigration = migrationDefinition("2025_01_01_ROOT", "create_posts", {
     parent: null,
     schemas: {
@@ -471,7 +465,7 @@ Deno.test("Validation Attack 7: Multi-collection transformation with invalid val
       },
     },
     migrate(migration) {
-      // 🚨 ATTACK: Returns undefined instead of boolean
+      // ATTACK: Returns undefined instead of boolean
       migration.multiCollection("posts").type("article").transform({
         up: (doc) => ({
           ...doc,
@@ -487,5 +481,5 @@ Deno.test("Validation Attack 7: Multi-collection transformation with invalid val
   });
 
   const result = await validateMigrationWithSimulation(attackMigration);
-  assertEquals(result.success, false, "Should fail validation");
+  expect(result.success).toEqual(false);
 });

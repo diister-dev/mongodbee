@@ -1,12 +1,12 @@
 import * as v from "../../src/schema.ts";
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { test, expect } from "vitest";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
-import { withIndex } from "@diister/mongodbee";
+import { withIndex } from "../../src/indexes.ts";
 import { defineModel } from "../../src/multi-collection-model.ts";
 
-Deno.test("Ensure Schema are not recreated", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Ensure Schema are not recreated", async () => {
+  await withDatabase("Ensure Schema are not recreated", async (db) => {
     const model = defineModel("test", {
       schema: {
         user: {
@@ -28,19 +28,19 @@ Deno.test("Ensure Schema are not recreated", async (t) => {
       mail: "jane@doe.d",
     });
 
-    const users = await collection.find("user");
-    assertEquals(users.length, 2);
+    const users = await collection.find("user").toArray();
+    expect(users.length).toEqual(2);
 
     // Close connection
     const collection2 = await multiCollection(db, "test", model);
 
-    const users2 = await collection2.find("user");
-    assertEquals(users2.length, 2);
+    const users2 = await collection2.find("user").toArray();
+    expect(users2.length).toEqual(2);
   });
 });
 
-Deno.test("Ensure Schema are updated if changed", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Ensure Schema are updated if changed", async () => {
+  await withDatabase("Ensure Schema are updated if changed", async (db) => {
     const model = defineModel("test", {
       schema: {
         user: {
@@ -57,8 +57,8 @@ Deno.test("Ensure Schema are updated if changed", async (t) => {
       mail: "john@doe.d",
     });
 
-    const users = await collection.find("user");
-    assertEquals(users.length, 1);
+    const users = await collection.find("user").toArray();
+    expect(users.length).toEqual(1);
 
     // Close connection
     const model2 = defineModel("test", {
@@ -74,9 +74,9 @@ Deno.test("Ensure Schema are updated if changed", async (t) => {
     const collection2 = await multiCollection(db, "test", model2);
 
     // Existing user should still be there
-    const users2 = await collection2.find("user");
-    assertEquals(users2.length, 1);
-    assertEquals(users2[0].age, undefined);
+    const users2 = await collection2.find("user").toArray();
+    expect(users2.length).toEqual(1);
+    expect(users2[0].age).toEqual(undefined);
 
     // New user should be insertable with age
     const userB = await collection2.insertOne("user", {
@@ -85,14 +85,14 @@ Deno.test("Ensure Schema are updated if changed", async (t) => {
       age: 30,
     });
 
-    const users3 = await collection2.find("user");
-    assertEquals(users3.length, 2);
-    assertEquals(users3[1].age, 30);
+    const users3 = await collection2.find("user").toArray();
+    expect(users3.length).toEqual(2);
+    expect(users3[1].age).toEqual(30);
   });
 });
 
-Deno.test("Ensure indexes are not recreated if already exist", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Ensure indexes are not recreated if already exist", async () => {
+  await withDatabase("Ensure indexes are not recreated if already exist", async (db) => {
     const model = defineModel("test", {
       schema: {
         user: {
@@ -109,43 +109,39 @@ Deno.test("Ensure indexes are not recreated if already exist", async (t) => {
       mail: "john@doe.d",
     });
 
-    await assertRejects(
+    await expect(
       async () => {
         await collection.insertOne("user", {
           name: "John",
           mail: "john2@doe.d",
         });
       },
-      Error,
-      "E11000 duplicate key error collection",
-    );
+    ).rejects.toThrow("E11000 duplicate key error collection");
 
     // Close connection
     const collection2 = await multiCollection(db, "test", model, { schemaManagement: "auto" });
 
-    await assertRejects(
+    await expect(
       async () => {
         await collection2.insertOne("user", {
           name: "John",
           mail: "john3@doe.d",
         });
       },
-      Error,
-      "E11000 duplicate key error collection",
-    );
+    ).rejects.toThrow("E11000 duplicate key error collection");
 
     const userB = await collection2.insertOne("user", {
       name: "Jane",
       mail: "jane@doe.d",
     });
 
-    const users2 = await collection2.find("user");
-    assertEquals(users2.length, 2);
+    const users2 = await collection2.find("user").toArray();
+    expect(users2.length).toEqual(2);
   });
 });
 
-Deno.test("Ensure indexes are updated if changed", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Ensure indexes are updated if changed", async () => {
+  await withDatabase("Ensure indexes are updated if changed", async (db) => {
     const model = defineModel("test", {
       schema: {
         user: {
@@ -161,16 +157,14 @@ Deno.test("Ensure indexes are updated if changed", async (t) => {
       mail: "john@doe.d",
     });
 
-    await assertRejects(
+    await expect(
       async () => {
         await collection.insertOne("user", {
           name: "John",
           mail: "john2@doe.d",
         });
       },
-      Error,
-      "E11000 duplicate key error collection",
-    );
+    ).rejects.toThrow("E11000 duplicate key error collection");
 
     // Close connection
     const model2 = defineModel("test", {
@@ -189,7 +183,7 @@ Deno.test("Ensure indexes are updated if changed", async (t) => {
       mail: "john3@doe.d",
     });
 
-    const users2 = await collection2.find("user");
-    assertEquals(users2.length, 2);
+    const users2 = await collection2.find("user").toArray();
+    expect(users2.length).toEqual(2);
   });
 });

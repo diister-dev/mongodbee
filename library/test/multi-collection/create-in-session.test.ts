@@ -1,5 +1,5 @@
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertRejects } from "@std/assert";
+import { test, expect } from "vitest";
 import {
   multiCollection,
   newMultiCollection,
@@ -45,8 +45,8 @@ const userSchema = {
   email: v.string(),
 };
 
-Deno.test("Create multiCollection in session: Basic creation and insert", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Create multiCollection in session: Basic creation and insert", async () => {
+  await withDatabase("Create multiCollection in session: Basic creation and insert", async (db) => {
     // Get session context directly from the client
     const { withSession } = getSessionContext(db.client);
 
@@ -74,22 +74,22 @@ Deno.test("Create multiCollection in session: Basic creation and insert", async 
     const catalog = await multiCollection(db, "catalog_store1", catalogModel);
 
     const category = await catalog.findOne("category", { _id: result.categoryId });
-    assert(category !== null);
-    assertEquals(category.name, "Electronics");
+    expect(category).not.toBeNull();
+    expect(category.name).toEqual("Electronics");
 
     const product = await catalog.findOne("product", { _id: result.productId });
-    assert(product !== null);
-    assertEquals(product.name, "Laptop");
-    assertEquals(product.price, 999.99);
+    expect(product).not.toBeNull();
+    expect(product.name).toEqual("Laptop");
+    expect(product.price).toEqual(999.99);
   });
 });
 
-Deno.test("Create multiCollection in session: Rollback on error", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Create multiCollection in session: Rollback on error", async () => {
+  await withDatabase("Create multiCollection in session: Rollback on error", async (db) => {
     const { withSession } = getSessionContext(db.client);
 
     // Try to create and populate, then fail
-    await assertRejects(
+    await expect(
       async () => {
         await withSession(async () => {
           // Create a new multiCollection
@@ -110,26 +110,24 @@ Deno.test("Create multiCollection in session: Rollback on error", async (t) => {
           throw new Error("Intentional error for rollback test");
         });
       },
-      Error,
-      "Intentional error for rollback test",
-    );
+    ).rejects.toThrow("Intentional error for rollback test");
 
     // Verify collection exists but has no data (rollback)
     // Note: The collection itself might exist due to metadata creation
     const catalog = await multiCollection(db, "catalog_rollback", catalogModel);
 
-    const categories = await catalog.find("category");
-    const products = await catalog.find("product");
+    const categories = await catalog.find("category").toArray();
+    const products = await catalog.find("product").toArray();
 
     // Products and categories should be empty due to rollback
     // Note: metadata documents (_information, _migrations) are created outside the transaction
-    assertEquals(categories.length, 0, "Categories should be empty after rollback");
-    assertEquals(products.length, 0, "Products should be empty after rollback");
+    expect(categories.length).toEqual(0);
+    expect(products.length).toEqual(0);
   });
 });
 
-Deno.test("Create multiCollection in session: Multiple collections in same session", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Create multiCollection in session: Multiple collections in same session", async () => {
+  await withDatabase("Create multiCollection in session: Multiple collections in same session", async (db) => {
     const { withSession } = getSessionContext(db.client);
 
     const result = await withSession(async () => {
@@ -164,22 +162,22 @@ Deno.test("Create multiCollection in session: Multiple collections in same sessi
     // Verify all data
     const users = await collection(db, "users", userSchema);
     const user = await users.getById(result.userId);
-    assertEquals(user.name, "Test User");
+    expect(user.name).toEqual("Test User");
 
     const store1 = await multiCollection(db, "catalog_store1", catalogModel);
     const product1 = await store1.findOne("product", { _id: result.product1Id });
-    assert(product1 !== null);
-    assertEquals(product1.name, "Product in Store 1");
+    expect(product1).not.toBeNull();
+    expect(product1.name).toEqual("Product in Store 1");
 
     const store2 = await multiCollection(db, "catalog_store2", catalogModel);
     const product2 = await store2.findOne("product", { _id: result.product2Id });
-    assert(product2 !== null);
-    assertEquals(product2.name, "Product in Store 2");
+    expect(product2).not.toBeNull();
+    expect(product2.name).toEqual("Product in Store 2");
   });
 });
 
-Deno.test("Create multiCollection in session: Using collection's withSession", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Create multiCollection in session: Using collection's withSession", async () => {
+  await withDatabase("Create multiCollection in session: Using collection's withSession", async (db) => {
     // First create an existing collection to get withSession from
     const users = await collection(db, "users", userSchema);
 
@@ -204,8 +202,8 @@ Deno.test("Create multiCollection in session: Using collection's withSession", a
 
       // Read back within the same session
       const product = await catalog.findOne("product", { _id: productId });
-      assert(product !== null);
-      assertEquals(product.name, "Session Product");
+      expect(product).not.toBeNull();
+      expect(product.name).toEqual("Session Product");
 
       return { userId, productId };
     });
@@ -213,13 +211,13 @@ Deno.test("Create multiCollection in session: Using collection's withSession", a
     // Verify outside the session
     const catalog = await multiCollection(db, "catalog_from_session", catalogModel);
     const product = await catalog.findOne("product", { _id: result.productId });
-    assert(product !== null);
-    assertEquals(product.price, 199.99);
+    expect(product).not.toBeNull();
+    expect(product.price).toEqual(199.99);
   });
 });
 
-Deno.test("Create multiCollection in session: Nested withSession calls", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Create multiCollection in session: Nested withSession calls", async () => {
+  await withDatabase("Create multiCollection in session: Nested withSession calls", async (db) => {
     const { withSession } = getSessionContext(db.client);
 
     const result = await withSession(async () => {
@@ -248,18 +246,18 @@ Deno.test("Create multiCollection in session: Nested withSession calls", async (
     // Verify both were committed
     const store1 = await multiCollection(db, "store1", catalogModel);
     const cat1 = await store1.findOne("category", { _id: result.cat1Id });
-    assert(cat1 !== null);
-    assertEquals(cat1.name, "Category 1");
+    expect(cat1).not.toBeNull();
+    expect(cat1.name).toEqual("Category 1");
 
     const store2 = await multiCollection(db, "store2", catalogModel);
     const cat2 = await store2.findOne("category", { _id: result.cat2Id });
-    assert(cat2 !== null);
-    assertEquals(cat2.name, "Category 2");
+    expect(cat2).not.toBeNull();
+    expect(cat2.name).toEqual("Category 2");
   });
 });
 
-Deno.test("Create multiCollection in session: With schemaManagement auto (explicit)", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Create multiCollection in session: With schemaManagement auto (explicit)", async () => {
+  await withDatabase("Create multiCollection in session: With schemaManagement auto (explicit)", async (db) => {
     // When using schemaManagement: "auto" explicitly, validators/indexes are applied
     // This can cause issues in transactions, so collections should be created BEFORE the session
 
@@ -283,8 +281,8 @@ Deno.test("Create multiCollection in session: With schemaManagement auto (explic
 
     // Verify data
     const product = await catalog.findOne("product", { _id: result.productId });
-    assert(product !== null);
-    assertEquals(product.name, "Auto Product");
+    expect(product).not.toBeNull();
+    expect(product.name).toEqual("Auto Product");
   });
 });
 
@@ -292,8 +290,8 @@ Deno.test("Create multiCollection in session: With schemaManagement auto (explic
 // Tests for utility functions in sessions
 // ============================================================================
 
-Deno.test("Utility functions in session: createMultiCollectionInstance", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Utility functions in session: createMultiCollectionInstance", async () => {
+  await withDatabase("Utility functions in session: createMultiCollectionInstance", async (db) => {
     const { withSession } = getSessionContext(db.client);
 
     // Create instance metadata OUTSIDE session (DDL operations incompatible with transactions)
@@ -307,13 +305,13 @@ Deno.test("Utility functions in session: createMultiCollectionInstance", async (
       return { exists1, exists2 };
     });
 
-    assertEquals(result.exists1, true, "catalog_store1 should exist");
-    assertEquals(result.exists2, true, "catalog_store2 should exist");
+    expect(result.exists1).toEqual(true);
+    expect(result.exists2).toEqual(true);
   });
 });
 
-Deno.test("Utility functions in session: multiCollectionInstanceExists", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Utility functions in session: multiCollectionInstanceExists", async () => {
+  await withDatabase("Utility functions in session: multiCollectionInstanceExists", async (db) => {
     const { withSession } = getSessionContext(db.client);
 
     // Create an instance first
@@ -327,13 +325,13 @@ Deno.test("Utility functions in session: multiCollectionInstanceExists", async (
       return { exists, notExists };
     });
 
-    assertEquals(result.exists, true, "existing_catalog should exist");
-    assertEquals(result.notExists, false, "non_existing_catalog should not exist");
+    expect(result.exists).toEqual(true);
+    expect(result.notExists).toEqual(false);
   });
 });
 
-Deno.test("Utility functions in session: discoverMultiCollectionInstances", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Utility functions in session: discoverMultiCollectionInstances", async () => {
+  await withDatabase("Utility functions in session: discoverMultiCollectionInstances", async (db) => {
     // Create multiple instances OUTSIDE session (DDL operations incompatible with transactions)
     await createMultiCollectionInstance(db, "catalog_paris", catalogModel);
     await createMultiCollectionInstance(db, "catalog_lyon", catalogModel);
@@ -347,19 +345,19 @@ Deno.test("Utility functions in session: discoverMultiCollectionInstances", asyn
     const inventoryInstances = await discoverMultiCollectionInstances(db, "inventory");
     const unknownInstances = await discoverMultiCollectionInstances(db, "unknown");
 
-    assertEquals(catalogInstances.length, 3, "Should find 3 catalog instances");
-    assertEquals(inventoryInstances.length, 1, "Should find 1 inventory instance");
-    assertEquals(unknownInstances.length, 0, "Should find 0 unknown instances");
+    expect(catalogInstances.length).toEqual(3);
+    expect(inventoryInstances.length).toEqual(1);
+    expect(unknownInstances.length).toEqual(0);
 
     // Check specific instances are found
-    assert(catalogInstances.includes("catalog_paris"));
-    assert(catalogInstances.includes("catalog_lyon"));
-    assert(catalogInstances.includes("catalog_marseille"));
+    expect(catalogInstances.includes("catalog_paris")).toBeTruthy();
+    expect(catalogInstances.includes("catalog_lyon")).toBeTruthy();
+    expect(catalogInstances.includes("catalog_marseille")).toBeTruthy();
   });
 });
 
-Deno.test("Utility functions in session: getMultiCollectionInfo", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Utility functions in session: getMultiCollectionInfo", async () => {
+  await withDatabase("Utility functions in session: getMultiCollectionInfo", async (db) => {
     const { withSession } = getSessionContext(db.client);
 
     // Create an instance
@@ -373,14 +371,14 @@ Deno.test("Utility functions in session: getMultiCollectionInfo", async (t) => {
       return { info, noInfo };
     });
 
-    assert(result.info !== null, "Should get info for existing instance");
-    assertEquals(result.info?.collectionType, "catalog");
-    assertEquals(result.noInfo, null, "Should return null for non-existing instance");
+    expect(result.info).not.toBeNull();
+    expect(result.info?.collectionType).toEqual("catalog");
+    expect(result.noInfo).toEqual(null);
   });
 });
 
-Deno.test("Utility functions in session: getMultiCollectionMigrations", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Utility functions in session: getMultiCollectionMigrations", async () => {
+  await withDatabase("Utility functions in session: getMultiCollectionMigrations", async (db) => {
     const { withSession } = getSessionContext(db.client);
 
     // Create an instance
@@ -394,14 +392,14 @@ Deno.test("Utility functions in session: getMultiCollectionMigrations", async (t
       return { migrations, noMigrations };
     });
 
-    assert(result.migrations !== null, "Should get migrations for existing instance");
-    assert(result.migrations?.appliedMigrations.length >= 1, "Should have at least one applied migration");
-    assertEquals(result.noMigrations, null, "Should return null for non-existing instance");
+    expect(result.migrations).not.toBeNull();
+    expect(result.migrations?.appliedMigrations.length >= 1).toBeTruthy();
+    expect(result.noMigrations).toEqual(null);
   });
 });
 
-Deno.test("Utility functions in session: markAsMultiCollection", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Utility functions in session: markAsMultiCollection", async () => {
+  await withDatabase("Utility functions in session: markAsMultiCollection", async (db) => {
     const { withSession } = getSessionContext(db.client);
 
     // First create a regular collection with some data
@@ -415,20 +413,20 @@ Deno.test("Utility functions in session: markAsMultiCollection", async (t) => {
 
     // Verify it's now marked
     const exists = await multiCollectionInstanceExists(db, "legacy_catalog");
-    assertEquals(exists, true, "legacy_catalog should now be marked as multi-collection");
+    expect(exists).toEqual(true);
 
     const info = await getMultiCollectionInfo(db, "legacy_catalog");
-    assert(info !== null);
-    assertEquals(info.collectionType, "catalog");
+    expect(info).not.toBeNull();
+    expect(info.collectionType).toEqual("catalog");
 
     // Original data should still be there
     const doc = await rawCollection.findOne({ name: "Legacy Product" });
-    assert(doc !== null, "Original data should still exist");
+    expect(doc).not.toBeNull();
   });
 });
 
-Deno.test("Utility functions in session: Combined operations", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Utility functions in session: Combined operations", async () => {
+  await withDatabase("Utility functions in session: Combined operations", async (db) => {
     const { withSession } = getSessionContext(db.client);
 
     // Create multiple instances OUTSIDE session (DDL operations incompatible with transactions)
@@ -455,32 +453,30 @@ Deno.test("Utility functions in session: Combined operations", async (t) => {
     // in a transaction, so we call it after the session
     const instances = await discoverMultiCollectionInstances(db, "catalog");
 
-    assertEquals(result.existsA, true);
-    assertEquals(result.existsB, true);
-    assertEquals(instances.length, 2);
-    assert(result.infoA !== null);
-    assertEquals(result.infoA?.collectionType, "catalog");
+    expect(result.existsA).toEqual(true);
+    expect(result.existsB).toEqual(true);
+    expect(instances.length).toEqual(2);
+    expect(result.infoA).not.toBeNull();
+    expect(result.infoA?.collectionType).toEqual("catalog");
   });
 });
 
 // Test that createMultiCollectionInstance throws when called in a session
-Deno.test("Utility functions in session: createMultiCollectionInstance throws in session", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Utility functions in session: createMultiCollectionInstance throws in session", async () => {
+  await withDatabase("Utility functions in session: createMultiCollectionInstance throws in session", async (db) => {
     const { withSession } = getSessionContext(db.client);
 
     // Try to create instance within a session - should throw
-    await assertRejects(
+    await expect(
       async () => {
         await withSession(async () => {
           await createMultiCollectionInstance(db, "should_fail", catalogModel);
         });
       },
-      Error,
-      "Cannot call createMultiCollectionInstance() within an active session/transaction",
-    );
+    ).rejects.toThrow("Cannot call createMultiCollectionInstance() within an active session/transaction");
 
     // Verify nothing was created
     const exists = await multiCollectionInstanceExists(db, "should_fail");
-    assertEquals(exists, false, "should_fail should not exist");
+    expect(exists).toEqual(false);
   });
 });

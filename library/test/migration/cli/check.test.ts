@@ -4,19 +4,22 @@
  * @module
  */
 
-import { assertEquals } from "@std/assert";
+import { test, expect } from "vitest";
+import * as fsp from "node:fs/promises";
 import { checkCommand } from "../../../src/migration/cli/commands/check.ts";
-import * as path from "@std/path";
+import * as path from "node:path";
+import { setupTempNodeModules } from "./shared.ts";
 
-Deno.test("check - validates all migrations successfully", async () => {
-  const testDir = await Deno.makeTempDir();
+test("check - validates all migrations successfully", async () => {
+  const testDir = await fsp.mkdtemp(path.join((await import("node:os")).tmpdir(), "mongodbee_test_"));
 
   try {
+    await setupTempNodeModules(testDir);
     // Create test directory structure
-    await Deno.mkdir(path.join(testDir, "migrations"), { recursive: true });
+    await fsp.mkdir(path.join(testDir, "migrations"), { recursive: true });
 
     // Create config
-    await Deno.writeTextFile(
+    await fsp.writeFile(
       path.join(testDir, "mongodbee.config.json"),
       JSON.stringify({
         paths: {
@@ -26,14 +29,15 @@ Deno.test("check - validates all migrations successfully", async () => {
         database: {
           name: "test_check",
           connection: {
-            uri: "mongodb://localhost:27017",
+            uri: "mongodb://127.0.0.1:27017",
           },
         },
       }),
+      "utf-8",
     );
 
     // Create schemas
-    await Deno.writeTextFile(
+    await fsp.writeFile(
       path.join(testDir, "schemas.ts"),
       `import * as v from "valibot";
 
@@ -48,10 +52,11 @@ export const schemas = {
   multiModels: {},
 };
 `,
+      "utf-8",
     );
 
     // Create valid migration
-    await Deno.writeTextFile(
+    await fsp.writeFile(
       path.join(testDir, "migrations", "2025_01_01_000000_create_users.ts"),
       `import { migrationDefinition } from "@diister/mongodbee/migration";
 import * as v from "valibot";
@@ -74,24 +79,26 @@ export default migrationDefinition("2025_01_01_000000", "create_users", {
   },
 });
 `,
+      "utf-8",
     );
 
     // Run check command
     await checkCommand({ cwd: testDir });
   } finally {
-    await Deno.remove(testDir, { recursive: true });
+    await fsp.rm(testDir, { recursive: true });
   }
 });
 
-Deno.test("check - detects invalid migration", async () => {
-  const testDir = await Deno.makeTempDir();
+test("check - detects invalid migration", async () => {
+  const testDir = await fsp.mkdtemp(path.join((await import("node:os")).tmpdir(), "mongodbee_test_"));
 
   try {
+    await setupTempNodeModules(testDir);
     // Create test directory structure
-    await Deno.mkdir(path.join(testDir, "migrations"), { recursive: true });
+    await fsp.mkdir(path.join(testDir, "migrations"), { recursive: true });
 
     // Create config
-    await Deno.writeTextFile(
+    await fsp.writeFile(
       path.join(testDir, "mongodbee.config.json"),
       JSON.stringify({
         paths: {
@@ -101,14 +108,15 @@ Deno.test("check - detects invalid migration", async () => {
         database: {
           name: "test_check",
           connection: {
-            uri: "mongodb://localhost:27017",
+            uri: "mongodb://127.0.0.1:27017",
           },
         },
       }),
+      "utf-8",
     );
 
     // Create schemas
-    await Deno.writeTextFile(
+    await fsp.writeFile(
       path.join(testDir, "schemas.ts"),
       `import * as v from "valibot";
 
@@ -124,10 +132,11 @@ export const schemas = {
   multiModels: {},
 };
 `,
+      "utf-8",
     );
 
     // Create root migration
-    await Deno.writeTextFile(
+    await fsp.writeFile(
       path.join(testDir, "migrations", "2025_01_01_000000_create_users.ts"),
       `import { migrationDefinition } from "@diister/mongodbee/migration";
 import * as v from "valibot";
@@ -153,10 +162,11 @@ export default migrationDefinition("2025_01_01_000000", "create_users", {
   },
 });
 `,
+      "utf-8",
     );
 
     // Create invalid migration (schema change without transformation)
-    await Deno.writeTextFile(
+    await fsp.writeFile(
       path.join(testDir, "migrations", "2025_01_02_000000_add_age.ts"),
       `import { migrationDefinition } from "@diister/mongodbee/migration";
 import * as v from "valibot";
@@ -181,6 +191,7 @@ export default migrationDefinition("2025_01_02_000000", "add_age", {
   },
 });
 `,
+      "utf-8",
     );
 
     // Run check command - should throw
@@ -191,21 +202,22 @@ export default migrationDefinition("2025_01_02_000000", "add_age", {
       errorThrown = true;
     }
 
-    assertEquals(errorThrown, true, "Check should fail for invalid migration");
+    expect(errorThrown).toEqual(true);
   } finally {
-    await Deno.remove(testDir, { recursive: true });
+    await fsp.rm(testDir, { recursive: true });
   }
 });
 
-Deno.test("check - detects schema mismatch", async () => {
-  const testDir = await Deno.makeTempDir();
+test("check - detects schema mismatch", async () => {
+  const testDir = await fsp.mkdtemp(path.join((await import("node:os")).tmpdir(), "mongodbee_test_"));
 
   try {
+    await setupTempNodeModules(testDir);
     // Create test directory structure
-    await Deno.mkdir(path.join(testDir, "migrations"), { recursive: true });
+    await fsp.mkdir(path.join(testDir, "migrations"), { recursive: true });
 
     // Create config
-    await Deno.writeTextFile(
+    await fsp.writeFile(
       path.join(testDir, "mongodbee.config.json"),
       JSON.stringify({
         paths: {
@@ -215,14 +227,15 @@ Deno.test("check - detects schema mismatch", async () => {
         database: {
           name: "test_check",
           connection: {
-            uri: "mongodb://localhost:27017",
+            uri: "mongodb://127.0.0.1:27017",
           },
         },
       }),
+      "utf-8",
     );
 
     // Create schemas with DIFFERENT schema than last migration
-    await Deno.writeTextFile(
+    await fsp.writeFile(
       path.join(testDir, "schemas.ts"),
       `import * as v from "valibot";
 
@@ -238,10 +251,11 @@ export const schemas = {
   multiModels: {},
 };
 `,
+      "utf-8",
     );
 
     // Create migration
-    await Deno.writeTextFile(
+    await fsp.writeFile(
       path.join(testDir, "migrations", "2025_01_01_000000_create_users.ts"),
       `import { migrationDefinition } from "@diister/mongodbee/migration";
 import * as v from "valibot";
@@ -264,6 +278,7 @@ export default migrationDefinition("2025_01_01_000000", "create_users", {
   },
 });
 `,
+      "utf-8",
     );
 
     // Run check command - should throw due to schema mismatch
@@ -274,25 +289,24 @@ export default migrationDefinition("2025_01_01_000000", "create_users", {
       errorThrown = true;
     }
 
-    assertEquals(
+    expect(
       errorThrown,
-      true,
-      "Check should fail when schemas don't match",
-    );
+    ).toEqual(true);
   } finally {
-    await Deno.remove(testDir, { recursive: true });
+    await fsp.rm(testDir, { recursive: true });
   }
 });
 
-Deno.test("check - handles empty migrations directory", async () => {
-  const testDir = await Deno.makeTempDir();
+test("check - handles empty migrations directory", async () => {
+  const testDir = await fsp.mkdtemp(path.join((await import("node:os")).tmpdir(), "mongodbee_test_"));
 
   try {
+    await setupTempNodeModules(testDir);
     // Create test directory structure
-    await Deno.mkdir(path.join(testDir, "migrations"), { recursive: true });
+    await fsp.mkdir(path.join(testDir, "migrations"), { recursive: true });
 
     // Create config
-    await Deno.writeTextFile(
+    await fsp.writeFile(
       path.join(testDir, "mongodbee.config.json"),
       JSON.stringify({
         paths: {
@@ -302,14 +316,15 @@ Deno.test("check - handles empty migrations directory", async () => {
         database: {
           name: "test_check",
           connection: {
-            uri: "mongodb://localhost:27017",
+            uri: "mongodb://127.0.0.1:27017",
           },
         },
       }),
+      "utf-8",
     );
 
     // Create schemas
-    await Deno.writeTextFile(
+    await fsp.writeFile(
       path.join(testDir, "schemas.ts"),
       `import * as v from "valibot";
 
@@ -318,11 +333,12 @@ export const schemas = {
   multiModels: {},
 };
 `,
+      "utf-8",
     );
 
     // Run check command - should succeed with warning
     await checkCommand({ cwd: testDir });
   } finally {
-    await Deno.remove(testDir, { recursive: true });
+    await fsp.rm(testDir, { recursive: true });
   }
 });

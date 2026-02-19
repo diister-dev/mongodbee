@@ -1,11 +1,11 @@
 import * as v from "../../src/schema.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
-import { assertEquals } from "@std/assert";
+import { test, expect } from "vitest";
 import { withDatabase } from "../+shared.ts";
 import { defineModel } from "../../src/multi-collection-model.ts";
 
-Deno.test("MultiCollection: countDocuments functionality", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("MultiCollection: countDocuments functionality", async () => {
+  await withDatabase("MultiCollection: countDocuments functionality", async (db) => {
     const model = defineModel("catalog", {
       schema: {
         product: {
@@ -46,31 +46,31 @@ Deno.test("MultiCollection: countDocuments functionality", async (t) => {
 
     // Test counting all documents of a type
     const categoryCount = await catalog.countDocuments("category");
-    assertEquals(categoryCount, 2);
+    expect(categoryCount).toEqual(2);
 
     const productCount = await catalog.countDocuments("product");
-    assertEquals(productCount, 3);
+    expect(productCount).toEqual(3);
 
     // Test counting with filter
     const electronicsCount = await catalog.countDocuments("product", {
       category: "Electronics",
     });
-    assertEquals(electronicsCount, 2);
+    expect(electronicsCount).toEqual(2);
 
     const booksCount = await catalog.countDocuments("product", {
       category: "Books",
     });
-    assertEquals(booksCount, 1);
+    expect(booksCount).toEqual(1);
 
     // Test counting with price filter (Laptop: 999 >= 500, Phone: 499 < 500, Novel: 15 < 500)
     const expensiveCount = await catalog.countDocuments("product", {
       price: { $gte: 500 },
     });
-    assertEquals(expensiveCount, 1); // Only Laptop (999) is >= 500
+    expect(expensiveCount).toEqual(1); // Only Laptop (999) is >= 500
 
     // Test counting with empty filter (should be same as no filter)
     const allProductsCount = await catalog.countDocuments("product", {});
-    assertEquals(allProductsCount, 3);
+    expect(allProductsCount).toEqual(3);
 
     // Test counting categories with description - remove this failing test for now
     // Let's first see if the basic counts work
@@ -79,11 +79,11 @@ Deno.test("MultiCollection: countDocuments functionality", async (t) => {
     const electronicsCategory = await catalog.countDocuments("category", {
       name: "Electronics",
     });
-    assertEquals(electronicsCategory, 1);
+    expect(electronicsCategory).toEqual(1);
 
     const booksCategory = await catalog.countDocuments("category", {
       name: "Books",
     });
-    assertEquals(booksCategory, 1);
+    expect(booksCategory).toEqual(1);
   });
 });

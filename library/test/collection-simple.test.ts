@@ -1,8 +1,8 @@
-import { assert, assertEquals, assertRejects } from "@std/assert";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
 import * as v from "../src/schema.ts";
 import { ObjectId } from "mongodb";
+import { test, expect } from "vitest";
 
 // Simple test schema
 const userSchema = {
@@ -12,8 +12,8 @@ const userSchema = {
   status: v.null(),
 } as const;
 
-Deno.test("Collection: Basic operations coverage", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection: Basic operations coverage", async () => {
+  await withDatabase("Collection: Basic operations coverage", async (db) => {
     const users = await collection(db, "users", userSchema);
 
     // Test insertOne
@@ -26,25 +26,25 @@ Deno.test("Collection: Basic operations coverage", async (t) => {
 
     // Test findOne
     const found = await users.findOne({ name: "John" });
-    assert(found !== null);
-    assertEquals(found.name, "John");
+    expect(found).not.toBeNull();
+    expect(found.name).toEqual("John");
 
     // Test find
     const allUsers = await users.find({}).toArray();
-    assertEquals(allUsers.length, 1);
+    expect(allUsers.length).toEqual(1);
 
     // Test updateOne
     await users.updateOne({ name: "John" }, { $set: { age: 31 } });
     const updated = await users.findOne({ name: "John" });
-    assertEquals(updated?.age, 31);
+    expect(updated?.age).toEqual(31);
 
     // Test deleteOne
     const deleteResult = await users.deleteOne({ name: "John" });
-    assertEquals(deleteResult.deletedCount, 1);
+    expect(deleteResult.deletedCount).toEqual(1);
 
     // Test that document was deleted
     const countAfterDelete = await users.countDocuments({ name: "John" });
-    assertEquals(countAfterDelete, 0);
+    expect(countAfterDelete).toEqual(0);
 
     // Test insertMany
     await users.insertMany([
@@ -54,16 +54,16 @@ Deno.test("Collection: Basic operations coverage", async (t) => {
 
     // Test count
     const count = await users.countDocuments({});
-    assertEquals(count, 2);
+    expect(count).toEqual(2);
 
     // Test distinct
     const names = await users.distinct("name", {});
-    assertEquals(names.length, 2);
+    expect(names.length).toEqual(2);
 
     // Test aggregate
     const pipeline = [{ $match: { age: { $gte: 30 } } }];
     const results = await users.aggregate(pipeline).toArray();
-    assertEquals(results.length, 1);
+    expect(results.length).toEqual(1);
 
     // Test replaceOne
     await users.replaceOne({ name: "Alice" }, {
@@ -72,35 +72,35 @@ Deno.test("Collection: Basic operations coverage", async (t) => {
       status: null,
     });
     const replaced = await users.findOne({ name: "Alice" });
-    assertEquals(replaced?.age, 26);
+    expect(replaced?.age).toEqual(26);
 
     // Test updateMany
     await users.updateMany({}, { $set: { email: "updated@example.com" } });
     const allUpdated = await users.find({}).toArray();
     allUpdated.forEach((user) => {
-      assertEquals(user.email, "updated@example.com");
+      expect(user.email).toEqual("updated@example.com");
     });
 
     // Test deleteMany
     await users.deleteMany({ age: { $gte: 0 } }); // Delete all documents
     const finalCount = await users.countDocuments({});
-    assertEquals(finalCount, 0);
+    expect(finalCount).toEqual(0);
   });
 });
 
-Deno.test("Collection: Error handling coverage", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection: Error handling coverage", async () => {
+  await withDatabase("Collection: Error handling coverage", async (db) => {
     const users = await collection(db, "users", userSchema);
 
     // Test updateOne with non-existent document
     const updateResult = await users.updateOne({ name: "NonExistent" }, {
       $set: { age: 40 },
     });
-    assertEquals(updateResult.modifiedCount, 0);
+    expect(updateResult.modifiedCount).toEqual(0);
 
     // Test deleteOne with non-existent document
     const deleteResult = await users.deleteOne({ name: "NonExistent" });
-    assertEquals(deleteResult.deletedCount, 0);
+    expect(deleteResult.deletedCount).toEqual(0);
 
     // Test replaceOne with non-existent document
     const replaceResult = await users.replaceOne({ name: "NonExistent" }, {
@@ -108,16 +108,16 @@ Deno.test("Collection: Error handling coverage", async (t) => {
       age: 20,
       status: null,
     });
-    assertEquals(replaceResult.modifiedCount, 0);
+    expect(replaceResult.modifiedCount).toEqual(0);
 
     // Test count with empty collection
     const emptyCount = await users.countDocuments({});
-    assertEquals(emptyCount, 0);
+    expect(emptyCount).toEqual(0);
   });
 });
 
-Deno.test("Collection: getById functionality", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection: getById functionality", async () => {
+  await withDatabase("Collection: getById functionality", async (db) => {
     const users = await collection(db, "users", userSchema);
 
     // Insert a document
@@ -130,21 +130,21 @@ Deno.test("Collection: getById functionality", async (t) => {
 
     // Test getById with valid ID
     const foundById = await users.getById(userId);
-    assert(foundById);
-    assertEquals(foundById.name, "Test User");
-    assertEquals(foundById.age, 25);
-    assertEquals(foundById.email, "test@example.com");
-    assertEquals(foundById._id, userId);
+    expect(foundById).toBeTruthy();
+    expect(foundById.name).toEqual("Test User");
+    expect(foundById.age).toEqual(25);
+    expect(foundById.email).toEqual("test@example.com");
+    expect(foundById._id).toEqual(userId);
 
     // Test getById with non-existent ID
-    assertRejects(async () => {
+    await expect(async () => {
       await users.getById("nonexistent-id");
-    });
+    }).rejects.toThrow();
 
     // Test getById with ObjectId
     const objectId = new ObjectId();
-    assertRejects(async () => {
+    await expect(async () => {
       await users.getById(objectId);
-    });
+    }).rejects.toThrow();
   });
 });

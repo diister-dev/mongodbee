@@ -1,5 +1,5 @@
 import * as v from "../../src/schema.ts";
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { test, expect } from "vitest";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import { defineModel } from "../../src/multi-collection-model.ts";
@@ -19,8 +19,8 @@ const userGroupModel = defineModel("test", {
   schema: multiSchema,
 });
 
-Deno.test("Basic test", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Basic test", async () => {
+  await withDatabase("Basic test", async (db) => {
     const collection = await multiCollection(db, "test", userGroupModel);
 
     const userA = await collection.insertOne("user", {
@@ -38,27 +38,27 @@ Deno.test("Basic test", async (t) => {
       members: [userA],
     });
 
-    const users = await collection.find("user");
-    assertEquals(users.length, 2);
+    const users = await collection.find("user").toArray();
+    expect(users.length).toEqual(2);
 
-    const groups = await collection.find("group");
-    assertEquals(groups.length, 1);
+    const groups = await collection.find("group").toArray();
+    expect(groups.length).toEqual(1);
 
     const findUserB = await collection.findOne("user", { _id: userB });
-    assertEquals(findUserB, {
+    expect(findUserB).toEqual({
       _id: userB,
       _type: "user",
       name: "Jane",
       mail: "jane@doe.d",
     });
 
-    const deleteUserB = await collection.deleteId("user", userB);
-    assertEquals(deleteUserB, 1);
+    const deleteUserB = await collection.deleteById("user", userB);
+    expect(deleteUserB).toEqual(1);
   });
 });
 
-Deno.test("FindOne: Ensure find correct type", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("FindOne: Ensure find correct type", async () => {
+  await withDatabase("FindOne: Ensure find correct type", async (db) => {
     const collection = await multiCollection(db, "test", userGroupModel);
 
     const usersId = await collection.insertMany("user", [{
@@ -78,20 +78,20 @@ Deno.test("FindOne: Ensure find correct type", async (t) => {
     }]);
 
     const notFoundUser = await collection.findOne("user", { _id: groupsId[0] });
-    assert(notFoundUser === null);
+    expect(notFoundUser === null).toBeTruthy();
 
     const notFoundGroup = await collection.findOne("group", {
       _id: usersId[0],
     });
-    assert(notFoundGroup === null);
+    expect(notFoundGroup === null).toBeTruthy();
 
     const notFoundGroup2 = await collection.findOne("group", {
       _id: "group-invalid:id",
     });
-    assert(notFoundGroup2 === null);
+    expect(notFoundGroup2 === null).toBeTruthy();
 
     const findUserB = await collection.findOne("user", { _id: usersId[1] });
-    assertEquals(findUserB, {
+    expect(findUserB).toEqual({
       _id: usersId[1],
       _type: "user",
       name: "Jane",
@@ -99,7 +99,7 @@ Deno.test("FindOne: Ensure find correct type", async (t) => {
     });
 
     const findGroupB = await collection.findOne("group", { _id: groupsId[1] });
-    assertEquals(findGroupB, {
+    expect(findGroupB).toEqual({
       _id: groupsId[1],
       _type: "group",
       name: "Jane",
@@ -108,8 +108,8 @@ Deno.test("FindOne: Ensure find correct type", async (t) => {
   });
 });
 
-Deno.test("find: Ensure find correct type", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("find: Ensure find correct type", async () => {
+  await withDatabase("find: Ensure find correct type", async (db) => {
     const collection = await multiCollection(db, "test", userGroupModel);
 
     const usersId = await collection.insertMany("user", [{
@@ -129,40 +129,40 @@ Deno.test("find: Ensure find correct type", async (t) => {
     }]);
 
     {
-      const count = await collection.find("user", { _id: groupsId[0] });
-      assertEquals(count.length, 0);
+      const count = await collection.find("user", { _id: groupsId[0] }).toArray();
+      expect(count.length).toEqual(0);
     }
 
     {
-      const count = await collection.find("group", { _id: usersId[0] });
-      assertEquals(count.length, 0);
+      const count = await collection.find("group", { _id: usersId[0] }).toArray();
+      expect(count.length).toEqual(0);
     }
 
     {
-      const count = await collection.find("group", { _id: groupsId[0] });
-      assertEquals(count.length, 1);
+      const count = await collection.find("group", { _id: groupsId[0] }).toArray();
+      expect(count.length).toEqual(1);
     }
 
     {
-      const count = await collection.find("user", { _id: usersId[0] });
-      assertEquals(count.length, 1);
+      const count = await collection.find("user", { _id: usersId[0] }).toArray();
+      expect(count.length).toEqual(1);
     }
 
     {
-      const count = await collection.find("group", { _id: "group-invalid:id" });
-      assertEquals(count.length, 0);
+      const count = await collection.find("group", { _id: "group-invalid:id" }).toArray();
+      expect(count.length).toEqual(0);
     }
 
-    const users = await collection.find("user", {});
-    assertEquals(users.length, 2);
+    const users = await collection.find("user", {}).toArray();
+    expect(users.length).toEqual(2);
 
-    const groups = await collection.find("group", {});
-    assertEquals(groups.length, 2);
+    const groups = await collection.find("group", {}).toArray();
+    expect(groups.length).toEqual(2);
   });
 });
 
-Deno.test("DeleteId: Ensure delete correct type", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("DeleteId: Ensure delete correct type", async () => {
+  await withDatabase("DeleteId: Ensure delete correct type", async (db) => {
     const collection = await multiCollection(db, "test", userGroupModel);
 
     const usersId = await collection.insertMany("user", [{
@@ -181,28 +181,28 @@ Deno.test("DeleteId: Ensure delete correct type", async (t) => {
       members: [usersId[1]],
     }]);
 
-    await assertRejects(async () => {
-      await collection.deleteId("user", groupsId[0]);
-    });
+    await expect(async () => {
+      await collection.deleteById("user", groupsId[0]);
+    }).rejects.toThrow();
 
-    await assertRejects(async () => {
-      await collection.deleteId("group", usersId[0]);
-    });
+    await expect(async () => {
+      await collection.deleteById("group", usersId[0]);
+    }).rejects.toThrow();
 
-    await assertRejects(async () => {
-      await collection.deleteId("group", "group-invalid:id");
-    });
+    await expect(async () => {
+      await collection.deleteById("group", "group-invalid:id");
+    }).rejects.toThrow();
 
-    const deleteUserB = await collection.deleteId("user", usersId[1]);
-    assertEquals(deleteUserB, 1);
+    const deleteUserB = await collection.deleteById("user", usersId[1]);
+    expect(deleteUserB).toEqual(1);
 
-    const deleteGroupB = await collection.deleteId("group", groupsId[1]);
-    assertEquals(deleteGroupB, 1);
+    const deleteGroupB = await collection.deleteById("group", groupsId[1]);
+    expect(deleteGroupB).toEqual(1);
   });
 });
 
-Deno.test("DeleteIds: Ensure delete correct type", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("DeleteIds: Ensure delete correct type", async () => {
+  await withDatabase("DeleteIds: Ensure delete correct type", async (db) => {
     const collection = await multiCollection(db, "test", userGroupModel);
 
     const usersId = await collection.insertMany("user", [{
@@ -221,32 +221,32 @@ Deno.test("DeleteIds: Ensure delete correct type", async (t) => {
       members: [usersId[1]],
     }]);
 
-    await assertRejects(async () => {
-      await collection.deleteIds("user", groupsId);
-    });
+    await expect(async () => {
+      await collection.deleteByIds("user", groupsId);
+    }).rejects.toThrow();
 
-    await assertRejects(async () => {
-      await collection.deleteIds("group", usersId);
-    });
+    await expect(async () => {
+      await collection.deleteByIds("group", usersId);
+    }).rejects.toThrow();
 
-    await assertRejects(async () => {
-      await collection.deleteIds("group", [usersId[0], groupsId[0]]);
-    });
+    await expect(async () => {
+      await collection.deleteByIds("group", [usersId[0], groupsId[0]]);
+    }).rejects.toThrow();
 
-    await assertRejects(async () => {
-      await collection.deleteIds("group", ["group-invalid:id"]);
-    });
+    await expect(async () => {
+      await collection.deleteByIds("group", ["group-invalid:id"]);
+    }).rejects.toThrow();
 
-    const deleteUserB = await collection.deleteIds("user", usersId.slice(1));
-    assertEquals(deleteUserB, 1);
+    const deleteUserB = await collection.deleteByIds("user", usersId.slice(1));
+    expect(deleteUserB).toEqual(1);
 
-    const deleteGroupB = await collection.deleteIds("group", groupsId);
-    assertEquals(deleteGroupB, 2);
+    const deleteGroupB = await collection.deleteByIds("group", groupsId);
+    expect(deleteGroupB).toEqual(2);
   });
 });
 
-Deno.test("Aggregate: lookup with string 'as' parameter", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Aggregate: lookup with string 'as' parameter", async () => {
+  await withDatabase("Aggregate: lookup with string 'as' parameter", async (db) => {
     const model = defineModel("test", {
       schema: {
         user: {
@@ -281,13 +281,13 @@ Deno.test("Aggregate: lookup with string 'as' parameter", async (t) => {
       stage.lookup("user", "members", "_id", "userDetails"),
     ]);
 
-    assertEquals(results.length, 2);
-    assert(results[0].userDetails);
+    expect(results.length).toEqual(2);
+    expect(results[0].userDetails).toBeTruthy();
   });
 });
 
-Deno.test("Aggregate: lookup with pipeline for filtering", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Aggregate: lookup with pipeline for filtering", async () => {
+  await withDatabase("Aggregate: lookup with pipeline for filtering", async (db) => {
     const model = defineModel("test", {
       schema: {
         invitation: {
@@ -364,16 +364,16 @@ Deno.test("Aggregate: lookup with pipeline for filtering", async (t) => {
       }),
     ]);
 
-    assertEquals(topExhibitors.length, 2);
-    assertEquals(topExhibitors[0].company, "Tech Corp");
-    assertEquals(topExhibitors[0].visitorCount, 2);
-    assertEquals(topExhibitors[1].company, "Innovation Ltd");
-    assertEquals(topExhibitors[1].visitorCount, 1);
+    expect(topExhibitors.length).toEqual(2);
+    expect(topExhibitors[0].company).toEqual("Tech Corp");
+    expect(topExhibitors[0].visitorCount).toEqual(2);
+    expect(topExhibitors[1].company).toEqual("Innovation Ltd");
+    expect(topExhibitors[1].visitorCount).toEqual(1);
   });
 });
 
-Deno.test("Date fields: Insert and query with dates", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Date fields: Insert and query with dates", async () => {
+  await withDatabase("Date fields: Insert and query with dates", async (db) => {
     const model = defineModel("test", {
       schema: {
         event: {
@@ -411,26 +411,26 @@ Deno.test("Date fields: Insert and query with dates", async (t) => {
     // Test finding by date
     const events = await collection.find("event", {
       startDate: { $lte: now },
-    });
-    assertEquals(events.length, 1);
-    assertEquals(events[0].name, "Conference");
+    }).toArray();
+    expect(events.length).toEqual(1);
+    expect(events[0].name).toEqual("Conference");
 
     // Test finding users by date range
     const users = await collection.find("user", {
       lastLogin: { $gte: yesterday },
-    });
-    assertEquals(users.length, 1);
-    assertEquals(users[0].name, "Alice");
+    }).toArray();
+    expect(users.length).toEqual(1);
+    expect(users[0].name).toEqual("Alice");
 
     // Verify date fields are preserved correctly
     const foundEvent = await collection.findOne("event", { _id: eventId });
-    assertEquals(foundEvent?.startDate.getTime(), now.getTime());
-    assertEquals(foundEvent?.endDate.getTime(), tomorrow.getTime());
+    expect(foundEvent?.startDate.getTime()).toEqual(now.getTime());
+    expect(foundEvent?.endDate.getTime()).toEqual(tomorrow.getTime());
   });
 });
 
-Deno.test("Date fields: Date comparisons and sorting", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Date fields: Date comparisons and sorting", async () => {
+  await withDatabase("Date fields: Date comparisons and sorting", async (db) => {
     const model = defineModel("test", {
       schema: {
         task: {
@@ -469,14 +469,14 @@ Deno.test("Date fields: Date comparisons and sorting", async (t) => {
       dueDate: {
         $lte: new Date(baseDate.getTime() + 2 * 24 * 60 * 60 * 1000),
       },
-    });
-    assertEquals(urgentTasks.length, 2);
+    }).toArray();
+    expect(urgentTasks.length).toEqual(2);
 
     // Test finding tasks created after a specific date
     const recentTasks = await collection.find("task", {
       createdAt: { $gt: baseDate },
-    });
-    assertEquals(recentTasks.length, 2);
+    }).toArray();
+    expect(recentTasks.length).toEqual(2);
 
     // Test date between range
     const midRangeTasks = await collection.find("task", {
@@ -484,13 +484,13 @@ Deno.test("Date fields: Date comparisons and sorting", async (t) => {
         $gte: new Date(baseDate.getTime() + 1 * 24 * 60 * 60 * 1000),
         $lte: new Date(baseDate.getTime() + 2 * 24 * 60 * 60 * 1000),
       },
-    });
-    assertEquals(midRangeTasks.length, 2);
+    }).toArray();
+    expect(midRangeTasks.length).toEqual(2);
   });
 });
 
-Deno.test("Date fields: Current date and date updates", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Date fields: Current date and date updates", async () => {
+  await withDatabase("Date fields: Current date and date updates", async (db) => {
     const model = defineModel("test", {
       schema: {
         document: {
@@ -516,24 +516,24 @@ Deno.test("Date fields: Current date and date updates", async (t) => {
 
     const updateTime = new Date();
 
-    await collection.updateOne("document", docId, {
+    await collection.updateById("document", docId, {
       title: "Updated Document",
       updatedAt: updateTime,
     });
 
     const updatedDoc = await collection.findOne("document", { _id: docId });
-    assert(updatedDoc !== null);
-    assertEquals(updatedDoc?.title, "Updated Document");
-    assertEquals(updatedDoc?.createdAt.getTime(), startTime.getTime());
-    assertEquals(updatedDoc?.updatedAt.getTime(), updateTime.getTime());
+    expect(updatedDoc).not.toBeNull();
+    expect(updatedDoc?.title).toEqual("Updated Document");
+    expect(updatedDoc?.createdAt.getTime()).toEqual(startTime.getTime());
+    expect(updatedDoc?.updatedAt.getTime()).toEqual(updateTime.getTime());
 
     // Verify updatedAt is after createdAt
-    assert(updatedDoc?.updatedAt >= updatedDoc?.createdAt);
+    expect(updatedDoc?.updatedAt >= updatedDoc?.createdAt).toBeTruthy();
   });
 });
 
-Deno.test("Date fields: Date edge cases", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Date fields: Date edge cases", async () => {
+  await withDatabase("Date fields: Date edge cases", async (db) => {
     const model = defineModel("test", {
       schema: {
         appointment: {
@@ -565,26 +565,26 @@ Deno.test("Date fields: Date edge cases", async (t) => {
     // Find appointments by date range
     const oldAppointments = await collection.find("appointment", {
       scheduledFor: { $lt: new Date("2000-01-01") },
-    });
-    assertEquals(oldAppointments.length, 1);
-    assertEquals(oldAppointments[0].title, "Historical Event");
+    }).toArray();
+    expect(oldAppointments.length).toEqual(1);
+    expect(oldAppointments[0].title).toEqual("Historical Event");
 
     const futureAppointments = await collection.find("appointment", {
       scheduledFor: { $gt: new Date("2025-01-01") },
-    });
-    assertEquals(futureAppointments.length, 1);
-    assertEquals(futureAppointments[0].title, "Future Meeting");
+    }).toArray();
+    expect(futureAppointments.length).toEqual(1);
+    expect(futureAppointments[0].title).toEqual("Future Meeting");
 
     // Test optional date field
     const withReminder = await collection.find("appointment", {
       reminderDate: { $exists: true },
-    });
-    assertEquals(withReminder.length, 1);
+    }).toArray();
+    expect(withReminder.length).toEqual(1);
   });
 });
 
-Deno.test("Literal id must have valid type", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Literal id must have valid type", async () => {
+  await withDatabase("Literal id must have valid type", async (db) => {
     const model = defineModel("test", {
       schema: {
         item: {
@@ -608,12 +608,12 @@ Deno.test("Literal id must have valid type", async (t) => {
     const foundItem = await collection.findOne("item", {
       _id: "item-id",
     });
-    assertEquals(foundItem?._id, itemId);
+    expect(foundItem?._id).toEqual(itemId);
   });
 });
 
-Deno.test("getById: retrieve by id and error cases", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("getById: retrieve by id and error cases", async () => {
+  await withDatabase("getById: retrieve by id and error cases", async (db) => {
     const collection = await multiCollection(db, "test", userGroupModel);
 
     const userId = await collection.insertOne("user", {
@@ -628,7 +628,7 @@ Deno.test("getById: retrieve by id and error cases", async (t) => {
 
     // Successful retrieval
     const foundUser = await collection.getById("user", userId);
-    assertEquals(foundUser, {
+    expect(foundUser).toEqual({
       _id: userId,
       _type: "user",
       name: "John",
@@ -636,13 +636,13 @@ Deno.test("getById: retrieve by id and error cases", async (t) => {
     });
 
     // Trying to get a group id as a user should fail
-    await assertRejects(async () => {
+    await expect(async () => {
       await collection.getById("user", groupId);
-    });
+    }).rejects.toThrow();
 
     // Nonexistent id should also throw
-    await assertRejects(async () => {
+    await expect(async () => {
       await collection.getById("user", "user:nonexistent-id");
-    });
+    }).rejects.toThrow();
   });
 });

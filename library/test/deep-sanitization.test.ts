@@ -1,29 +1,9 @@
 import * as v from "../src/schema.ts";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
-import { assert, assertEquals } from "@std/assert";
-import { MongoClient } from "../src/mongodb.ts";
+import { test, expect } from "vitest";
 import { defineModel } from "../src/multi-collection-model.ts";
-
-// Mock MongoDB setup for testing
-let client: MongoClient;
-let db: ReturnType<MongoClient["db"]>;
-
-async function setupTestDb() {
-  const mongoUrl = Deno.env.get("MONGODB_URL") || "mongodb://localhost:27017";
-  client = new MongoClient(mongoUrl);
-  await client.connect();
-  db = client.db("test_deep_sanitization");
-}
-
-async function cleanupTestDb() {
-  if (db) {
-    await db.dropDatabase();
-  }
-  if (client) {
-    await client.close();
-  }
-}
+import { withDatabase } from "./+shared.ts";
 
 const deepSchema = {
   name: v.string(),
@@ -50,10 +30,8 @@ const deepSchema = {
   }))),
 };
 
-Deno.test("Deep sanitization: Collection removes nested undefined values", async () => {
-  await setupTestDb();
-
-  try {
+test("Deep sanitization: Collection removes nested undefined values", async () => {
+  await withDatabase("deep_sanitize_collection", async (db) => {
     const users = await collection(db, "users_deep", deepSchema, {
       undefinedBehavior: "remove",
     });
@@ -91,66 +69,62 @@ Deno.test("Deep sanitization: Collection removes nested undefined values", async
     });
 
     const user = await users.findOne({ name: "DeepUser" });
-    assert(user !== null);
+    expect(user).not.toBeNull();
 
     // Check top level
-    assertEquals(user.name, "DeepUser");
-    assert("profile" in user);
-    assert("metadata" in user);
+    expect(user.name).toEqual("DeepUser");
+    expect("profile" in user).toBeTruthy();
+    expect("metadata" in user).toBeTruthy();
 
     // Check profile level
-    assert(user.profile !== undefined);
-    assertEquals(user.profile.bio, "Test bio");
-    assert("settings" in user.profile);
-    assert("tags" in user.profile);
+    expect(user.profile !== undefined).toBeTruthy();
+    expect(user.profile.bio).toEqual("Test bio");
+    expect("settings" in user.profile).toBeTruthy();
+    expect("tags" in user.profile).toBeTruthy();
 
     // Check settings level
-    assert(user.profile.settings !== undefined);
-    assert(!("theme" in user.profile.settings)); // Should be removed
-    assert("notifications" in user.profile.settings);
+    expect(user.profile.settings !== undefined).toBeTruthy();
+    expect(!("theme" in user.profile.settings)).toBeTruthy(); // Should be removed
+    expect("notifications" in user.profile.settings).toBeTruthy();
 
     // Check notifications level
-    assert(user.profile.settings.notifications !== undefined);
-    assertEquals(user.profile.settings.notifications.email, true);
-    assert(!("push" in user.profile.settings.notifications)); // Should be removed
+    expect(user.profile.settings.notifications !== undefined).toBeTruthy();
+    expect(user.profile.settings.notifications.email).toEqual(true);
+    expect(!("push" in user.profile.settings.notifications)).toBeTruthy(); // Should be removed
 
     // Check metadata array
-    assert(user.metadata !== undefined);
-    assertEquals(user.metadata.length, 2);
+    expect(user.metadata !== undefined).toBeTruthy();
+    expect(user.metadata.length).toEqual(2);
 
     // Check first metadata item
     const meta1 = user.metadata[0];
-    assertEquals(meta1.key, "key1");
-    assert(!("value" in meta1)); // Should be removed
-    assert("nested" in meta1);
+    expect(meta1.key).toEqual("key1");
+    expect(!("value" in meta1)).toBeTruthy(); // Should be removed
+    expect("nested" in meta1).toBeTruthy();
 
     // Check nested in first metadata
-    assert(meta1.nested !== undefined);
-    assertEquals(meta1.nested.level1, "value1");
-    assert("level2" in meta1.nested);
-    assert(meta1.nested.level2 !== undefined);
-    assert(!("deepValue" in meta1.nested.level2)); // Should be removed
+    expect(meta1.nested !== undefined).toBeTruthy();
+    expect(meta1.nested.level1).toEqual("value1");
+    expect("level2" in meta1.nested).toBeTruthy();
+    expect(meta1.nested.level2 !== undefined).toBeTruthy();
+    expect(!("deepValue" in meta1.nested.level2)).toBeTruthy(); // Should be removed
 
     // Check second metadata item
     const meta2 = user.metadata[1];
-    assertEquals(meta2.key, "key2");
-    assertEquals(meta2.value, "value2");
-    assert(!("nested" in meta2)); // Should be removed
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(meta2.key).toEqual("key2");
+    expect(meta2.value).toEqual("value2");
+    expect(!("nested" in meta2)).toBeTruthy(); // Should be removed
+  });
 });
 
-Deno.test("Deep sanitization: MultiCollection removes nested undefined values", async () => {
-  await setupTestDb();
+test("Deep sanitization: MultiCollection removes nested undefined values", async () => {
+  await withDatabase("deep_sanitize_multi", async (db) => {
+    const model = defineModel("deep_docs", {
+      schema: {
+        users: deepSchema,
+      },
+    });
 
-  const model = defineModel("deep_docs", {
-    schema: {
-      users: deepSchema,
-    },
-  });
-
-  try {
     const mc = await multiCollection(db, "deep_docs", model, {
       undefinedBehavior: "remove",
     });
@@ -183,52 +157,48 @@ Deno.test("Deep sanitization: MultiCollection removes nested undefined values", 
     });
 
     const user = await mc.findOne("users", { _id: userId });
-    assert(user !== null);
+    expect(user).not.toBeNull();
 
-    assertEquals(user.name, "DeepMultiUser");
-    assert("profile" in user);
-    assert("metadata" in user);
+    expect(user.name).toEqual("DeepMultiUser");
+    expect("profile" in user).toBeTruthy();
+    expect("metadata" in user).toBeTruthy();
 
     // Check profile
-    assert(user.profile !== undefined);
-    assert(!("bio" in user.profile)); // Should be removed
-    assert(!("tags" in user.profile)); // Should be removed
-    assert("settings" in user.profile);
+    expect(user.profile !== undefined).toBeTruthy();
+    expect(!("bio" in user.profile)).toBeTruthy(); // Should be removed
+    expect(!("tags" in user.profile)).toBeTruthy(); // Should be removed
+    expect("settings" in user.profile).toBeTruthy();
 
     // Check settings
-    assert(user.profile.settings !== undefined);
-    assertEquals(user.profile.settings.theme, "dark");
-    assert("notifications" in user.profile.settings);
+    expect(user.profile.settings !== undefined).toBeTruthy();
+    expect(user.profile.settings.theme).toEqual("dark");
+    expect("notifications" in user.profile.settings).toBeTruthy();
 
     // Check notifications
-    assert(user.profile.settings.notifications !== undefined);
-    assert(!("email" in user.profile.settings.notifications)); // Should be removed
-    assertEquals(user.profile.settings.notifications.push, false);
+    expect(user.profile.settings.notifications !== undefined).toBeTruthy();
+    expect(!("email" in user.profile.settings.notifications)).toBeTruthy(); // Should be removed
+    expect(user.profile.settings.notifications.push).toEqual(false);
 
     // Check metadata
-    assert(user.metadata !== undefined);
-    assertEquals(user.metadata.length, 1);
+    expect(user.metadata !== undefined).toBeTruthy();
+    expect(user.metadata.length).toEqual(1);
 
     const meta = user.metadata[0];
-    assertEquals(meta.key, "nested_key");
-    assertEquals(meta.value, "nested_value");
-    assert("nested" in meta);
+    expect(meta.key).toEqual("nested_key");
+    expect(meta.value).toEqual("nested_value");
+    expect("nested" in meta).toBeTruthy();
 
     // Check deep nested
-    assert(meta.nested !== undefined);
-    assert(!("level1" in meta.nested)); // Should be removed
-    assert("level2" in meta.nested);
-    assert(meta.nested.level2 !== undefined);
-    assertEquals(meta.nested.level2.deepValue, "deep!");
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(meta.nested !== undefined).toBeTruthy();
+    expect(!("level1" in meta.nested)).toBeTruthy(); // Should be removed
+    expect("level2" in meta.nested).toBeTruthy();
+    expect(meta.nested.level2 !== undefined).toBeTruthy();
+    expect(meta.nested.level2.deepValue).toEqual("deep!");
+  });
 });
 
-Deno.test("Deep sanitization: Arrays with undefined items", async () => {
-  await setupTestDb();
-
-  try {
+test("Deep sanitization: Arrays with undefined items", async () => {
+  await withDatabase("deep_sanitize_arrays", async (db) => {
     const arraySchema = {
       name: v.string(),
       items: v.optional(v.array(v.object({
@@ -270,38 +240,34 @@ Deno.test("Deep sanitization: Arrays with undefined items", async () => {
     });
 
     const doc = await coll.findOne({ name: "ArrayTest" });
-    assert(doc !== null);
+    expect(doc).not.toBeNull();
 
-    assert(doc.items !== undefined);
-    assertEquals(doc.items.length, 3);
+    expect(doc.items !== undefined).toBeTruthy();
+    expect(doc.items.length).toEqual(3);
 
     // First item
-    assertEquals(doc.items[0].id, "1");
-    assertEquals(doc.items[0].data, "data1");
-    assert("nested" in doc.items[0]);
-    assert(doc.items[0].nested !== undefined);
-    assert(!("value" in doc.items[0].nested)); // Should be removed
+    expect(doc.items[0].id).toEqual("1");
+    expect(doc.items[0].data).toEqual("data1");
+    expect("nested" in doc.items[0]).toBeTruthy();
+    expect(doc.items[0].nested !== undefined).toBeTruthy();
+    expect(!("value" in doc.items[0].nested)).toBeTruthy(); // Should be removed
 
     // Second item
-    assertEquals(doc.items[1].id, "2");
-    assert(!("data" in doc.items[1])); // Should be removed
-    assert(!("nested" in doc.items[1])); // Should be removed
+    expect(doc.items[1].id).toEqual("2");
+    expect(!("data" in doc.items[1])).toBeTruthy(); // Should be removed
+    expect(!("nested" in doc.items[1])).toBeTruthy(); // Should be removed
 
     // Third item
-    assertEquals(doc.items[2].id, "3");
-    assertEquals(doc.items[2].data, "data3");
-    assert("nested" in doc.items[2]);
-    assert(doc.items[2].nested !== undefined);
-    assertEquals(doc.items[2].nested.value, "value3");
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(doc.items[2].id).toEqual("3");
+    expect(doc.items[2].data).toEqual("data3");
+    expect("nested" in doc.items[2]).toBeTruthy();
+    expect(doc.items[2].nested !== undefined).toBeTruthy();
+    expect(doc.items[2].nested.value).toEqual("value3");
+  });
 });
 
-Deno.test("Deep sanitization: Comparison with shallow mode", async () => {
-  await setupTestDb();
-
-  try {
+test("Deep sanitization: Comparison with shallow mode", async () => {
+  await withDatabase("deep_sanitize_shallow", async (db) => {
     // Test that our fix ensures deep sanitization by default
     const simpleSchema = {
       name: v.string(),
@@ -322,18 +288,16 @@ Deno.test("Deep sanitization: Comparison with shallow mode", async () => {
     });
 
     const doc = await coll.findOne({ name: "Test" });
-    assert(doc !== null);
+    expect(doc).not.toBeNull();
 
-    assertEquals(doc.name, "Test");
-    assert("nested" in doc);
-    assert(doc.nested !== undefined);
+    expect(doc.name).toEqual("Test");
+    expect("nested" in doc).toBeTruthy();
+    expect(doc.nested !== undefined).toBeTruthy();
 
     // With deep=true (our fix), this undefined should be removed
-    assert(!("value" in doc.nested));
+    expect(!("value" in doc.nested)).toBeTruthy();
 
     // The nested object should still exist but be empty
-    assertEquals(Object.keys(doc.nested).length, 0);
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(Object.keys(doc.nested).length).toEqual(0);
+  });
 });

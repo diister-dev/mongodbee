@@ -1,27 +1,7 @@
 import * as v from "../src/schema.ts";
 import { collection } from "../src/collection.ts";
-import { assert, assertEquals, assertRejects } from "@std/assert";
-import { MongoClient } from "../src/mongodb.ts";
-
-// Mock MongoDB setup for testing
-let client: MongoClient;
-let db: ReturnType<MongoClient["db"]>;
-
-async function setupTestDb() {
-  const mongoUrl = Deno.env.get("MONGODB_URL") || "mongodb://localhost:27017";
-  client = new MongoClient(mongoUrl);
-  await client.connect();
-  db = client.db("test_multi_collection_sanitizer");
-}
-
-async function cleanupTestDb() {
-  if (db) {
-    await db.dropDatabase();
-  }
-  if (client) {
-    await client.close();
-  }
-}
+import { test, expect } from "vitest";
+import { withDatabase } from "./+shared.ts";
 
 const userSchema = {
   name: v.string(),
@@ -39,10 +19,8 @@ const productSchema = {
   tags: v.optional(v.array(v.string())),
 };
 
-Deno.test("Multi-collection: Different undefined behaviors", async () => {
-  await setupTestDb();
-
-  try {
+test("Multi-collection: Different undefined behaviors", async () => {
+  await withDatabase("mc_sanitizer_diff_behaviors", async (db) => {
     // Collection 1: Remove undefined values (default)
     const users = await collection(db, "users", userSchema, {
       undefinedBehavior: "remove",
@@ -70,11 +48,11 @@ Deno.test("Multi-collection: Different undefined behaviors", async () => {
     });
 
     const insertedUser = await users.findOne({ name: "John" });
-    assert(insertedUser !== null);
-    assert(!("email" in insertedUser));
-    assert(!("age" in insertedUser));
-    assertEquals(insertedUser.name, "John");
-    assertEquals(insertedUser.phone, "123-456-7890");
+    expect(insertedUser).not.toBeNull();
+    expect(!("email" in insertedUser!)).toBeTruthy();
+    expect(!("age" in insertedUser!)).toBeTruthy();
+    expect(insertedUser!.name).toEqual("John");
+    expect(insertedUser!.phone).toEqual("123-456-7890");
 
     // Test products collection (default = remove behavior)
     await products.insertOne({
@@ -85,14 +63,14 @@ Deno.test("Multi-collection: Different undefined behaviors", async () => {
     });
 
     const insertedProduct = await products.findOne({ name: "Laptop" });
-    assert(insertedProduct !== null);
-    assert(!("description" in insertedProduct));
-    assertEquals(insertedProduct.name, "Laptop");
-    assertEquals(insertedProduct.price, 999.99);
-    assertEquals(insertedProduct.category, "Electronics");
+    expect(insertedProduct).not.toBeNull();
+    expect(!("description" in insertedProduct!)).toBeTruthy();
+    expect(insertedProduct!.name).toEqual("Laptop");
+    expect(insertedProduct!.price).toEqual(999.99);
+    expect(insertedProduct!.category).toEqual("Electronics");
 
     // Test strict products collection (error behavior)
-    await assertRejects(
+    await expect(
       async () => {
         await strictProducts.insertOne({
           name: "Mouse",
@@ -101,9 +79,7 @@ Deno.test("Multi-collection: Different undefined behaviors", async () => {
           category: "Electronics",
         });
       },
-      Error,
-      "Undefined values are not allowed",
-    );
+    ).rejects.toThrow("Undefined values are not allowed");
 
     // But it should work fine without undefined values
     await strictProducts.insertOne({
@@ -115,19 +91,15 @@ Deno.test("Multi-collection: Different undefined behaviors", async () => {
     const insertedStrictProduct = await strictProducts.findOne({
       name: "Mouse",
     });
-    assert(insertedStrictProduct !== null);
-    assertEquals(insertedStrictProduct.name, "Mouse");
-    assertEquals(insertedStrictProduct.price, 29.99);
-    assertEquals(insertedStrictProduct.category, "Electronics");
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(insertedStrictProduct).not.toBeNull();
+    expect(insertedStrictProduct!.name).toEqual("Mouse");
+    expect(insertedStrictProduct!.price).toEqual(29.99);
+    expect(insertedStrictProduct!.category).toEqual("Electronics");
+  });
 });
 
-Deno.test("Multi-collection: Same schema, different configurations", async () => {
-  await setupTestDb();
-
-  try {
+test("Multi-collection: Same schema, different configurations", async () => {
+  await withDatabase("mc_sanitizer_same_schema", async (db) => {
     // Same schema, different undefined behaviors
     const strictUsers = await collection(db, "strict_users", userSchema, {
       undefinedBehavior: "error",
@@ -145,32 +117,26 @@ Deno.test("Multi-collection: Same schema, different configurations", async () =>
     };
 
     // Strict collection should reject undefined
-    await assertRejects(
+    await expect(
       async () => {
         await strictUsers.insertOne(testData);
       },
-      Error,
-      "Undefined values are not allowed",
-    );
+    ).rejects.toThrow("Undefined values are not allowed");
 
     // Lenient collection should accept and remove undefined
     await lenientUsers.insertOne(testData);
 
     const insertedUser = await lenientUsers.findOne({ name: "Alice" });
-    assert(insertedUser !== null);
-    assert(!("phone" in insertedUser));
-    assertEquals(insertedUser.name, "Alice");
-    assertEquals(insertedUser.email, "alice@example.com");
-    assertEquals(insertedUser.age, 25);
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(insertedUser).not.toBeNull();
+    expect(!("phone" in insertedUser!)).toBeTruthy();
+    expect(insertedUser!.name).toEqual("Alice");
+    expect(insertedUser!.email).toEqual("alice@example.com");
+    expect(insertedUser!.age).toEqual(25);
+  });
 });
 
-Deno.test("Multi-collection: insertMany with different behaviors", async () => {
-  await setupTestDb();
-
-  try {
+test("Multi-collection: insertMany with different behaviors", async () => {
+  await withDatabase("mc_sanitizer_insertmany", async (db) => {
     const users = await collection(db, "users_many", userSchema, {
       undefinedBehavior: "remove",
     });
@@ -198,37 +164,31 @@ Deno.test("Multi-collection: insertMany with different behaviors", async () => {
     await users.insertMany(testData);
 
     const insertedUsers = await users.find({}).toArray();
-    assertEquals(insertedUsers.length, 2);
+    expect(insertedUsers.length).toEqual(2);
 
     // Check first user
     const user1 = insertedUsers.find((u) => u.name === "User1");
-    assert(user1 !== undefined);
-    assert(!("phone" in user1));
-    assertEquals(user1.email, "user1@example.com");
+    expect(user1 !== undefined).toBeTruthy();
+    expect(!("phone" in user1!)).toBeTruthy();
+    expect(user1!.email).toEqual("user1@example.com");
 
     // Check second user
     const user2 = insertedUsers.find((u) => u.name === "User2");
-    assert(user2 !== undefined);
-    assert(!("email" in user2));
-    assertEquals(user2.phone, "123-456-7890");
+    expect(user2 !== undefined).toBeTruthy();
+    expect(!("email" in user2!)).toBeTruthy();
+    expect(user2!.phone).toEqual("123-456-7890");
 
     // Strict collection should reject
-    await assertRejects(
+    await expect(
       async () => {
         await strictUsers.insertMany(testData);
       },
-      Error,
-      "Undefined values are not allowed",
-    );
-  } finally {
-    await cleanupTestDb();
-  }
+    ).rejects.toThrow("Undefined values are not allowed");
+  });
 });
 
-Deno.test("Multi-collection: replaceOne with different behaviors", async () => {
-  await setupTestDb();
-
-  try {
+test("Multi-collection: replaceOne with different behaviors", async () => {
+  await withDatabase("mc_sanitizer_replaceone", async (db) => {
     const users = await collection(db, "users_replace", userSchema, {
       undefinedBehavior: "remove",
     });
@@ -268,28 +228,22 @@ Deno.test("Multi-collection: replaceOne with different behaviors", async () => {
     await users.replaceOne({ name: "TestUser" }, updateData);
 
     const updatedUser = await users.findOne({ name: "TestUser Updated" });
-    assert(updatedUser !== null);
-    assert(!("phone" in updatedUser));
-    assertEquals(updatedUser.email, "updated@example.com");
-    assertEquals(updatedUser.age, 35);
+    expect(updatedUser).not.toBeNull();
+    expect(!("phone" in updatedUser!)).toBeTruthy();
+    expect(updatedUser!.email).toEqual("updated@example.com");
+    expect(updatedUser!.age).toEqual(35);
 
     // Strict collection should reject undefined
-    await assertRejects(
+    await expect(
       async () => {
         await strictUsers.replaceOne({ name: "TestUser" }, updateData);
       },
-      Error,
-      "Undefined values are not allowed",
-    );
-  } finally {
-    await cleanupTestDb();
-  }
+    ).rejects.toThrow("Undefined values are not allowed");
+  });
 });
 
-Deno.test("Multi-collection: Cross-collection data consistency", async () => {
-  await setupTestDb();
-
-  try {
+test("Multi-collection: Cross-collection data consistency", async () => {
+  await withDatabase("mc_sanitizer_cross_coll", async (db) => {
     // Create collections with different behaviors
     const mainUsers = await collection(db, "main_users", userSchema, {
       undefinedBehavior: "remove",
@@ -311,17 +265,15 @@ Deno.test("Multi-collection: Cross-collection data consistency", async () => {
     await mainUsers.insertOne(userData);
 
     const mainUser = await mainUsers.findOne({ name: "CrossCollectionUser" });
-    assert(mainUser !== null);
-    assert(!("phone" in mainUser));
+    expect(mainUser).not.toBeNull();
+    expect(!("phone" in mainUser!)).toBeTruthy();
 
     // Trying to insert same data into audit should fail
-    await assertRejects(
+    await expect(
       async () => {
         await auditUsers.insertOne(userData);
       },
-      Error,
-      "Undefined values are not allowed",
-    );
+    ).rejects.toThrow("Undefined values are not allowed");
 
     // But we can sanitize data for audit by removing undefined fields first
     const cleanUserData = {
@@ -334,20 +286,16 @@ Deno.test("Multi-collection: Cross-collection data consistency", async () => {
     await auditUsers.insertOne(cleanUserData);
 
     const auditUser = await auditUsers.findOne({ name: "CrossCollectionUser" });
-    assert(auditUser !== null);
-    assert(!("phone" in auditUser));
-    assertEquals(auditUser.name, "CrossCollectionUser");
-    assertEquals(auditUser.email, "cross@example.com");
-    assertEquals(auditUser.age, 28);
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(auditUser).not.toBeNull();
+    expect(!("phone" in auditUser!)).toBeTruthy();
+    expect(auditUser!.name).toEqual("CrossCollectionUser");
+    expect(auditUser!.email).toEqual("cross@example.com");
+    expect(auditUser!.age).toEqual(28);
+  });
 });
 
-Deno.test("Multi-collection: Performance with large number of collections", async () => {
-  await setupTestDb();
-
-  try {
+test("Multi-collection: Performance with large number of collections", async () => {
+  await withDatabase("mc_sanitizer_perf", async (db) => {
     const collections = [];
     const collectionCount = 5; // Keep it reasonable for testing
 
@@ -377,8 +325,8 @@ Deno.test("Multi-collection: Performance with large number of collections", asyn
         });
 
         const user = await coll.findOne({ name: `User_${i}` });
-        assert(user !== null);
-        assert(!("phone" in user));
+        expect(user).not.toBeNull();
+        expect(!("phone" in user!)).toBeTruthy();
       } else {
         // Must insert clean data
         await coll.insertOne({
@@ -388,22 +336,18 @@ Deno.test("Multi-collection: Performance with large number of collections", asyn
         });
 
         const user = await coll.findOne({ name: `User_${i}` });
-        assert(user !== null);
-        assertEquals(user.name, `User_${i}`);
+        expect(user).not.toBeNull();
+        expect(user!.name).toEqual(`User_${i}`);
       }
     }
 
     // Verify all collections work independently
-    assertEquals(collections.length, collectionCount);
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(collections.length).toEqual(collectionCount);
+  });
 });
 
-Deno.test("Multi-collection: Mixed undefined behaviors in transactions", async () => {
-  await setupTestDb();
-
-  try {
+test("Multi-collection: Mixed undefined behaviors in transactions", async () => {
+  await withDatabase("mc_sanitizer_mixed_tx", async (db) => {
     const lenientCollection = await collection(db, "lenient_tx", userSchema, {
       undefinedBehavior: "remove",
     });
@@ -424,17 +368,15 @@ Deno.test("Multi-collection: Mixed undefined behaviors in transactions", async (
     await lenientCollection.insertOne(testData);
 
     const lenientUser = await lenientCollection.findOne({ name: "TxUser" });
-    assert(lenientUser !== null);
-    assert(!("phone" in lenientUser));
+    expect(lenientUser).not.toBeNull();
+    expect(!("phone" in lenientUser!)).toBeTruthy();
 
     // This should fail for strict
-    await assertRejects(
+    await expect(
       async () => {
         await strictCollection.insertOne(testData);
       },
-      Error,
-      "Undefined values are not allowed",
-    );
+    ).rejects.toThrow("Undefined values are not allowed");
 
     // Verify lenient still works after strict failed
     await lenientCollection.insertOne({
@@ -445,18 +387,14 @@ Deno.test("Multi-collection: Mixed undefined behaviors in transactions", async (
     });
 
     const lenientUser2 = await lenientCollection.findOne({ name: "TxUser2" });
-    assert(lenientUser2 !== null);
-    assert(!("email" in lenientUser2));
-    assertEquals(lenientUser2.phone, "123-456-7890");
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(lenientUser2).not.toBeNull();
+    expect(!("email" in lenientUser2!)).toBeTruthy();
+    expect(lenientUser2!.phone).toEqual("123-456-7890");
+  });
 });
 
-Deno.test("Multi-collection: Null validation", async () => {
-  await setupTestDb();
-
-  try {
+test("Multi-collection: Null validation", async () => {
+  await withDatabase("mc_sanitizer_null", async (db) => {
     const users = await collection(db, "null_test_users", userSchema, {
       undefinedBehavior: "remove",
     });
@@ -471,9 +409,9 @@ Deno.test("Multi-collection: Null validation", async () => {
     });
 
     const insertedUser = await users.findOne({ name: "NullUser" });
-    assert(insertedUser !== null);
-    assertEquals(insertedUser.status, null);
-    assertEquals(insertedUser.name, "NullUser");
+    expect(insertedUser).not.toBeNull();
+    expect(insertedUser!.status).toEqual(null);
+    expect(insertedUser!.name).toEqual("NullUser");
 
     // Test inserting without status (should be undefined, not null)
     await users.insertOne({
@@ -483,8 +421,8 @@ Deno.test("Multi-collection: Null validation", async () => {
     });
 
     const noStatusUser = await users.findOne({ name: "NoStatusUser" });
-    assert(noStatusUser !== null);
-    assert(!("status" in noStatusUser)); // status should not be present
+    expect(noStatusUser).not.toBeNull();
+    expect(!("status" in noStatusUser!)).toBeTruthy(); // status should not be present
 
     // Test updating to null
     await users.updateOne(
@@ -493,9 +431,7 @@ Deno.test("Multi-collection: Null validation", async () => {
     );
 
     const updatedUser = await users.findOne({ name: "NoStatusUser" });
-    assert(updatedUser !== null);
-    assertEquals(updatedUser.status, null);
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(updatedUser).not.toBeNull();
+    expect(updatedUser!.status).toEqual(null);
+  });
 });

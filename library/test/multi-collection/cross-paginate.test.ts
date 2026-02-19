@@ -1,11 +1,11 @@
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertExists } from "@std/assert";
+import { test, expect } from "vitest";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import { defineModel } from "../../src/multi-collection-model.ts";
 
-Deno.test("Cross-pagination: paginate across two types", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Cross-pagination: paginate across two types", async () => {
+  await withDatabase("Cross-pagination: paginate across two types", async (db) => {
     const peopleModel = defineModel("people", {
       schema: {
         collaborator: {
@@ -50,26 +50,26 @@ Deno.test("Cross-pagination: paginate across two types", async (t) => {
     });
 
     // Should get all 10 documents
-    assertEquals(result.total, 10);
-    assertEquals(result.data.length, 10);
+    expect(result.total).toEqual(10);
+    expect(result.data.length).toEqual(10);
 
     // Verify we have both types in the result
     const types = new Set(result.data.map((doc) => doc._type));
-    assertEquals(types.has("collaborator"), true);
-    assertEquals(types.has("visitor"), true);
+    expect(types.has("collaborator")).toEqual(true);
+    expect(types.has("visitor")).toEqual(true);
 
     // Verify all documents have required common fields
     for (const doc of result.data) {
-      assertExists(doc._id);
-      assertExists(doc._type);
-      assertExists(doc.name);
-      assertExists(doc.email);
+      expect(doc._id).toBeDefined();
+      expect(doc._type).toBeDefined();
+      expect(doc.name).toBeDefined();
+      expect(doc.email).toBeDefined();
     }
   });
 });
 
-Deno.test("Cross-pagination: paginate with limit smaller than total", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Cross-pagination: paginate with limit smaller than total", async () => {
+  await withDatabase("Cross-pagination: paginate with limit smaller than total", async (db) => {
     const peopleModel = defineModel("people", {
       schema: {
         collaborator: {
@@ -100,19 +100,19 @@ Deno.test("Cross-pagination: paginate with limit smaller than total", async (t) 
       sort: { createdAt: 1 },
     });
 
-    assertEquals(page1.total, 6);
-    assertEquals(page1.data.length, 3);
-    assertEquals(page1.position, 0);
+    expect(page1.total).toEqual(6);
+    expect(page1.data.length).toEqual(3);
+    expect(page1.position).toEqual(0);
 
     // Verify order by createdAt
-    assertEquals(page1.data[0].name, "C1");
-    assertEquals(page1.data[1].name, "V1");
-    assertEquals(page1.data[2].name, "C2");
+    expect(page1.data[0].name).toEqual("C1");
+    expect(page1.data[1].name).toEqual("V1");
+    expect(page1.data[2].name).toEqual("C2");
   });
 });
 
-Deno.test("Cross-pagination: afterId with multiple types", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Cross-pagination: afterId with multiple types", async () => {
+  await withDatabase("Cross-pagination: afterId with multiple types", async (db) => {
     const peopleModel = defineModel("people", {
       schema: {
         collaborator: {
@@ -143,7 +143,7 @@ Deno.test("Cross-pagination: afterId with multiple types", async (t) => {
       sort: { createdAt: 1 },
     });
 
-    assertEquals(page1.data.length, 3);
+    expect(page1.data.length).toEqual(3);
     const lastId = page1.data[page1.data.length - 1]._id;
 
     // Get second page using afterId
@@ -153,23 +153,23 @@ Deno.test("Cross-pagination: afterId with multiple types", async (t) => {
       afterId: lastId,
     });
 
-    assertEquals(page2.data.length, 3);
+    expect(page2.data.length).toEqual(3);
 
     // Verify continuation
-    assertEquals(page2.data[0].name, "V2");
-    assertEquals(page2.data[1].name, "C3");
-    assertEquals(page2.data[2].name, "V3");
+    expect(page2.data[0].name).toEqual("V2");
+    expect(page2.data[1].name).toEqual("C3");
+    expect(page2.data[2].name).toEqual("V3");
 
     // Verify no overlap
     const page1Ids = new Set(page1.data.map((d) => d._id));
     for (const doc of page2.data) {
-      assertEquals(page1Ids.has(doc._id), false, "Should not have duplicates");
+      expect(page1Ids.has(doc._id)).toEqual(false);
     }
   });
 });
 
-Deno.test("Cross-pagination: afterId can be from any of the allowed types", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Cross-pagination: afterId can be from any of the allowed types", async () => {
+  await withDatabase("Cross-pagination: afterId can be from any of the allowed types", async (db) => {
     const peopleModel = defineModel("people", {
       schema: {
         collaborator: {
@@ -209,16 +209,16 @@ Deno.test("Cross-pagination: afterId can be from any of the allowed types", asyn
     // Should work - visitor ID is valid for cross-pagination
     // Items after V1 should be returned
     const expectedCount = all.data.length - v1Index - 1;
-    assertEquals(result.data.length, expectedCount);
+    expect(result.data.length).toEqual(expectedCount);
 
     // Verify V1 is not in the result (we're paginating AFTER it)
     const hasV1 = result.data.some((d) => d._id === visitorId);
-    assertEquals(hasV1, false, "V1 should not be in the result");
+    expect(hasV1).toEqual(false);
   });
 });
 
-Deno.test("Cross-pagination: invalid afterId format throws error", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Cross-pagination: invalid afterId format throws error", async () => {
+  await withDatabase("Cross-pagination: invalid afterId format throws error", async (db) => {
     const peopleModel = defineModel("people", {
       schema: {
         collaborator: {
@@ -244,26 +244,23 @@ Deno.test("Cross-pagination: invalid afterId format throws error", async (t) => 
       await people.paginate(["collaborator", "visitor"], {}, {
         afterId: adminId, // admin is NOT in the allowed types
       });
-      assertEquals(true, false, "Should have thrown an error");
+      expect(true).toEqual(false);
     } catch (error) {
-      assertEquals(
+      expect(
         (error as Error).message.includes("Invalid afterId format"),
-        true,
-      );
-      assertEquals(
+      ).toEqual(true);
+      expect(
         (error as Error).message.includes("collaborator"),
-        true,
-      );
-      assertEquals(
+      ).toEqual(true);
+      expect(
         (error as Error).message.includes("visitor"),
-        true,
-      );
+      ).toEqual(true);
     }
   });
 });
 
-Deno.test("Cross-pagination: beforeId with multiple types", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Cross-pagination: beforeId with multiple types", async () => {
+  await withDatabase("Cross-pagination: beforeId with multiple types", async (db) => {
     const peopleModel = defineModel("people", {
       schema: {
         collaborator: {
@@ -301,17 +298,17 @@ Deno.test("Cross-pagination: beforeId with multiple types", async (t) => {
       beforeId: all.data[3]._id,
     });
 
-    assertEquals(beforePage.data.length, 3);
+    expect(beforePage.data.length).toEqual(3);
 
     // Should return first 3 items in original order
-    assertEquals(beforePage.data[0].name, "C1");
-    assertEquals(beforePage.data[1].name, "V1");
-    assertEquals(beforePage.data[2].name, "C2");
+    expect(beforePage.data[0].name).toEqual("C1");
+    expect(beforePage.data[1].name).toEqual("V1");
+    expect(beforePage.data[2].name).toEqual("C2");
   });
 });
 
-Deno.test("Cross-pagination: with filter applied to all types", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Cross-pagination: with filter applied to all types", async () => {
+  await withDatabase("Cross-pagination: with filter applied to all types", async (db) => {
     const peopleModel = defineModel("people", {
       schema: {
         collaborator: {
@@ -343,17 +340,17 @@ Deno.test("Cross-pagination: with filter applied to all types", async (t) => {
     );
 
     // Should only get active ones
-    assertEquals(result.total, 4);
-    assertEquals(result.data.length, 4);
+    expect(result.total).toEqual(4);
+    expect(result.data.length).toEqual(4);
 
     for (const doc of result.data) {
-      assertEquals(doc.active, true);
+      expect(doc.active).toEqual(true);
     }
   });
 });
 
-Deno.test("Cross-pagination: with custom sort descending", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Cross-pagination: with custom sort descending", async () => {
+  await withDatabase("Cross-pagination: with custom sort descending", async (db) => {
     const peopleModel = defineModel("people", {
       schema: {
         collaborator: {
@@ -382,19 +379,19 @@ Deno.test("Cross-pagination: with custom sort descending", async (t) => {
       sort: { score: -1 },
     });
 
-    assertEquals(result.data.length, 5);
+    expect(result.data.length).toEqual(5);
 
     // Verify descending order
-    assertEquals(result.data[0].score, 50); // V1
-    assertEquals(result.data[1].score, 40); // C3
-    assertEquals(result.data[2].score, 30); // C2
-    assertEquals(result.data[3].score, 20); // V2
-    assertEquals(result.data[4].score, 10); // C1
+    expect(result.data[0].score).toEqual(50); // V1
+    expect(result.data[1].score).toEqual(40); // C3
+    expect(result.data[2].score).toEqual(30); // C2
+    expect(result.data[3].score).toEqual(20); // V2
+    expect(result.data[4].score).toEqual(10); // C1
   });
 });
 
-Deno.test("Cross-pagination: three types simultaneously", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Cross-pagination: three types simultaneously", async () => {
+  await withDatabase("Cross-pagination: three types simultaneously", async (db) => {
     const peopleModel = defineModel("people", {
       schema: {
         employee: {
@@ -429,28 +426,28 @@ Deno.test("Cross-pagination: three types simultaneously", async (t) => {
       { limit: 10, sort: { createdAt: 1 } },
     );
 
-    assertEquals(result.total, 6);
-    assertEquals(result.data.length, 6);
+    expect(result.total).toEqual(6);
+    expect(result.data.length).toEqual(6);
 
     // Verify all types present
     const types = new Set(result.data.map((d) => d._type));
-    assertEquals(types.size, 3);
-    assertEquals(types.has("employee"), true);
-    assertEquals(types.has("contractor"), true);
-    assertEquals(types.has("intern"), true);
+    expect(types.size).toEqual(3);
+    expect(types.has("employee")).toEqual(true);
+    expect(types.has("contractor")).toEqual(true);
+    expect(types.has("intern")).toEqual(true);
 
     // Verify order
-    assertEquals(result.data[0].name, "E1");
-    assertEquals(result.data[1].name, "C1");
-    assertEquals(result.data[2].name, "I1");
-    assertEquals(result.data[3].name, "E2");
-    assertEquals(result.data[4].name, "C2");
-    assertEquals(result.data[5].name, "I2");
+    expect(result.data[0].name).toEqual("E1");
+    expect(result.data[1].name).toEqual("C1");
+    expect(result.data[2].name).toEqual("I1");
+    expect(result.data[3].name).toEqual("E2");
+    expect(result.data[4].name).toEqual("C2");
+    expect(result.data[5].name).toEqual("I2");
   });
 });
 
-Deno.test("Cross-pagination: single type array behaves like single key", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Cross-pagination: single type array behaves like single key", async () => {
+  await withDatabase("Cross-pagination: single type array behaves like single key", async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
         product: {
@@ -482,19 +479,19 @@ Deno.test("Cross-pagination: single type array behaves like single key", async (
     const resultSingle = await catalog.paginate("product", {}, { limit: 10 });
 
     // Should have same results
-    assertEquals(resultArray.total, resultSingle.total);
-    assertEquals(resultArray.data.length, resultSingle.data.length);
-    assertEquals(resultArray.total, 5);
+    expect(resultArray.total).toEqual(resultSingle.total);
+    expect(resultArray.data.length).toEqual(resultSingle.data.length);
+    expect(resultArray.total).toEqual(5);
 
     // All should be products
     for (const doc of resultArray.data) {
-      assertEquals(doc._type, "product");
+      expect(doc._type).toEqual("product");
     }
   });
 });
 
-Deno.test("Cross-pagination: accumulation across 5+ pages with no duplicates", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Cross-pagination: accumulation across 5+ pages with no duplicates", async () => {
+  await withDatabase("Cross-pagination: accumulation across 5+ pages with no duplicates", async (db) => {
     const peopleModel = defineModel("people", {
       schema: {
         collaborator: {
@@ -539,16 +536,16 @@ Deno.test("Cross-pagination: accumulation across 5+ pages with no duplicates", a
     }
 
     // Should have all 30 items
-    assertEquals(allCollectedIds.length, 30);
+    expect(allCollectedIds.length).toEqual(30);
 
     // Verify no duplicates using Set
     const uniqueIds = new Set(allCollectedIds);
-    assertEquals(uniqueIds.size, 30, "There are duplicate IDs");
+    expect(uniqueIds.size).toEqual(30);
   });
 });
 
-Deno.test("Cross-pagination: with prepare, filter, and format", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Cross-pagination: with prepare, filter, and format", async () => {
+  await withDatabase("Cross-pagination: with prepare, filter, and format", async (db) => {
     const peopleModel = defineModel("people", {
       schema: {
         collaborator: {
@@ -577,17 +574,17 @@ Deno.test("Cross-pagination: with prepare, filter, and format", async (t) => {
     });
 
     // Only C1 (50000) and C2 (70000) have salary > 45000
-    assertEquals(result.data.length, 2);
+    expect(result.data.length).toEqual(2);
 
     for (const doc of result.data) {
-      assertEquals(doc.bonus, true);
-      assertExists(doc.name);
+      expect(doc.bonus).toEqual(true);
+      expect(doc.name).toBeDefined();
     }
   });
 });
 
-Deno.test("Cross-pagination: empty result when no matching types", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Cross-pagination: empty result when no matching types", async () => {
+  await withDatabase("Cross-pagination: empty result when no matching types", async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
         product: {
@@ -613,13 +610,13 @@ Deno.test("Cross-pagination: empty result when no matching types", async (t) => 
       limit: 10,
     });
 
-    assertEquals(result.total, 0);
-    assertEquals(result.data.length, 0);
+    expect(result.total).toEqual(0);
+    expect(result.data.length).toEqual(0);
   });
 });
 
-Deno.test("Cross-pagination: backward compatibility - single key still works", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Cross-pagination: backward compatibility - single key still works", async () => {
+  await withDatabase("Cross-pagination: backward compatibility - single key still works", async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
         product: {
@@ -645,12 +642,12 @@ Deno.test("Cross-pagination: backward compatibility - single key still works", a
     // Traditional single-key pagination should still work
     const products = await catalog.paginate("product", {}, { limit: 10 });
 
-    assertEquals(products.total, 5);
-    assertEquals(products.data.length, 5);
+    expect(products.total).toEqual(5);
+    expect(products.data.length).toEqual(5);
 
     for (const doc of products.data) {
-      assertEquals(doc._type, "product");
-      assertExists(doc.price);
+      expect(doc._type).toEqual("product");
+      expect(doc.price).toBeDefined();
     }
   });
 });
@@ -659,8 +656,8 @@ Deno.test("Cross-pagination: backward compatibility - single key still works", a
 // naturalIdSort tests
 // ============================================
 
-Deno.test("Cross-pagination: naturalIdSort sorts by ULID (creation time) across types", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Cross-pagination: naturalIdSort sorts by ULID (creation time) across types", async () => {
+  await withDatabase("Cross-pagination: naturalIdSort sorts by ULID (creation time) across types", async (db) => {
     const peopleModel = defineModel("people", {
       schema: {
         collaborator: {
@@ -697,14 +694,14 @@ Deno.test("Cross-pagination: naturalIdSort sorts by ULID (creation time) across 
     });
 
     // Both should return all 4 items
-    assertEquals(withoutNatural.data.length, 4);
-    assertEquals(withNatural.data.length, 4);
+    expect(withoutNatural.data.length).toEqual(4);
+    expect(withNatural.data.length).toEqual(4);
 
     // With naturalIdSort, order should be chronological: C1, V1, C2, V2
-    assertEquals(withNatural.data[0].name, "C1");
-    assertEquals(withNatural.data[1].name, "V1");
-    assertEquals(withNatural.data[2].name, "C2");
-    assertEquals(withNatural.data[3].name, "V2");
+    expect(withNatural.data[0].name).toEqual("C1");
+    expect(withNatural.data[1].name).toEqual("V1");
+    expect(withNatural.data[2].name).toEqual("C2");
+    expect(withNatural.data[3].name).toEqual("V2");
 
     // Without naturalIdSort, collaborators come before visitors (alphabetical by type prefix)
     // The exact order depends on type prefix comparison
@@ -712,13 +709,12 @@ Deno.test("Cross-pagination: naturalIdSort sorts by ULID (creation time) across 
     // All collaborators should come before all visitors
     const firstVisitorIdx = typesWithout.indexOf("visitor");
     const lastCollabIdx = typesWithout.lastIndexOf("collaborator");
-    assertEquals(lastCollabIdx < firstVisitorIdx, true,
-      "Without naturalIdSort, collaborators should come before visitors");
+    expect(lastCollabIdx < firstVisitorIdx).toEqual(true);
   });
 });
 
-Deno.test("Cross-pagination: naturalIdSort with afterId", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Cross-pagination: naturalIdSort with afterId", async () => {
+  await withDatabase("Cross-pagination: naturalIdSort with afterId", async (db) => {
     const peopleModel = defineModel("people", {
       schema: {
         collaborator: {
@@ -749,14 +745,14 @@ Deno.test("Cross-pagination: naturalIdSort with afterId", async (t) => {
     });
 
     // Should get C2 and V2 (the items after V1 chronologically)
-    assertEquals(result.data.length, 2);
-    assertEquals(result.data[0].name, "C2");
-    assertEquals(result.data[1].name, "V2");
+    expect(result.data.length).toEqual(2);
+    expect(result.data[0].name).toEqual("C2");
+    expect(result.data[1].name).toEqual("V2");
   });
 });
 
-Deno.test("Cross-pagination: naturalIdSort descending order", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Cross-pagination: naturalIdSort descending order", async () => {
+  await withDatabase("Cross-pagination: naturalIdSort descending order", async (db) => {
     const peopleModel = defineModel("people", {
       schema: {
         collaborator: {
@@ -787,16 +783,16 @@ Deno.test("Cross-pagination: naturalIdSort descending order", async (t) => {
     });
 
     // Should be reverse chronological: V2, C2, V1, C1
-    assertEquals(result.data.length, 4);
-    assertEquals(result.data[0].name, "V2");
-    assertEquals(result.data[1].name, "C2");
-    assertEquals(result.data[2].name, "V1");
-    assertEquals(result.data[3].name, "C1");
+    expect(result.data.length).toEqual(4);
+    expect(result.data[0].name).toEqual("V2");
+    expect(result.data[1].name).toEqual("C2");
+    expect(result.data[2].name).toEqual("V1");
+    expect(result.data[3].name).toEqual("C1");
   });
 });
 
-Deno.test("Cross-pagination: naturalIdSort pagination across multiple pages", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Cross-pagination: naturalIdSort pagination across multiple pages", async () => {
+  await withDatabase("Cross-pagination: naturalIdSort pagination across multiple pages", async (db) => {
     const peopleModel = defineModel("people", {
       schema: {
         collaborator: {
@@ -841,19 +837,19 @@ Deno.test("Cross-pagination: naturalIdSort pagination across multiple pages", as
     }
 
     // Should have all 10 items in chronological order
-    assertEquals(allCollected.length, 10);
-    assertEquals(allCollected[0], "C1");
-    assertEquals(allCollected[1], "V1");
-    assertEquals(allCollected[2], "C2");
-    assertEquals(allCollected[3], "V2");
+    expect(allCollected.length).toEqual(10);
+    expect(allCollected[0]).toEqual("C1");
+    expect(allCollected[1]).toEqual("V1");
+    expect(allCollected[2]).toEqual("C2");
+    expect(allCollected[3]).toEqual("V2");
     // ... alternating pattern continues
-    assertEquals(allCollected[8], "C5");
-    assertEquals(allCollected[9], "V5");
+    expect(allCollected[8]).toEqual("C5");
+    expect(allCollected[9]).toEqual("V5");
   });
 });
 
-Deno.test("Cross-pagination: naturalIdSort with three types", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Cross-pagination: naturalIdSort with three types", async () => {
+  await withDatabase("Cross-pagination: naturalIdSort with three types", async (db) => {
     const peopleModel = defineModel("people", {
       schema: {
         admin: {
@@ -891,12 +887,12 @@ Deno.test("Cross-pagination: naturalIdSort with three types", async (t) => {
     );
 
     // Should be chronological: A1, C1, V1, A2, C2, V2
-    assertEquals(result.data.length, 6);
-    assertEquals(result.data[0].name, "A1");
-    assertEquals(result.data[1].name, "C1");
-    assertEquals(result.data[2].name, "V1");
-    assertEquals(result.data[3].name, "A2");
-    assertEquals(result.data[4].name, "C2");
-    assertEquals(result.data[5].name, "V2");
+    expect(result.data.length).toEqual(6);
+    expect(result.data[0].name).toEqual("A1");
+    expect(result.data[1].name).toEqual("C1");
+    expect(result.data[2].name).toEqual("V1");
+    expect(result.data[3].name).toEqual("A2");
+    expect(result.data[4].name).toEqual("C2");
+    expect(result.data[5].name).toEqual("V2");
   });
 });

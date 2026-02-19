@@ -1,8 +1,8 @@
 import { toMongoValidator } from "../src/validator.ts";
 import * as v from "../src/schema.ts";
-import { assert, assertEquals } from "@std/assert";
+import { test, expect } from "vitest";
 
-Deno.test("Simple schema test", () => {
+test("Simple schema test", () => {
   const schema = v.object({
     a: v.string(),
     b: v.object({
@@ -12,7 +12,7 @@ Deno.test("Simple schema test", () => {
 
   const validator = toMongoValidator(schema);
 
-  assertEquals(validator, {
+  expect(validator).toEqual({
     "$jsonSchema": {
       bsonType: "object",
       properties: {
@@ -41,7 +41,7 @@ Deno.test("Simple schema test", () => {
   });
 });
 
-Deno.test("Basic types schemas", () => {
+test("Basic types schemas", () => {
   const schema = v.object({
     stringField: v.string(),
     numberField: v.number(),
@@ -53,33 +53,33 @@ Deno.test("Basic types schemas", () => {
   const validator = toMongoValidator(schema);
   const jsonSchema = validator.$jsonSchema!;
 
-  assertEquals(jsonSchema.properties!.stringField, {
+  expect(jsonSchema.properties!.stringField).toEqual({
     bsonType: "string",
     description: "must be a string",
   });
 
-  assertEquals(jsonSchema.properties!.numberField, {
+  expect(jsonSchema.properties!.numberField).toEqual({
     bsonType: "number",
     description: "must be a number",
   });
 
-  assertEquals(jsonSchema.properties!.booleanField, {
+  expect(jsonSchema.properties!.booleanField).toEqual({
     bsonType: "bool",
     description: "must be a boolean",
   });
 
-  assertEquals(jsonSchema.properties!.dateField, {
+  expect(jsonSchema.properties!.dateField).toEqual({
     bsonType: "date",
     description: "must be a date",
   });
 
-  assertEquals(jsonSchema.properties!.nullField, {
+  expect(jsonSchema.properties!.nullField).toEqual({
     bsonType: "null",
     description: "must be null",
   });
 });
 
-Deno.test("String validations", () => {
+test("String validations", () => {
   const schema = v.object({
     minLength: v.pipe(v.string(), v.minLength(5)),
     maxLength: v.pipe(v.string(), v.maxLength(10)),
@@ -96,32 +96,32 @@ Deno.test("String validations", () => {
   const validator = toMongoValidator(schema);
   const jsonSchema = validator.$jsonSchema!;
 
-  assertEquals(jsonSchema.properties!.minLength, {
+  expect(jsonSchema.properties!.minLength).toEqual({
     bsonType: "string",
     description: "must be a string",
     minLength: 5,
   });
 
-  assertEquals(jsonSchema.properties!.maxLength, {
+  expect(jsonSchema.properties!.maxLength).toEqual({
     bsonType: "string",
     description: "must be a string",
     maxLength: 10,
   });
 
-  assertEquals(jsonSchema.properties!.exactLength, {
+  expect(jsonSchema.properties!.exactLength).toEqual({
     bsonType: "string",
     description: "must be a string",
     minLength: 8,
     maxLength: 8,
   });
 
-  assertEquals(jsonSchema.properties!.pattern, {
+  expect(jsonSchema.properties!.pattern).toEqual({
     bsonType: "string",
     description: "must be a string",
     pattern: "^[a-z]+$",
   });
 
-  assertEquals(jsonSchema.properties!.combined, {
+  expect(jsonSchema.properties!.combined).toEqual({
     bsonType: "string",
     description: "must be a string",
     minLength: 3,
@@ -130,7 +130,7 @@ Deno.test("String validations", () => {
   });
 });
 
-Deno.test("Number validations", () => {
+test("Number validations", () => {
   const schema = v.object({
     min: v.pipe(v.number(), v.minValue(5)),
     max: v.pipe(v.number(), v.maxValue(10)),
@@ -140,19 +140,19 @@ Deno.test("Number validations", () => {
   const validator = toMongoValidator(schema);
   const jsonSchema = validator.$jsonSchema!;
 
-  assertEquals(jsonSchema.properties!.min, {
+  expect(jsonSchema.properties!.min).toEqual({
     bsonType: "number",
     description: "must be a number",
     minimum: 5,
   });
 
-  assertEquals(jsonSchema.properties!.max, {
+  expect(jsonSchema.properties!.max).toEqual({
     bsonType: "number",
     description: "must be a number",
     maximum: 10,
   });
 
-  assertEquals(jsonSchema.properties!.range, {
+  expect(jsonSchema.properties!.range).toEqual({
     bsonType: "number",
     description: "must be a number",
     minimum: 1,
@@ -160,7 +160,7 @@ Deno.test("Number validations", () => {
   });
 });
 
-Deno.test("Array schema", () => {
+test("Array schema", () => {
   const schema = v.object({
     simpleArray: v.array(v.string()),
     typedArray: v.array(v.number()),
@@ -175,7 +175,7 @@ Deno.test("Array schema", () => {
   const validator = toMongoValidator(schema);
   const jsonSchema = validator.$jsonSchema!;
 
-  assertEquals(jsonSchema.properties!.simpleArray, {
+  expect(jsonSchema.properties!.simpleArray).toEqual({
     bsonType: "array",
     items: {
       bsonType: "string",
@@ -184,7 +184,7 @@ Deno.test("Array schema", () => {
     description: "must be an array",
   });
 
-  assertEquals(jsonSchema.properties!.typedArray, {
+  expect(jsonSchema.properties!.typedArray).toEqual({
     bsonType: "array",
     items: {
       bsonType: "number",
@@ -193,7 +193,7 @@ Deno.test("Array schema", () => {
     description: "must be an array",
   });
 
-  assertEquals(jsonSchema.properties!.objectArray, {
+  expect(jsonSchema.properties!.objectArray).toEqual({
     bsonType: "array",
     items: {
       bsonType: "object",
@@ -208,7 +208,7 @@ Deno.test("Array schema", () => {
     description: "must be an array",
   });
 
-  assertEquals(jsonSchema.properties!.constrainedArray, {
+  expect(jsonSchema.properties!.constrainedArray).toEqual({
     bsonType: "array",
     items: {
       bsonType: "string",
@@ -220,7 +220,7 @@ Deno.test("Array schema", () => {
   });
 });
 
-Deno.test("Optional fields", () => {
+test("Optional fields", () => {
   const schema = v.object({
     required: v.string(),
     optional: v.optional(v.string()),
@@ -230,27 +230,27 @@ Deno.test("Optional fields", () => {
   const validator = toMongoValidator(schema);
   const jsonSchema = validator.$jsonSchema!;
 
-  // Vérifie que le champ 'required' est dans la liste des champs requis
-  assert(jsonSchema.required!.includes("required"));
+  // Verifie que le champ 'required' est dans la liste des champs requis
+  expect(jsonSchema.required!.includes("required")).toBeTruthy();
 
-  // Vérifie que le champ 'optional' n'est PAS dans la liste des champs requis
-  assert(!jsonSchema.required!.includes("optional"));
+  // Verifie que le champ 'optional' n'est PAS dans la liste des champs requis
+  expect(!jsonSchema.required!.includes("optional")).toBeTruthy();
 
-  // Le champ 'optionalWithDefault' est requis car il a une valeur par défaut
-  assert(jsonSchema.required!.includes("optionalWithDefault"));
+  // Le champ 'optionalWithDefault' est requis car il a une valeur par defaut
+  expect(jsonSchema.required!.includes("optionalWithDefault")).toBeTruthy();
 
-  assertEquals(jsonSchema.properties!.optional, {
+  expect(jsonSchema.properties!.optional).toEqual({
     bsonType: "string",
     description: "must be a string",
   });
 
-  assertEquals(jsonSchema.properties!.optionalWithDefault, {
+  expect(jsonSchema.properties!.optionalWithDefault).toEqual({
     bsonType: "number",
     description: "must be a number",
   });
 });
 
-Deno.test("Union schema", () => {
+test("Union schema", () => {
   const schema = v.object({
     stringOrNumber: v.union([v.string(), v.number()]),
     optionalField: v.union([v.string(), v.undefined()]),
@@ -259,7 +259,7 @@ Deno.test("Union schema", () => {
   const validator = toMongoValidator(schema);
   const jsonSchema = validator.$jsonSchema!;
 
-  assertEquals(jsonSchema.properties!.stringOrNumber, {
+  expect(jsonSchema.properties!.stringOrNumber).toEqual({
     anyOf: [
       {
         bsonType: "string",
@@ -272,10 +272,10 @@ Deno.test("Union schema", () => {
     ],
   });
 
-  assertEquals(jsonSchema.required!.includes("optionalField"), false);
+  expect(jsonSchema.required!.includes("optionalField")).toEqual(false);
 });
 
-Deno.test("Intersect schema", () => {
+test("Intersect schema", () => {
   const nameSchema = v.object({ name: v.string() });
   const ageSchema = v.object({ age: v.number() });
 
@@ -286,7 +286,7 @@ Deno.test("Intersect schema", () => {
   const validator = toMongoValidator(schema);
   const jsonSchema = validator.$jsonSchema!;
 
-  assertEquals(jsonSchema.properties!.person, {
+  expect(jsonSchema.properties!.person).toEqual({
     allOf: [
       {
         bsonType: "object",
@@ -312,7 +312,7 @@ Deno.test("Intersect schema", () => {
   });
 });
 
-Deno.test("Complex nested schema", () => {
+test("Complex nested schema", () => {
   const schema = v.object({
     user: v.object({
       name: v.string(),
@@ -332,31 +332,31 @@ Deno.test("Complex nested schema", () => {
   const validator = toMongoValidator(schema);
   const jsonSchema = validator.$jsonSchema!;
 
-  // Vérifier la structure générale
-  assertEquals(jsonSchema.required!.includes("user"), true);
-  assertEquals(jsonSchema.required!.includes("metadata"), true);
+  // Verifier la structure generale
+  expect(jsonSchema.required!.includes("user")).toEqual(true);
+  expect(jsonSchema.required!.includes("metadata")).toEqual(true);
 
-  // Vérifier les propriétés imbriquées
+  // Verifier les proprietes imbriquees
   const userProps = jsonSchema.properties!.user.properties!;
-  assertEquals(userProps.name.bsonType, "string");
-  assertEquals(userProps.age.minimum, 0);
+  expect(userProps.name.bsonType).toEqual("string");
+  expect(userProps.age.minimum).toEqual(0);
 
-  // Vérifier les imbrications profondes
+  // Verifier les imbrications profondes
   const contactProps = userProps.contact.properties!;
-  assertEquals(contactProps.email.pattern, "^.+@.+\\..+$");
-  assertEquals(userProps.contact.required!.includes("phone"), false);
+  expect(contactProps.email.pattern).toEqual("^.+@.+\\..+$");
+  expect(userProps.contact.required!.includes("phone")).toEqual(false);
 
-  // Vérifier les tableaux
-  assertEquals(userProps.tags.bsonType, "array");
-  assertEquals(userProps.tags.items.bsonType, "string");
+  // Verifier les tableaux
+  expect(userProps.tags.bsonType).toEqual("array");
+  expect(userProps.tags.items.bsonType).toEqual("string");
 
-  // Vérifier les dates
+  // Verifier les dates
   const metadataProps = jsonSchema.properties!.metadata.properties!;
-  assertEquals(metadataProps.createdAt.bsonType, "date");
-  assertEquals(metadataProps.updatedAt.bsonType, "date");
+  expect(metadataProps.createdAt.bsonType).toEqual("date");
+  expect(metadataProps.updatedAt.bsonType).toEqual("date");
 });
 
-Deno.test("Multiple regex patterns should be combined correctly", () => {
+test("Multiple regex patterns should be combined correctly", () => {
   const schema = v.object({
     username: v.pipe(
       v.string(),
@@ -371,14 +371,14 @@ Deno.test("Multiple regex patterns should be combined correctly", () => {
   const jsonSchema = validator.$jsonSchema!;
 
   const usernameProps = jsonSchema.properties!.username;
-  assertEquals(usernameProps.bsonType, "string");
-  assertEquals(usernameProps.minLength, 3);
-  assertEquals(usernameProps.maxLength, 20);
-  assert(usernameProps.pattern!.includes("^[a-z]"));
-  assert(usernameProps.pattern!.includes("[a-z0-9]+$"));
+  expect(usernameProps.bsonType).toEqual("string");
+  expect(usernameProps.minLength).toEqual(3);
+  expect(usernameProps.maxLength).toEqual(20);
+  expect(usernameProps.pattern!.includes("^[a-z]")).toBeTruthy();
+  expect(usernameProps.pattern!.includes("[a-z0-9]+$")).toBeTruthy();
 });
 
-Deno.test("Any schema type", () => {
+test("Any schema type", () => {
   const schema = v.object({
     anyField: v.any(),
   });
@@ -386,11 +386,11 @@ Deno.test("Any schema type", () => {
   const validator = toMongoValidator(schema);
   const jsonSchema = validator.$jsonSchema!;
 
-  assert(jsonSchema.properties!.anyField === undefined); // 'any' doesn't add a validator
-  assertEquals(jsonSchema.required!.includes("anyField"), true); // still a required field
+  expect(jsonSchema.properties!.anyField === undefined).toBeTruthy(); // 'any' doesn't add a validator
+  expect(jsonSchema.required!.includes("anyField")).toEqual(true); // still a required field
 });
 
-Deno.test("Literal schema", () => {
+test("Literal schema", () => {
   const schema = v.object({
     stringLiteral: v.literal("active"),
     numberLiteral: v.literal(42),
@@ -400,26 +400,26 @@ Deno.test("Literal schema", () => {
   const validator = toMongoValidator(schema);
   const jsonSchema = validator.$jsonSchema!;
 
-  assertEquals(jsonSchema.properties!.stringLiteral, {
+  expect(jsonSchema.properties!.stringLiteral).toEqual({
     bsonType: "string",
     enum: ["active"],
     description: "must be active",
   });
 
-  assertEquals(jsonSchema.properties!.numberLiteral, {
+  expect(jsonSchema.properties!.numberLiteral).toEqual({
     bsonType: "number",
     enum: [42],
     description: "must be 42",
   });
 
-  assertEquals(jsonSchema.properties!.booleanLiteral, {
+  expect(jsonSchema.properties!.booleanLiteral).toEqual({
     bsonType: "bool",
     enum: [true],
     description: "must be true",
   });
 });
 
-Deno.test("Enum schema", () => {
+test("Enum schema", () => {
   enum StringEnum {
     Option1 = "option1",
     Option2 = "option2",
@@ -440,20 +440,20 @@ Deno.test("Enum schema", () => {
   const validator = toMongoValidator(schema);
   const jsonSchema = validator.$jsonSchema!;
 
-  assertEquals(jsonSchema.properties!.stringEnum, {
+  expect(jsonSchema.properties!.stringEnum).toEqual({
     bsonType: "string",
     enum: ["option1", "option2", "option3"],
     description: "must be one of the allowed values",
   });
 
-  assertEquals(jsonSchema.properties!.numberEnum, {
+  expect(jsonSchema.properties!.numberEnum).toEqual({
     bsonType: "number",
     enum: [1, 2, 3],
     description: "must be one of the allowed values",
   });
 });
 
-Deno.test("Literal with pipes", () => {
+test("Literal with pipes", () => {
   const schema = v.object({
     status: v.pipe(
       v.string(),
@@ -466,14 +466,14 @@ Deno.test("Literal with pipes", () => {
 
   // For literal with pipes, the first validation in the pipe (v.string())
   // sets the bsonType, and then literal adds the enum constraint
-  assertEquals(jsonSchema.properties!.status, {
+  expect(jsonSchema.properties!.status).toEqual({
     bsonType: "string",
     description: "must be a string",
     enum: ["active"],
   });
 });
 
-Deno.test("Record schema - string keys and number values", () => {
+test("Record schema - string keys and number values", () => {
   const schema = v.object({
     map: v.record(v.string(), v.number()),
   });
@@ -481,7 +481,7 @@ Deno.test("Record schema - string keys and number values", () => {
   const validator = toMongoValidator(schema);
   const jsonSchema = validator.$jsonSchema!;
 
-  assertEquals(jsonSchema.properties!.map, {
+  expect(jsonSchema.properties!.map).toEqual({
     bsonType: "object",
     description: "must be a record",
     additionalProperties: {
@@ -491,7 +491,7 @@ Deno.test("Record schema - string keys and number values", () => {
   });
 });
 
-Deno.test("Record schema with key regex", () => {
+test("Record schema with key regex", () => {
   const schema = v.object({
     mapRegex: v.record(v.pipe(v.string(), v.regex(/^[a-z]+$/)), v.string()),
   });
@@ -499,47 +499,47 @@ Deno.test("Record schema with key regex", () => {
   const validator = toMongoValidator(schema);
   const jsonSchema = validator.$jsonSchema!;
 
-  assertEquals(jsonSchema.properties!.mapRegex.patternProperties, {
+  expect(jsonSchema.properties!.mapRegex.patternProperties).toEqual({
     "^[a-z]+$": {
       bsonType: "string",
       description: "must be a string",
     },
   });
 
-  assertEquals(jsonSchema.properties!.mapRegex.additionalProperties, false);
+  expect(jsonSchema.properties!.mapRegex.additionalProperties).toEqual(false);
 });
 
-Deno.test("Record validation should accept valid and reject invalid values", () => {
+test("Record validation should accept valid and reject invalid values", () => {
   const schema = v.object({
     map: v.record(v.string(), v.number()),
   });
 
   // Valid document
   const ok = v.safeParse(schema, { map: { a: 1, b: 2 } });
-  assert(ok.success);
+  expect(ok.success).toBeTruthy();
 
   // Invalid value for a key
   const nokValue = v.safeParse(schema, { map: { a: "1" } });
-  assert(!nokValue.success);
+  expect(!nokValue.success).toBeTruthy();
 
   // Invalid overall type
   const nokType = v.safeParse(schema, { map: "not-an-object" });
-  assert(!nokType.success);
+  expect(!nokType.success).toBeTruthy();
 });
 
-Deno.test("Record key regex validation should accept and reject keys", () => {
+test("Record key regex validation should accept and reject keys", () => {
   const schema = v.object({
     mapRegex: v.record(v.pipe(v.string(), v.regex(/^[a-z]+$/)), v.string()),
   });
 
   const ok = v.safeParse(schema, { mapRegex: { abc: "ok", xyz: "ok" } });
-  assert(ok.success);
+  expect(ok.success).toBeTruthy();
 
   const nok = v.safeParse(schema, { mapRegex: { Abc: "ok" } });
-  assert(!nok.success);
+  expect(!nok.success).toBeTruthy();
 });
 
-Deno.test("Deep nested record schema: toMongoValidator structure and valibot validation", () => {
+test("Deep nested record schema: toMongoValidator structure and valibot validation", () => {
   const schema = v.object({
     level1: v.object({
       level2: v.record(v.string(), v.object({ x: v.number() })),
@@ -550,32 +550,31 @@ Deno.test("Deep nested record schema: toMongoValidator structure and valibot val
   const jsonSchema = validator.$jsonSchema!;
 
   // Check generated JSON Schema for deep nested record
-  assertEquals(
+  expect(
     jsonSchema.properties!.level1.properties!.level2.additionalProperties,
-    {
-      bsonType: "object",
-      properties: {
-        x: {
-          bsonType: "number",
-          description: "must be a number",
-        },
+  ).toEqual({
+    bsonType: "object",
+    properties: {
+      x: {
+        bsonType: "number",
+        description: "must be a number",
       },
-      required: ["x"],
     },
-  );
+    required: ["x"],
+  });
 
   // Valid document
   const ok = v.safeParse(schema, {
     level1: { level2: { a: { x: 1 }, b: { x: 2 } } },
   });
-  assert(ok.success);
+  expect(ok.success).toBeTruthy();
 
   // Invalid document: nested value wrong type
   const nok = v.safeParse(schema, { level1: { level2: { a: { x: "no" } } } });
-  assert(!nok.success);
+  expect(!nok.success).toBeTruthy();
 });
 
-Deno.test("Record schema complex cases", () => {
+test("Record schema complex cases", () => {
   // Record with enum keys
   const enumSchema = v.object({
     enumRecord: v.record(v.picklist(["a", "b", "c"]), v.number()),
@@ -585,7 +584,7 @@ Deno.test("Record schema complex cases", () => {
   const enumJsonSchema = enumValidator.$jsonSchema!;
 
   // Since enum doesn't produce a pattern, it should use additionalProperties
-  assertEquals(enumJsonSchema.properties!.enumRecord, {
+  expect(enumJsonSchema.properties!.enumRecord).toEqual({
     bsonType: "object",
     description: "must be a record",
     additionalProperties: {
@@ -608,7 +607,7 @@ Deno.test("Record schema complex cases", () => {
   const complexValidator = toMongoValidator(complexSchema);
   const complexJsonSchema = complexValidator.$jsonSchema!;
 
-  assertEquals(complexJsonSchema.properties!.complexRecord, {
+  expect(complexJsonSchema.properties!.complexRecord).toEqual({
     bsonType: "object",
     description: "must be a record",
     patternProperties: {
@@ -631,7 +630,7 @@ Deno.test("Record schema complex cases", () => {
   });
 });
 
-Deno.test("Nullable schema", () => {
+test("Nullable schema", () => {
   const schema = v.object({
     nullableString: v.nullable(v.string()),
     nullableNumber: v.nullable(v.number()),
@@ -643,7 +642,7 @@ Deno.test("Nullable schema", () => {
   const jsonSchema = validator.$jsonSchema!;
 
   // Test nullable string
-  assertEquals(jsonSchema.properties!.nullableString, {
+  expect(jsonSchema.properties!.nullableString).toEqual({
     anyOf: [
       {
         bsonType: "string",
@@ -656,7 +655,7 @@ Deno.test("Nullable schema", () => {
   });
 
   // Test nullable number
-  assertEquals(jsonSchema.properties!.nullableNumber, {
+  expect(jsonSchema.properties!.nullableNumber).toEqual({
     anyOf: [
       {
         bsonType: "number",
@@ -669,7 +668,7 @@ Deno.test("Nullable schema", () => {
   });
 
   // Test nullable object
-  assertEquals(jsonSchema.properties!.nullableObject, {
+  expect(jsonSchema.properties!.nullableObject).toEqual({
     anyOf: [
       {
         bsonType: "object",
@@ -688,7 +687,7 @@ Deno.test("Nullable schema", () => {
   });
 
   // Test nullable with default (should still be required in MongoDB schema)
-  assertEquals(jsonSchema.properties!.nullableStringWithDefault, {
+  expect(jsonSchema.properties!.nullableStringWithDefault).toEqual({
     anyOf: [
       {
         bsonType: "string",
@@ -701,13 +700,13 @@ Deno.test("Nullable schema", () => {
   });
 
   // All nullable fields should be required in the schema (MongoDB doesn't handle defaults)
-  assert(jsonSchema.required!.includes("nullableString"));
-  assert(jsonSchema.required!.includes("nullableNumber"));
-  assert(jsonSchema.required!.includes("nullableObject"));
-  assert(jsonSchema.required!.includes("nullableStringWithDefault"));
+  expect(jsonSchema.required!.includes("nullableString")).toBeTruthy();
+  expect(jsonSchema.required!.includes("nullableNumber")).toBeTruthy();
+  expect(jsonSchema.required!.includes("nullableObject")).toBeTruthy();
+  expect(jsonSchema.required!.includes("nullableStringWithDefault")).toBeTruthy();
 });
 
-Deno.test("Nullable with validations", () => {
+test("Nullable with validations", () => {
   const schema = v.object({
     nullableEmail: v.nullable(v.pipe(v.string(), v.regex(/^.+@.+\..+$/))),
     nullableAge: v.nullable(v.pipe(v.number(), v.minValue(0), v.maxValue(120))),
@@ -720,7 +719,7 @@ Deno.test("Nullable with validations", () => {
   const jsonSchema = validator.$jsonSchema!;
 
   // Test nullable string with regex validation
-  assertEquals(jsonSchema.properties!.nullableEmail, {
+  expect(jsonSchema.properties!.nullableEmail).toEqual({
     anyOf: [
       {
         bsonType: "string",
@@ -734,7 +733,7 @@ Deno.test("Nullable with validations", () => {
   });
 
   // Test nullable number with range validation
-  assertEquals(jsonSchema.properties!.nullableAge, {
+  expect(jsonSchema.properties!.nullableAge).toEqual({
     anyOf: [
       {
         bsonType: "number",
@@ -749,7 +748,7 @@ Deno.test("Nullable with validations", () => {
   });
 
   // Test nullable array with length validation
-  assertEquals(jsonSchema.properties!.nullableArray, {
+  expect(jsonSchema.properties!.nullableArray).toEqual({
     anyOf: [
       {
         bsonType: "array",
@@ -768,7 +767,7 @@ Deno.test("Nullable with validations", () => {
   });
 });
 
-Deno.test("Nullable validation with Valibot", () => {
+test("Nullable validation with Valibot", () => {
   // Test that nullable schemas work correctly with Valibot validation
   const schema = v.object({
     nullableString: v.nullable(v.string()),
@@ -780,38 +779,38 @@ Deno.test("Nullable validation with Valibot", () => {
     nullableString: null,
     nullableNumber: null,
   });
-  assert(validNull.success);
+  expect(validNull.success).toBeTruthy();
 
   // Valid: actual values
   const validValues = v.safeParse(schema, {
     nullableString: "test",
     nullableNumber: 42,
   });
-  assert(validValues.success);
+  expect(validValues.success).toBeTruthy();
 
   // Invalid: wrong types (should fail)
   const invalidType = v.safeParse(schema, {
     nullableString: 123,
     nullableNumber: "not a number",
   });
-  assert(!invalidType.success);
+  expect(!invalidType.success).toBeTruthy();
 
   // Invalid: number validation fails
   const invalidNumber = v.safeParse(schema, {
     nullableString: "test",
     nullableNumber: -5,
   });
-  assert(!invalidNumber.success);
+  expect(!invalidNumber.success).toBeTruthy();
 
   // Valid: mixed null and values
   const mixedValid = v.safeParse(schema, {
     nullableString: "test",
     nullableNumber: null,
   });
-  assert(mixedValid.success);
+  expect(mixedValid.success).toBeTruthy();
 });
 
-Deno.test("Nested nullable schemas", () => {
+test("Nested nullable schemas", () => {
   const schema = v.object({
     user: v.nullable(v.object({
       name: v.string(),
@@ -824,7 +823,7 @@ Deno.test("Nested nullable schemas", () => {
   const jsonSchema = validator.$jsonSchema!;
 
   // Test nested nullable object
-  assertEquals(jsonSchema.properties!.user, {
+  expect(jsonSchema.properties!.user).toEqual({
     anyOf: [
       {
         bsonType: "object",
@@ -854,7 +853,7 @@ Deno.test("Nested nullable schemas", () => {
   });
 
   // Test array of nullable items
-  assertEquals(jsonSchema.properties!.tags, {
+  expect(jsonSchema.properties!.tags).toEqual({
     bsonType: "array",
     items: {
       anyOf: [
@@ -871,7 +870,7 @@ Deno.test("Nested nullable schemas", () => {
   });
 });
 
-Deno.test("Record validation edge cases", () => {
+test("Record validation edge cases", () => {
   // Test that patternProperties validation works
   const schema = v.object({
     data: v.record(v.pipe(v.string(), v.regex(/^[a-z]+$/)), v.number()),
@@ -879,17 +878,17 @@ Deno.test("Record validation edge cases", () => {
 
   // Valid: keys match pattern, values are numbers
   const valid1 = v.safeParse(schema, { data: { abc: 1, xyz: 2 } });
-  assert(valid1.success);
+  expect(valid1.success).toBeTruthy();
 
   // Invalid: key doesn't match pattern (contains uppercase)
   const invalid1 = v.safeParse(schema, { data: { Abc: 1 } });
-  assert(!invalid1.success);
+  expect(!invalid1.success).toBeTruthy();
 
   // Invalid: value is wrong type
   const invalid2 = v.safeParse(schema, { data: { abc: "not-a-number" } });
-  assert(!invalid2.success);
+  expect(!invalid2.success).toBeTruthy();
 
   // Valid: empty record
   const valid2 = v.safeParse(schema, { data: {} });
-  assert(valid2.success);
+  expect(valid2.success).toBeTruthy();
 });

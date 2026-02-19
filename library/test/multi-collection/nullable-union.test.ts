@@ -1,5 +1,5 @@
 import * as v from "../../src/schema.ts";
-import { assertEquals } from "@std/assert";
+import { test, expect } from "vitest";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import assert from "node:assert";
@@ -18,8 +18,8 @@ import { defineModel } from "../../src/multi-collection-model.ts";
 // NULLABLE FIELD TESTS
 // =============================================================================
 
-Deno.test("MultiCollection: Nullable object - null to object transition", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("MultiCollection: Nullable object - null to object transition", async () => {
+  await withDatabase("MultiCollection: Nullable object - null to object transition", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         job: {
@@ -43,13 +43,13 @@ Deno.test("MultiCollection: Nullable object - null to object transition", async 
     });
 
     const initialJob = await coll.findOne("job", { _id: jobId });
-    assert(initialJob !== null);
-    assertEquals(initialJob.request, null);
+    expect(initialJob).not.toBeNull();
+    expect(initialJob.request).toEqual(null);
 
     const now = new Date();
 
     // Update null field to object - should work with full replacement
-    await coll.updateOne("job", jobId, {
+    await coll.updateById("job", jobId, {
       request: {
         type: "cancel",
         requestedAt: now,
@@ -58,15 +58,15 @@ Deno.test("MultiCollection: Nullable object - null to object transition", async 
     });
 
     const updatedJob = await coll.findOne("job", { _id: jobId });
-    assert(updatedJob !== null);
-    assert(updatedJob.request !== null);
-    assertEquals(updatedJob.request?.type, "cancel");
-    assertEquals(updatedJob.request?.requestedBy, "user:123");
+    expect(updatedJob).not.toBeNull();
+    expect(updatedJob.request).not.toBeNull();
+    expect(updatedJob.request?.type).toEqual("cancel");
+    expect(updatedJob.request?.requestedBy).toEqual("user:123");
   });
 });
 
-Deno.test("MultiCollection: Nullable object - object to null transition", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("MultiCollection: Nullable object - object to null transition", async () => {
+  await withDatabase("MultiCollection: Nullable object - object to null transition", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         job: {
@@ -90,21 +90,21 @@ Deno.test("MultiCollection: Nullable object - object to null transition", async 
     });
 
     const initialJob = await coll.findOne("job", { _id: jobId });
-    assert(initialJob !== null);
-    assert(initialJob.request !== null);
+    expect(initialJob).not.toBeNull();
+    expect(initialJob.request).not.toBeNull();
 
-    await coll.updateOne("job", jobId, {
+    await coll.updateById("job", jobId, {
       request: null,
     });
 
     const updatedJob = await coll.findOne("job", { _id: jobId });
-    assert(updatedJob !== null);
-    assertEquals(updatedJob.request, null);
+    expect(updatedJob).not.toBeNull();
+    expect(updatedJob.request).toEqual(null);
   });
 });
 
-Deno.test("MultiCollection: Nullable object - full replacement removes old fields", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("MultiCollection: Nullable object - full replacement removes old fields", async () => {
+  await withDatabase("MultiCollection: Nullable object - full replacement removes old fields", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         job: {
@@ -135,7 +135,7 @@ Deno.test("MultiCollection: Nullable object - full replacement removes old field
     const now = new Date();
 
     // Update without reason field - should remove it
-    await coll.updateOne("job", jobId, {
+    await coll.updateById("job", jobId, {
       request: {
         type: "cancel",
         requestedAt: now,
@@ -144,16 +144,16 @@ Deno.test("MultiCollection: Nullable object - full replacement removes old field
     });
 
     const updatedJob = await coll.findOne("job", { _id: jobId });
-    assert(updatedJob !== null);
-    assertEquals(updatedJob.request?.type, "cancel");
-    assertEquals(updatedJob.request?.requestedBy, "user:new");
+    expect(updatedJob).not.toBeNull();
+    expect(updatedJob.request?.type).toEqual("cancel");
+    expect(updatedJob.request?.requestedBy).toEqual("user:new");
     // Old field should be removed with full replacement
-    assertEquals(updatedJob.request?.reason, undefined);
+    expect(updatedJob.request?.reason).toEqual(undefined);
   });
 });
 
-Deno.test("MultiCollection: Deeply nested nullable object", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("MultiCollection: Deeply nested nullable object", async () => {
+  await withDatabase("MultiCollection: Deeply nested nullable object", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         user: {
@@ -180,7 +180,7 @@ Deno.test("MultiCollection: Deeply nested nullable object", async (t) => {
     });
 
     // Update nested null to object using dot notation path
-    await coll.updateOne("user", userId, {
+    await coll.updateById("user", userId, {
       "profile.contact": {
         email: "john@example.com",
         phone: "123-456",
@@ -188,9 +188,9 @@ Deno.test("MultiCollection: Deeply nested nullable object", async (t) => {
     });
 
     const updatedUser = await coll.findOne("user", { _id: userId });
-    assert(updatedUser !== null);
-    assertEquals(updatedUser.profile.bio, "Developer");
-    assertEquals(updatedUser.profile.contact?.email, "john@example.com");
+    expect(updatedUser).not.toBeNull();
+    expect(updatedUser.profile.bio).toEqual("Developer");
+    expect(updatedUser.profile.contact?.email).toEqual("john@example.com");
   });
 });
 
@@ -198,8 +198,8 @@ Deno.test("MultiCollection: Deeply nested nullable object", async (t) => {
 // UNION FIELD TESTS
 // =============================================================================
 
-Deno.test("MultiCollection: Union - switch between variants", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("MultiCollection: Union - switch between variants", async () => {
+  await withDatabase("MultiCollection: Union - switch between variants", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         entity: {
@@ -224,12 +224,12 @@ Deno.test("MultiCollection: Union - switch between variants", async (t) => {
     });
 
     const initialEntity = await coll.findOne("entity", { _id: entityId });
-    assert(initialEntity !== null);
-    assertEquals(initialEntity.data.type, "typeA");
-    assertEquals((initialEntity.data as { a: string }).a, "hello");
+    expect(initialEntity).not.toBeNull();
+    expect(initialEntity.data.type).toEqual("typeA");
+    expect((initialEntity.data as { a: string }).a).toEqual("hello");
 
     // Switch to typeB - old fields should be removed
-    await coll.updateOne("entity", entityId, {
+    await coll.updateById("entity", entityId, {
       data: {
         type: "typeB",
         b: 42,
@@ -238,16 +238,16 @@ Deno.test("MultiCollection: Union - switch between variants", async (t) => {
     });
 
     const updatedEntity = await coll.findOne("entity", { _id: entityId });
-    assert(updatedEntity !== null);
-    assertEquals(updatedEntity.data.type, "typeB");
-    assertEquals((updatedEntity.data as { b: number }).b, 42);
+    expect(updatedEntity).not.toBeNull();
+    expect(updatedEntity.data.type).toEqual("typeB");
+    expect((updatedEntity.data as { b: number }).b).toEqual(42);
     // Field from typeA should NOT exist
-    assertEquals((updatedEntity.data as { a?: string }).a, undefined);
+    expect((updatedEntity.data as { a?: string }).a).toEqual(undefined);
   });
 });
 
-Deno.test("MultiCollection: Nullable union - null to variant", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("MultiCollection: Nullable union - null to variant", async () => {
+  await withDatabase("MultiCollection: Nullable union - null to variant", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         entity: {
@@ -268,11 +268,11 @@ Deno.test("MultiCollection: Nullable union - null to variant", async (t) => {
     });
 
     const initialEntity = await coll.findOne("entity", { _id: entityId });
-    assert(initialEntity !== null);
-    assertEquals(initialEntity.data, null);
+    expect(initialEntity).not.toBeNull();
+    expect(initialEntity.data).toEqual(null);
 
     // Update null to typeA variant
-    await coll.updateOne("entity", entityId, {
+    await coll.updateById("entity", entityId, {
       data: {
         type: "typeA",
         a: "hello",
@@ -280,14 +280,14 @@ Deno.test("MultiCollection: Nullable union - null to variant", async (t) => {
     });
 
     const updatedEntity = await coll.findOne("entity", { _id: entityId });
-    assert(updatedEntity !== null);
-    assert(updatedEntity.data !== null);
-    assertEquals(updatedEntity.data?.type, "typeA");
+    expect(updatedEntity).not.toBeNull();
+    expect(updatedEntity.data).not.toBeNull();
+    expect(updatedEntity.data?.type).toEqual("typeA");
   });
 });
 
-Deno.test("MultiCollection: Union with different structures - complete replacement", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("MultiCollection: Union with different structures - complete replacement", async () => {
+  await withDatabase("MultiCollection: Union with different structures - complete replacement", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         payment: {
@@ -327,7 +327,7 @@ Deno.test("MultiCollection: Union with different structures - complete replaceme
     });
 
     // Switch from card to bank_transfer
-    await coll.updateOne("payment", paymentId, {
+    await coll.updateById("payment", paymentId, {
       method: {
         type: "bank_transfer",
         iban: "FR7630001007941234567890185",
@@ -336,13 +336,13 @@ Deno.test("MultiCollection: Union with different structures - complete replaceme
     });
 
     const updatedPayment = await coll.findOne("payment", { _id: paymentId });
-    assert(updatedPayment !== null);
-    assertEquals(updatedPayment.method.type, "bank_transfer");
-    assertEquals((updatedPayment.method as { iban: string }).iban, "FR7630001007941234567890185");
+    expect(updatedPayment).not.toBeNull();
+    expect(updatedPayment.method.type).toEqual("bank_transfer");
+    expect((updatedPayment.method as { iban: string }).iban).toEqual("FR7630001007941234567890185");
 
     // Card fields should NOT exist
-    assertEquals((updatedPayment.method as { cardNumber?: string }).cardNumber, undefined);
-    assertEquals((updatedPayment.method as { expiry?: string }).expiry, undefined);
-    assertEquals((updatedPayment.method as { cvv?: string }).cvv, undefined);
+    expect((updatedPayment.method as { cardNumber?: string }).cardNumber).toEqual(undefined);
+    expect((updatedPayment.method as { expiry?: string }).expiry).toEqual(undefined);
+    expect((updatedPayment.method as { cvv?: string }).cvv).toEqual(undefined);
   });
 });

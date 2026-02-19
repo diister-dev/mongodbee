@@ -1,4 +1,4 @@
-import { assert } from "@std/assert";
+import { test, expect } from "vitest";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import * as v from "../../src/schema.ts";
@@ -28,8 +28,8 @@ const collectionModel = defineModel("multi_test", {
   schema: collectionSchema,
 });
 
-Deno.test("Multi-Collection: Basic prepare → filter → format", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-Collection: Basic prepare → filter → format", async () => {
+  await withDatabase("Multi-Collection: Basic prepare → filter → format", async (db) => {
     const mc = await multiCollection(db, "multi_test", collectionModel);
 
     // Insert test data
@@ -72,24 +72,22 @@ Deno.test("Multi-Collection: Basic prepare → filter → format", async (t) => 
       }),
     });
 
-    assert(results.data.length === 2, "Should return 2 active users");
-    assert(
+    expect(results.data.length === 2).toBeTruthy();
+    expect(
       results.data[0].displayName === "Alice",
-      "First user should be Alice",
-    );
-    assert(results.data[0].category === "young", "Alice should be young");
-    assert(results.data[0].domain === "test.com", "Domain should be test.com");
-    assert(results.data[0].type === "users", "Type should be users");
-    assert(
+    ).toBeTruthy();
+    expect(results.data[0].category === "young").toBeTruthy();
+    expect(results.data[0].domain === "test.com").toBeTruthy();
+    expect(results.data[0].type === "users").toBeTruthy();
+    expect(
       results.data[1].displayName === "Charlie",
-      "Second user should be Charlie",
-    );
-    assert(results.data[1].category === "adult", "Charlie should be adult");
+    ).toBeTruthy();
+    expect(results.data[1].category === "adult").toBeTruthy();
   });
 });
 
-Deno.test("Multi-Collection: Products with pricing logic", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-Collection: Products with pricing logic", async () => {
+  await withDatabase("Multi-Collection: Products with pricing logic", async (db) => {
     const mc = await multiCollection(db, "multi_test", collectionModel);
 
     // Insert test products
@@ -137,30 +135,26 @@ Deno.test("Multi-Collection: Products with pricing logic", async (t) => {
       }),
     });
 
-    assert(results.data.length === 2, "Should return 2 in-stock products");
-    assert(
+    expect(results.data.length === 2).toBeTruthy();
+    expect(
       results.data[0].productName === "Laptop",
-      "First product should be Laptop",
-    );
-    assert(results.data[0].tier === "premium", "Laptop should be premium");
-    assert(
+    ).toBeTruthy();
+    expect(results.data[0].tier === "premium").toBeTruthy();
+    expect(
       results.data[0].canDiscount === true,
-      "Laptop should be discount eligible",
-    );
-    assert(
+    ).toBeTruthy();
+    expect(
       results.data[1].productName === "Book",
-      "Second product should be Book",
-    );
-    assert(results.data[1].tier === "budget", "Book should be budget");
-    assert(
+    ).toBeTruthy();
+    expect(results.data[1].tier === "budget").toBeTruthy();
+    expect(
       results.data[1].canDiscount === false,
-      "Book should not be discount eligible",
-    );
+    ).toBeTruthy();
   });
 });
 
-Deno.test("Multi-Collection: Cross-type isolation", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-Collection: Cross-type isolation", async () => {
+  await withDatabase("Multi-Collection: Cross-type isolation", async (db) => {
     const mc = await multiCollection(db, "multi_test", collectionModel);
 
     // Insert mixed data
@@ -205,21 +199,19 @@ Deno.test("Multi-Collection: Cross-type isolation", async (t) => {
       }),
     });
 
-    assert(userResults.data.length === 2, "Should return 2 users");
-    assert(
+    expect(userResults.data.length === 2).toBeTruthy();
+    expect(
       userResults.data.every((r) => r.recordType === "user-record"),
-      "All should be user records",
-    );
-    assert(productResults.data.length === 1, "Should return 1 product");
-    assert(
+    ).toBeTruthy();
+    expect(productResults.data.length === 1).toBeTruthy();
+    expect(
       productResults.data.every((r) => r.recordType === "product-record"),
-      "All should be product records",
-    );
+    ).toBeTruthy();
   });
 });
 
-Deno.test("Multi-Collection: External API enrichment", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-Collection: External API enrichment", async () => {
+  await withDatabase("Multi-Collection: External API enrichment", async (db) => {
     const mc = await multiCollection(db, "multi_test", collectionModel);
 
     await mc.insertOne("users", {
@@ -288,30 +280,26 @@ Deno.test("Multi-Collection: External API enrichment", async (t) => {
       }),
     });
 
-    assert(userResults.data.length === 1, "Should return 1 active user");
-    assert(
+    expect(userResults.data.length === 1).toBeTruthy();
+    expect(
       userResults.data[0].trust === "high",
-      "Alice should have high trust",
-    );
-    assert(userResults.data[0].score === 95, "Alice should have score 95");
+    ).toBeTruthy();
+    expect(userResults.data[0].score === 95).toBeTruthy();
 
-    assert(
+    expect(
       productResults.data.length === 1,
-      "Should return 1 in-stock product",
-    );
-    assert(
+    ).toBeTruthy();
+    expect(
       productResults.data[0].rating === 4.5,
-      "Laptop should have 4.5 rating",
-    );
-    assert(
+    ).toBeTruthy();
+    expect(
       productResults.data[0].popularity === "popular",
-      "Laptop should be popular",
-    );
+    ).toBeTruthy();
   });
 });
 
-Deno.test("Multi-Collection: Type safety with generics", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-Collection: Type safety with generics", async () => {
+  await withDatabase("Multi-Collection: Type safety with generics", async (db) => {
     const mc = await multiCollection(db, "multi_test", collectionModel);
 
     await mc.insertOne("users", {
@@ -325,10 +313,10 @@ Deno.test("Multi-Collection: Type safety with generics", async (t) => {
     const results = await mc.paginate("users", {}, {
       prepare: async (user) => {
         // user should be User with _id and _type
-        assert(typeof user.name === "string", "Should have name");
-        assert(typeof user.age === "number", "Should have age");
-        assert(typeof user._id === "string", "Should have string _id");
-        assert(user._type === "users", "Should have correct _type");
+        expect(typeof user.name === "string").toBeTruthy();
+        expect(typeof user.age === "number").toBeTruthy();
+        expect(typeof user._id === "string").toBeTruthy();
+        expect(user._type === "users").toBeTruthy();
 
         return {
           ...user,
@@ -338,20 +326,18 @@ Deno.test("Multi-Collection: Type safety with generics", async (t) => {
 
       filter: (enrichedUser) => {
         // enrichedUser should have enrichedField
-        assert(
+        expect(
           enrichedUser.enrichedField === "test-value",
-          "Should have enriched field",
-        );
+        ).toBeTruthy();
         return true;
       },
 
       format: async (enrichedUser) => {
         // enrichedUser should still have all fields
-        assert(enrichedUser.name === "Alice", "Should have original name");
-        assert(
+        expect(enrichedUser.name === "Alice").toBeTruthy();
+        expect(
           enrichedUser.enrichedField === "test-value",
-          "Should have enriched field",
-        );
+        ).toBeTruthy();
 
         return {
           finalName: enrichedUser.name,
@@ -360,17 +346,16 @@ Deno.test("Multi-Collection: Type safety with generics", async (t) => {
       },
     });
 
-    assert(results.data.length === 1, "Should return 1 result");
-    assert(results.data[0].finalName === "Alice", "Should have final name");
-    assert(
+    expect(results.data.length === 1).toBeTruthy();
+    expect(results.data[0].finalName === "Alice").toBeTruthy();
+    expect(
       results.data[0].finalValue === "test-value",
-      "Should have final value",
-    );
+    ).toBeTruthy();
   });
 });
 
-Deno.test("Multi-Collection: Error handling", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multi-Collection: Error handling", async () => {
+  await withDatabase("Multi-Collection: Error handling", async (db) => {
     const mc = await multiCollection(db, "multi_test", collectionModel);
 
     await mc.insertOne("users", {
@@ -396,12 +381,11 @@ Deno.test("Multi-Collection: Error handling", async (t) => {
           return { ...user, processed: true };
         },
       });
-      assert(false, "Should have thrown error");
+      expect(false).toBeTruthy();
     } catch (error) {
-      assert(
+      expect(
         (error as Error).message === "Simulated prepare error",
-        "Should catch prepare error",
-      );
+      ).toBeTruthy();
     }
 
     // Test error in filter
@@ -414,12 +398,11 @@ Deno.test("Multi-Collection: Error handling", async (t) => {
           return true;
         },
       });
-      assert(false, "Should have thrown error");
+      expect(false).toBeTruthy();
     } catch (error) {
-      assert(
+      expect(
         (error as Error).message === "Simulated filter error",
-        "Should catch filter error",
-      );
+      ).toBeTruthy();
     }
 
     // Test error in format
@@ -432,12 +415,11 @@ Deno.test("Multi-Collection: Error handling", async (t) => {
           return { processed: user.name };
         },
       });
-      assert(false, "Should have thrown error");
+      expect(false).toBeTruthy();
     } catch (error) {
-      assert(
+      expect(
         (error as Error).message === "Simulated format error",
-        "Should catch format error",
-      );
+      ).toBeTruthy();
     }
   });
 });

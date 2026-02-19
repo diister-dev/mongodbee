@@ -1,11 +1,11 @@
 import * as v from "../../src/schema.ts";
-import { assertEquals } from "@std/assert";
+import { test, expect } from "vitest";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import { defineModel } from "../../src/multi-collection-model.ts";
 
-Deno.test("Types test - deleteMany and deleteAny should compile", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Types test - deleteMany and deleteAny should compile", async () => {
+  await withDatabase("Types test - deleteMany and deleteAny should compile", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         user: {
@@ -27,16 +27,16 @@ Deno.test("Types test - deleteMany and deleteAny should compile", async (t) => {
 
     // Test that deleteMany accepts correct filter types
     const deletedUsers = await collection.deleteMany("user", { active: true });
-    assertEquals(deletedUsers, 1);
+    expect(deletedUsers).toEqual(1);
 
     // Test that deleteAny accepts any filter (dangerous but should compile)
     const deletedAny = await collection.deleteAny({ active: false });
-    assertEquals(deletedAny, 1);
+    expect(deletedAny).toEqual(1);
 
     // Verify all documents are deleted
-    const remainingUsers = await collection.find("user");
-    const remainingGroups = await collection.find("group");
-    assertEquals(remainingUsers.length, 0);
-    assertEquals(remainingGroups.length, 0);
+    const remainingUsers = await collection.find("user").toArray();
+    const remainingGroups = await collection.find("group").toArray();
+    expect(remainingUsers.length).toEqual(0);
+    expect(remainingGroups.length).toEqual(0);
   });
 });

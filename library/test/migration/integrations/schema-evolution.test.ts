@@ -1,21 +1,21 @@
 /**
  * Integration test: Schema evolution patterns
- * 
+ *
  * Tests common schema evolution scenarios:
  * 1. Adding optional fields (no transformation needed)
  * 2. Making optional fields required (transformation needed)
  * 3. Type migrations (string → enum, number → formatted string)
  * 4. Restructuring (flat → nested objects)
- * 
+ *
  * @module
  */
 
-import { assertEquals } from "@std/assert";
+import { test, expect } from "vitest";
 import * as v from "valibot";
 import { migrationDefinition } from "../../../src/migration/definition.ts";
 import { validateMigrationWithSimulation } from "../../../src/migration/validators/simulation.ts";
 
-Deno.test("Schema Evolution: Optional to required field progression", async () => {
+test("Schema Evolution: Optional to required field progression", async () => {
   // Step 1: Initial schema
   const m1 = migrationDefinition("2025_01_01_INIT", "init_products", {
     parent: null,
@@ -99,16 +99,16 @@ Deno.test("Schema Evolution: Optional to required field progression", async () =
   });
 
   const r1 = await validateMigrationWithSimulation(m1);
-  assertEquals(r1.success, true, "Initial schema should be valid");
+  expect(r1.success).toEqual(true);
 
   const r2 = await validateMigrationWithSimulation(m2);
-  assertEquals(r2.success, true, "Adding optional field should not require transformation");
+  expect(r2.success).toEqual(true);
 
   const r3 = await validateMigrationWithSimulation(m3);
-  assertEquals(r3.success, true, "Making field required should succeed with transformation");
+  expect(r3.success).toEqual(true);
 });
 
-Deno.test("Schema Evolution: Type migration (string → enum)", async () => {
+test("Schema Evolution: Type migration (string → enum)", async () => {
   // Step 1: Status as free-form string
   const m1 = migrationDefinition("2025_01_01_ORDERS", "create_orders", {
     parent: null,
@@ -175,13 +175,13 @@ Deno.test("Schema Evolution: Type migration (string → enum)", async () => {
   });
 
   const r1 = await validateMigrationWithSimulation(m1);
-  assertEquals(r1.success, true, "Free-form string status should be valid");
+  expect(r1.success).toEqual(true);
 
   const r2 = await validateMigrationWithSimulation(m2);
-  assertEquals(r2.success, true, "Migrating to enum with normalization should succeed");
+  expect(r2.success).toEqual(true);
 });
 
-Deno.test("Schema Evolution: Restructuring (flat → nested)", async () => {
+test("Schema Evolution: Restructuring (flat → nested)", async () => {
   // Step 1: Flat structure
   const m1 = migrationDefinition("2025_01_01_USERS_FLAT", "create_users_flat", {
     parent: null,
@@ -258,13 +258,13 @@ Deno.test("Schema Evolution: Restructuring (flat → nested)", async () => {
   });
 
   const r1 = await validateMigrationWithSimulation(m1);
-  assertEquals(r1.success, true, "Flat structure should be valid");
+  expect(r1.success).toEqual(true);
 
   const r2 = await validateMigrationWithSimulation(m2);
-  assertEquals(r2.success, true, "Nesting fields should succeed with transformation");
+  expect(r2.success).toEqual(true);
 });
 
-Deno.test("Schema Evolution: Number to formatted string", async () => {
+test("Schema Evolution: Number to formatted string", async () => {
   // Step 1: Price as number
   const m1 = migrationDefinition("2025_01_01_PRICE_NUM", "price_as_number", {
     parent: null,
@@ -320,13 +320,13 @@ Deno.test("Schema Evolution: Number to formatted string", async () => {
   });
 
   const r1 = await validateMigrationWithSimulation(m1);
-  assertEquals(r1.success, true, "Numeric price should be valid");
+  expect(r1.success).toEqual(true);
 
   const r2 = await validateMigrationWithSimulation(m2);
-  assertEquals(r2.success, true, "Formatted string price should succeed with transformation");
+  expect(r2.success).toEqual(true);
 });
 
-Deno.test("Schema Evolution: Adding validation constraints progressively", async () => {
+test("Schema Evolution: Adding validation constraints progressively", async () => {
   // Step 1: Basic email field
   const m1 = migrationDefinition("2025_01_01_EMAIL_BASIC", "email_no_validation", {
     parent: null,
@@ -381,13 +381,13 @@ Deno.test("Schema Evolution: Adding validation constraints progressively", async
   });
 
   const r1 = await validateMigrationWithSimulation(m1);
-  assertEquals(r1.success, true, "Unvalidated email should be valid");
+  expect(r1.success).toEqual(true);
 
   const r2 = await validateMigrationWithSimulation(m2);
-  assertEquals(r2.success, true, "Adding email validation should succeed with cleanup");
+  expect(r2.success).toEqual(true);
 });
 
-Deno.test("Schema Evolution: Array field addition and transformation", async () => {
+test("Schema Evolution: Array field addition and transformation", async () => {
   // Step 1: Single tag as string
   const m1 = migrationDefinition("2025_01_01_TAG_SINGLE", "single_tag", {
     parent: null,
@@ -442,8 +442,8 @@ Deno.test("Schema Evolution: Array field addition and transformation", async () 
   });
 
   const r1 = await validateMigrationWithSimulation(m1);
-  assertEquals(r1.success, true, "Single tag should be valid");
+  expect(r1.success).toEqual(true);
 
   const r2 = await validateMigrationWithSimulation(m2);
-  assertEquals(r2.success, true, "Converting to array should succeed");
+  expect(r2.success).toEqual(true);
 });

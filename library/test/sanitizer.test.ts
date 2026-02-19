@@ -7,9 +7,9 @@ import {
   sanitizeForMongoDB,
   undefinedToNull,
 } from "../src/sanitizer.ts";
-import { assert, assertEquals } from "@std/assert";
+import { test, expect } from "vitest";
 
-Deno.test("removeUndefined - simple object", () => {
+test("removeUndefined - simple object", () => {
   const input = {
     a: "hello",
     b: undefined,
@@ -19,17 +19,17 @@ Deno.test("removeUndefined - simple object", () => {
 
   const result = removeUndefined(input);
 
-  assertEquals(result, {
+  expect(result).toEqual({
     a: "hello",
     c: 42,
     d: null,
   });
 
   // Should not have property 'b'
-  assert(!("b" in result));
+  expect(!("b" in result)).toBeTruthy();
 });
 
-Deno.test("removeUndefined - nested object", () => {
+test("removeUndefined - nested object", () => {
   const input = {
     user: {
       name: "John",
@@ -45,7 +45,7 @@ Deno.test("removeUndefined - nested object", () => {
 
   const result = removeUndefined(input);
 
-  assertEquals(result, {
+  expect(result).toEqual({
     user: {
       name: "John",
       address: {
@@ -56,7 +56,7 @@ Deno.test("removeUndefined - nested object", () => {
   });
 });
 
-Deno.test("removeUndefined - arrays", () => {
+test("removeUndefined - arrays", () => {
   const input = {
     tags: ["a", undefined, "b", "c"],
     items: [
@@ -68,7 +68,7 @@ Deno.test("removeUndefined - arrays", () => {
 
   const result = removeUndefined(input);
 
-  assertEquals(result, {
+  expect(result).toEqual({
     tags: ["a", "b", "c"],
     items: [
       { name: "item1" },
@@ -77,7 +77,7 @@ Deno.test("removeUndefined - arrays", () => {
   });
 });
 
-Deno.test("undefinedToNull - converts undefined to null", () => {
+test("undefinedToNull - converts undefined to null", () => {
   const input = {
     a: "hello",
     b: undefined,
@@ -89,7 +89,7 @@ Deno.test("undefinedToNull - converts undefined to null", () => {
 
   const result = undefinedToNull(input);
 
-  assertEquals(result, {
+  expect(result).toEqual({
     a: "hello",
     b: null,
     c: {
@@ -99,7 +99,7 @@ Deno.test("undefinedToNull - converts undefined to null", () => {
   });
 });
 
-Deno.test("sanitizeDocument - remove behavior", () => {
+test("sanitizeDocument - remove behavior", () => {
   const input = {
     required: "value",
     optional: undefined,
@@ -113,13 +113,13 @@ Deno.test("sanitizeDocument - remove behavior", () => {
     deep: true,
   });
 
-  assertEquals(result, {
+  expect(result).toEqual({
     required: "value",
     nested: {},
   });
 });
 
-Deno.test("sanitizeDocument - convert to null behavior", () => {
+test("sanitizeDocument - convert to null behavior", () => {
   const input = {
     required: "value",
     optional: undefined,
@@ -133,7 +133,7 @@ Deno.test("sanitizeDocument - convert to null behavior", () => {
     deep: true,
   });
 
-  assertEquals(result, {
+  expect(result).toEqual({
     required: "value",
     optional: null,
     nested: {
@@ -142,7 +142,7 @@ Deno.test("sanitizeDocument - convert to null behavior", () => {
   });
 });
 
-Deno.test("sanitizeDocument - shallow sanitization", () => {
+test("sanitizeDocument - shallow sanitization", () => {
   const input = {
     topLevel: undefined,
     nested: {
@@ -155,14 +155,14 @@ Deno.test("sanitizeDocument - shallow sanitization", () => {
     deep: false,
   });
 
-  assertEquals(result, {
+  expect(result).toEqual({
     nested: {
       prop: undefined, // Should remain undefined since it's not top level
     },
   });
 });
 
-Deno.test("MongoDB optional field scenario", () => {
+test("MongoDB optional field scenario", () => {
   // Simulates what happens with valibot optional fields
   const mongoDocument = {
     _id: "123",
@@ -180,7 +180,7 @@ Deno.test("MongoDB optional field scenario", () => {
   const sanitized = removeUndefined(mongoDocument);
 
   // Should be ready for MongoDB insertion
-  assertEquals(sanitized, {
+  expect(sanitized).toEqual({
     _id: "123",
     name: "John",
     age: 30,
@@ -192,11 +192,11 @@ Deno.test("MongoDB optional field scenario", () => {
   });
 
   // Verify undefined properties are completely removed
-  assert(!("phone" in sanitized));
-  assert(!("zipcode" in sanitized.address));
+  expect(!("phone" in sanitized)).toBeTruthy();
+  expect(!("zipcode" in sanitized.address)).toBeTruthy();
 });
 
-Deno.test("Enhanced sanitization with field removal", () => {
+test("Enhanced sanitization with field removal", () => {
   const input = {
     keep: "this",
     remove: removeField(),
@@ -212,7 +212,7 @@ Deno.test("Enhanced sanitization with field removal", () => {
     deep: true,
   });
 
-  assertEquals(result as any, {
+  expect(result as any).toEqual({
     keep: "this",
     nested: {
       keep: "nested value",
@@ -220,7 +220,7 @@ Deno.test("Enhanced sanitization with field removal", () => {
   });
 });
 
-Deno.test("Different undefined behaviors in updates", () => {
+test("Different undefined behaviors in updates", () => {
   const input = {
     field1: "value1",
     field2: undefined,
@@ -233,7 +233,7 @@ Deno.test("Different undefined behaviors in updates", () => {
     deep: true,
   });
 
-  assertEquals(removed, {
+  expect(removed).toEqual({
     field1: "value1",
     field3: "value3",
   });
@@ -244,14 +244,14 @@ Deno.test("Different undefined behaviors in updates", () => {
       undefinedBehavior: "error",
       deep: true,
     });
-    assert(false, "Should have thrown an error");
+    expect(false).toBeTruthy();
   } catch (error) {
-    assert(error instanceof Error);
-    assert(error.message.includes("Undefined values are not allowed"));
+    expect(error instanceof Error).toBeTruthy();
+    expect((error as Error).message.includes("Undefined values are not allowed")).toBeTruthy();
   }
 });
 
-Deno.test("Explicit field removal vs undefined", () => {
+test("Explicit field removal vs undefined", () => {
   // Scenario: Update a user, remove phone field, ignore email if undefined
   const updateData = {
     name: "John Updated",
@@ -265,7 +265,7 @@ Deno.test("Explicit field removal vs undefined", () => {
     deep: true,
   });
 
-  assertEquals(withRemove as any, {
+  expect(withRemove as any).toEqual({
     name: "John Updated",
   });
 
@@ -275,12 +275,12 @@ Deno.test("Explicit field removal vs undefined", () => {
     deep: true,
   });
 
-  assertEquals(withIgnore as any, {
+  expect(withIgnore as any).toEqual({
     name: "John Updated",
   });
 });
 
-Deno.test("Configuration: ignore behavior vs remove behavior", () => {
+test("Configuration: ignore behavior vs remove behavior", () => {
   const testData = {
     field1: "value1",
     field2: undefined,
@@ -298,7 +298,7 @@ Deno.test("Configuration: ignore behavior vs remove behavior", () => {
     deep: true,
   });
 
-  assertEquals(ignoredResult, {
+  expect(ignoredResult).toEqual({
     field1: "value1",
     field3: "value3",
     nested: {
@@ -313,7 +313,7 @@ Deno.test("Configuration: ignore behavior vs remove behavior", () => {
     deep: true,
   });
 
-  assertEquals(removedResult, {
+  expect(removedResult).toEqual({
     field1: "value1",
     field3: "value3",
     nested: {
@@ -323,10 +323,10 @@ Deno.test("Configuration: ignore behavior vs remove behavior", () => {
   });
 
   // Both should be identical for 'undefined' values (only difference is intent)
-  assertEquals(ignoredResult, removedResult);
+  expect(ignoredResult).toEqual(removedResult);
 });
 
-Deno.test("Configuration: removeField() works consistently across all behaviors", () => {
+test("Configuration: removeField() works consistently across all behaviors", () => {
   const testData = {
     keep: "this",
     remove1: removeField(),
@@ -357,11 +357,11 @@ Deno.test("Configuration: removeField() works consistently across all behaviors"
   };
 
   // removeField() should work the same regardless of undefinedBehavior setting
-  assertEquals(removeResult, expectedResult);
-  assertEquals(ignoreResult, expectedResult);
+  expect(removeResult).toEqual(expectedResult);
+  expect(ignoreResult).toEqual(expectedResult);
 });
 
-Deno.test("Configuration: error behavior throws on undefined", () => {
+test("Configuration: error behavior throws on undefined", () => {
   const testDataWithUndefined = {
     field1: "value1",
     field2: undefined,
@@ -380,10 +380,10 @@ Deno.test("Configuration: error behavior throws on undefined", () => {
       undefinedBehavior: "error",
       deep: true,
     });
-    assert(false, "Should have thrown an error for undefined");
+    expect(false).toBeTruthy();
   } catch (error) {
-    assert(error instanceof Error);
-    assert(error.message.includes("Undefined values are not allowed"));
+    expect(error instanceof Error).toBeTruthy();
+    expect((error as Error).message.includes("Undefined values are not allowed")).toBeTruthy();
   }
 
   // Should work fine with removeField()
@@ -392,13 +392,13 @@ Deno.test("Configuration: error behavior throws on undefined", () => {
     deep: true,
   });
 
-  assertEquals(result as any, {
+  expect(result as any).toEqual({
     field1: "value1",
     field3: "value3",
   });
 });
 
-Deno.test("Real-world scenario: User profile update with different field intentions", () => {
+test("Real-world scenario: User profile update with different field intentions", () => {
   // Simulates a realistic user profile update scenario
   const currentProfile = {
     name: "John Doe",
@@ -429,7 +429,7 @@ Deno.test("Real-world scenario: User profile update with different field intenti
   });
 
   // Should only include fields that were explicitly set or removed
-  assertEquals(updateForIgnore as any, {
+  expect(updateForIgnore as any).toEqual({
     name: "John Smith",
     avatar: "http://example.com/new-avatar.jpg",
     // Note: phone and bio are removed, email is not included
@@ -442,13 +442,13 @@ Deno.test("Real-world scenario: User profile update with different field intenti
   });
 
   // Same result in this case since removeField() and undefined both remove
-  assertEquals(updateForRemove as any, {
+  expect(updateForRemove as any).toEqual({
     name: "John Smith",
     avatar: "http://example.com/new-avatar.jpg",
   });
 });
 
-Deno.test("Edge case: Empty objects and arrays after sanitization", () => {
+test("Edge case: Empty objects and arrays after sanitization", () => {
   const testData = {
     emptyAfterSanitization: {
       prop1: undefined,
@@ -465,7 +465,7 @@ Deno.test("Edge case: Empty objects and arrays after sanitization", () => {
     deep: true,
   });
 
-  assertEquals(result as any, {
+  expect(result as any).toEqual({
     emptyAfterSanitization: {}, // Empty object remains
     arrayWithUndefined: [], // Empty array remains
     mixedArray: ["keep", "also keep"], // Only defined values remain
@@ -473,7 +473,7 @@ Deno.test("Edge case: Empty objects and arrays after sanitization", () => {
   });
 });
 
-Deno.test("Type consistency: Results should be properly typed", () => {
+test("Type consistency: Results should be properly typed", () => {
   interface TestInterface {
     required: string;
     optional?: string;
@@ -496,33 +496,33 @@ Deno.test("Type consistency: Results should be properly typed", () => {
   });
 
   // Result should maintain type structure while removing undefined values
-  assertEquals(result, {
+  expect(result).toEqual({
     required: "value",
     nested: {},
   });
 
   // TypeScript should recognize this as the same interface type
   const typedResult = result as TestInterface;
-  assertEquals(typedResult.required, "value");
-  assert(!("optional" in typedResult)); // Field should not exist after sanitization
+  expect(typedResult.required).toEqual("value");
+  expect(!("optional" in typedResult)).toBeTruthy(); // Field should not exist after sanitization
 });
 
 // Tests for extractFieldsToRemove with deep objects
 // NOTE: Since v2, objects are NOT flattened by default (full replacement).
 // Use partial() to opt-in to dot notation (merge behavior).
 
-Deno.test("extractFieldsToRemove - simple flat object", () => {
+test("extractFieldsToRemove - simple flat object", () => {
   const result = extractFieldsToRemove({
     name: "John",
     email: removeField(),
     age: 30,
   });
 
-  assertEquals(result.set, { name: "John", age: 30 });
-  assertEquals(result.unset, { email: 1 });
+  expect(result.set).toEqual({ name: "John", age: 30 });
+  expect(result.unset).toEqual({ email: 1 });
 });
 
-Deno.test("extractFieldsToRemove - nested object WITHOUT partial (full replacement)", () => {
+test("extractFieldsToRemove - nested object WITHOUT partial (full replacement)", () => {
   // Without partial(), nested objects are kept as-is (full replacement)
   const result = extractFieldsToRemove({
     name: "John",
@@ -532,17 +532,17 @@ Deno.test("extractFieldsToRemove - nested object WITHOUT partial (full replaceme
     },
   });
 
-  assertEquals(result.set, {
+  expect(result.set).toEqual({
     name: "John",
     settings: {
       theme: "dark",
       language: "fr",
     },
   });
-  assertEquals(result.unset, {});
+  expect(result.unset).toEqual({});
 });
 
-Deno.test("extractFieldsToRemove - nested object WITH partial (merge/dot notation)", () => {
+test("extractFieldsToRemove - nested object WITH partial (merge/dot notation)", () => {
   // With partial(), nested objects use dot notation for merging
   const result = extractFieldsToRemove({
     name: "John",
@@ -552,14 +552,14 @@ Deno.test("extractFieldsToRemove - nested object WITH partial (merge/dot notatio
     }),
   });
 
-  assertEquals(result.set, {
+  expect(result.set).toEqual({
     name: "John",
     "settings.language": "fr",
   });
-  assertEquals(result.unset, { "settings.theme": 1 });
+  expect(result.unset).toEqual({ "settings.theme": 1 });
 });
 
-Deno.test("extractFieldsToRemove - deeply nested object with partial", () => {
+test("extractFieldsToRemove - deeply nested object with partial", () => {
   const result = extractFieldsToRemove({
     user: partial({
       profile: partial({
@@ -573,17 +573,17 @@ Deno.test("extractFieldsToRemove - deeply nested object with partial", () => {
     }),
   });
 
-  assertEquals(result.set, {
+  expect(result.set).toEqual({
     "user.profile.bio": "Hello",
     "user.profile.social.github": "user123",
   });
-  assertEquals(result.unset, {
+  expect(result.unset).toEqual({
     "user.profile.avatar": 1,
     "user.profile.social.twitter": 1,
   });
 });
 
-Deno.test("extractFieldsToRemove - mixed with arrays", () => {
+test("extractFieldsToRemove - mixed with arrays", () => {
   const result = extractFieldsToRemove({
     name: "John",
     tags: ["a", "b", "c"], // Arrays should not be recursed into
@@ -593,15 +593,15 @@ Deno.test("extractFieldsToRemove - mixed with arrays", () => {
     }),
   });
 
-  assertEquals(result.set, {
+  expect(result.set).toEqual({
     name: "John",
     tags: ["a", "b", "c"],
     "metadata.updated": "2024-01-01",
   });
-  assertEquals(result.unset, { "metadata.created": 1 });
+  expect(result.unset).toEqual({ "metadata.created": 1 });
 });
 
-Deno.test("extractFieldsToRemove - entire nested object removal", () => {
+test("extractFieldsToRemove - entire nested object removal", () => {
   const result = extractFieldsToRemove({
     name: "John",
     settings: removeField(), // Remove entire nested object
@@ -611,16 +611,16 @@ Deno.test("extractFieldsToRemove - entire nested object removal", () => {
   });
 
   // Without partial(), profile is kept as full object
-  assertEquals(result.set, {
+  expect(result.set).toEqual({
     name: "John",
     profile: {
       bio: "Hello",
     },
   });
-  assertEquals(result.unset, { settings: 1 });
+  expect(result.unset).toEqual({ settings: 1 });
 });
 
-Deno.test("extractFieldsToRemove - empty nested object", () => {
+test("extractFieldsToRemove - empty nested object", () => {
   const result = extractFieldsToRemove({
     name: "John",
     empty: {},
@@ -629,11 +629,11 @@ Deno.test("extractFieldsToRemove - empty nested object", () => {
     }),
   });
 
-  assertEquals(result.set, { name: "John", empty: {} });
-  assertEquals(result.unset, { "settings.theme": 1 });
+  expect(result.set).toEqual({ name: "John", empty: {} });
+  expect(result.unset).toEqual({ "settings.theme": 1 });
 });
 
-Deno.test("extractFieldsToRemove - all fields removed in nested with partial", () => {
+test("extractFieldsToRemove - all fields removed in nested with partial", () => {
   const result = extractFieldsToRemove({
     name: "John",
     settings: partial({
@@ -642,14 +642,14 @@ Deno.test("extractFieldsToRemove - all fields removed in nested with partial", (
     }),
   });
 
-  assertEquals(result.set, { name: "John" });
-  assertEquals(result.unset, {
+  expect(result.set).toEqual({ name: "John" });
+  expect(result.unset).toEqual({
     "settings.theme": 1,
     "settings.language": 1,
   });
 });
 
-Deno.test("extractFieldsToRemove - preserves null values", () => {
+test("extractFieldsToRemove - preserves null values", () => {
   const result = extractFieldsToRemove({
     name: "John",
     email: null,
@@ -659,15 +659,15 @@ Deno.test("extractFieldsToRemove - preserves null values", () => {
     }),
   });
 
-  assertEquals(result.set, {
+  expect(result.set).toEqual({
     name: "John",
     email: null,
     "settings.theme": null,
   });
-  assertEquals(result.unset, { "settings.language": 1 });
+  expect(result.unset).toEqual({ "settings.language": 1 });
 });
 
-Deno.test("extractFieldsToRemove - partial at different nesting levels", () => {
+test("extractFieldsToRemove - partial at different nesting levels", () => {
   // Only the level with partial() gets flattened
   const result = extractFieldsToRemove({
     user: partial({
@@ -680,12 +680,12 @@ Deno.test("extractFieldsToRemove - partial at different nesting levels", () => {
   });
 
   // user is flattened, but address inside is NOT (no partial on it)
-  assertEquals(result.set, {
+  expect(result.set).toEqual({
     "user.name": "John",
     "user.address": {
       city: "Paris",
       country: "France",
     },
   });
-  assertEquals(result.unset, {});
+  expect(result.unset).toEqual({});
 });

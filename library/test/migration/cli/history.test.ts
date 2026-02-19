@@ -11,7 +11,8 @@
  * @module
  */
 
-import { assertEquals } from "@std/assert";
+import { test, expect } from "vitest";
+import * as fsp from "node:fs/promises";
 import { MongoClient } from "../../../src/mongodb.ts";
 import { initCommand } from "../../../src/migration/cli/commands/init.ts";
 import { generateCommand } from "../../../src/migration/cli/commands/generate.ts";
@@ -22,8 +23,8 @@ import { getAppliedMigrationIds } from "../../../src/migration/state.ts";
 import { delay, withTempDir } from "./shared.ts";
 
 // MongoDB test connection
-const TEST_MONGODB_URI = Deno.env.get("TEST_MONGODB_URI") ||
-  "mongodb://localhost:27017";
+const TEST_MONGODB_URI = process.env.TEST_MONGODB_URI ||
+  "mongodb://127.0.0.1:27017";
 
 /**
  * Generate a unique database name for each test to avoid collisions
@@ -71,13 +72,14 @@ async function withTestDb(
  * Setup test configuration
  */
 async function setupTestConfig(tempDir: string, dbName: string) {
-  await Deno.writeTextFile(
+  await fsp.writeFile(
     `${tempDir}/mongodbee.config.ts`,
     `export default { database: { connection: { uri: "${TEST_MONGODB_URI}" }, name: "${dbName}" }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
+    "utf-8",
   );
 }
 
-Deno.test("history - shows empty history when no migrations run", async () => {
+test("history - shows empty history when no migrations run", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       // Setup
@@ -91,7 +93,7 @@ Deno.test("history - shows empty history when no migrations run", async () => {
   });
 });
 
-Deno.test("history - shows applied migrations in history", async () => {
+test("history - shows applied migrations in history", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -108,7 +110,7 @@ Deno.test("history - shows applied migrations in history", async () => {
 
       // Verify applied
       const appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 2);
+      expect(appliedIds.length).toEqual(2);
 
       // Run history
       await historyCommand({ cwd: tempDir });
@@ -117,7 +119,7 @@ Deno.test("history - shows applied migrations in history", async () => {
   });
 });
 
-Deno.test("history - shows rollback operations in history", async () => {
+test("history - shows rollback operations in history", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -133,13 +135,13 @@ Deno.test("history - shows rollback operations in history", async () => {
       await migrateCommand({ cwd: tempDir, force: true });
 
       let appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 2);
+      expect(appliedIds.length).toEqual(2);
 
       // Rollback one
       await rollbackCommand({ force: true, cwd: tempDir });
 
       appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 1);
+      expect(appliedIds.length).toEqual(1);
 
       // Run history
       await historyCommand({ cwd: tempDir });
@@ -148,7 +150,7 @@ Deno.test("history - shows rollback operations in history", async () => {
   });
 });
 
-Deno.test("history - shows multiple operations chronologically", async () => {
+test("history - shows multiple operations chronologically", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       // Setup
@@ -174,7 +176,7 @@ Deno.test("history - shows multiple operations chronologically", async () => {
   });
 });
 
-Deno.test("history - uses custom config path when provided", async () => {
+test("history - uses custom config path when provided", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       // Setup
@@ -182,9 +184,10 @@ Deno.test("history - uses custom config path when provided", async () => {
       await setupTestConfig(tempDir, dbName); // Standard config for generate
 
       // Create custom config
-      await Deno.writeTextFile(
+      await fsp.writeFile(
         `${tempDir}/custom.config.ts`,
         `export default { database: { connection: { uri: "${TEST_MONGODB_URI}" }, name: "${dbName}" }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
+        "utf-8",
       );
 
       await generateCommand({ name: "test", cwd: tempDir });
@@ -199,33 +202,29 @@ Deno.test("history - uses custom config path when provided", async () => {
   });
 });
 
-Deno.test({
-  name: "history - handles connection errors gracefully",
-  sanitizeResources: false, // MongoDB connection attempt leaves resources
-  sanitizeOps: false, // DNS resolution doesn't complete
-  fn: async () => {
-    await withTempDir(async (tempDir) => {
-      // Setup with invalid connection (with short timeout)
-      await initCommand({ cwd: tempDir });
-      await Deno.writeTextFile(
-        `${tempDir}/mongodbee.config.ts`,
-        `export default { db: { uri: "mongodb://invalid:27017?serverSelectionTimeoutMS=1000&connectTimeoutMS=1000", name: "test" }, paths: { migrationsDir: "./migrations" } };`,
-      );
+test("history - handles connection errors gracefully", async () => {
+  await withTempDir(async (tempDir) => {
+    // Setup with invalid connection (with short timeout)
+    await initCommand({ cwd: tempDir });
+    await fsp.writeFile(
+      `${tempDir}/mongodbee.config.ts`,
+      `export default { database: { connection: { uri: "mongodb://invalid:27017?serverSelectionTimeoutMS=1000&connectTimeoutMS=1000" }, name: "test" }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
+      "utf-8",
+    );
 
-      await generateCommand({ name: "test", cwd: tempDir });
+    await generateCommand({ name: "test", cwd: tempDir });
 
-      // Try to run history
-      try {
-        await historyCommand({ cwd: tempDir });
-      } catch (error) {
-        // Connection error is expected
-        assertEquals(error instanceof Error, true);
-      }
-    });
-  },
+    // Try to run history
+    try {
+      await historyCommand({ cwd: tempDir });
+    } catch (error) {
+      // Connection error is expected
+      expect(error instanceof Error).toEqual(true);
+    }
+  });
 });
 
-Deno.test("history - shows operations for specific migrations", async () => {
+test("history - shows operations for specific migrations", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -243,7 +242,7 @@ Deno.test("history - shows operations for specific migrations", async () => {
       await migrateCommand({ cwd: tempDir, force: true });
 
       const appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 3);
+      expect(appliedIds.length).toEqual(3);
 
       // Run history
       await historyCommand({ cwd: tempDir });
@@ -252,7 +251,7 @@ Deno.test("history - shows operations for specific migrations", async () => {
   });
 });
 
-Deno.test("history - reflects current database state", async () => {
+test("history - reflects current database state", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -268,7 +267,7 @@ Deno.test("history - reflects current database state", async () => {
       await migrateCommand({ cwd: tempDir, force: true });
 
       let appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 1);
+      expect(appliedIds.length).toEqual(1);
 
       // History after apply
       await historyCommand({ cwd: tempDir });
@@ -277,7 +276,7 @@ Deno.test("history - reflects current database state", async () => {
       await rollbackCommand({ force: true, cwd: tempDir });
 
       appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 0);
+      expect(appliedIds.length).toEqual(0);
 
       // History after rollback
       await historyCommand({ cwd: tempDir });

@@ -1,6 +1,6 @@
 import * as v from "../src/schema.ts";
 import { removeField } from "../src/sanitizer.ts";
-import { assert, assertEquals } from "@std/assert";
+import { test, expect } from "vitest";
 
 // Mock collection behavior to test without MongoDB
 class MockCollection {
@@ -67,7 +67,7 @@ class MockCollection {
   }
 }
 
-Deno.test("Integration: Default behavior removes undefined fields", async () => {
+test("Integration: Default behavior removes undefined fields", async () => {
   const collection = new MockCollection("remove");
 
   await collection.insertOne({
@@ -83,7 +83,7 @@ Deno.test("Integration: Default behavior removes undefined fields", async () => 
 
   const result = collection.getLastDocument();
 
-  assertEquals(result, {
+  expect(result).toEqual({
     name: "John",
     email: "john@example.com",
     age: 30,
@@ -93,11 +93,11 @@ Deno.test("Integration: Default behavior removes undefined fields", async () => 
   });
 
   // Verify removed fields
-  assert(!("phone" in result));
-  assert(!("tags" in result.metadata));
+  expect(!("phone" in result)).toBeTruthy();
+  expect(!("tags" in result.metadata)).toBeTruthy();
 });
 
-Deno.test("Integration: removeField() explicitly removes fields", async () => {
+test("Integration: removeField() explicitly removes fields", async () => {
   const collection = new MockCollection("remove");
 
   await collection.insertOne({
@@ -110,18 +110,18 @@ Deno.test("Integration: removeField() explicitly removes fields", async () => {
 
   const result = collection.getLastDocument();
 
-  assertEquals(result, {
+  expect(result).toEqual({
     name: "John",
     email: "john@example.com",
     age: 30,
   });
 
   // Verify explicitly removed fields
-  assert(!("phone" in result));
-  assert(!("temporaryFlag" in result));
+  expect(!("phone" in result)).toBeTruthy();
+  expect(!("temporaryFlag" in result)).toBeTruthy();
 });
 
-Deno.test("Integration: Error behavior throws on undefined", async () => {
+test("Integration: Error behavior throws on undefined", async () => {
   const collection = new MockCollection("error");
 
   // Should work fine without undefined
@@ -140,14 +140,14 @@ Deno.test("Integration: Error behavior throws on undefined", async () => {
     });
   } catch (error) {
     errorThrown = true;
-    assert(error instanceof Error);
-    assert(error.message.includes("Undefined values are not allowed"));
+    expect(error instanceof Error).toBeTruthy();
+    expect((error as Error).message.includes("Undefined values are not allowed")).toBeTruthy();
   }
 
-  assert(errorThrown, "Expected error to be thrown for undefined values");
+  expect(errorThrown).toBeTruthy();
 });
 
-Deno.test("Integration: Complex nested scenario", async () => {
+test("Integration: Complex nested scenario", async () => {
   const collection = new MockCollection("remove");
 
   // Complex real-world scenario
@@ -183,31 +183,31 @@ Deno.test("Integration: Complex nested scenario", async () => {
   const result = collection.getLastDocument();
 
   // Should have clean structure without undefined fields
-  assertEquals(result.user.profile, {
+  expect(result.user.profile).toEqual({
     name: "John Doe",
     bio: "Developer",
   });
 
-  assertEquals(result.user.settings.notifications, {
+  expect(result.user.settings.notifications).toEqual({
     email: true,
     sms: false,
   });
 
-  assertEquals(result.user.metadata.tags, ["user", "active"]);
+  expect(result.user.metadata.tags).toEqual(["user", "active"]);
 
-  assertEquals(result.user.metadata.flags, {
+  expect(result.user.metadata.flags).toEqual({
     verified: true,
   });
 
   // Verify all undefined and removeField() values were removed
-  assert(!("avatar" in result.user.profile));
-  assert(!("push" in result.user.settings.notifications));
-  assert(!("privacy" in result.user.settings));
-  assert(!("beta" in result.user.metadata.flags));
-  assert(!("admin" in result.user.metadata.flags));
+  expect(!("avatar" in result.user.profile)).toBeTruthy();
+  expect(!("push" in result.user.settings.notifications)).toBeTruthy();
+  expect(!("privacy" in result.user.settings)).toBeTruthy();
+  expect(!("beta" in result.user.metadata.flags)).toBeTruthy();
+  expect(!("admin" in result.user.metadata.flags)).toBeTruthy();
 });
 
-Deno.test("Integration: Update operations maintain consistency", async () => {
+test("Integration: Update operations maintain consistency", async () => {
   const collection = new MockCollection("remove");
 
   // Initial insert
@@ -231,18 +231,18 @@ Deno.test("Integration: Update operations maintain consistency", async () => {
 
   const updatedDoc = collection.getLastDocument();
 
-  assertEquals(updatedDoc, {
+  expect(updatedDoc).toEqual({
     name: "John Updated",
     email: "john.new@example.com",
     avatar: "http://example.com/avatar.jpg",
   });
 
   // Verify removed fields
-  assert(!("phone" in updatedDoc));
-  assert(!("bio" in updatedDoc));
+  expect(!("phone" in updatedDoc)).toBeTruthy();
+  expect(!("bio" in updatedDoc)).toBeTruthy();
 });
 
-Deno.test("Integration: Array sanitization in complex structures", async () => {
+test("Integration: Array sanitization in complex structures", async () => {
   const collection = new MockCollection("remove");
 
   await collection.insertOne({
@@ -283,19 +283,19 @@ Deno.test("Integration: Array sanitization in complex structures", async () => {
   const result = collection.getLastDocument();
 
   // Array should be cleaned
-  assertEquals(result.products.length, 3);
+  expect(result.products.length).toEqual(3);
 
   // First product - discount removed
-  assert(!("discount" in result.products[0]));
-  assertEquals(result.products[0], {
+  expect(!("discount" in result.products[0])).toBeTruthy();
+  expect(result.products[0]).toEqual({
     id: 1,
     name: "Product 1",
     price: 100,
   });
 
   // Second product - category removed
-  assert(!("category" in result.products[1]));
-  assertEquals(result.products[1], {
+  expect(!("category" in result.products[1])).toBeTruthy();
+  expect(result.products[1]).toEqual({
     id: 2,
     name: "Product 2",
     price: 200,
@@ -303,14 +303,14 @@ Deno.test("Integration: Array sanitization in complex structures", async () => {
   });
 
   // Third product - tags cleaned
-  assertEquals(result.products[2].tags, ["electronics", "popular"]);
+  expect(result.products[2].tags).toEqual(["electronics", "popular"]);
 
   // Metadata cleaned
-  assert(!("filters" in result.metadata));
-  assert(!("hasPrev" in result.metadata.pagination));
+  expect(!("filters" in result.metadata)).toBeTruthy();
+  expect(!("hasPrev" in result.metadata.pagination)).toBeTruthy();
 });
 
-Deno.test("Integration: Performance with large nested structures", async () => {
+test("Integration: Performance with large nested structures", async () => {
   const collection = new MockCollection("remove");
 
   // Create a reasonably large structure with many undefined values
@@ -338,26 +338,25 @@ Deno.test("Integration: Performance with large nested structures", async () => {
   const result = collection.getLastDocument();
 
   // Should process quickly (under 10ms for this size)
-  assert(
+  expect(
     (endTime - startTime) < 100,
-    `Sanitization took too long: ${endTime - startTime}ms`,
-  );
+  ).toBeTruthy();
 
   // Verify structure is properly cleaned
-  assertEquals(result.users.length, 100);
+  expect(result.users.length).toEqual(100);
 
   // Check that undefined fields were properly removed
   for (let i = 0; i < 100; i++) {
     const user = result.users[i];
-    assertEquals(user.id, i);
-    assertEquals(user.name, `User ${i}`);
+    expect(user.id).toEqual(i);
+    expect(user.name).toEqual(`User ${i}`);
 
     if (i % 2 !== 0) {
-      assert(!("email" in user));
+      expect(!("email" in user)).toBeTruthy();
     }
 
     if (i % 3 !== 0) {
-      assert(!("avatar" in user.profile));
+      expect(!("avatar" in user.profile)).toBeTruthy();
     }
   }
 });

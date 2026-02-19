@@ -1,5 +1,5 @@
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertRejects } from "@std/assert";
+import { test, expect } from "vitest";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import { ulid } from "../../src/schema.ts";
@@ -29,8 +29,8 @@ const createTestSchema = () =>
     },
   });
 
-Deno.test("MultiCollection Session: Basic transaction", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("MultiCollection Session: Basic transaction", async () => {
+  await withDatabase("MultiCollection Session: Basic transaction", async (db) => {
     const store = await multiCollection(db, "store", createTestSchema());
 
     // Test basic session functionality
@@ -61,22 +61,22 @@ Deno.test("MultiCollection Session: Basic transaction", async (t) => {
 
     // Verify all data was inserted correctly
     const user = await store.findOne("user", { _id: results.userId });
-    assert(user !== null);
-    assertEquals(user.name, "John Doe");
+    expect(user).not.toBeNull();
+    expect(user.name).toEqual("John Doe");
 
     const product = await store.findOne("product", { _id: results.productId });
-    assert(product !== null);
-    assertEquals(product.name, "Test Product");
+    expect(product).not.toBeNull();
+    expect(product.name).toEqual("Test Product");
 
     const order = await store.findOne("order", { _id: results.orderId });
-    assert(order !== null);
-    assertEquals(order.total, 99.99);
-    assertEquals(order.status, "pending");
+    expect(order).not.toBeNull();
+    expect(order.total).toEqual(99.99);
+    expect(order.status).toEqual("pending");
   });
 });
 
-Deno.test("MultiCollection Session: Transaction rollback", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("MultiCollection Session: Transaction rollback", async () => {
+  await withDatabase("MultiCollection Session: Transaction rollback", async (db) => {
     const store = await multiCollection(db, "store", createTestSchema());
 
     // Insert a product first (outside transaction)
@@ -87,11 +87,11 @@ Deno.test("MultiCollection Session: Transaction rollback", async (t) => {
     });
 
     // Test transaction rollback
-    await assertRejects(
+    await expect(
       async () => {
         await store.withSession(async () => {
           // Update existing product
-          await store.updateOne("product", productId, {
+          await store.updateById("product", productId, {
             stock: 4,
             price: 55,
           });
@@ -115,32 +115,28 @@ Deno.test("MultiCollection Session: Transaction rollback", async (t) => {
           throw new Error("Intentional error for rollback test");
         });
       },
-      Error,
-      "Intentional error for rollback test",
-    );
+    ).rejects.toThrow("Intentional error for rollback test");
 
     // Verify that product wasn't updated (transaction rolled back)
     const product = await store.findOne("product", { _id: productId });
-    assert(product !== null);
-    assertEquals(product.stock, 5, "Stock should be unchanged due to rollback");
-    assertEquals(
+    expect(product).not.toBeNull();
+    expect(product.stock).toEqual(5);
+    expect(
       product.price,
-      50,
-      "Price should be unchanged due to rollback",
-    );
+    ).toEqual(50);
 
     // Verify no user was created
-    const users = await store.find("user");
-    assertEquals(users.length, 0, "No users should exist after rollback");
+    const users = await store.find("user").toArray();
+    expect(users.length).toEqual(0);
 
     // Verify no order was created
-    const orders = await store.find("order");
-    assertEquals(orders.length, 0, "No orders should exist after rollback");
+    const orders = await store.find("order").toArray();
+    expect(orders.length).toEqual(0);
   });
 });
 
-Deno.test("MultiCollection Session: Complex multi-entity update", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("MultiCollection Session: Complex multi-entity update", async () => {
+  await withDatabase("MultiCollection Session: Complex multi-entity update", async (db) => {
     const store = await multiCollection(db, "store", createTestSchema());
 
     // Setup test data
@@ -197,7 +193,7 @@ Deno.test("MultiCollection Session: Complex multi-entity update", async (t) => {
     // Test a complex transaction with updateMany and multiple entity types
     await store.withSession(async () => {
       // Update both users
-      await store.updateMany({
+      await store.updateManyByIds({
         user: {
           [setupData.userIds[0]]: { age: 31 },
           [setupData.userIds[1]]: { age: 26 },
@@ -205,7 +201,7 @@ Deno.test("MultiCollection Session: Complex multi-entity update", async (t) => {
       });
 
       // Update product stock for ordered items
-      await store.updateMany({
+      await store.updateManyByIds({
         product: {
           [setupData.productIds[0]]: { stock: 99 }, // -1 from order
           [setupData.productIds[1]]: { stock: 49 }, // -1 from order
@@ -214,7 +210,7 @@ Deno.test("MultiCollection Session: Complex multi-entity update", async (t) => {
       });
 
       // Update all orders to 'processed'
-      await store.updateMany({
+      await store.updateManyByIds({
         order: {
           [setupData.orderIds[0]]: { status: "processed" },
           [setupData.orderIds[1]]: { status: "processed" },
@@ -224,31 +220,29 @@ Deno.test("MultiCollection Session: Complex multi-entity update", async (t) => {
 
     // Verify all updates were applied
     const user1 = await store.findOne("user", { _id: setupData.userIds[0] });
-    assert(user1 !== null);
-    assertEquals(user1.age, 31, "User 1 age should be updated");
+    expect(user1).not.toBeNull();
+    expect(user1.age).toEqual(31);
 
     const user2 = await store.findOne("user", { _id: setupData.userIds[1] });
-    assert(user2 !== null);
-    assertEquals(user2.age, 26, "User 2 age should be updated");
+    expect(user2).not.toBeNull();
+    expect(user2.age).toEqual(26);
 
     const productA = await store.findOne("product", {
       _id: setupData.productIds[0],
     });
-    assert(productA !== null);
-    assertEquals(productA.stock, 99, "Product A stock should be updated");
+    expect(productA).not.toBeNull();
+    expect(productA.stock).toEqual(99);
 
     const order1 = await store.findOne("order", { _id: setupData.orderIds[0] });
-    assert(order1 !== null);
-    assertEquals(
+    expect(order1).not.toBeNull();
+    expect(
       order1.status,
-      "processed",
-      "Order 1 status should be updated",
-    );
+    ).toEqual("processed");
   });
 });
 
-Deno.test("MultiCollection Session: Read operations in transaction", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("MultiCollection Session: Read operations in transaction", async () => {
+  await withDatabase("MultiCollection Session: Read operations in transaction", async (db) => {
     const store = await multiCollection(db, "store", createTestSchema());
 
     // Insert test data
@@ -262,13 +256,13 @@ Deno.test("MultiCollection Session: Read operations in transaction", async (t) =
     await store.withSession(async () => {
       // Find the user
       const user = await store.findOne("user", { _id: userId });
-      assert(user !== null);
-      assertEquals(user.name, "Read Test User");
+      expect(user).not.toBeNull();
+      expect(user.name).toEqual("Read Test User");
 
       // Test find with filter
-      const users = await store.find("user", { age: 50 });
-      assertEquals(users.length, 1);
-      assertEquals((users[0] as any).email, "read@example.com");
+      const users = await store.find("user", { age: 50 }).toArray();
+      expect(users.length).toEqual(1);
+      expect((users[0] as any).email).toEqual("read@example.com");
 
       // Insert another user in the same transaction
       const newUserId = await store.insertOne("user", {
@@ -278,16 +272,16 @@ Deno.test("MultiCollection Session: Read operations in transaction", async (t) =
       });
 
       // Should be able to find both users
-      const allUsers = await store.find("user");
-      assertEquals(allUsers.length, 2);
+      const allUsers = await store.find("user").toArray();
+      expect(allUsers.length).toEqual(2);
 
       // Update the first user
-      await store.updateOne("user", userId, { age: 51 });
+      await store.updateById("user", userId, { age: 51 });
 
       // Find should reflect the update in the same transaction
       const updatedUser = await store.findOne("user", { _id: userId });
-      assert(updatedUser !== null);
-      assertEquals(updatedUser.age, 51);
+      expect(updatedUser).not.toBeNull();
+      expect(updatedUser.age).toEqual(51);
     });
   });
 });

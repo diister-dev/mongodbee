@@ -11,7 +11,8 @@
  * @module
  */
 
-import { assert, assertEquals } from "@std/assert";
+import { test, expect } from "vitest";
+import * as fsp from "node:fs/promises";
 import { initCommand } from "../../../src/migration/cli/commands/init.ts";
 import { generateCommand } from "../../../src/migration/cli/commands/generate.ts";
 import {
@@ -37,16 +38,16 @@ export default defineConfig({
     migrationsDir: "./migrations"
   },
   mongodb: {
-    uri: "mongodb://localhost:27017",
+    uri: "mongodb://127.0.0.1:27017",
     database: "mongodbee_test"
   }
 });
   `;
 
-  await Deno.writeTextFile("mongodbee.config.ts", config.trim());
+  await fsp.writeFile("mongodbee.config.ts", config.trim(), "utf-8");
 }
 
-Deno.test("generate - creates first migration with no parent", async () => {
+test("generate - creates first migration with no parent", async () => {
   await withTempDir(async (tempDir) => {
     // Setup
     await initCommand({ cwd: tempDir });
@@ -57,21 +58,21 @@ Deno.test("generate - creates first migration with no parent", async () => {
     // Check migration file was created
     const files = listMigrationFiles(getMigrationsDir(tempDir));
 
-    assertEquals(files.length, 1);
-    assert(files[0].includes("@initial"));
+    expect(files.length).toEqual(1);
+    expect(files[0].includes("@initial")).toBeTruthy();
 
     // Check file content
     const migrationPath = getMigrationPath(tempDir, files[0]);
     const content = await readFile(migrationPath);
 
-    assert(content !== null);
-    assert(content.includes("migrationDefinition"));
-    assert(content.includes("parent: null"));
-    assert(content.includes("initial"));
+    expect(content !== null).toBeTruthy();
+    expect(content.includes("migrationDefinition")).toBeTruthy();
+    expect(content.includes("parent: null")).toBeTruthy();
+    expect(content.includes("initial")).toBeTruthy();
   });
 });
 
-Deno.test("generate - creates child migration with parent reference", async () => {
+test("generate - creates child migration with parent reference", async () => {
   await withTempDir(async (tempDir) => {
     // Setup
     await initCommand({ cwd: tempDir });
@@ -85,20 +86,20 @@ Deno.test("generate - creates child migration with parent reference", async () =
     // Check both files exist
     const files = listMigrationFiles(getMigrationsDir(tempDir));
 
-    assertEquals(files.length, 2);
+    expect(files.length).toEqual(2);
 
     // Check second migration references first as parent
     const secondMigrationPath = getMigrationPath(tempDir, files[1]);
     const content = await readFile(secondMigrationPath);
 
-    assert(content !== null);
-    assert(content.includes("import parent from"));
-    assert(content.includes(files[0]));
-    assert(content.includes("parent: parent"));
+    expect(content !== null).toBeTruthy();
+    expect(content.includes("import parent from")).toBeTruthy();
+    expect(content.includes(files[0])).toBeTruthy();
+    expect(content.includes("parent: parent")).toBeTruthy();
   });
 });
 
-Deno.test("generate - includes parent schemas in child migration", async () => {
+test("generate - includes parent schemas in child migration", async () => {
   await withTempDir(async (tempDir) => {
     // Setup
     await initCommand({ cwd: tempDir });
@@ -115,12 +116,12 @@ Deno.test("generate - includes parent schemas in child migration", async () => {
     const secondMigrationPath = getMigrationPath(tempDir, files[1]);
     const content = await readFile(secondMigrationPath);
 
-    assert(content !== null);
-    assert(content.includes("...parent.schemas.collections"));
+    expect(content !== null).toBeTruthy();
+    expect(content.includes("...parent.schemas.collections")).toBeTruthy();
   });
 });
 
-Deno.test("generate - creates unique migration IDs", async () => {
+test("generate - creates unique migration IDs", async () => {
   await withTempDir(async (tempDir) => {
     // Setup
     await initCommand({ cwd: tempDir });
@@ -136,15 +137,15 @@ Deno.test("generate - creates unique migration IDs", async () => {
     // Check all have unique IDs
     const files = listMigrationFiles(getMigrationsDir(tempDir));
 
-    assertEquals(files.length, 2);
+    expect(files.length).toEqual(2);
 
     // IDs should be different
     const ids = files.map((name) => name.split("@")[0]);
-    assertEquals(new Set(ids).size, 2);
+    expect(new Set(ids).size).toEqual(2);
   });
 });
 
-Deno.test("generate - preserves migration name in ID", async () => {
+test("generate - preserves migration name in ID", async () => {
   await withTempDir(async (tempDir) => {
     // Setup
     await initCommand({ cwd: tempDir });
@@ -156,16 +157,16 @@ Deno.test("generate - preserves migration name in ID", async () => {
     // Check file includes the name
     const files = listMigrationFiles(getMigrationsDir(tempDir));
 
-    assertEquals(files.length, 1);
-    assert(files[0].includes(`@${migrationName}`));
+    expect(files.length).toEqual(1);
+    expect(files[0].includes(`@${migrationName}`)).toBeTruthy();
 
     // Use helper to extract name
     const extractedName = extractMigrationName(files[0]);
-    assertEquals(extractedName, migrationName);
+    expect(extractedName).toEqual(migrationName);
   });
 });
 
-Deno.test("generate - migration ID follows correct format", async () => {
+test("generate - migration ID follows correct format", async () => {
   await withTempDir(async (tempDir) => {
     // Setup
     await initCommand({ cwd: tempDir });
@@ -180,28 +181,28 @@ Deno.test("generate - migration ID follows correct format", async () => {
 
     // Should have format: YYYY_MM_DD_HHMM_ULID@name
     const parts = migrationId.split("@");
-    assertEquals(parts.length, 2);
-    assertEquals(parts[1], "test_migration");
+    expect(parts.length).toEqual(2);
+    expect(parts[1]).toEqual("test_migration");
 
     // First part should have date format
     const datePart = parts[0];
     const dateComponents = datePart.split("_");
 
     // Should have at least 5 components: YYYY, MM, DD, HHMM, ULID
-    assert(dateComponents.length >= 5);
+    expect(dateComponents.length >= 5).toBeTruthy();
 
     // Year should be 4 digits
-    assertEquals(dateComponents[0].length, 4);
+    expect(dateComponents[0].length).toEqual(4);
 
     // Month should be 2 digits
-    assertEquals(dateComponents[1].length, 2);
+    expect(dateComponents[1].length).toEqual(2);
 
     // Day should be 2 digits
-    assertEquals(dateComponents[2].length, 2);
+    expect(dateComponents[2].length).toEqual(2);
   });
 });
 
-Deno.test("generate - includes proper TypeScript structure", async () => {
+test("generate - includes proper TypeScript structure", async () => {
   await withTempDir(async (tempDir) => {
     // Setup
     await initCommand({ cwd: tempDir });
@@ -213,26 +214,26 @@ Deno.test("generate - includes proper TypeScript structure", async () => {
     const files = listMigrationFiles(getMigrationsDir(tempDir));
     const content = await readFile(getMigrationPath(tempDir, files[0]));
 
-    assert(content !== null);
+    expect(content !== null).toBeTruthy();
 
     // Should have proper imports
-    assert(content.includes("import"));
-    assert(content.includes("migrationDefinition"));
+    expect(content.includes("import")).toBeTruthy();
+    expect(content.includes("migrationDefinition")).toBeTruthy();
 
     // Should have proper exports
-    assert(content.includes("export default"));
+    expect(content.includes("export default")).toBeTruthy();
 
     // Should have schemas object
-    assert(content.includes("schemas:"));
-    assert(content.includes("collections:"));
+    expect(content.includes("schemas:")).toBeTruthy();
+    expect(content.includes("collections:")).toBeTruthy();
 
     // Should have migrate function
-    assert(content.includes("migrate(migration)"));
-    assert(content.includes("migration.compile()"));
+    expect(content.includes("migrate(migration)")).toBeTruthy();
+    expect(content.includes("migration.compile()")).toBeTruthy();
   });
 });
 
-Deno.test("generate - handles migrations with long names", async () => {
+test("generate - handles migrations with long names", async () => {
   await withTempDir(async (tempDir) => {
     // Setup
     await initCommand({ cwd: tempDir });
@@ -244,12 +245,12 @@ Deno.test("generate - handles migrations with long names", async () => {
     // Check file was created with full name
     const files = listMigrationFiles(getMigrationsDir(tempDir));
 
-    assertEquals(files.length, 1);
-    assert(files[0].includes(`@${longName}`));
+    expect(files.length).toEqual(1);
+    expect(files[0].includes(`@${longName}`)).toBeTruthy();
   });
 });
 
-Deno.test("generate - creates multiple migrations in sequence", async () => {
+test("generate - creates multiple migrations in sequence", async () => {
   await withTempDir(async (tempDir) => {
     // Setup
     await initCommand({ cwd: tempDir });
@@ -266,29 +267,30 @@ Deno.test("generate - creates multiple migrations in sequence", async () => {
     // Check all migrations exist
     const files = listMigrationFiles(getMigrationsDir(tempDir));
 
-    assertEquals(files.length, 4);
+    expect(files.length).toEqual(4);
 
     // Check names
-    assert(files[0].includes("@initial"));
-    assert(files[1].includes("@add_users"));
-    assert(files[2].includes("@add_posts"));
-    assert(files[3].includes("@add_comments"));
+    expect(files[0].includes("@initial")).toBeTruthy();
+    expect(files[1].includes("@add_users")).toBeTruthy();
+    expect(files[2].includes("@add_posts")).toBeTruthy();
+    expect(files[3].includes("@add_comments")).toBeTruthy();
 
     // Check each migration references its parent
     for (let i = 1; i < files.length; i++) {
       const content = await readFile(getMigrationPath(tempDir, files[i]));
-      assert(content !== null);
-      assert(content.includes(`import parent from "./${files[i - 1]}"`));
+      expect(content !== null).toBeTruthy();
+      expect(content.includes(`import parent from "./${files[i - 1]}"`)).toBeTruthy();
     }
   });
 });
 
-Deno.test("generate - fails gracefully if migrations directory doesn't exist", async () => {
+test("generate - fails gracefully if migrations directory doesn't exist", async () => {
   await withTempDir(async (tempDir) => {
     // Create config without initializing (no migrations directory)
-    await Deno.writeTextFile(
+    await fsp.writeFile(
       `${tempDir}/mongodbee.config.ts`,
       `export default { paths: { migrationsDir: "./migrations" } };`,
+      "utf-8",
     );
 
     // Try to generate migration

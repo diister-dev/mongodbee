@@ -1,9 +1,8 @@
 import * as v from "../src/schema.ts";
-import { assertEquals, assertRejects } from "@std/assert";
+import { test, expect } from "vitest";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { withDatabase } from "./+shared.ts";
-import assert from "node:assert";
 import { defineModel } from "../src/multi-collection-model.ts";
 
 // Test schemas
@@ -40,8 +39,8 @@ const catalogSchema = {
 
 const modelCatalog = defineModel("catalog", { schema: catalogSchema });
 
-Deno.test("Combined Session: Collection and Multi-Collection in same transaction", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Combined Session: Collection and Multi-Collection in same transaction", async () => {
+  await withDatabase("Combined Session: Collection and Multi-Collection in same transaction", async (db) => {
     // Create regular collections
     const users = await collection(db, "users", userSchema);
     const orders = await collection(db, "orders", orderSchema);
@@ -96,28 +95,28 @@ Deno.test("Combined Session: Collection and Multi-Collection in same transaction
 
     // Verify all entities were created correctly
     const user = await users.getById(results.userId);
-    assertEquals(user.name, "Combined Test User");
+    expect(user.name).toEqual("Combined Test User");
 
     const product = await catalog.findOne("product", {
       _id: results.productIds[0],
     });
-    assert(product !== null);
-    assertEquals(product.name, "First Product");
+    expect(product).not.toBeNull();
+    expect(product.name).toEqual("First Product");
 
     const category = await catalog.findOne("category", {
       _id: results.categoryId,
     });
-    assert(category !== null);
-    assertEquals(category.name, "Electronics");
+    expect(category).not.toBeNull();
+    expect(category.name).toEqual("Electronics");
 
     const order = await orders.getById(results.orderId);
-    assertEquals(order.items.length, 2);
-    assertEquals(order.total, 2 * 25.99 + 35.50);
+    expect(order.items.length).toEqual(2);
+    expect(order.total).toEqual(2 * 25.99 + 35.50);
   });
 });
 
-Deno.test("Combined Session: Transaction rollback across collection types", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Combined Session: Transaction rollback across collection types", async () => {
+  await withDatabase("Combined Session: Transaction rollback across collection types", async (db) => {
     // Create regular collections
     const users = await collection(db, "users", userSchema);
     const orders = await collection(db, "orders", orderSchema);
@@ -135,7 +134,7 @@ Deno.test("Combined Session: Transaction rollback across collection types", asyn
     });
 
     // Test rollback across collection types
-    await assertRejects(
+    await expect(
       async () => {
         await users.withSession(async () => {
           // Create a user
@@ -146,7 +145,7 @@ Deno.test("Combined Session: Transaction rollback across collection types", asyn
           });
 
           // Update the existing product
-          await catalog.updateOne("product", existingProductId, {
+          await catalog.updateById("product", existingProductId, {
             stock: 19,
             price: 89.99,
           });
@@ -174,32 +173,30 @@ Deno.test("Combined Session: Transaction rollback across collection types", asyn
           throw new Error("Intentional error for combined rollback test");
         });
       },
-      Error,
-      "Intentional error for combined rollback test",
-    );
+    ).rejects.toThrow("Intentional error for combined rollback test");
 
     // Verify regular collection had rollback
     const userCount = await users.countDocuments({});
-    assertEquals(userCount, 0, "No users should exist after rollback");
+    expect(userCount).toEqual(0);
 
     const orderCount = await orders.countDocuments({});
-    assertEquals(orderCount, 0, "No orders should exist after rollback");
+    expect(orderCount).toEqual(0);
 
     // Verify multi-collection had rollback
     const product = await catalog.findOne("product", {
       _id: existingProductId,
     });
-    assert(product !== null);
-    assertEquals(product.stock, 20, "Stock should be unchanged");
-    assertEquals(product.price, 99.99, "Price should be unchanged");
+    expect(product).not.toBeNull();
+    expect(product.stock).toEqual(20);
+    expect(product.price).toEqual(99.99);
 
-    const products = await catalog.find("product");
-    assertEquals(products.length, 1, "Only the original product should exist");
+    const products = await catalog.find("product").toArray();
+    expect(products.length).toEqual(1);
   });
 });
 
-Deno.test("Combined Session: Update operations across collection types", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Combined Session: Update operations across collection types", async () => {
+  await withDatabase("Combined Session: Update operations across collection types", async (db) => {
     // Create regular collections
     const users = await collection(db, "users", userSchema);
     const orders = await collection(db, "orders", orderSchema);
@@ -246,7 +243,7 @@ Deno.test("Combined Session: Update operations across collection types", async (
       );
 
       // Update product in multi-collection
-      await catalog.updateOne("product", initialData.productId, {
+      await catalog.updateById("product", initialData.productId, {
         stock: 9,
         price: 16.99,
       });
@@ -266,23 +263,23 @@ Deno.test("Combined Session: Update operations across collection types", async (
 
     // Verify all updates were applied
     const user = await users.getById(initialData.userId);
-    assertEquals(user.age, 31, "User age should be updated");
+    expect(user.age).toEqual(31);
 
     const product = await catalog.findOne("product", {
       _id: initialData.productId,
     });
-    assert(product !== null);
-    assertEquals(product.stock, 9, "Product stock should be updated");
-    assertEquals(product.price, 16.99, "Product price should be updated");
+    expect(product).not.toBeNull();
+    expect(product.stock).toEqual(9);
+    expect(product.price).toEqual(16.99);
 
     const order = await orders.getById(initialData.orderId);
-    assertEquals(order.status, "processed", "Order status should be updated");
-    assertEquals(order.total, 16.99, "Order total should be updated");
+    expect(order.status).toEqual("processed");
+    expect(order.total).toEqual(16.99);
   });
 });
 
-Deno.test("Combined Session: Shared session context", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Combined Session: Shared session context", async () => {
+  await withDatabase("Combined Session: Shared session context", async (db) => {
     // Create regular collections
     const users = await collection(db, "users", userSchema);
     const orders = await collection(db, "orders", orderSchema);
@@ -311,11 +308,11 @@ Deno.test("Combined Session: Shared session context", async (t) => {
 
       // Verify data is accessible within the same transaction
       const user = await users.getById(userId);
-      assertEquals(user.name, "Shared Session User");
+      expect(user.name).toEqual("Shared Session User");
 
       const product = await catalog.findOne("product", { _id: productId });
-      assert(product !== null);
-      assertEquals(product.name, "Shared Session Product");
+      expect(product).not.toBeNull();
+      expect(product.name).toEqual("Shared Session Product");
 
       // Now start a "nested" session from the catalog
       await catalog.withSession(async () => {
@@ -332,7 +329,7 @@ Deno.test("Combined Session: Shared session context", async (t) => {
 
         // Verify order creation worked
         const order = await orders.getById(orderId);
-        assertEquals(order.total, 29.99);
+        expect(order.total).toEqual(29.99);
       });
     });
   });

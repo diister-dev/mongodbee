@@ -1,5 +1,5 @@
 import * as v from "../../src/schema.ts";
-import { assert, assertEquals } from "@std/assert";
+import { test, expect } from "vitest";
 import { newMultiCollection, createMultiCollectionInstance } from "../../src/multi-collection.ts";
 import { defineModel } from "../../src/multi-collection-model.ts";
 import { withDatabase } from "../+shared.ts";
@@ -13,8 +13,8 @@ const testModel = defineModel("test", {
   },
 });
 
-Deno.test("Metadata creation: newMultiCollection with raw schema should NOT create metadata", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Metadata creation: newMultiCollection with raw schema should NOT create metadata", async () => {
+  await withDatabase("Metadata creation: newMultiCollection with raw schema should NOT create metadata", async (db) => {
     const rawSchema = {
       product: {
         name: v.string(),
@@ -31,13 +31,13 @@ Deno.test("Metadata creation: newMultiCollection with raw schema should NOT crea
     const migrationsDoc = await collection.findOne({ _type: "_migrations" });
 
     // Raw schema should NOT create metadata
-    assertEquals(infoDoc, null, "newMultiCollection with raw schema should NOT create _information");
-    assertEquals(migrationsDoc, null, "newMultiCollection with raw schema should NOT create _migrations");
+    expect(infoDoc).toEqual(null);
+    expect(migrationsDoc).toEqual(null);
   });
 });
 
-Deno.test("Metadata creation: createMultiCollectionInstance with model SHOULD create metadata", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Metadata creation: createMultiCollectionInstance with model SHOULD create metadata", async () => {
+  await withDatabase("Metadata creation: createMultiCollectionInstance with model SHOULD create metadata", async (db) => {
     // Create collection instance with model
     await createMultiCollectionInstance(db, "test_instance", testModel);
 
@@ -47,24 +47,24 @@ Deno.test("Metadata creation: createMultiCollectionInstance with model SHOULD cr
     const migrationsDoc = await collection.findOne({ _type: "_migrations" }) as any;
 
     // Model-based instance SHOULD create metadata
-    assert(infoDoc !== null, "createMultiCollectionInstance should create _information");
-    assert(migrationsDoc !== null, "createMultiCollectionInstance should create _migrations");
+    expect(infoDoc).not.toBeNull();
+    expect(migrationsDoc).not.toBeNull();
 
     // Verify metadata structure
-    assertEquals(infoDoc._id, "_information");
-    assertEquals(infoDoc._type, "_information");
-    assertEquals(infoDoc.collectionType, "test");
-    assert(infoDoc.createdAt instanceof Date);
+    expect(infoDoc._id).toEqual("_information");
+    expect(infoDoc._type).toEqual("_information");
+    expect(infoDoc.collectionType).toEqual("test");
+    expect(infoDoc.createdAt instanceof Date).toBeTruthy();
 
-    assertEquals(migrationsDoc._id, "_migrations");
-    assertEquals(migrationsDoc._type, "_migrations");
-    assert(Array.isArray(migrationsDoc.appliedMigrations));
-    assert(migrationsDoc.appliedMigrations.length > 0);
+    expect(migrationsDoc._id).toEqual("_migrations");
+    expect(migrationsDoc._type).toEqual("_migrations");
+    expect(Array.isArray(migrationsDoc.appliedMigrations)).toBeTruthy();
+    expect(migrationsDoc.appliedMigrations.length > 0).toBeTruthy();
   });
 });
 
-Deno.test("Metadata creation: newMultiCollection with model SHOULD create metadata", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Metadata creation: newMultiCollection with model SHOULD create metadata", async () => {
+  await withDatabase("Metadata creation: newMultiCollection with model SHOULD create metadata", async (db) => {
     // Create collection with model (not instance)
     const collection = await newMultiCollection(db, "test_with_model", testModel.schema);
 
@@ -74,7 +74,7 @@ Deno.test("Metadata creation: newMultiCollection with model SHOULD create metada
     const migrationsDoc = await rawCollection.findOne({ _type: "_migrations" });
 
     // Passing raw schema (even if from model) should NOT create metadata
-    assertEquals(infoDoc, null, "newMultiCollection with model.schema should NOT create _information");
-    assertEquals(migrationsDoc, null, "newMultiCollection with model.schema should NOT create _migrations");
+    expect(infoDoc).toEqual(null);
+    expect(migrationsDoc).toEqual(null);
   });
 });

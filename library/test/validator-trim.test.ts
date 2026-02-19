@@ -1,10 +1,10 @@
-import { assert, assertEquals } from "@std/assert";
+import { test, expect } from "vitest";
 import * as v from "../src/schema.ts";
 import { toMongoValidator } from "../src/validator.ts";
 import { withDatabase } from "./+shared.ts";
 import { collection } from "../src/collection.ts";
 
-Deno.test("Valibot trim action validation", () => {
+test("Valibot trim action validation", () => {
   // Test how trim works with Valibot
   const trimSchema = v.object({
     name: v.pipe(v.string(), v.trim(), v.nonEmpty()),
@@ -19,10 +19,10 @@ Deno.test("Valibot trim action validation", () => {
     description: "  Some description  ",
   });
 
-  assert(validWithSpaces.success);
-  assertEquals(validWithSpaces.output.name, "John");
-  assertEquals(validWithSpaces.output.email, "john@test.com");
-  assertEquals(validWithSpaces.output.description, "Some description");
+  expect(validWithSpaces.success).toBeTruthy();
+  expect(validWithSpaces.output.name).toEqual("John");
+  expect(validWithSpaces.output.email).toEqual("john@test.com");
+  expect(validWithSpaces.output.description).toEqual("Some description");
 
   // Test that empty string after trim fails nonEmpty validation
   const invalidEmptyAfterTrim = v.safeParse(trimSchema, {
@@ -31,7 +31,7 @@ Deno.test("Valibot trim action validation", () => {
     description: "test",
   });
 
-  assert(!invalidEmptyAfterTrim.success);
+  expect(!invalidEmptyAfterTrim.success).toBeTruthy();
 
   // Test valid minimal case
   const validMinimal = v.safeParse(trimSchema, {
@@ -40,10 +40,10 @@ Deno.test("Valibot trim action validation", () => {
     description: "",
   });
 
-  assert(validMinimal.success);
+  expect(validMinimal.success).toBeTruthy();
 });
 
-Deno.test("MongoDB validator generation for trim", () => {
+test("MongoDB validator generation for trim", () => {
   const trimSchema = v.object({
     name: v.pipe(v.string(), v.trim(), v.nonEmpty()),
     email: v.pipe(v.string(), v.trim(), v.regex(/^.+@.+\..+$/)),
@@ -55,27 +55,27 @@ Deno.test("MongoDB validator generation for trim", () => {
 
   // Trim action should not generate specific MongoDB validation
   // because trimming happens at application level, not database level
-  assertEquals(jsonSchema.properties!.name, {
+  expect(jsonSchema.properties!.name).toEqual({
     bsonType: "string",
     description: "must be a string",
     minLength: 1,
     minItems: 1,
   });
 
-  assertEquals(jsonSchema.properties!.email, {
+  expect(jsonSchema.properties!.email).toEqual({
     bsonType: "string",
     description: "must be a string",
     pattern: "^.+@.+\\..+$",
   });
 
-  assertEquals(jsonSchema.properties!.description, {
+  expect(jsonSchema.properties!.description).toEqual({
     bsonType: "string",
     description: "must be a string",
   });
 });
 
-Deno.test("Collection integration with trim", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection integration with trim", async () => {
+  await withDatabase("Collection integration with trim", async (db) => {
     const users = await collection(db, "users", {
       name: v.pipe(v.string(), v.trim(), v.nonEmpty()),
       email: v.pipe(v.string(), v.trim(), v.regex(/^.+@.+\..+$/)),
@@ -90,9 +90,9 @@ Deno.test("Collection integration with trim", async (t) => {
     });
 
     const insertedUser = await users.getById(userId);
-    assertEquals(insertedUser.name, "Alice");
-    assertEquals(insertedUser.email, "alice@test.com");
-    assertEquals(insertedUser.bio, "Software developer");
+    expect(insertedUser.name).toEqual("Alice");
+    expect(insertedUser.email).toEqual("alice@test.com");
+    expect(insertedUser.bio).toEqual("Software developer");
 
     // Try to insert empty name after trim - should fail
     try {
@@ -101,16 +101,16 @@ Deno.test("Collection integration with trim", async (t) => {
         email: "bob@test.com",
         bio: "test",
       });
-      assert(false, "Should have failed");
+      expect(false).toBeTruthy();
     } catch (error: unknown) {
       // Expected to fail due to nonEmpty validation
       const errorObj = error as { message?: string; issues?: unknown };
-      assert(errorObj.message?.includes("validation") || errorObj.issues);
+      expect(errorObj.message?.includes("validation") || errorObj.issues).toBeTruthy();
     }
   });
 });
 
-Deno.test("Trim with various string scenarios", () => {
+test("Trim with various string scenarios", () => {
   const schema = v.object({
     field: v.pipe(v.string(), v.trim(), v.nonEmpty()),
   });
@@ -125,8 +125,8 @@ Deno.test("Trim with various string scenarios", () => {
 
   for (const { input, expected } of cases) {
     const result = v.safeParse(schema, { field: input });
-    assert(result.success, `Should succeed for input: "${input}"`);
-    assertEquals(result.output.field, expected);
+    expect(result.success).toBeTruthy();
+    expect(result.output.field).toEqual(expected);
   }
 
   // Invalid cases (empty after trim)
@@ -134,6 +134,6 @@ Deno.test("Trim with various string scenarios", () => {
 
   for (const input of invalidCases) {
     const result = v.safeParse(schema, { field: input });
-    assert(!result.success, `Should fail for input: "${input}"`);
+    expect(!result.success).toBeTruthy();
   }
 });

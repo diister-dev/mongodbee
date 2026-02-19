@@ -1,11 +1,11 @@
 import * as v from "../../src/schema.ts";
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { test, expect } from "vitest";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import { defineModel } from "../../src/multi-collection-model.ts";
 
-Deno.test("deleteMany - basic functionality", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("deleteMany - basic functionality", async () => {
+  await withDatabase("deleteMany - basic functionality", async (db) => {
     const model = defineModel("test", {
       schema: {
         user: {
@@ -34,21 +34,21 @@ Deno.test("deleteMany - basic functionality", async (t) => {
 
     // Test deleteMany with filter
     const deletedCount = await collection.deleteMany("user", { active: false });
-    assertEquals(deletedCount, 1);
+    expect(deletedCount).toEqual(1);
 
     // Verify only Jane was deleted
-    const remainingUsers = await collection.find("user");
-    assertEquals(remainingUsers.length, 2);
-    assertEquals(remainingUsers.map((u) => u.name).sort(), ["Bob", "John"]);
+    const remainingUsers = await collection.find("user").toArray();
+    expect(remainingUsers.length).toEqual(2);
+    expect(remainingUsers.map((u) => u.name).sort()).toEqual(["Bob", "John"]);
 
     // Verify groups are untouched
-    const groups = await collection.find("group");
-    assertEquals(groups.length, 1);
+    const groups = await collection.find("group").toArray();
+    expect(groups.length).toEqual(1);
   });
 });
 
-Deno.test("deleteMany - multiple matches", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("deleteMany - multiple matches", async () => {
+  await withDatabase("deleteMany - multiple matches", async (db) => {
     const model = defineModel("test", {
       schema: {
         user: {
@@ -68,17 +68,17 @@ Deno.test("deleteMany - multiple matches", async (t) => {
 
     // Delete all active users
     const deletedCount = await collection.deleteMany("user", { active: true });
-    assertEquals(deletedCount, 2);
+    expect(deletedCount).toEqual(2);
 
     // Verify only Bob remains
-    const remainingUsers = await collection.find("user");
-    assertEquals(remainingUsers.length, 1);
-    assertEquals(remainingUsers[0].name, "Bob");
+    const remainingUsers = await collection.find("user").toArray();
+    expect(remainingUsers.length).toEqual(1);
+    expect(remainingUsers[0].name).toEqual("Bob");
   });
 });
 
-Deno.test("deleteMany - no matches", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("deleteMany - no matches", async () => {
+  await withDatabase("deleteMany - no matches", async (db) => {
     const model = defineModel("test", {
       schema: {
         user: {
@@ -95,16 +95,16 @@ Deno.test("deleteMany - no matches", async (t) => {
 
     // Try to delete non-existent records
     const deletedCount = await collection.deleteMany("user", { age: 50 });
-    assertEquals(deletedCount, 0);
+    expect(deletedCount).toEqual(0);
 
     // Verify no users were deleted
-    const remainingUsers = await collection.find("user");
-    assertEquals(remainingUsers.length, 1);
+    const remainingUsers = await collection.find("user").toArray();
+    expect(remainingUsers.length).toEqual(1);
   });
 });
 
-Deno.test("deleteMany - only affects specified type", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("deleteMany - only affects specified type", async () => {
+  await withDatabase("deleteMany - only affects specified type", async (db) => {
     const model = defineModel("test", {
       schema: {
         user: {
@@ -124,14 +124,14 @@ Deno.test("deleteMany - only affects specified type", async (t) => {
 
     // Delete users with name "John"
     const deletedCount = await collection.deleteMany("user", { name: "John" });
-    assertEquals(deletedCount, 1);
+    expect(deletedCount).toEqual(1);
 
     // Verify only user was deleted, not group
-    const remainingUsers = await collection.find("user");
-    assertEquals(remainingUsers.length, 0);
+    const remainingUsers = await collection.find("user").toArray();
+    expect(remainingUsers.length).toEqual(0);
 
-    const remainingGroups = await collection.find("group");
-    assertEquals(remainingGroups.length, 1);
-    assertEquals(remainingGroups[0].name, "John");
+    const remainingGroups = await collection.find("group").toArray();
+    expect(remainingGroups.length).toEqual(1);
+    expect(remainingGroups[0].name).toEqual("John");
   });
 });

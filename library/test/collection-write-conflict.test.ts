@@ -1,5 +1,5 @@
 import * as v from "../src/schema.ts";
-import { assert, assertEquals } from "@std/assert";
+import { test, expect } from "vitest";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
 
@@ -22,8 +22,8 @@ const productSchema = {
   stock: v.number(),
 };
 
-Deno.test("Collection Write Conflict: Sequential updates should work", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection Write Conflict: Sequential updates should work", async () => {
+  await withDatabase("Collection Write Conflict: Sequential updates should work", async (db) => {
     const counters = await collection(db, "counters", counterSchema);
 
     // Insert a counter
@@ -48,12 +48,12 @@ Deno.test("Collection Write Conflict: Sequential updates should work", async (t)
     }
 
     const finalCounter = await counters.getById(counterId);
-    assertEquals(finalCounter.value, 10, "All sequential updates should succeed");
+    expect(finalCounter.value).toEqual(10);
   });
 });
 
-Deno.test("Collection Write Conflict: Concurrent updates with retry", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection Write Conflict: Concurrent updates with retry", async () => {
+  await withDatabase("Collection Write Conflict: Concurrent updates with retry", async (db) => {
     const counters = await collection(db, "counters", counterSchema);
 
     const counterId = await counters.insertOne({
@@ -87,12 +87,12 @@ Deno.test("Collection Write Conflict: Concurrent updates with retry", async (t) 
 
     const finalCounter = await counters.getById(counterId);
     console.log(`Concurrent updates final value: ${finalCounter.value}`);
-    assert(finalCounter.value >= 1, "At least one update should succeed");
+    expect(finalCounter.value >= 1).toBeTruthy();
   });
 });
 
-Deno.test("Collection Write Conflict: Rapid fire updates", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection Write Conflict: Rapid fire updates", async () => {
+  await withDatabase("Collection Write Conflict: Rapid fire updates", async (db) => {
     const products = await collection(db, "products", productSchema);
 
     const productId = await products.insertOne({
@@ -119,15 +119,14 @@ Deno.test("Collection Write Conflict: Rapid fire updates", async (t) => {
 
     const finalProduct = await products.getById(productId);
     console.log(`Rapid fire final stock: ${finalProduct.stock}`);
-    assert(
+    expect(
       [75, 80, 85, 90, 95].includes(finalProduct.stock),
-      "Final stock should be one of the updated values"
-    );
+    ).toBeTruthy();
   });
 });
 
-Deno.test("Collection Write Conflict: UpdateMany with retry", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection Write Conflict: UpdateMany with retry", async () => {
+  await withDatabase("Collection Write Conflict: UpdateMany with retry", async (db) => {
     const products = await collection(db, "products", productSchema);
 
     // Insert multiple products
@@ -143,7 +142,7 @@ Deno.test("Collection Write Conflict: UpdateMany with retry", async (t) => {
       { $inc: { stock: -1 } }
     );
 
-    assertEquals(result.modifiedCount, 3, "All products should be updated");
+    expect(result.modifiedCount).toEqual(3);
 
     // Verify updates
     const allProducts = await products.find({});
@@ -154,13 +153,13 @@ Deno.test("Collection Write Conflict: UpdateMany with retry", async (t) => {
         ? 20
         : 30;
 
-      assert(product.stock < originalStock, "Stock should be decremented");
+      expect(product.stock < originalStock).toBeTruthy();
     });
   });
 });
 
-Deno.test("Collection Write Conflict: Simple sequential updates never fail", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection Write Conflict: Simple sequential updates never fail", async () => {
+  await withDatabase("Collection Write Conflict: Simple sequential updates never fail", async (db) => {
     const products = await collection(db, "products", productSchema);
 
     const productId = await products.insertOne({
@@ -178,12 +177,12 @@ Deno.test("Collection Write Conflict: Simple sequential updates never fail", asy
     }
 
     const finalProduct = await products.getById(productId);
-    assertEquals(finalProduct.stock, 80, "Final stock should be 80");
+    expect(finalProduct.stock).toEqual(80);
   });
 });
 
-Deno.test("Collection Write Conflict: WithSession protects grouped operations", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection Write Conflict: WithSession protects grouped operations", async () => {
+  await withDatabase("Collection Write Conflict: WithSession protects grouped operations", async (db) => {
     const products = await collection(db, "products", productSchema);
     const counters = await collection(db, "counters", counterSchema);
 
@@ -217,13 +216,13 @@ Deno.test("Collection Write Conflict: WithSession protects grouped operations", 
     const finalProduct = await products.getById(productId);
     const finalCounter = await counters.getById(counterId);
 
-    assertEquals(finalProduct.stock, 49, "Stock should be decremented");
-    assertEquals(finalCounter.value, 1, "Counter should be incremented");
+    expect(finalProduct.stock).toEqual(49);
+    expect(finalCounter.value).toEqual(1);
   });
 });
 
-Deno.test("Collection Write Conflict: Mixed operations don't interfere", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection Write Conflict: Mixed operations don't interfere", async () => {
+  await withDatabase("Collection Write Conflict: Mixed operations don't interfere", async (db) => {
     const counters = await collection(db, "counters", counterSchema);
 
     const counterId = await counters.insertOne({
@@ -267,6 +266,6 @@ Deno.test("Collection Write Conflict: Mixed operations don't interfere", async (
 
     const finalCounter = await counters.getById(counterId);
     console.log(`Mixed ops final value: ${finalCounter.value}`);
-    assert(finalCounter.value >= 1, "At least some updates should succeed");
+    expect(finalCounter.value >= 1).toBeTruthy();
   });
 });

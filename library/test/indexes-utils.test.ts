@@ -1,29 +1,29 @@
-import { assert, assertEquals } from "@std/assert";
+import { test, expect } from "vitest";
 import { keyEqual, normalizeIndexOptions } from "../src/indexes.ts";
 
-Deno.test("keyEqual returns true for identical simple specs", () => {
+test("keyEqual returns true for identical simple specs", () => {
   const a = { foo: 1 };
   const b = { foo: 1 };
-  assert(keyEqual(a, b));
+  expect(keyEqual(a, b)).toBeTruthy();
 });
 
-Deno.test("keyEqual returns false for different specs", () => {
+test("keyEqual returns false for different specs", () => {
   const a = { foo: 1 };
   const b = { foo: -1 };
-  assert(!keyEqual(a, b));
+  expect(!keyEqual(a, b)).toBeTruthy();
 });
 
-Deno.test("normalizeIndexOptions normalizes unique and collation", () => {
+test("normalizeIndexOptions normalizes unique and collation", () => {
   const opts = { unique: true, collation: { locale: "en", strength: 2 } };
   const norm = normalizeIndexOptions(opts);
-  assertEquals(norm.unique, true);
-  assertEquals(typeof norm.collation, "string");
-  assert(norm.collation?.includes('"locale":"en"'));
+  expect(norm.unique).toEqual(true);
+  expect(typeof norm.collation).toEqual("string");
+  expect(norm.collation?.includes('"locale":"en"')).toBeTruthy();
 });
 
-Deno.test("normalizeIndexOptions handles undefined safely", () => {
+test("normalizeIndexOptions handles undefined safely", () => {
   const norm = normalizeIndexOptions(undefined);
-  assertEquals(norm.unique, false);
-  assertEquals(norm.collation, undefined);
-  assertEquals(norm.partialFilterExpression, undefined);
+  expect(norm.unique).toEqual(false);
+  expect(norm.collation).toEqual(undefined);
+  expect(norm.partialFilterExpression).toEqual(undefined);
 });

@@ -1,7 +1,7 @@
-import { assertEquals } from "@std/assert";
+import { test, expect } from "vitest";
 import { createQueueSystem } from "../src/utils/queue.ts";
 
-Deno.test("Integration test - MongoDB queue system usage example", async () => {
+test("Integration test - MongoDB queue system usage example", async () => {
   const mongoOperationQueue = createQueueSystem({ maxConcurrent: 2 });
 
   // Simulate multiple index creation operations
@@ -40,8 +40,8 @@ Deno.test("Integration test - MongoDB queue system usage example", async () => {
     );
   });
 
-  assertEquals(result1.acknowledged, true);
-  assertEquals(result1.name, "name_index");
+  expect(result1.acknowledged).toEqual(true);
+  expect(result1.name).toEqual("name_index");
 
   // Test bulk index creation through queue
   const result2 = await mongoOperationQueue.add(() => {
@@ -51,13 +51,13 @@ Deno.test("Integration test - MongoDB queue system usage example", async () => {
     ]);
   });
 
-  assertEquals(result2.acknowledged, true);
-  assertEquals(result2.numIndexesAfter, 3); // 1 initial + 2 created
+  expect(result2.acknowledged).toEqual(true);
+  expect(result2.numIndexesAfter).toEqual(3); // 1 initial + 2 created
 
   // Check queue stats
   const stats = mongoOperationQueue.getStats();
-  assertEquals(stats.completed, 2);
-  assertEquals(stats.failed, 0);
-  assertEquals(stats.pending, 0);
-  assertEquals(stats.running, 0);
+  expect(stats.completed).toEqual(2);
+  expect(stats.failed).toEqual(0);
+  expect(stats.pending).toEqual(0);
+  expect(stats.running).toEqual(0);
 });

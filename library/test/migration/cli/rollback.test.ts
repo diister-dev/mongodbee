@@ -11,7 +11,8 @@
  * @module
  */
 
-import { assert, assertEquals } from "@std/assert";
+import { test, expect } from "vitest";
+import * as fsp from "node:fs/promises";
 import { MongoClient } from "../../../src/mongodb.ts";
 import { initCommand } from "../../../src/migration/cli/commands/init.ts";
 import { generateCommand } from "../../../src/migration/cli/commands/generate.ts";
@@ -28,8 +29,8 @@ import {
 } from "./shared.ts";
 
 // MongoDB test connection
-const TEST_MONGODB_URI = Deno.env.get("TEST_MONGODB_URI") ||
-  "mongodb://localhost:27017";
+const TEST_MONGODB_URI = process.env.TEST_MONGODB_URI ||
+  "mongodb://127.0.0.1:27017";
 
 /**
  * Generate a unique database name for each test to avoid collisions
@@ -77,13 +78,14 @@ async function withTestDb(
  * Setup test configuration
  */
 async function setupTestConfig(tempDir: string, dbName: string) {
-  await Deno.writeTextFile(
+  await fsp.writeFile(
     `${tempDir}/mongodbee.config.ts`,
     `export default { database: { connection: { uri: "${TEST_MONGODB_URI}" }, name: "${dbName}" }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
+    "utf-8",
   );
 }
 
-Deno.test("rollback - rolls back the last applied migration", async () => {
+test("rollback - rolls back the last applied migration", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -99,19 +101,19 @@ Deno.test("rollback - rolls back the last applied migration", async () => {
       await migrateCommand({ cwd: tempDir, force: true });
 
       let appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 2);
+      expect(appliedIds.length).toEqual(2);
 
       // Rollback
       await rollbackCommand({ force: true, cwd: tempDir });
 
       // Should have only 1 migration applied
       appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 1);
+      expect(appliedIds.length).toEqual(1);
     });
   });
 });
 
-Deno.test("rollback - can rollback multiple times", async () => {
+test("rollback - can rollback multiple times", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -129,27 +131,27 @@ Deno.test("rollback - can rollback multiple times", async () => {
       await migrateCommand({ cwd: tempDir, force: true });
 
       let appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 3);
+      expect(appliedIds.length).toEqual(3);
 
       // First rollback
       await rollbackCommand({ force: true, cwd: tempDir });
       appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 2);
+      expect(appliedIds.length).toEqual(2);
 
       // Second rollback
       await rollbackCommand({ force: true, cwd: tempDir });
       appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 1);
+      expect(appliedIds.length).toEqual(1);
 
       // Third rollback
       await rollbackCommand({ force: true, cwd: tempDir });
       appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 0);
+      expect(appliedIds.length).toEqual(0);
     });
   });
 });
 
-Deno.test("rollback - fails gracefully when no migrations to rollback", async () => {
+test("rollback - fails gracefully when no migrations to rollback", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       // Setup
@@ -164,13 +166,13 @@ Deno.test("rollback - fails gracefully when no migrations to rollback", async ()
         // Should handle gracefully (either succeed with message or throw)
       } catch (error) {
         // Error is acceptable behavior
-        assert(error instanceof Error);
+        expect(error instanceof Error).toBeTruthy();
       }
     });
   });
 });
 
-Deno.test("rollback - can re-apply after rollback", async () => {
+test("rollback - can re-apply after rollback", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -183,24 +185,24 @@ Deno.test("rollback - can re-apply after rollback", async () => {
       await migrateCommand({ cwd: tempDir, force: true });
 
       let appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 1);
+      expect(appliedIds.length).toEqual(1);
 
       // Rollback
       await rollbackCommand({ force: true, cwd: tempDir });
 
       appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 0);
+      expect(appliedIds.length).toEqual(0);
 
       // Re-apply
       await migrateCommand({ cwd: tempDir, force: true });
 
       appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 1);
+      expect(appliedIds.length).toEqual(1);
     });
   });
 });
 
-Deno.test("rollback - handles migration with operations", async () => {
+test("rollback - handles migration with operations", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -215,7 +217,7 @@ Deno.test("rollback - handles migration with operations", async () => {
       const migrationPath = getMigrationPath(tempDir, files[0]);
       let content = await readFile(migrationPath);
 
-      assert(content !== null);
+      expect(content !== null).toBeTruthy();
 
       // Add a createCollection operation
       content = `import * as v from "valibot";
@@ -232,12 +234,12 @@ Deno.test("rollback - handles migration with operations", async () => {
         migration.createCollection("users");`,
       );
 
-      await Deno.writeTextFile(migrationPath, content);
+      await fsp.writeFile(migrationPath, content, "utf-8");
 
       // Update the schema file to include the new collection
       const schemaPath = `${tempDir}/schemas.ts`;
       let schemaContent = await readFile(schemaPath);
-      assert(schemaContent !== null);
+      expect(schemaContent !== null).toBeTruthy();
 
       schemaContent = `import * as v from "valibot";
        ${schemaContent}`;
@@ -249,7 +251,7 @@ Deno.test("rollback - handles migration with operations", async () => {
           },`,
       );
 
-      await Deno.writeTextFile(schemaPath, schemaContent);
+      await fsp.writeFile(schemaPath, schemaContent, "utf-8");
 
       // Apply migration
       await migrateCommand({ cwd: tempDir, force: true });
@@ -257,7 +259,7 @@ Deno.test("rollback - handles migration with operations", async () => {
       // Check collection was created
       const collections = await db.listCollections().toArray();
       const userCollection = collections.find((c) => c.name === "users");
-      assert(userCollection !== undefined);
+      expect(userCollection !== undefined).toBeTruthy();
 
       // Rollback
       await rollbackCommand({ force: true, cwd: tempDir });
@@ -265,12 +267,12 @@ Deno.test("rollback - handles migration with operations", async () => {
       // Collection should still exist (rollback doesn't delete collections)
       // but migration should be unmarked
       const appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 0);
+      expect(appliedIds.length).toEqual(0);
     });
   });
 });
 
-Deno.test("rollback - respects dry run mode (if supported)", async () => {
+test("rollback - respects dry run mode (if supported)", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -283,7 +285,7 @@ Deno.test("rollback - respects dry run mode (if supported)", async () => {
       await migrateCommand({ cwd: tempDir, force: true });
 
       let appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 1);
+      expect(appliedIds.length).toEqual(1);
 
       // Note: Check if rollback supports dryRun option
       // For now, just verify it works normally
@@ -291,12 +293,12 @@ Deno.test("rollback - respects dry run mode (if supported)", async () => {
 
       // Migration should be rolled back
       appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 0);
+      expect(appliedIds.length).toEqual(0);
     });
   });
 });
 
-Deno.test("rollback - uses custom config path when provided", async () => {
+test("rollback - uses custom config path when provided", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -304,9 +306,10 @@ Deno.test("rollback - uses custom config path when provided", async () => {
 
       // Create both configs
       await setupTestConfig(tempDir, dbName); // Standard config for generate
-      await Deno.writeTextFile(
+      await fsp.writeFile(
         `${tempDir}/custom.config.ts`,
         `export default { database: { connection: { uri: "${TEST_MONGODB_URI}" }, name: "${dbName}" }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
+        "utf-8",
       );
 
       await generateCommand({ name: "test", cwd: tempDir });
@@ -315,7 +318,7 @@ Deno.test("rollback - uses custom config path when provided", async () => {
       await migrateCommand({ configPath: "./custom.config.ts", cwd: tempDir, force: true });
 
       let appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 1);
+      expect(appliedIds.length).toEqual(1);
 
       // Rollback with custom config
       await rollbackCommand({
@@ -325,12 +328,12 @@ Deno.test("rollback - uses custom config path when provided", async () => {
       });
 
       appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 0);
+      expect(appliedIds.length).toEqual(0);
     });
   });
 });
 
-Deno.test("rollback - maintains migration order", async () => {
+test("rollback - maintains migration order", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -348,17 +351,17 @@ Deno.test("rollback - maintains migration order", async () => {
       await migrateCommand({ cwd: tempDir, force: true });
 
       const initialIds = await getAppliedMigrationIds(db);
-      assertEquals(initialIds.length, 3);
+      expect(initialIds.length).toEqual(3);
 
       // Rollback one
       await rollbackCommand({ force: true, cwd: tempDir });
 
       const afterRollback = await getAppliedMigrationIds(db);
-      assertEquals(afterRollback.length, 2);
+      expect(afterRollback.length).toEqual(2);
 
       // The remaining migrations should be in order
-      assertEquals(afterRollback[0], initialIds[0]);
-      assertEquals(afterRollback[1], initialIds[1]);
+      expect(afterRollback[0]).toEqual(initialIds[0]);
+      expect(afterRollback[1]).toEqual(initialIds[1]);
     });
   });
 });

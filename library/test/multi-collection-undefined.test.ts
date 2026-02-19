@@ -1,33 +1,11 @@
 import * as v from "../src/schema.ts";
 import { multiCollection } from "../src/multi-collection.ts";
-import { assert, assertEquals, assertRejects } from "@std/assert";
-import { MongoClient } from "../src/mongodb.ts";
+import { test, expect } from "vitest";
 import { defineModel } from "../src/multi-collection-model.ts";
+import { withDatabase } from "./+shared.ts";
 
-// Mock MongoDB setup for testing
-let client: MongoClient;
-let db: ReturnType<MongoClient["db"]>;
-
-async function setupTestDb() {
-  const mongoUrl = Deno.env.get("MONGODB_URL") || "mongodb://localhost:27017";
-  client = new MongoClient(mongoUrl);
-  await client.connect();
-  db = client.db("test_multi_collection_undefined");
-}
-
-async function cleanupTestDb() {
-  if (db) {
-    await db.dropDatabase();
-  }
-  if (client) {
-    await client.close();
-  }
-}
-
-Deno.test("MultiCollection: undefined behavior remove (default)", async () => {
-  await setupTestDb();
-
-  try {
+test("MultiCollection: undefined behavior remove (default)", async () => {
+  await withDatabase("mc_undef_remove", async (db) => {
     const catalogModel = defineModel("catalog_remove", {
       schema: {
         product: {
@@ -54,11 +32,11 @@ Deno.test("MultiCollection: undefined behavior remove (default)", async () => {
     });
 
     const product = await catalog.findOne("product", { _id: productId });
-    assert(product !== null);
-    assert(!("description" in product));
-    assertEquals(product.name, "Laptop");
-    assertEquals(product.price, 999.99);
-    assertEquals(product.category, "Electronics");
+    expect(product).not.toBeNull();
+    expect(!("description" in product!)).toBeTruthy();
+    expect(product!.name).toEqual("Laptop");
+    expect(product!.price).toEqual(999.99);
+    expect(product!.category).toEqual("Electronics");
 
     // Insert category with undefined values
     const categoryId = await catalog.insertOne("category", {
@@ -67,18 +45,14 @@ Deno.test("MultiCollection: undefined behavior remove (default)", async () => {
     });
 
     const category = await catalog.findOne("category", { _id: categoryId });
-    assert(category !== null);
-    assert(!("parentId" in category));
-    assertEquals(category.name, "Electronics");
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(category).not.toBeNull();
+    expect(!("parentId" in category!)).toBeTruthy();
+    expect(category!.name).toEqual("Electronics");
+  });
 });
 
-Deno.test("MultiCollection: undefined behavior error", async () => {
-  await setupTestDb();
-
-  try {
+test("MultiCollection: undefined behavior error", async () => {
+  await withDatabase("mc_undef_error", async (db) => {
     const model = defineModel("catalog_error", {
       schema: {
         product: {
@@ -99,7 +73,7 @@ Deno.test("MultiCollection: undefined behavior error", async () => {
     });
 
     // Should throw error for product with undefined
-    await assertRejects(
+    await expect(
       async () => {
         await catalog.insertOne("product", {
           name: "Laptop",
@@ -108,21 +82,17 @@ Deno.test("MultiCollection: undefined behavior error", async () => {
           category: "Electronics",
         });
       },
-      Error,
-      "Undefined values are not allowed",
-    );
+    ).rejects.toThrow("Undefined values are not allowed");
 
     // Should throw error for category with undefined
-    await assertRejects(
+    await expect(
       async () => {
         await catalog.insertOne("category", {
           name: "Electronics",
           parentId: undefined, // Should cause error
         });
       },
-      Error,
-      "Undefined values are not allowed",
-    );
+    ).rejects.toThrow("Undefined values are not allowed");
 
     // But should work fine without undefined values
     const productId = await catalog.insertOne("product", {
@@ -132,19 +102,15 @@ Deno.test("MultiCollection: undefined behavior error", async () => {
     });
 
     const product = await catalog.findOne("product", { _id: productId });
-    assert(product !== null);
-    assertEquals(product.name, "Laptop");
-    assertEquals(product.price, 999.99);
-    assertEquals(product.category, "Electronics");
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(product).not.toBeNull();
+    expect(product!.name).toEqual("Laptop");
+    expect(product!.price).toEqual(999.99);
+    expect(product!.category).toEqual("Electronics");
+  });
 });
 
-Deno.test("MultiCollection: insertMany with undefined behavior", async () => {
-  await setupTestDb();
-
-  try {
+test("MultiCollection: insertMany with undefined behavior", async () => {
+  await withDatabase("mc_undef_insertmany", async (db) => {
     // Test remove behavior
     const model = defineModel("catalog_many_remove", {
       schema: {
@@ -181,18 +147,18 @@ Deno.test("MultiCollection: insertMany with undefined behavior", async () => {
       },
     ]);
 
-    assertEquals(productIds.length, 2);
+    expect(productIds.length).toEqual(2);
 
-    const products = await catalogRemove.find("product", {});
-    assertEquals(products.length, 2);
+    const products = await catalogRemove.find("product", {}).toArray();
+    expect(products.length).toEqual(2);
 
     const product1 = products.find((p) => p.name === "Product1");
     const product2 = products.find((p) => p.name === "Product2");
 
-    assert(product1 !== undefined);
-    assert(product2 !== undefined);
-    assert(!("description" in product1));
-    assert(!("category" in product2));
+    expect(product1 !== undefined).toBeTruthy();
+    expect(product2 !== undefined).toBeTruthy();
+    expect(!("description" in product1!)).toBeTruthy();
+    expect(!("category" in product2!)).toBeTruthy();
 
     // Test error behavior
     const modelError = defineModel("catalog_many_error", {
@@ -215,7 +181,7 @@ Deno.test("MultiCollection: insertMany with undefined behavior", async () => {
       },
     );
 
-    await assertRejects(
+    await expect(
       async () => {
         await catalogError.insertMany("product", [
           {
@@ -226,18 +192,12 @@ Deno.test("MultiCollection: insertMany with undefined behavior", async () => {
           },
         ]);
       },
-      Error,
-      "Undefined values are not allowed",
-    );
-  } finally {
-    await cleanupTestDb();
-  }
+    ).rejects.toThrow("Undefined values are not allowed");
+  });
 });
 
-Deno.test("MultiCollection: Mixed document types with different undefined values", async () => {
-  await setupTestDb();
-
-  try {
+test("MultiCollection: Mixed document types with different undefined values", async () => {
+  await withDatabase("mc_undef_mixed", async (db) => {
     const model = defineModel("catalog_mixed", {
       schema: {
         product: {
@@ -289,32 +249,28 @@ Deno.test("MultiCollection: Mixed document types with different undefined values
     const product = await catalog.findOne("product", { _id: productId });
 
     // Check category
-    assert(category !== null);
-    assert(!("parentId" in category));
-    assertEquals(category.name, "Electronics");
-    assertEquals(category.description, "Electronic devices");
+    expect(category).not.toBeNull();
+    expect(!("parentId" in category!)).toBeTruthy();
+    expect(category!.name).toEqual("Electronics");
+    expect(category!.description).toEqual("Electronic devices");
 
     // Check brand
-    assert(brand !== null);
-    assert(!("country" in brand));
-    assertEquals(brand.name, "TechCorp");
-    assertEquals(brand.website, "https://techcorp.com");
+    expect(brand).not.toBeNull();
+    expect(!("country" in brand!)).toBeTruthy();
+    expect(brand!.name).toEqual("TechCorp");
+    expect(brand!.website).toEqual("https://techcorp.com");
 
     // Check product
-    assert(product !== null);
-    assert(!("description" in product));
-    assertEquals(product.name, "Smartphone");
-    assertEquals(product.price, 599.99);
-    assertEquals(product.categoryId, categoryId);
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(product).not.toBeNull();
+    expect(!("description" in product!)).toBeTruthy();
+    expect(product!.name).toEqual("Smartphone");
+    expect(product!.price).toEqual(599.99);
+    expect(product!.categoryId).toEqual(categoryId);
+  });
 });
 
-Deno.test("MultiCollection: Multiple collections with different undefined behaviors", async () => {
-  await setupTestDb();
-
-  try {
+test("MultiCollection: Multiple collections with different undefined behaviors", async () => {
+  await withDatabase("mc_undef_multi_behaviors", async (db) => {
     // Collection 1: Remove undefined (default)
     const model = defineModel("catalog", {
       schema: {
@@ -356,18 +312,16 @@ Deno.test("MultiCollection: Multiple collections with different undefined behavi
     const product1 = await catalogRemove.findOne("product", {
       _id: productId1,
     });
-    assert(product1 !== null);
-    assert(!("description" in product1));
-    assertEquals(product1.name, "TestProduct");
+    expect(product1).not.toBeNull();
+    expect(!("description" in product1!)).toBeTruthy();
+    expect(product1!.name).toEqual("TestProduct");
 
     // Second collection should fail (error on undefined)
-    await assertRejects(
+    await expect(
       async () => {
         await catalogError.insertOne("product", testProduct);
       },
-      Error,
-      "Undefined values are not allowed",
-    );
+    ).rejects.toThrow("Undefined values are not allowed");
 
     // But second collection should work with clean data
     const productId2 = await catalogError.insertOne("product", {
@@ -376,18 +330,14 @@ Deno.test("MultiCollection: Multiple collections with different undefined behavi
     });
 
     const product2 = await catalogError.findOne("product", { _id: productId2 });
-    assert(product2 !== null);
-    assertEquals(product2.name, "TestProduct2");
-    assertEquals(product2.price, 59.99);
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(product2).not.toBeNull();
+    expect(product2!.name).toEqual("TestProduct2");
+    expect(product2!.price).toEqual(59.99);
+  });
 });
 
-Deno.test("MultiCollection: Nested undefined values", async () => {
-  await setupTestDb();
-
-  try {
+test("MultiCollection: Nested undefined values", async () => {
+  await withDatabase("mc_undef_nested", async (db) => {
     const nestedSchema = {
       name: v.string(),
       profile: v.optional(v.object({
@@ -426,29 +376,25 @@ Deno.test("MultiCollection: Nested undefined values", async () => {
 
     const profile = await mc.findOne("profiles", { _id: profileId });
 
-    assert(profile !== null);
-    assertEquals(profile.name, "Developer");
-    assert("profile" in profile);
-    assert(!("preferences" in profile));
+    expect(profile).not.toBeNull();
+    expect(profile!.name).toEqual("Developer");
+    expect("profile" in profile!).toBeTruthy();
+    expect(!("preferences" in profile!)).toBeTruthy();
 
     // Check nested object sanitization
-    assert(profile.profile !== undefined);
-    assert("bio" in profile.profile);
-    assert(!("website" in profile.profile));
-    assert("social" in profile.profile);
-    assert(profile.profile.social !== undefined);
-    assert(!("twitter" in profile.profile.social));
-    assert("github" in profile.profile.social);
-    assertEquals(profile.profile.social.github, "dev123");
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(profile!.profile !== undefined).toBeTruthy();
+    expect("bio" in profile!.profile!).toBeTruthy();
+    expect(!("website" in profile!.profile!)).toBeTruthy();
+    expect("social" in profile!.profile!).toBeTruthy();
+    expect(profile!.profile!.social !== undefined).toBeTruthy();
+    expect(!("twitter" in profile!.profile!.social!)).toBeTruthy();
+    expect("github" in profile!.profile!.social!).toBeTruthy();
+    expect(profile!.profile!.social!.github).toEqual("dev123");
+  });
 });
 
-Deno.test("MultiCollection: Ignore undefined behavior", async () => {
-  await setupTestDb();
-
-  try {
+test("MultiCollection: Ignore undefined behavior", async () => {
+  await withDatabase("mc_undef_ignore", async (db) => {
     const model = defineModel("ignore_docs", {
       schema: {
         products: {
@@ -474,22 +420,18 @@ Deno.test("MultiCollection: Ignore undefined behavior", async () => {
 
       // If we reach here, MongoDB accepted it (unlikely)
       const product = await mc.findOne("products", { name: "TestProduct" });
-      assert(product !== null);
-      assertEquals(product.name, "TestProduct");
+      expect(product).not.toBeNull();
+      expect(product!.name).toEqual("TestProduct");
     } catch (error) {
       // Expected: MongoDB will likely reject undefined values
-      assert(error instanceof Error);
+      expect(error instanceof Error).toBeTruthy();
       // This is acceptable behavior for 'ignore' mode
     }
-  } finally {
-    await cleanupTestDb();
-  }
+  });
 });
 
-Deno.test("MultiCollection: Performance with undefined sanitization", async () => {
-  await setupTestDb();
-
-  try {
+test("MultiCollection: Performance with undefined sanitization", async () => {
+  await withDatabase("mc_undef_perf", async (db) => {
     const model = defineModel("perf_docs", {
       schema: {
         items: {
@@ -522,53 +464,46 @@ Deno.test("MultiCollection: Performance with undefined sanitization", async () =
       });
     }
 
-    const startTime = Date.now();
     const itemIds = await mc.insertMany("items", testData);
-    const endTime = Date.now();
 
-    assertEquals(itemIds.length, 50);
-    // Performance validation: should handle 50 documents efficiently
+    expect(itemIds.length).toEqual(50);
 
     // Verify correct sanitization
-    const items = await mc.find("items", {});
-    assertEquals(items.length, 50);
+    const items = await mc.find("items", {}).toArray();
+    expect(items.length).toEqual(50);
 
     // Check that undefined values were properly removed
     for (const item of items) {
-      assert("id" in item);
+      expect("id" in item).toBeTruthy();
 
       // data should only be present if it wasn't undefined
       const originalItem = testData.find((d) => d.id === item.id);
       if (originalItem?.data !== undefined) {
-        assert("data" in item);
+        expect("data" in item).toBeTruthy();
       } else {
-        assert(!("data" in item));
+        expect(!("data" in item)).toBeTruthy();
       }
 
       // Check metadata sanitization
       if (originalItem?.metadata !== undefined) {
-        assert("metadata" in item);
-        assert(item.metadata !== undefined);
-        assert("created" in item.metadata);
+        expect("metadata" in item).toBeTruthy();
+        expect(item.metadata !== undefined).toBeTruthy();
+        expect("created" in item.metadata!).toBeTruthy();
 
         if (originalItem.metadata.updated !== undefined) {
-          assert("updated" in item.metadata);
+          expect("updated" in item.metadata!).toBeTruthy();
         } else {
-          assert(!("updated" in item.metadata));
+          expect(!("updated" in item.metadata!)).toBeTruthy();
         }
       } else {
-        assert(!("metadata" in item));
+        expect(!("metadata" in item)).toBeTruthy();
       }
     }
-  } finally {
-    await cleanupTestDb();
-  }
+  });
 });
 
-Deno.test("MultiCollection: Array sanitization with undefined values", async () => {
-  await setupTestDb();
-
-  try {
+test("MultiCollection: Array sanitization with undefined values", async () => {
+  await withDatabase("mc_undef_arrays", async (db) => {
     const model = defineModel("array_docs", {
       schema: {
         posts: {
@@ -606,25 +541,23 @@ Deno.test("MultiCollection: Array sanitization with undefined values", async () 
 
     const post = await mc.findOne("posts", { _id: postId });
 
-    assert(post !== null);
-    assertEquals(post.title, "Test Post");
-    assert(post.tags !== undefined);
-    assertEquals(post.tags.length, 2);
-    assert(post.comments !== undefined);
-    assertEquals(post.comments.length, 2);
+    expect(post).not.toBeNull();
+    expect(post!.title).toEqual("Test Post");
+    expect(post!.tags !== undefined).toBeTruthy();
+    expect(post!.tags!.length).toEqual(2);
+    expect(post!.comments !== undefined).toBeTruthy();
+    expect(post!.comments!.length).toEqual(2);
 
     // Check first comment
-    const comment1 = post.comments[0];
-    assertEquals(comment1.author, "user1");
-    assertEquals(comment1.text, "Great post!");
-    assert(!("timestamp" in comment1));
+    const comment1 = post!.comments![0];
+    expect(comment1.author).toEqual("user1");
+    expect(comment1.text).toEqual("Great post!");
+    expect(!("timestamp" in comment1)).toBeTruthy();
 
     // Check second comment
-    const comment2 = post.comments[1];
-    assertEquals(comment2.author, "user2");
-    assert(!("text" in comment2));
-    assertEquals(comment2.timestamp, "2023-01-01");
-  } finally {
-    await cleanupTestDb();
-  }
+    const comment2 = post!.comments![1];
+    expect(comment2.author).toEqual("user2");
+    expect(!("text" in comment2)).toBeTruthy();
+    expect(comment2.timestamp).toEqual("2023-01-01");
+  });
 });

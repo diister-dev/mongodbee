@@ -2,15 +2,16 @@
  * Integration tests for CLI command workflows
  *
  * Tests complete workflows that chain multiple commands together:
- * - init → generate → migrate → status
- * - init → generate → migrate → generate → migrate
- * - init → generate → migrate → rollback
+ * - init -> generate -> migrate -> status
+ * - init -> generate -> migrate -> generate -> migrate
+ * - init -> generate -> migrate -> rollback
  * - Full migration lifecycle
  *
  * @module
  */
 
-import { assert, assertEquals } from "@std/assert";
+import { test, expect } from "vitest";
+import * as fsp from "node:fs/promises";
 import { MongoClient } from "../../../src/mongodb.ts";
 import { initCommand } from "../../../src/migration/cli/commands/init.ts";
 import { generateCommand } from "../../../src/migration/cli/commands/generate.ts";
@@ -25,8 +26,8 @@ import {
 } from "./shared.ts";
 
 // MongoDB test connection
-const TEST_MONGODB_URI = Deno.env.get("TEST_MONGODB_URI") ||
-  "mongodb://localhost:27017";
+const TEST_MONGODB_URI = process.env.TEST_MONGODB_URI ||
+  "mongodb://127.0.0.1:27017";
 
 /**
  * Generate a unique database name for each test to avoid collisions
@@ -74,13 +75,14 @@ async function withTestDb(
  * Setup test configuration
  */
 async function setupTestConfig(tempDir: string, dbName: string) {
-  await Deno.writeTextFile(
+  await fsp.writeFile(
     `${tempDir}/mongodbee.config.ts`,
     `export default { database: { connection: { uri: "${TEST_MONGODB_URI}" }, name: "${dbName}" }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
+    "utf-8",
   );
 }
 
-Deno.test("integration - complete workflow: init → generate → migrate → status", async () => {
+test("integration - complete workflow: init -> generate -> migrate -> status", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Step 1: Initialize project
@@ -94,14 +96,14 @@ Deno.test("integration - complete workflow: init → generate → migrate → st
 
       // Verify files were created
       const files = listMigrationFiles(getMigrationsDir(tempDir));
-      assertEquals(files.length, 2);
+      expect(files.length).toEqual(2);
 
       // Step 3: Apply migrations
       await migrateCommand({ cwd: tempDir, force: true });
 
       // Verify migrations were applied
       const appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 2);
+      expect(appliedIds.length).toEqual(2);
 
       // Step 4: Check status
       await statusCommand({ cwd: tempDir });
@@ -110,7 +112,7 @@ Deno.test("integration - complete workflow: init → generate → migrate → st
   });
 });
 
-Deno.test("integration - incremental migrations: init → generate → migrate → generate → migrate", async () => {
+test("integration - incremental migrations: init -> generate -> migrate -> generate -> migrate", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Initialize
@@ -124,7 +126,7 @@ Deno.test("integration - incremental migrations: init → generate → migrate �
       await migrateCommand({ cwd: tempDir, force: true });
 
       let appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 1);
+      expect(appliedIds.length).toEqual(1);
 
       // Generate more migrations
       await delay(10);
@@ -137,12 +139,12 @@ Deno.test("integration - incremental migrations: init → generate → migrate �
 
       // Verify all migrations applied
       appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 3);
+      expect(appliedIds.length).toEqual(3);
     });
   });
 });
 
-Deno.test("integration - handles empty migration directory gracefully", async () => {
+test("integration - handles empty migration directory gracefully", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       // Initialize without generating migrations
@@ -156,7 +158,7 @@ Deno.test("integration - handles empty migration directory gracefully", async ()
   });
 });
 
-Deno.test("integration - multiple migrations with dependencies", async () => {
+test("integration - multiple migrations with dependencies", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -173,27 +175,26 @@ Deno.test("integration - multiple migrations with dependencies", async () => {
       await generateCommand({ name: "create_comments", cwd: tempDir });
 
       const files = listMigrationFiles(getMigrationsDir(tempDir));
-      assertEquals(files.length, 4);
+      expect(files.length).toEqual(4);
 
       // Apply all migrations
       await migrateCommand({ cwd: tempDir, force: true });
 
       // Verify all were applied in order
       const appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 4);
+      expect(appliedIds.length).toEqual(4);
 
       // Verify order is maintained
       for (let i = 0; i < appliedIds.length - 1; i++) {
-        assert(
+        expect(
           appliedIds[i] < appliedIds[i + 1],
-          "Migrations should be applied in order",
-        );
+        ).toBeTruthy();
       }
     });
   });
 });
 
-Deno.test("integration - idempotent migrations: multiple migrate calls", async () => {
+test("integration - idempotent migrations: multiple migrate calls", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -209,12 +210,12 @@ Deno.test("integration - idempotent migrations: multiple migrate calls", async (
 
       // Should still only have 1 applied migration
       const appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 1);
+      expect(appliedIds.length).toEqual(1);
     });
   });
 });
 
-Deno.test("integration - status shows correct information after migrations", async () => {
+test("integration - status shows correct information after migrations", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       // Setup
@@ -237,7 +238,7 @@ Deno.test("integration - status shows correct information after migrations", asy
   });
 });
 
-Deno.test("integration - dry run doesn't affect subsequent real migration", async () => {
+test("integration - dry run doesn't affect subsequent real migration", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -250,18 +251,18 @@ Deno.test("integration - dry run doesn't affect subsequent real migration", asyn
       await migrateCommand({ dryRun: true, cwd: tempDir, force: true });
 
       let appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 0);
+      expect(appliedIds.length).toEqual(0);
 
       // Real migration
       await migrateCommand({ cwd: tempDir, force: true });
 
       appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 1);
+      expect(appliedIds.length).toEqual(1);
     });
   });
 });
 
-Deno.test("integration - can continue after partial failure", async () => {
+test("integration - can continue after partial failure", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       // Setup
@@ -290,7 +291,7 @@ Deno.test("integration - can continue after partial failure", async () => {
   });
 });
 
-Deno.test("integration - migrations maintain parent-child relationships", async () => {
+test("integration - migrations maintain parent-child relationships", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -308,24 +309,23 @@ Deno.test("integration - migrations maintain parent-child relationships", async 
 
       // Each migration (except first) should reference its parent
       for (let i = 1; i < files.length; i++) {
-        const content = await Deno.readTextFile(
+        const content = await fsp.readFile(
           getMigrationsDir(tempDir) + "/" + files[i],
+          "utf-8",
         );
-        assert(
+        expect(
           content.includes("import parent"),
-          `Migration ${files[i]} should import parent`,
-        );
-        assert(
+        ).toBeTruthy();
+        expect(
           content.includes(`from "./${files[i - 1]}"`),
-          `Migration ${files[i]} should import from ${files[i - 1]}`,
-        );
+        ).toBeTruthy();
       }
 
       // Apply all migrations
       await migrateCommand({ cwd: tempDir, force: true });
 
       const appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 3);
+      expect(appliedIds.length).toEqual(3);
     });
   });
 });

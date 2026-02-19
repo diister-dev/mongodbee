@@ -1,28 +1,8 @@
 import * as v from "../src/schema.ts";
 import { collection } from "../src/collection.ts";
-import { assert, assertEquals, assertRejects } from "@std/assert";
-import { type Db, MongoClient } from "../src/mongodb.ts";
+import { test, expect } from "vitest";
 import { removeField } from "../src/sanitizer.ts";
-
-// Mock MongoDB setup for testing
-let client: MongoClient;
-let db: ReturnType<MongoClient["db"]>;
-
-async function setupTestDb() {
-  const mongoUrl = Deno.env.get("MONGODB_URL") || "mongodb://localhost:27017";
-  client = new MongoClient(mongoUrl);
-  await client.connect();
-  db = client.db("test_sanitizer_config");
-}
-
-async function cleanupTestDb() {
-  if (db) {
-    await db.dropDatabase();
-  }
-  if (client) {
-    await client.close();
-  }
-}
+import { withDatabase } from "./+shared.ts";
 
 const userSchema = {
   name: v.string(),
@@ -36,10 +16,8 @@ const userSchema = {
   })),
 };
 
-Deno.test("Collection with default undefined behavior (remove)", async () => {
-  await setupTestDb();
-
-  try {
+test("Collection with default undefined behavior (remove)", async () => {
+  await withDatabase("sanitizer_default_remove", async (db) => {
     const users = await collection(db, "users_default", userSchema);
 
     // Insert document with undefined values
@@ -54,20 +32,16 @@ Deno.test("Collection with default undefined behavior (remove)", async () => {
     const insertedDoc = await users.findOne({ name: "John" });
 
     // Should not have email and age fields
-    assert(insertedDoc !== null);
-    assert(!("email" in insertedDoc));
-    assert(!("age" in insertedDoc));
-    assertEquals(insertedDoc.name, "John");
-    assertEquals(insertedDoc.phone, "123-456-7890");
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(insertedDoc).not.toBeNull();
+    expect(!("email" in insertedDoc)).toBeTruthy();
+    expect(!("age" in insertedDoc)).toBeTruthy();
+    expect(insertedDoc.name).toEqual("John");
+    expect(insertedDoc.phone).toEqual("123-456-7890");
+  });
 });
 
-Deno.test("Collection with ignore undefined behavior", async () => {
-  await setupTestDb();
-
-  try {
+test("Collection with ignore undefined behavior", async () => {
+  await withDatabase("sanitizer_ignore", async (db) => {
     const users = await collection(db, "users_ignore", userSchema, {
       undefinedBehavior: "ignore",
     });
@@ -93,25 +67,21 @@ Deno.test("Collection with ignore undefined behavior", async () => {
 
     // email should not be in the document since it was undefined in replace
     // (replaceOne replaces the entire document, so undefined fields are removed)
-    assert(updatedDoc !== null);
-    assert(!("email" in updatedDoc));
-    assertEquals(updatedDoc.name, "John Updated");
-    assertEquals(updatedDoc.phone, "987-654-3210");
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(updatedDoc).not.toBeNull();
+    expect(!("email" in updatedDoc)).toBeTruthy();
+    expect(updatedDoc.name).toEqual("John Updated");
+    expect(updatedDoc.phone).toEqual("987-654-3210");
+  });
 });
 
-Deno.test("Collection with error undefined behavior", async () => {
-  await setupTestDb();
-
-  try {
+test("Collection with error undefined behavior", async () => {
+  await withDatabase("sanitizer_error", async (db) => {
     const users = await collection(db, "users_error", userSchema, {
       undefinedBehavior: "error",
     });
 
     // Should throw error when trying to insert with undefined
-    await assertRejects(
+    await expect(
       async () => {
         await users.insertOne({
           name: "John",
@@ -119,18 +89,12 @@ Deno.test("Collection with error undefined behavior", async () => {
           phone: "123-456-7890",
         });
       },
-      Error,
-      "Undefined values are not allowed",
-    );
-  } finally {
-    await cleanupTestDb();
-  }
+    ).rejects.toThrow("Undefined values are not allowed");
+  });
 });
 
-Deno.test("Explicit field removal with removeField()", async () => {
-  await setupTestDb();
-
-  try {
+test("Explicit field removal with removeField()", async () => {
+  await withDatabase("sanitizer_remove_field", async (db) => {
     const users = await collection(db, "users_remove_field", userSchema);
 
     // Insert initial document
@@ -147,28 +111,22 @@ Deno.test("Explicit field removal with removeField()", async () => {
       {
         name: "John Updated",
         email: "john.updated@example.com",
-        // phone: removeField(),  // This would require special handling
-        // age: undefined         // This will be removed by sanitizer
       },
     );
 
     const updatedDoc = await users.findOne({ name: "John Updated" });
 
     // Fields not included in replacement should be gone
-    assert(updatedDoc !== null);
-    assert(!("phone" in updatedDoc));
-    assert(!("age" in updatedDoc));
-    assertEquals(updatedDoc.name, "John Updated");
-    assertEquals(updatedDoc.email, "john.updated@example.com");
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(updatedDoc).not.toBeNull();
+    expect(!("phone" in updatedDoc)).toBeTruthy();
+    expect(!("age" in updatedDoc)).toBeTruthy();
+    expect(updatedDoc.name).toEqual("John Updated");
+    expect(updatedDoc.email).toEqual("john.updated@example.com");
+  });
 });
 
-Deno.test("Complex nested object with mixed undefined behaviors", async () => {
-  await setupTestDb();
-
-  try {
+test("Complex nested object with mixed undefined behaviors", async () => {
+  await withDatabase("sanitizer_nested", async (db) => {
     const users = await collection(db, "users_nested", userSchema, {
       undefinedBehavior: "remove",
     });
@@ -187,11 +145,11 @@ Deno.test("Complex nested object with mixed undefined behaviors", async () => {
     const insertedDoc = await users.findOne({ name: "John" });
 
     // Nested undefined should be removed
-    assert(insertedDoc !== null);
-    assert(insertedDoc.address !== undefined);
-    assert(!("city" in insertedDoc.address));
-    assertEquals(insertedDoc.address.street, "123 Main St");
-    assertEquals(insertedDoc.address.zipcode, "12345");
+    expect(insertedDoc).not.toBeNull();
+    expect(insertedDoc.address !== undefined).toBeTruthy();
+    expect(!("city" in insertedDoc.address)).toBeTruthy();
+    expect(insertedDoc.address.street).toEqual("123 Main St");
+    expect(insertedDoc.address.zipcode).toEqual("12345");
 
     // Update with mixed explicit and implicit removals
     await users.replaceOne(
@@ -210,22 +168,18 @@ Deno.test("Complex nested object with mixed undefined behaviors", async () => {
     const updatedDoc = await users.findOne({ name: "John Updated" });
 
     // All undefined fields should be removed
-    assert(updatedDoc !== null);
-    assert(!("email" in updatedDoc));
-    assert(updatedDoc.address !== undefined);
-    assert(!("city" in updatedDoc.address));
-    assert(!("zipcode" in updatedDoc.address));
-    assertEquals(updatedDoc.name, "John Updated");
-    assertEquals(updatedDoc.address.street, "456 Oak Ave");
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(updatedDoc).not.toBeNull();
+    expect(!("email" in updatedDoc)).toBeTruthy();
+    expect(updatedDoc.address !== undefined).toBeTruthy();
+    expect(!("city" in updatedDoc.address)).toBeTruthy();
+    expect(!("zipcode" in updatedDoc.address)).toBeTruthy();
+    expect(updatedDoc.name).toEqual("John Updated");
+    expect(updatedDoc.address.street).toEqual("456 Oak Ave");
+  });
 });
 
-Deno.test("Array sanitization with undefined values", async () => {
-  await setupTestDb();
-
-  try {
+test("Array sanitization with undefined values", async () => {
+  await withDatabase("sanitizer_arrays", async (db) => {
     const usersSchema = {
       name: v.string(),
       tags: v.optional(v.array(v.string())),
@@ -251,24 +205,20 @@ Deno.test("Array sanitization with undefined values", async () => {
     const insertedDoc = await users.findOne({ name: "John" });
 
     // Array should be clean
-    assert(insertedDoc !== null);
-    assert(insertedDoc.tags !== undefined);
-    assertEquals(insertedDoc.tags, ["work", "personal"]);
-    assert(insertedDoc.contacts !== undefined);
-    assertEquals(insertedDoc.contacts.length, 3);
+    expect(insertedDoc).not.toBeNull();
+    expect(insertedDoc.tags !== undefined).toBeTruthy();
+    expect(insertedDoc.tags).toEqual(["work", "personal"]);
+    expect(insertedDoc.contacts !== undefined).toBeTruthy();
+    expect(insertedDoc.contacts.length).toEqual(3);
 
     // Second contact should not have 'value' field
-    assert(!("value" in insertedDoc.contacts[1]));
-    assertEquals(insertedDoc.contacts[1].type, "phone");
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(!("value" in insertedDoc.contacts[1])).toBeTruthy();
+    expect(insertedDoc.contacts[1].type).toEqual("phone");
+  });
 });
 
-Deno.test("Behavior consistency across insert and replace operations", async () => {
-  await setupTestDb();
-
-  try {
+test("Behavior consistency across insert and replace operations", async () => {
+  await withDatabase("sanitizer_consistency", async (db) => {
     const users = await collection(db, "users_consistency", userSchema, {
       undefinedBehavior: "remove",
     });
@@ -290,25 +240,21 @@ Deno.test("Behavior consistency across insert and replace operations", async () 
     const replacedDoc = await users.findOne({ name: "Consistency Test" });
 
     // Both should have identical structure (no email, no age)
-    assert(insertedDoc !== null);
-    assert(replacedDoc !== null);
-    assertEquals(insertedDoc.name, replacedDoc.name);
-    assertEquals(insertedDoc.phone, replacedDoc.phone);
-    assert(!("email" in insertedDoc));
-    assert(!("age" in insertedDoc));
-    assert(!("email" in replacedDoc));
-    assert(!("age" in replacedDoc));
-    assertEquals(insertedDoc.name, "Consistency Test");
-    assertEquals(insertedDoc.phone, "123-456-7890");
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(insertedDoc).not.toBeNull();
+    expect(replacedDoc).not.toBeNull();
+    expect(insertedDoc.name).toEqual(replacedDoc.name);
+    expect(insertedDoc.phone).toEqual(replacedDoc.phone);
+    expect(!("email" in insertedDoc)).toBeTruthy();
+    expect(!("age" in insertedDoc)).toBeTruthy();
+    expect(!("email" in replacedDoc)).toBeTruthy();
+    expect(!("age" in replacedDoc)).toBeTruthy();
+    expect(insertedDoc.name).toEqual("Consistency Test");
+    expect(insertedDoc.phone).toEqual("123-456-7890");
+  });
 });
 
-Deno.test("Collection updateOne with removeField()", async () => {
-  await setupTestDb();
-
-  try {
+test("Collection updateOne with removeField()", async () => {
+  await withDatabase("sanitizer_updateone_removefield", async (db) => {
     const users = await collection(db, "users_remove_field", userSchema);
 
     // Insert document with optional fields
@@ -321,10 +267,10 @@ Deno.test("Collection updateOne with removeField()", async () => {
 
     // Verify initial state
     const initialUser = await users.findOne({ _id: userId });
-    assert(initialUser !== null);
-    assertEquals(initialUser.email, "john@example.com");
-    assertEquals(initialUser.phone, "123-456");
-    assertEquals(initialUser.age, 30);
+    expect(initialUser).not.toBeNull();
+    expect(initialUser.email).toEqual("john@example.com");
+    expect(initialUser.phone).toEqual("123-456");
+    expect(initialUser.age).toEqual(30);
 
     // Remove email field using $set with removeField()
     await users.updateOne({ _id: userId }, {
@@ -335,11 +281,11 @@ Deno.test("Collection updateOne with removeField()", async () => {
 
     // Verify email was removed
     const afterEmailRemoval = await users.findOne({ _id: userId });
-    assert(afterEmailRemoval !== null);
-    assertEquals(afterEmailRemoval.name, "John");
-    assertEquals(afterEmailRemoval.email, undefined);
-    assertEquals(afterEmailRemoval.phone, "123-456");
-    assertEquals(afterEmailRemoval.age, 30);
+    expect(afterEmailRemoval).not.toBeNull();
+    expect(afterEmailRemoval.name).toEqual("John");
+    expect(afterEmailRemoval.email).toEqual(undefined);
+    expect(afterEmailRemoval.phone).toEqual("123-456");
+    expect(afterEmailRemoval.age).toEqual(30);
 
     // Mix update and remove in same operation
     await users.updateOne({ _id: userId }, {
@@ -352,20 +298,16 @@ Deno.test("Collection updateOne with removeField()", async () => {
 
     // Verify mixed operation
     const afterMixedUpdate = await users.findOne({ _id: userId });
-    assert(afterMixedUpdate !== null);
-    assertEquals(afterMixedUpdate.name, "John Doe");
-    assertEquals(afterMixedUpdate.email, undefined);
-    assertEquals(afterMixedUpdate.phone, undefined);
-    assertEquals(afterMixedUpdate.age, undefined);
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(afterMixedUpdate).not.toBeNull();
+    expect(afterMixedUpdate.name).toEqual("John Doe");
+    expect(afterMixedUpdate.email).toEqual(undefined);
+    expect(afterMixedUpdate.phone).toEqual(undefined);
+    expect(afterMixedUpdate.age).toEqual(undefined);
+  });
 });
 
-Deno.test("Collection findOneAndUpdate with removeField()", async () => {
-  await setupTestDb();
-
-  try {
+test("Collection findOneAndUpdate with removeField()", async () => {
+  await withDatabase("sanitizer_findoneandupdate_removefield", async (db) => {
     const users = await collection(db, "users_find_and_update", userSchema);
 
     // Insert document
@@ -387,15 +329,13 @@ Deno.test("Collection findOneAndUpdate with removeField()", async () => {
       { returnDocument: "after", includeResultMetadata: false },
     );
 
-    assert(result !== null);
+    expect(result).not.toBeNull();
 
     // Verify the update
     const updatedUser = await users.findOne({ name: "Jane Doe" });
-    assert(updatedUser !== null);
-    assertEquals(updatedUser.name, "Jane Doe");
-    assertEquals(updatedUser.email, undefined);
-    assertEquals(updatedUser.phone, "555-1234");
-  } finally {
-    await cleanupTestDb();
-  }
+    expect(updatedUser).not.toBeNull();
+    expect(updatedUser.name).toEqual("Jane Doe");
+    expect(updatedUser.email).toEqual(undefined);
+    expect(updatedUser.phone).toEqual("555-1234");
+  });
 });

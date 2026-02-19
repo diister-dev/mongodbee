@@ -1,13 +1,13 @@
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertRejects } from "@std/assert";
+import { test, expect } from "vitest";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import assert from "node:assert";
 import { defineModel } from "../../src/multi-collection-model.ts";
 import { removeField } from "../../src/sanitizer.ts";
 
-Deno.test("updateMany: Basic multiple update", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("updateMany: Basic multiple update", async () => {
+  await withDatabase("updateMany: Basic multiple update", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         user: {
@@ -31,24 +31,25 @@ Deno.test("updateMany: Basic multiple update", async (t) => {
     ]);
 
     // Update multiple users
-    const updatedCount = await collection.updateMany({
+    const updatedCount = await collection.updateManyByIds({
       user: {
         [userIds[0]]: { age: 21 },
         [userIds[1]]: { name: "Bobby" },
       },
     });
-    assertEquals(updatedCount, 2);
+    expect(updatedCount).toEqual(2);
 
     const userA = await collection.findOne("user", { _id: userIds[0] });
     const userB = await collection.findOne("user", { _id: userIds[1] });
-    assert(userA !== null && userB !== null);
-    assertEquals(userA.age, 21);
-    assertEquals(userB.name, "Bobby");
+    expect(userA).not.toBeNull();
+    expect(userB).not.toBeNull();
+    expect(userA.age).toEqual(21);
+    expect(userB.name).toEqual("Bobby");
   });
 });
 
-Deno.test("updateMany: Update nested and array fields", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("updateMany: Update nested and array fields", async () => {
+  await withDatabase("updateMany: Update nested and array fields", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         user: {
@@ -69,26 +70,27 @@ Deno.test("updateMany: Update nested and array fields", async (t) => {
       { name: "B", tags: ["y"], profile: { age: 20, city: "London" } },
     ]);
 
-    const updatedCount = await collection.updateMany({
+    const updatedCount = await collection.updateManyByIds({
       user: {
         [userIds[0]]: { "profile.city": "Berlin", "tags.0": "z" },
         [userIds[1]]: { name: "Bee", "profile.age": 21 },
       },
     });
-    assertEquals(updatedCount, 2);
+    expect(updatedCount).toEqual(2);
 
     const userA = await collection.findOne("user", { _id: userIds[0] });
     const userB = await collection.findOne("user", { _id: userIds[1] });
-    assert(userA !== null && userB !== null);
-    assertEquals(userA.profile.city, "Berlin");
-    assertEquals(userA.tags[0], "z");
-    assertEquals(userB.name, "Bee");
-    assertEquals(userB.profile.age, 21);
+    expect(userA).not.toBeNull();
+    expect(userB).not.toBeNull();
+    expect(userA.profile.city).toEqual("Berlin");
+    expect(userA.tags[0]).toEqual("z");
+    expect(userB.name).toEqual("Bee");
+    expect(userB.profile.age).toEqual(21);
   });
 });
 
-Deno.test("updateMany: Error on wrong id or type", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("updateMany: Error on wrong id or type", async () => {
+  await withDatabase("updateMany: Error on wrong id or type", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         user: {
@@ -111,30 +113,28 @@ Deno.test("updateMany: Error on wrong id or type", async (t) => {
       { name: "G", members: [userIds[0]] },
     ]);
     // Wrong id format
-    await assertRejects(async () => {
-      await collection.updateMany({
+    await expect(async () => {
+      await collection.updateManyByIds({
         user: { "invalid:id": { name: "fail" } },
       });
-    });
+    }).rejects.toThrow();
     // Wrong type
-    await assertRejects(async () => {
-      await collection.updateMany({
+    await expect(async () => {
+      await collection.updateManyByIds({
         user: { [groupIds[0]]: { name: "fail" } },
       });
-    });
+    }).rejects.toThrow();
     // No element to update
-    await assertRejects(
+    await expect(
       async () => {
-        await collection.updateMany({});
+        await collection.updateManyByIds({});
       },
-      Error,
-      "No element to update",
-    );
+    ).rejects.toThrow("No element to update");
   });
 });
 
-Deno.test("updateMany: Remove fields with removeField()", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("updateMany: Remove fields with removeField()", async () => {
+  await withDatabase("updateMany: Remove fields with removeField()", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         product: {
@@ -174,7 +174,7 @@ Deno.test("updateMany: Remove fields with removeField()", async (t) => {
     ]);
 
     // Update multiple products, removing different fields
-    const updatedCount = await collection.updateMany({
+    const updatedCount = await collection.updateManyByIds({
       product: {
         [productIds[0]]: {
           description: removeField(), // Remove description
@@ -191,38 +191,38 @@ Deno.test("updateMany: Remove fields with removeField()", async (t) => {
       },
     });
 
-    assertEquals(updatedCount, 3);
+    expect(updatedCount).toEqual(3);
 
     // Verify Product A
     const productA = await collection.findOne("product", { _id: productIds[0] });
-    assert(productA !== null);
-    assertEquals(productA.name, "Product A");
-    assertEquals(productA.price, 150);
-    assertEquals(productA.description, undefined); // Removed
-    assertEquals(productA.category, "Cat A"); // Unchanged
-    assertEquals(productA.tags, ["tag1", "tag2"]); // Unchanged
+    expect(productA).not.toBeNull();
+    expect(productA.name).toEqual("Product A");
+    expect(productA.price).toEqual(150);
+    expect(productA.description).toEqual(undefined); // Removed
+    expect(productA.category).toEqual("Cat A"); // Unchanged
+    expect(productA.tags).toEqual(["tag1", "tag2"]); // Unchanged
 
     // Verify Product B
     const productB = await collection.findOne("product", { _id: productIds[1] });
-    assert(productB !== null);
-    assertEquals(productB.name, "Product B");
-    assertEquals(productB.price, 200); // Unchanged
-    assertEquals(productB.description, "Description B"); // Unchanged
-    assertEquals(productB.category, undefined); // Removed
-    assertEquals(productB.tags, undefined); // Removed
+    expect(productB).not.toBeNull();
+    expect(productB.name).toEqual("Product B");
+    expect(productB.price).toEqual(200); // Unchanged
+    expect(productB.description).toEqual("Description B"); // Unchanged
+    expect(productB.category).toEqual(undefined); // Removed
+    expect(productB.tags).toEqual(undefined); // Removed
 
     // Verify Product C
     const productC = await collection.findOne("product", { _id: productIds[2] });
-    assert(productC !== null);
-    assertEquals(productC.name, "Product C Updated");
-    assertEquals(productC.price, 300); // Unchanged
-    assertEquals(productC.description, undefined); // Removed
-    assertEquals(productC.category, "Cat C"); // Unchanged
+    expect(productC).not.toBeNull();
+    expect(productC.name).toEqual("Product C Updated");
+    expect(productC.price).toEqual(300); // Unchanged
+    expect(productC.description).toEqual(undefined); // Removed
+    expect(productC.category).toEqual("Cat C"); // Unchanged
   });
 });
 
-Deno.test("updateMany: Mix updates and removes across different types", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("updateMany: Mix updates and removes across different types", async () => {
+  await withDatabase("updateMany: Mix updates and removes across different types", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         user: {
@@ -253,7 +253,7 @@ Deno.test("updateMany: Mix updates and removes across different types", async (t
     });
 
     // Update across different types
-    await collection.updateMany({
+    await collection.updateManyByIds({
       user: {
         [userId]: {
           name: "John Doe",
@@ -270,16 +270,16 @@ Deno.test("updateMany: Mix updates and removes across different types", async (t
 
     // Verify user
     const user = await collection.findOne("user", { _id: userId });
-    assert(user !== null);
-    assertEquals(user.name, "John Doe");
-    assertEquals(user.email, "john@example.com");
-    assertEquals(user.phone, undefined);
+    expect(user).not.toBeNull();
+    expect(user.name).toEqual("John Doe");
+    expect(user.email).toEqual("john@example.com");
+    expect(user.phone).toEqual(undefined);
 
     // Verify product
     const product = await collection.findOne("product", { _id: productId });
-    assert(product !== null);
-    assertEquals(product.name, "Laptop");
-    assertEquals(product.price, 900);
-    assertEquals(product.discount, undefined);
+    expect(product).not.toBeNull();
+    expect(product.name).toEqual("Laptop");
+    expect(product.price).toEqual(900);
+    expect(product.discount).toEqual(undefined);
   });
 });

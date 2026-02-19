@@ -1,23 +1,23 @@
 /**
  * Integration test: Complete application lifecycle journey
- * 
+ *
  * This test simulates a real-world application evolution:
  * 1. Initial setup with users
  * 2. Adding posts system (multi-collection)
  * 3. Adding comments system (new multi-collection instance)
  * 4. Adding likes feature (schema evolution with transformation)
- * 
+ *
  * Tests validation at each step and rollback capabilities.
- * 
+ *
  * @module
  */
 
-import { assertEquals } from "@std/assert";
+import { test, expect } from "vitest";
 import * as v from "valibot";
 import { migrationDefinition } from "../../../src/migration/definition.ts";
 import { validateMigrationWithSimulation } from "../../../src/migration/validators/simulation.ts";
 
-Deno.test("Journey: Complete application lifecycle with validation", async () => {
+test("Journey: Complete application lifecycle with validation", async () => {
   // ========================================
   // STEP 1: Initial application - Users
   // ========================================
@@ -54,7 +54,7 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
   });
 
   const result1 = await validateMigrationWithSimulation(migration1);
-  assertEquals(result1.success, true, "Step 1: Users creation should succeed");
+  expect(result1.success).toEqual(true);
 
   // ========================================
   // STEP 2: Add Posts System (Multi-collection)
@@ -108,13 +108,13 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
           },
         ])
         .end();
-      
+
       return migration.compile();
     },
   });
 
   const result2 = await validateMigrationWithSimulation(migration2);
-  assertEquals(result2.success, true, "Step 2: Posts system should succeed");
+  expect(result2.success).toEqual(true);
 
   // ========================================
   // STEP 3: Add User Age Field (with transformation)
@@ -152,7 +152,7 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
   });
 
   const result3 = await validateMigrationWithSimulation(migration3);
-  assertEquals(result3.success, true, "Step 3: User age field should succeed");
+  expect(result3.success).toEqual(true);
 
   // ========================================
   // STEP 4: Add Comments System (new multi-collection instance)
@@ -190,13 +190,13 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
           },
         ])
         .end();
-      
+
       return migration.compile();
     },
   });
 
   const result4 = await validateMigrationWithSimulation(migration4);
-  assertEquals(result4.success, true, "Step 4: Comments system should succeed");
+  expect(result4.success).toEqual(true);
 
   // ========================================
   // STEP 5: Add Likes Feature (array field with transformation)
@@ -233,7 +233,7 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
           return rest;
         },
       });
-      
+
       // Transform videos to add likes array
       migration.multiModelInstances("posts").type("video").transform({
         up: (doc) => ({
@@ -245,26 +245,22 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
           return rest;
         },
       });
-      
+
       return migration.compile();
     },
   });
 
   const result5 = await validateMigrationWithSimulation(migration5);
-  assertEquals(result5.success, true, "Step 5: Likes feature should succeed");
+  expect(result5.success).toEqual(true);
 
   // ========================================
   // VALIDATION: All migrations are reversible
   // ========================================
   const result5WithReversibility = await validateMigrationWithSimulation(migration5, {});
-  assertEquals(
-    result5WithReversibility.success,
-    true,
-    "All migrations should be reversible",
-  );
+  expect(result5WithReversibility.success).toEqual(true);
 });
 
-Deno.test("Journey: Rollback to different points", async () => {
+test("Journey: Rollback to different points", async () => {
   // Setup complete migration chain
   const m1 = migrationDefinition("2025_01_01_ROOT", "step1", {
     parent: null,
@@ -342,18 +338,18 @@ Deno.test("Journey: Rollback to different points", async () => {
 
   // Validate each migration step
   const r1 = await validateMigrationWithSimulation(m1, {});
-  assertEquals(r1.success, true, "Migration 1 should succeed");
+  expect(r1.success).toEqual(true);
 
   const r2 = await validateMigrationWithSimulation(m2, {});
-  assertEquals(r2.success, true, "Migration 2 should succeed and be reversible");
+  expect(r2.success).toEqual(true);
 
   const r3 = await validateMigrationWithSimulation(m3, {});
-  assertEquals(r3.success, true, "Migration 3 should succeed and be reversible");
+  expect(r3.success).toEqual(true);
 });
 
-Deno.test("Journey: State verification at each step", async () => {
+test("Journey: State verification at each step", async () => {
   // This test validates that data evolves correctly through the migration chain
-  
+
   const step1 = migrationDefinition("2025_01_01_INIT", "init", {
     parent: null,
     schemas: {
@@ -432,11 +428,11 @@ Deno.test("Journey: State verification at each step", async () => {
 
   // Validate progression
   const r1 = await validateMigrationWithSimulation(step1);
-  assertEquals(r1.success, true, "Initial state should be valid");
+  expect(r1.success).toEqual(true);
 
   const r2 = await validateMigrationWithSimulation(step2);
-  assertEquals(r2.success, true, "State after adding increment should be valid");
+  expect(r2.success).toEqual(true);
 
   const r3 = await validateMigrationWithSimulation(step3);
-  assertEquals(r3.success, true, "Final state with label should be valid");
+  expect(r3.success).toEqual(true);
 });

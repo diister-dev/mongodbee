@@ -1,4 +1,4 @@
-import { assertEquals, assertExists } from "@std/assert";
+import { test, expect } from "vitest";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import * as v from "../../src/schema.ts";
@@ -31,8 +31,8 @@ const registrationModel = defineModel("registration", {
   },
 });
 
-Deno.test("Paginate with lookup: Basic lookup to same collection", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Paginate with lookup: Basic lookup to same collection", async () => {
+  await withDatabase("Paginate with lookup: Basic lookup to same collection", async (db) => {
     const mc = await multiCollection(db, "registration", registrationModel);
 
     // Create collaborators
@@ -78,20 +78,20 @@ Deno.test("Paginate with lookup: Basic lookup to same collection", async (t) => 
       }),
     });
 
-    assertEquals(results.data.length, 3);
-    assertEquals(results.total, 3);
-    
+    expect(results.data.length).toEqual(3);
+    expect(results.total).toEqual(3);
+
     // Check that lookups worked
     const aliceEvents = results.data.filter(r => r.registeredByName === "Alice Admin");
-    assertEquals(aliceEvents.length, 2);
-    
+    expect(aliceEvents.length).toEqual(2);
+
     const bobEvents = results.data.filter(r => r.registeredByName === "Bob Manager");
-    assertEquals(bobEvents.length, 1);
+    expect(bobEvents.length).toEqual(1);
   });
 });
 
-Deno.test("Paginate with lookup: Polymorphic lookup (collaborator OR visitor)", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Paginate with lookup: Polymorphic lookup (collaborator OR visitor)", async () => {
+  await withDatabase("Paginate with lookup: Polymorphic lookup (collaborator OR visitor)", async (db) => {
     const mc = await multiCollection(db, "registration", registrationModel);
 
     // Create a collaborator
@@ -134,7 +134,7 @@ Deno.test("Paginate with lookup: Polymorphic lookup (collaborator OR visitor)", 
         const anyDoc = doc as any;
         const collaborator = anyDoc.collaboratorDocs?.[0];
         const visitor = anyDoc.visitorDocs?.[0];
-        
+
         return {
           event: doc.eventName,
           status: doc.status,
@@ -145,24 +145,24 @@ Deno.test("Paginate with lookup: Polymorphic lookup (collaborator OR visitor)", 
       },
     });
 
-    assertEquals(results.data.length, 2);
-    
+    expect(results.data.length).toEqual(2);
+
     // Find registration by collaborator
     const collabReg = results.data.find(r => r.registeredByType === "collaborator");
-    assertExists(collabReg);
-    assertEquals(collabReg.registeredByName, "Alice Admin");
-    assertEquals(collabReg.event, "Conference 2024");
-    
+    expect(collabReg).toBeDefined();
+    expect(collabReg.registeredByName).toEqual("Alice Admin");
+    expect(collabReg.event).toEqual("Conference 2024");
+
     // Find registration by visitor
     const visitorReg = results.data.find(r => r.registeredByType === "visitor");
-    assertExists(visitorReg);
-    assertEquals(visitorReg.registeredByName, "John Guest");
-    assertEquals(visitorReg.event, "Workshop AI");
+    expect(visitorReg).toBeDefined();
+    expect(visitorReg.registeredByName).toEqual("John Guest");
+    expect(visitorReg.event).toEqual("Workshop AI");
   });
 });
 
-Deno.test("Paginate with anyLookup: Polymorphic lookup without type constraint", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Paginate with anyLookup: Polymorphic lookup without type constraint", async () => {
+  await withDatabase("Paginate with anyLookup: Polymorphic lookup without type constraint", async (db) => {
     const mc = await multiCollection(db, "registration", registrationModel);
 
     // Create a collaborator
@@ -202,7 +202,7 @@ Deno.test("Paginate with anyLookup: Polymorphic lookup without type constraint",
         // deno-lint-ignore no-explicit-any
         const anyDoc = doc as any;
         const registrant = anyDoc.registrant?.[0];
-        
+
         return {
           event: doc.eventName,
           status: doc.status,
@@ -214,24 +214,24 @@ Deno.test("Paginate with anyLookup: Polymorphic lookup without type constraint",
       },
     });
 
-    assertEquals(results.data.length, 2);
-    
+    expect(results.data.length).toEqual(2);
+
     // Find registration by collaborator
     const collabReg = results.data.find(r => r.registeredByType === "collaborator");
-    assertExists(collabReg);
-    assertEquals(collabReg.registeredByName, "Alice Admin");
-    assertEquals(collabReg.event, "Conference 2024");
-    
+    expect(collabReg).toBeDefined();
+    expect(collabReg.registeredByName).toEqual("Alice Admin");
+    expect(collabReg.event).toEqual("Conference 2024");
+
     // Find registration by visitor
     const visitorReg = results.data.find(r => r.registeredByType === "visitor");
-    assertExists(visitorReg);
-    assertEquals(visitorReg.registeredByName, "John Guest");
-    assertEquals(visitorReg.event, "Workshop AI");
+    expect(visitorReg).toBeDefined();
+    expect(visitorReg.registeredByName).toEqual("John Guest");
+    expect(visitorReg.event).toEqual("Workshop AI");
   });
 });
 
-Deno.test("Paginate with lookup: Using addFields for computed values", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Paginate with lookup: Using addFields for computed values", async () => {
+  await withDatabase("Paginate with lookup: Using addFields for computed values", async (db) => {
     const mc = await multiCollection(db, "registration", registrationModel);
 
     // Create collaborators
@@ -254,7 +254,7 @@ Deno.test("Paginate with lookup: Using addFields for computed values", async (t)
       pipeline: (stage) => [
         // Add computed field - check if registeredBy exists and is not null/empty
         stage.addFields({
-          hasRegistrant: { 
+          hasRegistrant: {
             $and: [
               { $ne: ["$registeredBy", null] },
               { $ne: [{ $ifNull: ["$registeredBy", ""] }, ""] }
@@ -277,25 +277,25 @@ Deno.test("Paginate with lookup: Using addFields for computed values", async (t)
       },
     });
 
-    assertEquals(results.data.length, 3);
-    
+    expect(results.data.length).toEqual(3);
+
     // Check computed fields
     const eventA = results.data.find(r => r.event === "Event A");
-    assertExists(eventA);
-    assertEquals(eventA.status, "CONFIRMED");
-    assertEquals(eventA.hasRegistrant, true);
-    assertEquals(eventA.registrantName, "Alice Admin");
-    
+    expect(eventA).toBeDefined();
+    expect(eventA.status).toEqual("CONFIRMED");
+    expect(eventA.hasRegistrant).toEqual(true);
+    expect(eventA.registrantName).toEqual("Alice Admin");
+
     const eventC = results.data.find(r => r.event === "Event C");
-    assertExists(eventC);
-    assertEquals(eventC.status, "DRAFT");
-    assertEquals(eventC.hasRegistrant, false);
-    assertEquals(eventC.registrantName, null);
+    expect(eventC).toBeDefined();
+    expect(eventC.status).toEqual("DRAFT");
+    expect(eventC.hasRegistrant).toEqual(false);
+    expect(eventC.registrantName).toEqual(null);
   });
 });
 
-Deno.test("Paginate with lookup: Combined with MongoDB filter", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Paginate with lookup: Combined with MongoDB filter", async () => {
+  await withDatabase("Paginate with lookup: Combined with MongoDB filter", async (db) => {
     const mc = await multiCollection(db, "registration", registrationModel);
 
     // Create collaborators with different roles
@@ -331,17 +331,17 @@ Deno.test("Paginate with lookup: Combined with MongoDB filter", async (t) => {
       }),
     });
 
-    assertEquals(results.data.length, 2);
-    assertEquals(results.total, 2); // Total should only count confirmed
-    
+    expect(results.data.length).toEqual(2);
+    expect(results.total).toEqual(2); // Total should only count confirmed
+
     // Both confirmed events should be returned
     const events = results.data.map(r => r.event).sort();
-    assertEquals(events, ["Event 1", "Event 3"]);
+    expect(events).toEqual(["Event 1", "Event 3"]);
   });
 });
 
-Deno.test("Paginate with lookup: With cursor pagination (afterId)", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Paginate with lookup: With cursor pagination (afterId)", async () => {
+  await withDatabase("Paginate with lookup: With cursor pagination (afterId)", async (db) => {
     const mc = await multiCollection(db, "registration", registrationModel);
 
     // Create a collaborator
@@ -376,9 +376,9 @@ Deno.test("Paginate with lookup: With cursor pagination (afterId)", async (t) =>
       }),
     });
 
-    assertEquals(page1.data.length, 3);
-    assertEquals(page1.total, 10);
-    assertEquals(page1.position, 0);
+    expect(page1.data.length).toEqual(3);
+    expect(page1.total).toEqual(10);
+    expect(page1.position).toEqual(0);
 
     // Second page using afterId
     const page2 = await mc.paginate("registration", {}, {
@@ -395,26 +395,26 @@ Deno.test("Paginate with lookup: With cursor pagination (afterId)", async (t) =>
       }),
     });
 
-    assertEquals(page2.data.length, 3);
-    assertEquals(page2.total, 10);
-    assertEquals(page2.position, 3);
+    expect(page2.data.length).toEqual(3);
+    expect(page2.total).toEqual(10);
+    expect(page2.position).toEqual(3);
 
     // Verify no overlap between pages
     const page1Ids = new Set(page1.data.map(r => r.id));
     const page2Ids = new Set(page2.data.map(r => r.id));
     for (const id of page2Ids) {
-      assertEquals(page1Ids.has(id), false, "Pages should not overlap");
+      expect(page1Ids.has(id)).toEqual(false);
     }
 
     // All should have lookup data
     for (const reg of [...page1.data, ...page2.data]) {
-      assertEquals(reg.registrant, "Alice Admin");
+      expect(reg.registrant).toEqual("Alice Admin");
     }
   });
 });
 
-Deno.test("Paginate with lookup: Combined with prepare/filter/format pipeline", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Paginate with lookup: Combined with prepare/filter/format pipeline", async () => {
+  await withDatabase("Paginate with lookup: Combined with prepare/filter/format pipeline", async (db) => {
     const mc = await multiCollection(db, "registration", registrationModel);
 
     // Create collaborators with different roles
@@ -465,17 +465,17 @@ Deno.test("Paginate with lookup: Combined with prepare/filter/format pipeline", 
     });
 
     // Should only return registrations by admin
-    assertEquals(results.data.length, 2);
-    
+    expect(results.data.length).toEqual(2);
+
     for (const reg of results.data) {
-      assertEquals(reg.registrantRole, "admin");
-      assertEquals(reg.registrantName, "Alice Admin");
+      expect(reg.registrantRole).toEqual("admin");
+      expect(reg.registrantName).toEqual("Alice Admin");
     }
   });
 });
 
-Deno.test("Paginate with lookup: Lookup with nested pipeline filter", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Paginate with lookup: Lookup with nested pipeline filter", async () => {
+  await withDatabase("Paginate with lookup: Lookup with nested pipeline filter", async (db) => {
     const mc = await multiCollection(db, "registration", registrationModel);
 
     // Create collaborators with different roles
@@ -518,24 +518,24 @@ Deno.test("Paginate with lookup: Lookup with nested pipeline filter", async (t) 
       },
     });
 
-    assertEquals(results.data.length, 2);
-    
+    expect(results.data.length).toEqual(2);
+
     // Event 1 should have admin registrant
     const event1 = results.data.find(r => r.event === "Event 1");
-    assertExists(event1);
-    assertEquals(event1.adminRegistrant, "Alice Admin");
-    assertEquals(event1.hasAdminRegistrant, true);
-    
+    expect(event1).toBeDefined();
+    expect(event1.adminRegistrant).toEqual("Alice Admin");
+    expect(event1.hasAdminRegistrant).toEqual(true);
+
     // Event 2 should NOT have admin registrant (Bob is user)
     const event2 = results.data.find(r => r.event === "Event 2");
-    assertExists(event2);
-    assertEquals(event2.adminRegistrant, null);
-    assertEquals(event2.hasAdminRegistrant, false);
+    expect(event2).toBeDefined();
+    expect(event2.adminRegistrant).toEqual(null);
+    expect(event2.hasAdminRegistrant).toEqual(false);
   });
 });
 
-Deno.test("Paginate without pipeline: Backwards compatibility", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Paginate without pipeline: Backwards compatibility", async () => {
+  await withDatabase("Paginate without pipeline: Backwards compatibility", async (db) => {
     const mc = await multiCollection(db, "registration", registrationModel);
 
     await mc.insertMany("registration", [
@@ -553,17 +553,17 @@ Deno.test("Paginate without pipeline: Backwards compatibility", async (t) => {
       }),
     });
 
-    assertEquals(results.data.length, 2);
-    assertEquals(results.total, 2);
-    
+    expect(results.data.length).toEqual(2);
+    expect(results.total).toEqual(2);
+
     for (const reg of results.data) {
-      assertEquals(reg.status, "confirmed");
+      expect(reg.status).toEqual("confirmed");
     }
   });
 });
 
-Deno.test("Paginate with lookup: Project to reduce data transfer", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Paginate with lookup: Project to reduce data transfer", async () => {
+  await withDatabase("Paginate with lookup: Project to reduce data transfer", async (db) => {
     const mc = await multiCollection(db, "registration", registrationModel);
 
     const collab = await mc.insertOne("collaborator", {
@@ -602,14 +602,14 @@ Deno.test("Paginate with lookup: Project to reduce data transfer", async (t) => 
       },
     });
 
-    assertEquals(results.data.length, 1);
-    assertEquals(results.data[0].event, "Event 1");
-    assertEquals(results.data[0].registrant, "Alice Admin");
+    expect(results.data.length).toEqual(1);
+    expect(results.data[0].event).toEqual("Event 1");
+    expect(results.data[0].registrant).toEqual("Alice Admin");
   });
 });
 
-Deno.test("Paginate with externalLookup: Join with external collection", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Paginate with externalLookup: Join with external collection", async () => {
+  await withDatabase("Paginate with externalLookup: Join with external collection", async (db) => {
     const mc = await multiCollection(db, "registration", registrationModel);
 
     // Create an external collection for "events" (not part of multi-collection)
@@ -651,23 +651,23 @@ Deno.test("Paginate with externalLookup: Join with external collection", async (
       },
     });
 
-    assertEquals(results.data.length, 2);
-    
+    expect(results.data.length).toEqual(2);
+
     const conf = results.data.find(r => r.eventId === "evt1");
-    assertExists(conf);
-    assertEquals(conf.eventTitle, "Tech Conference 2024");
-    assertEquals(conf.eventLocation, "Paris");
-    assertEquals(conf.eventCapacity, 500);
-    
+    expect(conf).toBeDefined();
+    expect(conf.eventTitle).toEqual("Tech Conference 2024");
+    expect(conf.eventLocation).toEqual("Paris");
+    expect(conf.eventCapacity).toEqual(500);
+
     const workshop = results.data.find(r => r.eventId === "evt2");
-    assertExists(workshop);
-    assertEquals(workshop.eventTitle, "AI Workshop");
-    assertEquals(workshop.eventLocation, "London");
+    expect(workshop).toBeDefined();
+    expect(workshop.eventTitle).toEqual("AI Workshop");
+    expect(workshop.eventLocation).toEqual("London");
   });
 });
 
-Deno.test("Paginate with externalLookup: Join with another multi-collection", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Paginate with externalLookup: Join with another multi-collection", async () => {
+  await withDatabase("Paginate with externalLookup: Join with another multi-collection", async (db) => {
     // Create first multi-collection for registrations
     const registrations = await multiCollection(db, "registrations", registrationModel);
 
@@ -733,17 +733,17 @@ Deno.test("Paginate with externalLookup: Join with another multi-collection", as
       },
     });
 
-    assertEquals(results.data.length, 2);
-    
+    expect(results.data.length).toEqual(2);
+
     const conf = results.data.find(r => r.event === "Conference");
-    assertExists(conf);
-    assertEquals(conf.venueName, "Convention Center");
-    assertEquals(conf.venueCity, "Paris");
-    assertEquals(conf.venueType, "venue");
-    
+    expect(conf).toBeDefined();
+    expect(conf.venueName).toEqual("Convention Center");
+    expect(conf.venueCity).toEqual("Paris");
+    expect(conf.venueType).toEqual("venue");
+
     const workshop = results.data.find(r => r.event === "Workshop");
-    assertExists(workshop);
-    assertEquals(workshop.venueName, "Tech Hub");
-    assertEquals(workshop.venueCity, "London");
+    expect(workshop).toBeDefined();
+    expect(workshop.venueName).toEqual("Tech Hub");
+    expect(workshop.venueCity).toEqual("London");
   });
 });

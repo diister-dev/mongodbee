@@ -3,7 +3,7 @@
  */
 
 import * as v from "../../src/schema.ts";
-import { assert, assertEquals, assertExists } from "@std/assert";
+import { test, expect } from "vitest";
 import {
   createMigrationSummary,
   findCommonAncestor,
@@ -19,7 +19,7 @@ import {
 // Migration Definition Tests
 // ============================================================================
 
-Deno.test("migrationDefinition - creates valid migration", () => {
+test("migrationDefinition - creates valid migration", () => {
   const schemas = {
     collections: {
       users: {
@@ -35,14 +35,14 @@ Deno.test("migrationDefinition - creates valid migration", () => {
     migrate: (builder) => builder.compile(),
   });
 
-  assertEquals(migration.id, "001");
-  assertEquals(migration.name, "Initial");
-  assertEquals(migration.parent, null);
-  assertExists(migration.schemas);
-  assertEquals(typeof migration.migrate, "function");
+  expect(migration.id).toEqual("001");
+  expect(migration.name).toEqual("Initial");
+  expect(migration.parent).toEqual(null);
+  expect(migration.schemas).toBeDefined();
+  expect(typeof migration.migrate).toEqual("function");
 });
 
-Deno.test("migrationDefinition - throws on invalid ID", () => {
+test("migrationDefinition - throws on invalid ID", () => {
   const schemas = {
     collections: {},
   };
@@ -55,12 +55,12 @@ Deno.test("migrationDefinition - throws on invalid ID", () => {
     });
     throw new Error("Should have thrown");
   } catch (error) {
-    assert(error instanceof Error);
-    assert(error.message.includes("ID must be"));
+    expect(error instanceof Error).toBeTruthy();
+    expect(error.message.includes("ID must be")).toBeTruthy();
   }
 });
 
-Deno.test("migrationDefinition - throws on missing schemas", () => {
+test("migrationDefinition - throws on missing schemas", () => {
   try {
     migrationDefinition("001", "Test", {
       parent: null,
@@ -69,8 +69,8 @@ Deno.test("migrationDefinition - throws on missing schemas", () => {
     });
     throw new Error("Should have thrown");
   } catch (error) {
-    assert(error instanceof Error);
-    assert(error.message.includes("collections schema"));
+    expect(error instanceof Error).toBeTruthy();
+    expect(error.message.includes("collections schema")).toBeTruthy();
   }
 });
 
@@ -78,7 +78,7 @@ Deno.test("migrationDefinition - throws on missing schemas", () => {
 // Parent-Child Relationship Tests
 // ============================================================================
 
-Deno.test("Migration chain - creates parent-child relationship", () => {
+test("Migration chain - creates parent-child relationship", () => {
   const schemas1 = {
     collections: {
       users: {
@@ -110,15 +110,15 @@ Deno.test("Migration chain - creates parent-child relationship", () => {
     migrate: (builder) => builder.compile(),
   });
 
-  assertEquals(migration2.parent, migration1);
-  assertEquals(migration2.parent?.id, "001");
+  expect(migration2.parent).toEqual(migration1);
+  expect(migration2.parent?.id).toEqual("001");
 });
 
 // ============================================================================
 // Chain Validation Tests
 // ============================================================================
 
-Deno.test("validateMigrationChain - passes for valid chain", () => {
+test("validateMigrationChain - passes for valid chain", () => {
   const schemas = {
     collections: {
       users: {
@@ -148,11 +148,11 @@ Deno.test("validateMigrationChain - passes for valid chain", () => {
 
   const result = validateMigrationChain([m1, m2, m3]);
 
-  assert(result.valid);
-  assertEquals(result.errors.length, 0);
+  expect(result.valid).toBeTruthy();
+  expect(result.errors.length).toEqual(0);
 });
 
-Deno.test("validateMigrationChain - fails when first migration has parent", () => {
+test("validateMigrationChain - fails when first migration has parent", () => {
   const schemas = {
     collections: {},
   };
@@ -171,11 +171,11 @@ Deno.test("validateMigrationChain - fails when first migration has parent", () =
 
   const result = validateMigrationChain([m1]);
 
-  assert(!result.valid);
-  assert(result.errors.some((e) => e.includes("should have no parent")));
+  expect(!result.valid).toBeTruthy();
+  expect(result.errors.some((e) => e.includes("should have no parent"))).toBeTruthy();
 });
 
-Deno.test("validateMigrationChain - fails on incorrect parent reference", () => {
+test("validateMigrationChain - fails on incorrect parent reference", () => {
   const schemas = {
     collections: {},
   };
@@ -194,12 +194,12 @@ Deno.test("validateMigrationChain - fails on incorrect parent reference", () => 
 
   const result = validateMigrationChain([m1, m2]);
 
-  assert(!result.valid);
+  expect(!result.valid).toBeTruthy();
   // m2 should have m1 as parent but has null, so validation should fail
-  assert(result.errors.some((e) => e.includes("parent")));
+  expect(result.errors.some((e) => e.includes("parent"))).toBeTruthy();
 });
 
-Deno.test("validateMigrationChain - fails on duplicate IDs", () => {
+test("validateMigrationChain - fails on duplicate IDs", () => {
   const schemas = {
     collections: {},
   };
@@ -218,43 +218,43 @@ Deno.test("validateMigrationChain - fails on duplicate IDs", () => {
 
   const result = validateMigrationChain([m1, m2]);
 
-  assert(!result.valid);
-  assert(result.errors.some((e) => e.includes("Duplicate")));
+  expect(!result.valid).toBeTruthy();
+  expect(result.errors.some((e) => e.includes("Duplicate"))).toBeTruthy();
 });
 
 // ============================================================================
 // Migration ID Generation Tests
 // ============================================================================
 
-Deno.test("generateMigrationId - creates unique IDs", () => {
+test("generateMigrationId - creates unique IDs", () => {
   const id1 = generateMigrationId("test");
   const id2 = generateMigrationId("test");
 
   // IDs should be different
-  assert(id1 !== id2);
+  expect(id1 !== id2).toBeTruthy();
 });
 
-Deno.test("generateMigrationId - includes name in ID", () => {
+test("generateMigrationId - includes name in ID", () => {
   const id = generateMigrationId("create_users");
 
-  assert(id.includes("@create_users"));
+  expect(id.includes("@create_users")).toBeTruthy();
 });
 
-Deno.test("generateMigrationId - has correct format", () => {
+test("generateMigrationId - has correct format", () => {
   const id = generateMigrationId("test");
 
   // Format: YYYY_MM_DD_HHMM_ULID@name
-  assert(id.includes("@test"));
+  expect(id.includes("@test")).toBeTruthy();
 
   const parts = id.split("@");
-  assertEquals(parts.length, 2);
+  expect(parts.length).toEqual(2);
 
   // Date part should have underscores
   const datePart = parts[0];
-  assert(datePart.includes("_"));
+  expect(datePart.includes("_")).toBeTruthy();
 });
 
-Deno.test("generateMigrationId - generates sortable IDs", () => {
+test("generateMigrationId - generates sortable IDs", () => {
   const ids: string[] = [];
 
   for (let i = 0; i < 5; i++) {
@@ -266,14 +266,14 @@ Deno.test("generateMigrationId - generates sortable IDs", () => {
   const sorted = [...ids].sort();
 
   // IDs should sort in order of creation
-  assertEquals(ids, sorted);
+  expect(ids).toEqual(sorted);
 });
 
 // ============================================================================
 // Migration Ancestry Tests
 // ============================================================================
 
-Deno.test("getMigrationAncestors - returns empty for root migration", () => {
+test("getMigrationAncestors - returns empty for root migration", () => {
   const schemas = {
     collections: {},
   };
@@ -286,10 +286,10 @@ Deno.test("getMigrationAncestors - returns empty for root migration", () => {
 
   const ancestors = getMigrationAncestors(m1);
 
-  assertEquals(ancestors.length, 0);
+  expect(ancestors.length).toEqual(0);
 });
 
-Deno.test("getMigrationAncestors - returns all ancestors in order", () => {
+test("getMigrationAncestors - returns all ancestors in order", () => {
   const schemas = {
     collections: {},
   };
@@ -314,12 +314,12 @@ Deno.test("getMigrationAncestors - returns all ancestors in order", () => {
 
   const ancestors = getMigrationAncestors(m3);
 
-  assertEquals(ancestors.length, 2);
-  assertEquals(ancestors[0].id, "001");
-  assertEquals(ancestors[1].id, "002");
+  expect(ancestors.length).toEqual(2);
+  expect(ancestors[0].id).toEqual("001");
+  expect(ancestors[1].id).toEqual("002");
 });
 
-Deno.test("getMigrationPath - includes migration itself", () => {
+test("getMigrationPath - includes migration itself", () => {
   const schemas = {
     collections: {},
   };
@@ -338,12 +338,12 @@ Deno.test("getMigrationPath - includes migration itself", () => {
 
   const path = getMigrationPath(m2);
 
-  assertEquals(path.length, 2);
-  assertEquals(path[0].id, "001");
-  assertEquals(path[1].id, "002");
+  expect(path.length).toEqual(2);
+  expect(path[0].id).toEqual("001");
+  expect(path[1].id).toEqual("002");
 });
 
-Deno.test("findCommonAncestor - finds common ancestor", () => {
+test("findCommonAncestor - finds common ancestor", () => {
   const schemas = {
     collections: {},
   };
@@ -374,11 +374,11 @@ Deno.test("findCommonAncestor - finds common ancestor", () => {
 
   const common = findCommonAncestor(m3, m4);
 
-  assertExists(common);
-  assertEquals(common?.id, "002");
+  expect(common).toBeDefined();
+  expect(common?.id).toEqual("002");
 });
 
-Deno.test("findCommonAncestor - returns null for unrelated migrations", () => {
+test("findCommonAncestor - returns null for unrelated migrations", () => {
   const schemas = {
     collections: {},
   };
@@ -397,10 +397,10 @@ Deno.test("findCommonAncestor - returns null for unrelated migrations", () => {
 
   const common = findCommonAncestor(m1, m2);
 
-  assertEquals(common, null);
+  expect(common).toEqual(null);
 });
 
-Deno.test("isMigrationAncestor - returns true for ancestor", () => {
+test("isMigrationAncestor - returns true for ancestor", () => {
   const schemas = {
     collections: {},
   };
@@ -423,16 +423,16 @@ Deno.test("isMigrationAncestor - returns true for ancestor", () => {
     migrate: (builder) => builder.compile(),
   });
 
-  assert(isMigrationAncestor(m1, m3));
-  assert(isMigrationAncestor(m2, m3));
-  assert(!isMigrationAncestor(m3, m1));
+  expect(isMigrationAncestor(m1, m3)).toBeTruthy();
+  expect(isMigrationAncestor(m2, m3)).toBeTruthy();
+  expect(!isMigrationAncestor(m3, m1)).toBeTruthy();
 });
 
 // ============================================================================
 // Migration Summary Tests
 // ============================================================================
 
-Deno.test("createMigrationSummary - returns correct metadata", () => {
+test("createMigrationSummary - returns correct metadata", () => {
   const schemas = {
     collections: {
       users: {
@@ -464,17 +464,17 @@ Deno.test("createMigrationSummary - returns correct metadata", () => {
 
   const summary = createMigrationSummary(m2);
 
-  assertEquals(summary.id, "002");
-  assertEquals(summary.name, "Second");
-  assertEquals(summary.depth, 1);
-  assert(summary.hasParent);
-  assertEquals(summary.parentId, "001");
-  assertEquals(summary.ancestorCount, 1);
-  assertEquals(summary.collectionCount, 1);
-  assertEquals(summary.multiCollectionCount, 1);
+  expect(summary.id).toEqual("002");
+  expect(summary.name).toEqual("Second");
+  expect(summary.depth).toEqual(1);
+  expect(summary.hasParent).toBeTruthy();
+  expect(summary.parentId).toEqual("001");
+  expect(summary.ancestorCount).toEqual(1);
+  expect(summary.collectionCount).toEqual(1);
+  expect(summary.multiCollectionCount).toEqual(1);
 });
 
-Deno.test("createMigrationSummary - handles root migration", () => {
+test("createMigrationSummary - handles root migration", () => {
   const schemas = {
     collections: {},
   };
@@ -487,8 +487,8 @@ Deno.test("createMigrationSummary - handles root migration", () => {
 
   const summary = createMigrationSummary(m1);
 
-  assertEquals(summary.depth, 0);
-  assert(!summary.hasParent);
-  assertEquals(summary.parentId, null);
-  assertEquals(summary.ancestorCount, 0);
+  expect(summary.depth).toEqual(0);
+  expect(!summary.hasParent).toBeTruthy();
+  expect(summary.parentId).toEqual(null);
+  expect(summary.ancestorCount).toEqual(0);
 });

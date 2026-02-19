@@ -1,0 +1,32 @@
+{
+  "name": "@diister/mongodbee",
+  "version": "0.20.0",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./mod.ts",
+    "./schema": "./schema.ts",
+    "./session": "./session.ts",
+    "./ids": "./src/ids.ts",
+    "./migration": "./src/migration/mod.ts",
+    "./migration/cli": "./src/migration/cli/mod.ts",
+    "./migration/cli/bin": "./src/migration/cli/bin.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.18"
+  },
+  "dependencies": {
+    "@diister/valibot-mock": "npm:@jsr/diister__valibot-mock",
+    "@std/cli": "npm:@jsr/std__cli",
+    "@std/fmt": "npm:@jsr/std__fmt",
+    "@std/fs": "npm:@jsr/std__fs",
+    "@std/path": "npm:@jsr/std__path",
+    "@std/ulid": "npm:@jsr/std__ulid",
+    "mongodb": "^7.1.0",
+    "valibot": "^1.2.0"
+  }
+}

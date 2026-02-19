@@ -10,7 +10,8 @@
  * @module
  */
 
-import { assertEquals } from "@std/assert";
+import { test, expect } from "vitest";
+import * as fsp from "node:fs/promises";
 import { MongoClient } from "../../../src/mongodb.ts";
 import { initCommand } from "../../../src/migration/cli/commands/init.ts";
 import { generateCommand } from "../../../src/migration/cli/commands/generate.ts";
@@ -20,8 +21,8 @@ import { getAppliedMigrationIds } from "../../../src/migration/state.ts";
 import { delay, withTempDir } from "./shared.ts";
 
 // MongoDB test connection
-const TEST_MONGODB_URI = Deno.env.get("TEST_MONGODB_URI") ||
-  "mongodb://localhost:27017";
+const TEST_MONGODB_URI = process.env.TEST_MONGODB_URI ||
+  "mongodb://127.0.0.1:27017";
 
 /**
  * Generate a unique database name for each test to avoid collisions in parallel execution
@@ -69,13 +70,14 @@ async function withTestDb(
  * Setup test configuration
  */
 async function setupTestConfig(tempDir: string, dbName: string) {
-  await Deno.writeTextFile(
+  await fsp.writeFile(
     `${tempDir}/mongodbee.config.ts`,
     `export default { database: { connection: { uri: "${TEST_MONGODB_URI}" }, name: "${dbName}" }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
+    "utf-8",
   );
 }
 
-Deno.test("status - shows no migrations when none exist", async () => {
+test("status - shows no migrations when none exist", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       // Setup
@@ -89,7 +91,7 @@ Deno.test("status - shows no migrations when none exist", async () => {
   });
 });
 
-Deno.test("status - shows pending migrations when none applied", async () => {
+test("status - shows pending migrations when none applied", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -103,7 +105,7 @@ Deno.test("status - shows pending migrations when none applied", async () => {
 
       // Check no migrations applied yet
       const appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 0);
+      expect(appliedIds.length).toEqual(0);
 
       // Run status
       await statusCommand({ cwd: tempDir });
@@ -112,7 +114,7 @@ Deno.test("status - shows pending migrations when none applied", async () => {
   });
 });
 
-Deno.test("status - shows applied migrations", async () => {
+test("status - shows applied migrations", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -129,7 +131,7 @@ Deno.test("status - shows applied migrations", async () => {
 
       // Verify applied
       const appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 2);
+      expect(appliedIds.length).toEqual(2);
 
       // Run status
       await statusCommand({ cwd: tempDir });
@@ -138,7 +140,7 @@ Deno.test("status - shows applied migrations", async () => {
   });
 });
 
-Deno.test("status - shows mixed state (some applied, some pending)", async () => {
+test("status - shows mixed state (some applied, some pending)", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -161,7 +163,7 @@ Deno.test("status - shows mixed state (some applied, some pending)", async () =>
 
       // Verify state
       const appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 2);
+      expect(appliedIds.length).toEqual(2);
 
       // Run status
       await statusCommand({ cwd: tempDir });
@@ -170,7 +172,7 @@ Deno.test("status - shows mixed state (some applied, some pending)", async () =>
   });
 });
 
-Deno.test("status - shows up-to-date when all migrations applied", async () => {
+test("status - shows up-to-date when all migrations applied", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -187,7 +189,7 @@ Deno.test("status - shows up-to-date when all migrations applied", async () => {
 
       // Verify all applied
       const appliedIds = await getAppliedMigrationIds(db);
-      assertEquals(appliedIds.length, 2);
+      expect(appliedIds.length).toEqual(2);
 
       // Run status
       await statusCommand({ cwd: tempDir });
@@ -196,7 +198,7 @@ Deno.test("status - shows up-to-date when all migrations applied", async () => {
   });
 });
 
-Deno.test("status - uses custom config path when provided", async () => {
+test("status - uses custom config path when provided", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       // Setup
@@ -204,9 +206,10 @@ Deno.test("status - uses custom config path when provided", async () => {
       await setupTestConfig(tempDir, dbName); // Standard config for generate
 
       // Create custom config
-      await Deno.writeTextFile(
+      await fsp.writeFile(
         `${tempDir}/custom.config.ts`,
         `export default { database: { connection: { uri: "${TEST_MONGODB_URI}" }, name: "${dbName}" }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
+        "utf-8",
       );
 
       await generateCommand({ name: "test", cwd: tempDir });
@@ -218,33 +221,29 @@ Deno.test("status - uses custom config path when provided", async () => {
   });
 });
 
-Deno.test({
-  name: "status - handles connection errors gracefully",
-  sanitizeResources: false, // MongoDB connection attempt leaves resources
-  sanitizeOps: false, // DNS resolution doesn't complete
-  fn: async () => {
-    await withTempDir(async (tempDir) => {
-      // Setup with invalid connection (with short timeout)
-      await initCommand({ cwd: tempDir });
-      await Deno.writeTextFile(
-        `${tempDir}/mongodbee.config.ts`,
-        `export default { database: { connection: { uri: "mongodb://invalid:27017?serverSelectionTimeoutMS=1000&connectTimeoutMS=1000" }, name: "test" }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
-      );
+test("status - handles connection errors gracefully", async () => {
+  await withTempDir(async (tempDir) => {
+    // Setup with invalid connection (with short timeout)
+    await initCommand({ cwd: tempDir });
+    await fsp.writeFile(
+      `${tempDir}/mongodbee.config.ts`,
+      `export default { database: { connection: { uri: "mongodb://invalid:27017?serverSelectionTimeoutMS=1000&connectTimeoutMS=1000" }, name: "test" }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
+      "utf-8",
+    );
 
-      await generateCommand({ name: "test", cwd: tempDir });
+    await generateCommand({ name: "test", cwd: tempDir });
 
-      // Try to run status
-      try {
-        await statusCommand({ cwd: tempDir });
-      } catch (error) {
-        // Connection error is expected
-        assertEquals(error instanceof Error, true);
-      }
-    });
-  },
+    // Try to run status
+    try {
+      await statusCommand({ cwd: tempDir });
+    } catch (error) {
+      // Connection error is expected
+      expect(error instanceof Error).toEqual(true);
+    }
+  });
 });
 
-Deno.test("status - works after migrations are rolled back", async () => {
+test("status - works after migrations are rolled back", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -258,7 +257,7 @@ Deno.test("status - works after migrations are rolled back", async () => {
       await migrateCommand({ cwd: tempDir, force: true });
 
       const appliedBefore = await getAppliedMigrationIds(db);
-      assertEquals(appliedBefore.length, 1);
+      expect(appliedBefore.length).toEqual(1);
 
       // Rollback (would need to import rollbackCommand)
       // For now, just verify status works with applied migrations

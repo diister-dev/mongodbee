@@ -1,5 +1,5 @@
 import * as v from "../src/schema.ts";
-import { assertEquals, assertRejects } from "@std/assert";
+import { test, expect } from "vitest";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { withIndex } from "../src/indexes.ts";
@@ -11,8 +11,8 @@ import { defineModel } from "../src/multi-collection-model.ts";
  * Covers the case where withIndex is applied to union schemas
  */
 
-Deno.test("withIndex - Union schemas with unique constraints", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("withIndex - Union schemas with unique constraints", async () => {
+  await withDatabase("withIndex - Union schemas with unique constraints", async (db) => {
     // Create union schema similar to SIRET/SIREN
     const NumberOrString = v.union([v.string(), v.number()]);
 
@@ -39,40 +39,36 @@ Deno.test("withIndex - Union schemas with unique constraints", async (t) => {
     });
 
     // Should prevent duplicate string value
-    await assertRejects(
+    await expect(
       async () => {
         await coll.insertOne({
           id: "test3",
           value: "string_value", // Same as first
         });
       },
-      Error,
-      "duplicate key",
-    );
+    ).rejects.toThrow("duplicate key");
 
     // Should prevent duplicate number value
-    await assertRejects(
+    await expect(
       async () => {
         await coll.insertOne({
           id: "test4",
           value: 42, // Same as second
         });
       },
-      Error,
-      "duplicate key",
-    );
+    ).rejects.toThrow("duplicate key");
 
     // Verify indexes were created
     const indexes = await coll.collection.listIndexes().toArray();
     const valueIndex = indexes.find((idx: Record<string, unknown>) =>
       idx.key && (idx.key as Record<string, unknown>).value
     );
-    assertEquals(valueIndex?.unique, true);
+    expect(valueIndex?.unique).toEqual(true);
   });
 });
 
-Deno.test("withIndex - Complex nested union schemas", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("withIndex - Complex nested union schemas", async () => {
+  await withDatabase("withIndex - Complex nested union schemas", async (db) => {
     // Complex validation schemas like SIRET/SIREN
     const SiretSchema = v.pipe(
       v.string(),
@@ -113,7 +109,7 @@ Deno.test("withIndex - Complex nested union schemas", async (t) => {
     });
 
     // Should prevent duplicate SIRET
-    await assertRejects(
+    await expect(
       async () => {
         await coll.insertOne({
           id: "company3",
@@ -121,12 +117,10 @@ Deno.test("withIndex - Complex nested union schemas", async (t) => {
           name: "Duplicate SIRET Company",
         });
       },
-      Error,
-      "duplicate key",
-    );
+    ).rejects.toThrow("duplicate key");
 
     // Should prevent duplicate SIREN
-    await assertRejects(
+    await expect(
       async () => {
         await coll.insertOne({
           id: "company4",
@@ -134,18 +128,16 @@ Deno.test("withIndex - Complex nested union schemas", async (t) => {
           name: "Duplicate SIREN Company",
         });
       },
-      Error,
-      "duplicate key",
-    );
+    ).rejects.toThrow("duplicate key");
 
     // Verify unique constraint works
     const count = await coll.countDocuments({});
-    assertEquals(count, 2);
+    expect(count).toEqual(2);
   });
 });
 
-Deno.test("withIndex - Multi-collection with union schemas", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("withIndex - Multi-collection with union schemas", async () => {
+  await withDatabase("withIndex - Multi-collection with union schemas", async (db) => {
     const IdUnion = v.union([v.string(), v.number()]);
 
     const catalogSchema = {
@@ -189,28 +181,24 @@ Deno.test("withIndex - Multi-collection with union schemas", async (t) => {
     });
 
     // Should prevent duplicate user string ID
-    await assertRejects(
+    await expect(
       async () => {
         await multiColl.insertOne("user", {
           userId: "user123", // Same string ID
           name: "Duplicate User",
         });
       },
-      Error,
-      "duplicate key",
-    );
+    ).rejects.toThrow("duplicate key");
 
     // Should prevent duplicate user number ID
-    await assertRejects(
+    await expect(
       async () => {
         await multiColl.insertOne("user", {
           userId: 456, // Same number ID
           name: "Another Duplicate",
         });
       },
-      Error,
-      "duplicate key",
-    );
+    ).rejects.toThrow("duplicate key");
 
     // Should allow same ID across different types (scoped by type)
     await multiColl.insertOne("product", {
@@ -221,7 +209,7 @@ Deno.test("withIndex - Multi-collection with union schemas", async (t) => {
     const userCount = await multiColl.countDocuments("user");
     const productCount = await multiColl.countDocuments("product");
 
-    assertEquals(userCount, 2);
-    assertEquals(productCount, 2);
+    expect(userCount).toEqual(2);
+    expect(productCount).toEqual(2);
   });
 });

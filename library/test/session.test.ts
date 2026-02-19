@@ -1,5 +1,5 @@
 import * as v from "../src/schema.ts";
-import { assertEquals, assertRejects } from "@std/assert";
+import { test, expect } from "vitest";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
 
@@ -16,8 +16,8 @@ const productSchema = {
   stock: v.number(),
 };
 
-Deno.test("Session: Basic session creation and usage", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Session: Basic session creation and usage", async () => {
+  await withDatabase("Session: Basic session creation and usage", async (db) => {
     // Create a collection with the schema
     const users = await collection(db, "users", userSchema);
 
@@ -33,14 +33,14 @@ Deno.test("Session: Basic session creation and usage", async (t) => {
 
     // Verify that the data was inserted correctly
     const user = await users.getById(userId);
-    assertEquals(user.name, "John Doe");
-    assertEquals(user.email, "john@example.com");
-    assertEquals(user.age, 30);
+    expect(user.name).toEqual("John Doe");
+    expect(user.email).toEqual("john@example.com");
+    expect(user.age).toEqual(30);
   });
 });
 
-Deno.test("Session: Transaction rollback on error", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Session: Transaction rollback on error", async () => {
+  await withDatabase("Session: Transaction rollback on error", async (db) => {
     // Create collections with schemas
     const users = await collection(db, "users", userSchema);
     const products = await collection(db, "products", productSchema);
@@ -53,7 +53,7 @@ Deno.test("Session: Transaction rollback on error", async (t) => {
     });
 
     // Test transaction rollback
-    await assertRejects(
+    await expect(
       async () => {
         await users.withSession(async () => {
           // This should succeed
@@ -73,30 +73,24 @@ Deno.test("Session: Transaction rollback on error", async (t) => {
           throw new Error("Intentional error to trigger rollback");
         });
       },
-      Error,
-      "Intentional error to trigger rollback",
-    );
+    ).rejects.toThrow("Intentional error to trigger rollback");
 
     // Verify that the product stock wasn't updated (transaction rolled back)
     const product = await products.getById(productId);
-    assertEquals(
+    expect(
       product.stock,
-      5,
-      "Transaction should have rolled back the stock update",
-    );
+    ).toEqual(5);
 
     // Verify that no user was added
     const user = await users.findOne({ name: "Jane Doe" });
-    assertEquals(
+    expect(
       user,
-      null,
-      "User should not exist after transaction rollback",
-    );
+    ).toEqual(null);
   });
 });
 
-Deno.test("Session: Nested transactions", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Session: Nested transactions", async () => {
+  await withDatabase("Session: Nested transactions", async (db) => {
     // Create collections with schemas
     const users = await collection(db, "users", userSchema);
     const products = await collection(db, "products", productSchema);
@@ -124,15 +118,15 @@ Deno.test("Session: Nested transactions", async (t) => {
 
     // Verify both operations succeeded
     const product = await products.getById(results.productId);
-    assertEquals(product.name, "Nested Test Product");
+    expect(product.name).toEqual("Nested Test Product");
 
     const user = await users.getById(results.userId);
-    assertEquals(user.name, "Nested User");
+    expect(user.name).toEqual("Nested User");
   });
 });
 
-Deno.test("Session: Multiple collections in the same transaction", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Session: Multiple collections in the same transaction", async () => {
+  await withDatabase("Session: Multiple collections in the same transaction", async (db) => {
     // Create collections with schemas
     const users = await collection(db, "users", userSchema);
     const products = await collection(db, "products", productSchema);
@@ -156,15 +150,15 @@ Deno.test("Session: Multiple collections in the same transaction", async (t) => 
 
     // Verify both operations succeeded
     const user = await users.getById(userId);
-    assertEquals(user.name, "Multi Collection User");
+    expect(user.name).toEqual("Multi Collection User");
 
     const product = await products.getById(productId);
-    assertEquals(product.name, "Multi Collection Product");
+    expect(product.name).toEqual("Multi Collection Product");
   });
 });
 
-Deno.test("Session: Direct session access via getSession", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Session: Direct session access via getSession", async () => {
+  await withDatabase("Session: Direct session access via getSession", async (db) => {
     // Create a collection with the schema
     const users = await collection(db, "users", userSchema);
 
@@ -179,7 +173,7 @@ Deno.test("Session: Direct session access via getSession", async (t) => {
 
       // Find the user and verify
       const user = await users.getById(userId);
-      assertEquals(user.name, "Direct Session User");
+      expect(user.name).toEqual("Direct Session User");
     });
   });
 });

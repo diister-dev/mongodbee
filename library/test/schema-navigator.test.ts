@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertExists } from "@std/assert";
+import { test, expect } from "vitest";
 import {
   type NavigationNode,
   SchemaNavigator,
@@ -48,7 +48,7 @@ class DepthLimitingVisitor implements SchemaVisitor {
   }
 }
 
-Deno.test("SchemaNavigator: Basic string schema navigation", () => {
+test("SchemaNavigator: Basic string schema navigation", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -56,15 +56,15 @@ Deno.test("SchemaNavigator: Basic string schema navigation", () => {
 
   navigator.navigate(schema, visitor);
 
-  assertEquals(visitor.nodes.length, 1);
-  assertEquals(visitor.nodes[0].schema.type, "string");
-  assertEquals(visitor.nodes[0].path, []);
-  assertEquals(visitor.nodes[0].depth, 0);
-  assertEquals(visitor.nodes[0].parent, undefined);
-  assertEquals(visitor.nodes[0].key, undefined);
+  expect(visitor.nodes.length).toEqual(1);
+  expect(visitor.nodes[0].schema.type).toEqual("string");
+  expect(visitor.nodes[0].path).toEqual([]);
+  expect(visitor.nodes[0].depth).toEqual(0);
+  expect(visitor.nodes[0].parent).toEqual(undefined);
+  expect(visitor.nodes[0].key).toEqual(undefined);
 });
 
-Deno.test("SchemaNavigator: Piped string schema navigation", () => {
+test("SchemaNavigator: Piped string schema navigation", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -73,12 +73,12 @@ Deno.test("SchemaNavigator: Piped string schema navigation", () => {
   navigator.navigate(schema, visitor);
 
   // Should visit the string schema and all validations in pipe
-  assert(visitor.nodes.length >= 3);
-  assertEquals(visitor.nodes[0].schema.type, "string");
-  assert(visitor.validations.length >= 2); // minLength and maxLength
+  expect(visitor.nodes.length >= 3).toBeTruthy();
+  expect(visitor.nodes[0].schema.type).toEqual("string");
+  expect(visitor.validations.length >= 2).toBeTruthy(); // minLength and maxLength
 });
 
-Deno.test("SchemaNavigator: Object schema navigation", () => {
+test("SchemaNavigator: Object schema navigation", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -91,30 +91,30 @@ Deno.test("SchemaNavigator: Object schema navigation", () => {
   navigator.navigate(schema, visitor);
 
   // Should visit object + 3 properties + email validation
-  assert(visitor.nodes.length >= 4);
-  assertEquals(visitor.containers.length, 1); // object is a container
+  expect(visitor.nodes.length >= 4).toBeTruthy();
+  expect(visitor.containers.length).toEqual(1); // object is a container
 
   // Find the object node
   const objectNode = visitor.nodes.find((n) => n.schema.type === "object");
-  assertExists(objectNode);
-  assertEquals(objectNode.path, []);
-  assertEquals(objectNode.depth, 0);
+  expect(objectNode).toBeDefined();
+  expect(objectNode!.path).toEqual([]);
+  expect(objectNode!.depth).toEqual(0);
 
   // Find property nodes
   const nameNode = visitor.nodes.find((n) => n.key === "name");
-  assertExists(nameNode);
-  assertEquals(nameNode.path, ["name"]);
-  assertEquals(nameNode.depth, 1);
-  assertEquals(nameNode.schema.type, "string");
+  expect(nameNode).toBeDefined();
+  expect(nameNode!.path).toEqual(["name"]);
+  expect(nameNode!.depth).toEqual(1);
+  expect(nameNode!.schema.type).toEqual("string");
 
   const ageNode = visitor.nodes.find((n) => n.key === "age");
-  assertExists(ageNode);
-  assertEquals(ageNode.path, ["age"]);
-  assertEquals(ageNode.depth, 1);
-  assertEquals(ageNode.schema.type, "number");
+  expect(ageNode).toBeDefined();
+  expect(ageNode!.path).toEqual(["age"]);
+  expect(ageNode!.depth).toEqual(1);
+  expect(ageNode!.schema.type).toEqual("number");
 });
 
-Deno.test("SchemaNavigator: Nested object schema navigation", () => {
+test("SchemaNavigator: Nested object schema navigation", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -134,22 +134,22 @@ Deno.test("SchemaNavigator: Nested object schema navigation", () => {
   navigator.navigate(schema, visitor);
 
   // Should have multiple container levels
-  assert(visitor.containers.length >= 4); // root object + user + profile + settings
+  expect(visitor.containers.length >= 4).toBeTruthy(); // root object + user + profile + settings
 
   // Find deeply nested name field
   const nameNode = visitor.nodes.find((n) => n.key === "name");
-  assertExists(nameNode);
-  assertEquals(nameNode.path, ["user", "profile", "name"]);
-  assertEquals(nameNode.depth, 3);
+  expect(nameNode).toBeDefined();
+  expect(nameNode!.path).toEqual(["user", "profile", "name"]);
+  expect(nameNode!.depth).toEqual(3);
 
   // Find optional bio field
   const bioNode = visitor.nodes.find((n) => n.key === "bio");
-  assertExists(bioNode);
-  assertEquals(bioNode.path, ["user", "profile", "bio"]);
-  assertEquals(bioNode.schema.type, "optional");
+  expect(bioNode).toBeDefined();
+  expect(bioNode!.path).toEqual(["user", "profile", "bio"]);
+  expect(bioNode!.schema.type).toEqual("optional");
 });
 
-Deno.test("SchemaNavigator: Array schema navigation", () => {
+test("SchemaNavigator: Array schema navigation", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -161,23 +161,23 @@ Deno.test("SchemaNavigator: Array schema navigation", () => {
   navigator.navigate(schema, visitor);
 
   // Should visit array + item object + properties
-  assert(visitor.nodes.length >= 4);
-  assertEquals(visitor.containers.length, 2); // array + object
+  expect(visitor.nodes.length >= 4).toBeTruthy();
+  expect(visitor.containers.length).toEqual(2); // array + object
 
   // Find array node
   const arrayNode = visitor.nodes.find((n) => n.schema.type === "array");
-  assertExists(arrayNode);
-  assertEquals(arrayNode.path, []);
-  assertEquals(arrayNode.depth, 0);
+  expect(arrayNode).toBeDefined();
+  expect(arrayNode!.path).toEqual([]);
+  expect(arrayNode!.depth).toEqual(0);
 
   // Find item object properties
   const idNode = visitor.nodes.find((n) => n.key === "id");
-  assertExists(idNode);
-  assertEquals(idNode.path, ["$[]", "id"]);
-  assertEquals(idNode.depth, 2);
+  expect(idNode).toBeDefined();
+  expect(idNode!.path).toEqual(["$[]", "id"]);
+  expect(idNode!.depth).toEqual(2);
 });
 
-Deno.test("SchemaNavigator: Union schema navigation", () => {
+test("SchemaNavigator: Union schema navigation", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -190,24 +190,24 @@ Deno.test("SchemaNavigator: Union schema navigation", () => {
   navigator.navigate(schema, visitor);
 
   // Should visit union + all options
-  assert(visitor.nodes.length >= 4);
-  assertEquals(visitor.containers.length, 2); // union + object
+  expect(visitor.nodes.length >= 4).toBeTruthy();
+  expect(visitor.containers.length).toEqual(2); // union + object
 
   // Find union node
   const unionNode = visitor.nodes.find((n) => n.schema.type === "union");
-  assertExists(unionNode);
-  assertEquals(unionNode.path, []);
+  expect(unionNode).toBeDefined();
+  expect(unionNode!.path).toEqual([]);
 
   // Find union options
   const stringOption = visitor.nodes.find((n) =>
     n.schema.type === "string" && n.key === 0
   );
-  assertExists(stringOption);
-  assertEquals(stringOption.path, ["$union[0]"]);
-  assertEquals(stringOption.depth, 1);
+  expect(stringOption).toBeDefined();
+  expect(stringOption!.path).toEqual(["$union[0]"]);
+  expect(stringOption!.depth).toEqual(1);
 });
 
-Deno.test("SchemaNavigator: Intersect schema navigation", () => {
+test("SchemaNavigator: Intersect schema navigation", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -219,18 +219,18 @@ Deno.test("SchemaNavigator: Intersect schema navigation", () => {
   navigator.navigate(schema, visitor);
 
   // Should visit intersect + both objects + properties
-  assert(visitor.nodes.length >= 5);
-  assertEquals(visitor.containers.length, 3); // intersect + 2 objects
+  expect(visitor.nodes.length >= 5).toBeTruthy();
+  expect(visitor.containers.length).toEqual(3); // intersect + 2 objects
 
   // Find intersect node
   const intersectNode = visitor.nodes.find((n) =>
     n.schema.type === "intersect"
   );
-  assertExists(intersectNode);
-  assertEquals(intersectNode.path, []);
+  expect(intersectNode).toBeDefined();
+  expect(intersectNode!.path).toEqual([]);
 });
 
-Deno.test("SchemaNavigator: Tuple schema navigation", () => {
+test("SchemaNavigator: Tuple schema navigation", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -243,22 +243,22 @@ Deno.test("SchemaNavigator: Tuple schema navigation", () => {
   navigator.navigate(schema, visitor);
 
   // Should visit tuple + all items
-  assertEquals(visitor.nodes.length, 4);
-  assertEquals(visitor.containers.length, 1); // tuple
+  expect(visitor.nodes.length).toEqual(4);
+  expect(visitor.containers.length).toEqual(1); // tuple
 
   // Find tuple items
   const firstItem = visitor.nodes.find((n) => n.key === 0);
-  assertExists(firstItem);
-  assertEquals(firstItem.path, ["0"]);
-  assertEquals(firstItem.schema.type, "string");
+  expect(firstItem).toBeDefined();
+  expect(firstItem!.path).toEqual(["0"]);
+  expect(firstItem!.schema.type).toEqual("string");
 
   const secondItem = visitor.nodes.find((n) => n.key === 1);
-  assertExists(secondItem);
-  assertEquals(secondItem.path, ["1"]);
-  assertEquals(secondItem.schema.type, "number");
+  expect(secondItem).toBeDefined();
+  expect(secondItem!.path).toEqual(["1"]);
+  expect(secondItem!.schema.type).toEqual("number");
 });
 
-Deno.test("SchemaNavigator: Record schema navigation", () => {
+test("SchemaNavigator: Record schema navigation", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -267,27 +267,27 @@ Deno.test("SchemaNavigator: Record schema navigation", () => {
   navigator.navigate(schema, visitor);
 
   // Should visit record + key schema + value schema
-  assertEquals(visitor.nodes.length, 3);
-  assertEquals(visitor.containers.length, 1); // record
+  expect(visitor.nodes.length).toEqual(3);
+  expect(visitor.containers.length).toEqual(1); // record
 
   // Find record node
   const recordNode = visitor.nodes.find((n) => n.schema.type === "record");
-  assertExists(recordNode);
-  assertEquals(recordNode.path, []);
+  expect(recordNode).toBeDefined();
+  expect(recordNode!.path).toEqual([]);
 
   // Find key and value schemas
   const keyNode = visitor.nodes.find((n) => n.key === "$key");
-  assertExists(keyNode);
-  assertEquals(keyNode.path, ["$key"]);
-  assertEquals(keyNode.schema.type, "string");
+  expect(keyNode).toBeDefined();
+  expect(keyNode!.path).toEqual(["$key"]);
+  expect(keyNode!.schema.type).toEqual("string");
 
   const valueNode = visitor.nodes.find((n) => n.key === "$value");
-  assertExists(valueNode);
-  assertEquals(valueNode.path, ["$value"]);
-  assertEquals(valueNode.schema.type, "number");
+  expect(valueNode).toBeDefined();
+  expect(valueNode!.path).toEqual(["$value"]);
+  expect(valueNode!.schema.type).toEqual("number");
 });
 
-Deno.test("SchemaNavigator: Optional and nullable schemas", () => {
+test("SchemaNavigator: Optional and nullable schemas", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -300,25 +300,25 @@ Deno.test("SchemaNavigator: Optional and nullable schemas", () => {
   navigator.navigate(schema, visitor);
 
   // Should visit object + 3 wrapper schemas + 3 inner schemas
-  assertEquals(visitor.nodes.length, 7);
+  expect(visitor.nodes.length).toEqual(7);
 
   // Find optional field
   const optionalNode = visitor.nodes.find((n) => n.key === "optional");
-  assertExists(optionalNode);
-  assertEquals(optionalNode.schema.type, "optional");
+  expect(optionalNode).toBeDefined();
+  expect(optionalNode!.schema.type).toEqual("optional");
 
   // Find nullable field
   const nullableNode = visitor.nodes.find((n) => n.key === "nullable");
-  assertExists(nullableNode);
-  assertEquals(nullableNode.schema.type, "nullable");
+  expect(nullableNode).toBeDefined();
+  expect(nullableNode!.schema.type).toEqual("nullable");
 
   // Find nullish field
   const nullishNode = visitor.nodes.find((n) => n.key === "nullish");
-  assertExists(nullishNode);
-  assertEquals(nullishNode.schema.type, "nullish");
+  expect(nullishNode).toBeDefined();
+  expect(nullishNode!.schema.type).toEqual("nullish");
 });
 
-Deno.test("SchemaNavigator: Depth limiting visitor", () => {
+test("SchemaNavigator: Depth limiting visitor", () => {
   const navigator = new SchemaNavigator();
   const visitor = new DepthLimitingVisitor(2);
 
@@ -334,15 +334,15 @@ Deno.test("SchemaNavigator: Depth limiting visitor", () => {
 
   // Should stop at depth 2, not visit level3
   const level3Node = visitor.nodes.find((n) => n.key === "level3");
-  assertEquals(level3Node, undefined);
+  expect(level3Node).toEqual(undefined);
 
   // Should visit up to level2
   const level2Node = visitor.nodes.find((n) => n.key === "level2");
-  assertExists(level2Node);
-  assertEquals(level2Node.depth, 2);
+  expect(level2Node).toBeDefined();
+  expect(level2Node!.depth).toEqual(2);
 });
 
-Deno.test("SchemaNavigator: Initial context override", () => {
+test("SchemaNavigator: Initial context override", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -354,13 +354,13 @@ Deno.test("SchemaNavigator: Initial context override", () => {
     key: "customKey",
   });
 
-  assertEquals(visitor.nodes.length, 1);
-  assertEquals(visitor.nodes[0].path, ["custom", "path"]);
-  assertEquals(visitor.nodes[0].depth, 5);
-  assertEquals(visitor.nodes[0].key, "customKey");
+  expect(visitor.nodes.length).toEqual(1);
+  expect(visitor.nodes[0].path).toEqual(["custom", "path"]);
+  expect(visitor.nodes[0].depth).toEqual(5);
+  expect(visitor.nodes[0].key).toEqual("customKey");
 });
 
-Deno.test("SchemaNavigator: Complex schema with all types", () => {
+test("SchemaNavigator: Complex schema with all types", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -397,26 +397,26 @@ Deno.test("SchemaNavigator: Complex schema with all types", () => {
   navigator.navigate(schema, visitor);
 
   // Should visit many nodes
-  assert(visitor.nodes.length > 10);
-  assert(visitor.containers.length > 3);
-  assert(visitor.validations.length > 0);
+  expect(visitor.nodes.length > 10).toBeTruthy();
+  expect(visitor.containers.length > 3).toBeTruthy();
+  expect(visitor.validations.length > 0).toBeTruthy();
 
   // Verify some specific nodes exist
   const nameNode = visitor.nodes.find((n) => n.key === "name");
-  assertExists(nameNode);
-  assertEquals(nameNode.path, ["name"]);
+  expect(nameNode).toBeDefined();
+  expect(nameNode!.path).toEqual(["name"]);
 
   const zipCodeNode = visitor.nodes.find((n) => n.key === "zipCode");
-  assertExists(zipCodeNode);
-  assertEquals(zipCodeNode.path, ["address", "zipCode"]);
-  assertEquals(zipCodeNode.depth, 2);
+  expect(zipCodeNode).toBeDefined();
+  expect(zipCodeNode!.path).toEqual(["address", "zipCode"]);
+  expect(zipCodeNode!.depth).toEqual(2);
 
   const statusNode = visitor.nodes.find((n) => n.key === "status");
-  assertExists(statusNode);
-  assertEquals(statusNode.schema.type, "union");
+  expect(statusNode).toBeDefined();
+  expect(statusNode!.schema.type).toEqual("union");
 });
 
-Deno.test("SchemaNavigator: Navigation node convenience accessors", () => {
+test("SchemaNavigator: Navigation node convenience accessors", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -429,23 +429,23 @@ Deno.test("SchemaNavigator: Navigation node convenience accessors", () => {
   navigator.navigate(schema, visitor);
 
   const valueNode = visitor.nodes.find((n) => n.key === "value");
-  assertExists(valueNode);
+  expect(valueNode).toBeDefined();
 
   // Test convenience accessors
-  assertEquals(valueNode.path, ["nested", "value"]);
-  assertEquals(valueNode.depth, 2);
-  assertEquals(valueNode.key, "value");
-  assertExists(valueNode.parent);
-  assertEquals(valueNode.parent.type, "object");
+  expect(valueNode!.path).toEqual(["nested", "value"]);
+  expect(valueNode!.depth).toEqual(2);
+  expect(valueNode!.key).toEqual("value");
+  expect(valueNode!.parent).toBeDefined();
+  expect(valueNode!.parent.type).toEqual("object");
 
   // Test that accessors return the same as context
-  assertEquals(valueNode.path, valueNode.context.path);
-  assertEquals(valueNode.depth, valueNode.context.depth);
-  assertEquals(valueNode.key, valueNode.context.key);
-  assertEquals(valueNode.parent, valueNode.context.parent);
+  expect(valueNode!.path).toEqual(valueNode!.context.path);
+  expect(valueNode!.depth).toEqual(valueNode!.context.depth);
+  expect(valueNode!.key).toEqual(valueNode!.context.key);
+  expect(valueNode!.parent).toEqual(valueNode!.context.parent);
 });
 
-Deno.test("SchemaNavigator: Visitor without optional methods", () => {
+test("SchemaNavigator: Visitor without optional methods", () => {
   const navigator = new SchemaNavigator();
 
   // Visitor with only required method
@@ -464,7 +464,7 @@ Deno.test("SchemaNavigator: Visitor without optional methods", () => {
   navigator.navigate(schema, basicVisitor);
 });
 
-Deno.test("SchemaNavigator: Early termination", () => {
+test("SchemaNavigator: Early termination", () => {
   const navigator = new SchemaNavigator();
   const visited: string[] = [];
 
@@ -486,5 +486,5 @@ Deno.test("SchemaNavigator: Early termination", () => {
   navigator.navigate(schema, terminatingVisitor);
 
   // Should have stopped early - visitor logic limits to 3 nodes
-  assert(visited.length <= 5); // Allow for some flexibility in implementation
+  expect(visited.length <= 5).toBeTruthy(); // Allow for some flexibility in implementation
 });

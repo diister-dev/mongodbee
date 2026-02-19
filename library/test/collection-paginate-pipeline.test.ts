@@ -2,14 +2,13 @@
  * Tests for paginate with pipeline support in simple collections (collection.ts)
  */
 
-import { afterEach, beforeEach, describe, it } from "jsr:@std/testing/bdd";
-import { expect } from "jsr:@std/expect";
+import { test, expect } from "vitest";
 import * as v from "../src/schema.ts";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
 
-Deno.test("Collection paginate with pipeline - addFields", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection paginate with pipeline - addFields", async () => {
+  await withDatabase("Collection paginate with pipeline - addFields", async (db) => {
     const UserSchema = {
       name: v.string(),
       age: v.number(),
@@ -37,17 +36,17 @@ Deno.test("Collection paginate with pipeline - addFields", async (t) => {
   });
 });
 
-Deno.test("Collection paginate with pipeline - self lookup", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection paginate with pipeline - self lookup", async () => {
+  await withDatabase("Collection paginate with pipeline - self lookup", async (db) => {
     // Insert test data with manager reference
     const ManagerSchema = {
       name: v.string(),
       age: v.number(),
       managerId: v.optional(v.string()),
     };
-    
+
     const employees = await collection(db, "employees", ManagerSchema);
-    
+
     const managerId = await employees.insertOne({ name: "Manager", age: 45 });
     await employees.insertOne({ name: "Employee1", age: 28, managerId: managerId.toString() });
     await employees.insertOne({ name: "Employee2", age: 32, managerId: managerId.toString() });
@@ -66,8 +65,8 @@ Deno.test("Collection paginate with pipeline - self lookup", async (t) => {
   });
 });
 
-Deno.test("Collection paginate with pipeline - externalLookup", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection paginate with pipeline - externalLookup", async () => {
+  await withDatabase("Collection paginate with pipeline - externalLookup", async (db) => {
     const UserSchema = {
       name: v.string(),
       age: v.number(),
@@ -102,15 +101,15 @@ Deno.test("Collection paginate with pipeline - externalLookup", async (t) => {
 
     expect(result.total).toBe(3);
     expect(result.data.length).toBe(3);
-    
+
     // All users should have their department lookup
     expect((result.data[0] as any).department).toBeDefined();
     expect((result.data[0] as any).departmentName).toBeDefined();
   });
 });
 
-Deno.test("Collection paginate with pipeline - project", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection paginate with pipeline - project", async () => {
+  await withDatabase("Collection paginate with pipeline - project", async (db) => {
     const UserSchema = {
       name: v.string(),
       age: v.number(),
@@ -131,16 +130,16 @@ Deno.test("Collection paginate with pipeline - project", async (t) => {
 
     expect(result.total).toBe(2);
     expect(result.data.length).toBe(2);
-    
+
     // First doc (Alice, age 30)
     expect((result.data[0] as any).isOld).toBe(true);
-    // Second doc (Bob, age 25)  
+    // Second doc (Bob, age 25)
     expect((result.data[1] as any).isOld).toBe(false);
   });
 });
 
-Deno.test("Collection paginate with pipeline - cursor pagination afterId", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection paginate with pipeline - cursor pagination afterId", async () => {
+  await withDatabase("Collection paginate with pipeline - cursor pagination afterId", async (db) => {
     const UserSchema = {
       name: v.string(),
       age: v.number(),
@@ -169,8 +168,8 @@ Deno.test("Collection paginate with pipeline - cursor pagination afterId", async
   });
 });
 
-Deno.test("Collection paginate with pipeline - cursor pagination beforeId", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection paginate with pipeline - cursor pagination beforeId", async () => {
+  await withDatabase("Collection paginate with pipeline - cursor pagination beforeId", async (db) => {
     const UserSchema = {
       name: v.string(),
       age: v.number(),
@@ -202,8 +201,8 @@ Deno.test("Collection paginate with pipeline - cursor pagination beforeId", asyn
   });
 });
 
-Deno.test("Collection paginate with pipeline - combined with MongoDB filter", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection paginate with pipeline - combined with MongoDB filter", async () => {
+  await withDatabase("Collection paginate with pipeline - combined with MongoDB filter", async (db) => {
     const UserSchema = {
       name: v.string(),
       age: v.number(),
@@ -228,8 +227,8 @@ Deno.test("Collection paginate with pipeline - combined with MongoDB filter", as
   });
 });
 
-Deno.test("Collection paginate with pipeline - prepare filter format", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection paginate with pipeline - prepare filter format", async () => {
+  await withDatabase("Collection paginate with pipeline - prepare filter format", async (db) => {
     const UserSchema = {
       name: v.string(),
       age: v.number(),
@@ -259,8 +258,8 @@ Deno.test("Collection paginate with pipeline - prepare filter format", async (t)
   });
 });
 
-Deno.test("Collection paginate - backwards compatibility without pipeline", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection paginate - backwards compatibility without pipeline", async () => {
+  await withDatabase("Collection paginate - backwards compatibility without pipeline", async (db) => {
     const UserSchema = {
       name: v.string(),
       age: v.number(),
@@ -285,8 +284,8 @@ Deno.test("Collection paginate - backwards compatibility without pipeline", asyn
   });
 });
 
-Deno.test("Collection paginate with pipeline - match stage", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection paginate with pipeline - match stage", async () => {
+  await withDatabase("Collection paginate with pipeline - match stage", async (db) => {
     const UserSchema = {
       name: v.string(),
       age: v.number(),
@@ -314,8 +313,8 @@ Deno.test("Collection paginate with pipeline - match stage", async (t) => {
   });
 });
 
-Deno.test("Collection paginate with pipeline - externalLookup with advanced options", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection paginate with pipeline - externalLookup with advanced options", async () => {
+  await withDatabase("Collection paginate with pipeline - externalLookup with advanced options", async (db) => {
     const UserSchema = {
       name: v.string(),
       age: v.number(),

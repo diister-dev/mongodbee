@@ -1,13 +1,12 @@
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertRejects } from "@std/assert";
+import { test, expect } from "vitest";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
-import assert from "node:assert";
 import { defineModel } from "../../src/multi-collection-model.ts";
 import { partial, removeField } from "../../src/sanitizer.ts";
 
-Deno.test("UpdateOne: Basic update test", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("UpdateOne: Basic update test", async () => {
+  await withDatabase("UpdateOne: Basic update test", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         user: {
@@ -36,16 +35,16 @@ Deno.test("UpdateOne: Basic update test", async (t) => {
     });
 
     // Update simple property
-    await collection.updateOne("user", userId, {
+    await collection.updateById("user", userId, {
       name: "John Smith",
     });
 
     // Verify update
     const updatedUser = await collection.findOne("user", { _id: userId });
-    assert(updatedUser !== null);
-    assertEquals(updatedUser.name, "John Smith");
-    assertEquals(updatedUser.mail, "john@example.com");
-    assertEquals(updatedUser.age, 30);
+    expect(updatedUser).not.toBeNull();
+    expect(updatedUser!.name).toEqual("John Smith");
+    expect(updatedUser!.mail).toEqual("john@example.com");
+    expect(updatedUser!.age).toEqual(30);
 
     // Insert a group with nested object
     const groupId = await collection.insertOne("group", {
@@ -58,21 +57,21 @@ Deno.test("UpdateOne: Basic update test", async (t) => {
     });
 
     // Update nested property
-    await collection.updateOne("group", groupId, {
+    await collection.updateById("group", groupId, {
       "metadata.type": "private",
     });
 
     // Verify nested update
     const updatedGroup = await collection.findOne("group", { _id: groupId });
-    assert(updatedGroup !== null);
-    assertEquals(updatedGroup.name, "Team A");
-    assertEquals(updatedGroup.metadata.createdAt, "2023-01-01");
-    assertEquals(updatedGroup.metadata.type, "private");
+    expect(updatedGroup).not.toBeNull();
+    expect(updatedGroup!.name).toEqual("Team A");
+    expect(updatedGroup!.metadata.createdAt).toEqual("2023-01-01");
+    expect(updatedGroup!.metadata.type).toEqual("private");
   });
 });
 
-Deno.test("UpdateOne: Array updates test", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("UpdateOne: Array updates test", async () => {
+  await withDatabase("UpdateOne: Array updates test", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         group: {
@@ -115,27 +114,27 @@ Deno.test("UpdateOne: Array updates test", async (t) => {
     });
 
     // Update array element
-    await collection.updateOne("group", groupId, {
+    await collection.updateById("group", groupId, {
       tags: ["important", "inactive"],
     });
 
     // Update nested object in array
-    await collection.updateOne("group", groupId, {
+    await collection.updateById("group", groupId, {
       "nestedData.0.value": "home",
     });
 
     // Verify array updates
     const updatedGroup = await collection.findOne("group", { _id: groupId });
-    assert(updatedGroup !== null);
-    assertEquals(updatedGroup.tags, ["important", "inactive"]);
-    assertEquals(updatedGroup.nestedData[0].value, "home");
-    assertEquals(updatedGroup.nestedData[0].key, "location");
-    assertEquals(updatedGroup.nestedData[1].key, "priority");
+    expect(updatedGroup).not.toBeNull();
+    expect(updatedGroup!.tags).toEqual(["important", "inactive"]);
+    expect(updatedGroup!.nestedData[0].value).toEqual("home");
+    expect(updatedGroup!.nestedData[0].key).toEqual("location");
+    expect(updatedGroup!.nestedData[1].key).toEqual("priority");
   });
 });
 
-Deno.test("UpdateOne: Non-existent document", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("UpdateOne: Non-existent document", async () => {
+  await withDatabase("UpdateOne: Non-existent document", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         user: {
@@ -148,20 +147,16 @@ Deno.test("UpdateOne: Non-existent document", async (t) => {
     const collection = await multiCollection(db, "test", testModel);
 
     // Try to update non-existent document
-    await assertRejects(
-      async () => {
-        await collection.updateOne("user", "user:nonexistent", {
-          name: "Updated Name",
-        });
-      },
-      Error,
-      "No element that match the filter to update",
-    );
+    await expect(
+      collection.updateById("user", "user:nonexistent", {
+        name: "Updated Name",
+      }),
+    ).rejects.toThrow("No element that match the filter to update");
   });
 });
 
-Deno.test("UpdateOne: Invalid id format test", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("UpdateOne: Invalid id format test", async () => {
+  await withDatabase("UpdateOne: Invalid id format test", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         user: {
@@ -180,27 +175,23 @@ Deno.test("UpdateOne: Invalid id format test", async (t) => {
     });
 
     // Try to update with wrong id format
-    await assertRejects(
-      async () => {
-        await collection.updateOne("user", "invalidformat", {
-          name: "John Smith",
-        });
-      },
-    );
+    await expect(
+      collection.updateById("user", "invalidformat", {
+        name: "John Smith",
+      }),
+    ).rejects.toThrow();
 
     // Try to update with id from wrong collection type
-    await assertRejects(
-      async () => {
-        await collection.updateOne("user", "group:abc123", {
-          name: "John Smith",
-        });
-      },
-    );
+    await expect(
+      collection.updateById("user", "group:abc123", {
+        name: "John Smith",
+      }),
+    ).rejects.toThrow();
   });
 });
 
-Deno.test("UpdateOne: Support optional object entry", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("UpdateOne: Support optional object entry", async () => {
+  await withDatabase("UpdateOne: Support optional object entry", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         user: {
@@ -223,7 +214,7 @@ Deno.test("UpdateOne: Support optional object entry", async (t) => {
     });
 
     // Update with optional field
-    await collection.updateOne("user", userId, {
+    await collection.updateById("user", userId, {
       address: {
         city: "New York",
         country: "USA",
@@ -232,16 +223,16 @@ Deno.test("UpdateOne: Support optional object entry", async (t) => {
 
     // Verify update
     const updatedUser = await collection.findOne("user", { _id: userId });
-    assert(updatedUser !== null);
-    assertEquals(updatedUser.name, "John");
-    assertEquals(updatedUser.age, 30);
-    assertEquals(updatedUser.address?.city, "New York");
-    assertEquals(updatedUser.address?.country, "USA");
+    expect(updatedUser).not.toBeNull();
+    expect(updatedUser!.name).toEqual("John");
+    expect(updatedUser!.age).toEqual(30);
+    expect(updatedUser!.address?.city).toEqual("New York");
+    expect(updatedUser!.address?.country).toEqual("USA");
   });
 });
 
-Deno.test("UpdateOne: Multiple updates at once", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("UpdateOne: Multiple updates at once", async () => {
+  await withDatabase("UpdateOne: Multiple updates at once", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         user: {
@@ -276,7 +267,7 @@ Deno.test("UpdateOne: Multiple updates at once", async (t) => {
     });
 
     // Update multiple fields at different levels in a single call
-    await collection.updateOne("user", userId, {
+    await collection.updateById("user", userId, {
       name: "Jane Doe",
       "profile.age": 28,
       "profile.address.city": "San Francisco",
@@ -285,19 +276,19 @@ Deno.test("UpdateOne: Multiple updates at once", async (t) => {
 
     // Verify all updates were applied
     const updatedUser = await collection.findOne("user", { _id: userId });
-    assert(updatedUser !== null);
-    assertEquals(updatedUser.name, "Jane Doe");
-    assertEquals(updatedUser.email, "john@example.com"); // unchanged
-    assertEquals(updatedUser.profile.age, 28);
-    assertEquals(updatedUser.profile.address.city, "San Francisco");
-    assertEquals(updatedUser.profile.address.country, "USA"); // unchanged
-    assertEquals(updatedUser.tags[0], "designer");
-    assertEquals(updatedUser.tags[1], "admin"); // unchanged
+    expect(updatedUser).not.toBeNull();
+    expect(updatedUser!.name).toEqual("Jane Doe");
+    expect(updatedUser!.email).toEqual("john@example.com"); // unchanged
+    expect(updatedUser!.profile.age).toEqual(28);
+    expect(updatedUser!.profile.address.city).toEqual("San Francisco");
+    expect(updatedUser!.profile.address.country).toEqual("USA"); // unchanged
+    expect(updatedUser!.tags[0]).toEqual("designer");
+    expect(updatedUser!.tags[1]).toEqual("admin"); // unchanged
   });
 });
 
-Deno.test("UpdateOne: Update Complex array", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("UpdateOne: Update Complex array", async () => {
+  await withDatabase("UpdateOne: Update Complex array", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         user: {
@@ -324,7 +315,7 @@ Deno.test("UpdateOne: Update Complex array", async (t) => {
     });
 
     // Update multiple fields at different levels in a single call
-    await collection.updateOne("user", userId, {
+    await collection.updateById("user", userId, {
       name: "Jane Doe",
       "tags.0.value": "super-admin",
       "tags.1.name": "state",
@@ -332,36 +323,36 @@ Deno.test("UpdateOne: Update Complex array", async (t) => {
 
     // Verify all updates were applied
     const updatedUser = await collection.findOne("user", { _id: userId });
-    assert(updatedUser !== null);
-    assertEquals(updatedUser.name, "Jane Doe");
-    assertEquals(updatedUser.email, "john@example.com"); // unchanged
-    assertEquals(updatedUser.tags[0].name, "role");
-    assertEquals(updatedUser.tags[0].value, "super-admin");
-    assertEquals(updatedUser.tags[1].name, "state");
-    assertEquals(updatedUser.tags[1].value, "active");
+    expect(updatedUser).not.toBeNull();
+    expect(updatedUser!.name).toEqual("Jane Doe");
+    expect(updatedUser!.email).toEqual("john@example.com"); // unchanged
+    expect(updatedUser!.tags[0].name).toEqual("role");
+    expect(updatedUser!.tags[0].value).toEqual("super-admin");
+    expect(updatedUser!.tags[1].name).toEqual("state");
+    expect(updatedUser!.tags[1].value).toEqual("active");
 
     // Change an entire array element
-    await collection.updateOne("user", userId, {
+    await collection.updateById("user", userId, {
       "tags.1": { name: "location", value: "USA" },
       "tags.2": { name: "extra", value: "new" },
     });
 
     // Verify the entire array element was changed
     const updatedUser2 = await collection.findOne("user", { _id: userId });
-    assert(updatedUser2 !== null);
-    assertEquals(updatedUser2.tags[0].name, "role");
-    assertEquals(updatedUser2.tags[0].value, "super-admin");
-    assertEquals(updatedUser2.tags[1].name, "location");
-    assertEquals(updatedUser2.tags[1].value, "USA");
-    assertEquals(updatedUser2.tags[2].name, "extra");
-    assertEquals(updatedUser2.tags[2].value, "new");
-    assertEquals(updatedUser2.name, "Jane Doe");
-    assertEquals(updatedUser.email, "john@example.com");
+    expect(updatedUser2).not.toBeNull();
+    expect(updatedUser2!.tags[0].name).toEqual("role");
+    expect(updatedUser2!.tags[0].value).toEqual("super-admin");
+    expect(updatedUser2!.tags[1].name).toEqual("location");
+    expect(updatedUser2!.tags[1].value).toEqual("USA");
+    expect(updatedUser2!.tags[2].name).toEqual("extra");
+    expect(updatedUser2!.tags[2].value).toEqual("new");
+    expect(updatedUser2!.name).toEqual("Jane Doe");
+    expect(updatedUser!.email).toEqual("john@example.com");
   });
 });
 
-Deno.test("UpdateOne: Remove optional field with removeField()", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("UpdateOne: Remove optional field with removeField()", async () => {
+  await withDatabase("UpdateOne: Remove optional field with removeField()", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         user: {
@@ -387,44 +378,44 @@ Deno.test("UpdateOne: Remove optional field with removeField()", async (t) => {
 
     // Verify initial state
     const initialUser = await collection.findOne("user", { _id: userId });
-    assert(initialUser !== null);
-    assertEquals(initialUser.phone, "123-456-7890");
-    assertEquals(initialUser.bio, "Software developer");
-    assertEquals(initialUser.age, 30);
+    expect(initialUser).not.toBeNull();
+    expect(initialUser!.phone).toEqual("123-456-7890");
+    expect(initialUser!.bio).toEqual("Software developer");
+    expect(initialUser!.age).toEqual(30);
 
     // Remove phone field using removeField()
-    await collection.updateOne("user", userId, {
+    await collection.updateById("user", userId, {
       phone: removeField(),
     });
 
     // Verify phone was removed
     const afterPhoneRemoval = await collection.findOne("user", { _id: userId });
-    assert(afterPhoneRemoval !== null);
-    assertEquals(afterPhoneRemoval.name, "John Doe");
-    assertEquals(afterPhoneRemoval.email, "john@example.com");
-    assertEquals(afterPhoneRemoval.phone, undefined);
-    assertEquals(afterPhoneRemoval.bio, "Software developer");
-    assertEquals(afterPhoneRemoval.age, 30);
+    expect(afterPhoneRemoval).not.toBeNull();
+    expect(afterPhoneRemoval!.name).toEqual("John Doe");
+    expect(afterPhoneRemoval!.email).toEqual("john@example.com");
+    expect(afterPhoneRemoval!.phone).toEqual(undefined);
+    expect(afterPhoneRemoval!.bio).toEqual("Software developer");
+    expect(afterPhoneRemoval!.age).toEqual(30);
 
     // Remove multiple fields at once
-    await collection.updateOne("user", userId, {
+    await collection.updateById("user", userId, {
       bio: removeField(),
       age: removeField(),
     });
 
     // Verify both fields were removed
     const afterMultipleRemoval = await collection.findOne("user", { _id: userId });
-    assert(afterMultipleRemoval !== null);
-    assertEquals(afterMultipleRemoval.name, "John Doe");
-    assertEquals(afterMultipleRemoval.email, "john@example.com");
-    assertEquals(afterMultipleRemoval.phone, undefined);
-    assertEquals(afterMultipleRemoval.bio, undefined);
-    assertEquals(afterMultipleRemoval.age, undefined);
+    expect(afterMultipleRemoval).not.toBeNull();
+    expect(afterMultipleRemoval!.name).toEqual("John Doe");
+    expect(afterMultipleRemoval!.email).toEqual("john@example.com");
+    expect(afterMultipleRemoval!.phone).toEqual(undefined);
+    expect(afterMultipleRemoval!.bio).toEqual(undefined);
+    expect(afterMultipleRemoval!.age).toEqual(undefined);
   });
 });
 
-Deno.test("UpdateOne: Mix update and remove fields", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("UpdateOne: Mix update and remove fields", async () => {
+  await withDatabase("UpdateOne: Mix update and remove fields", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         product: {
@@ -449,7 +440,7 @@ Deno.test("UpdateOne: Mix update and remove fields", async (t) => {
     });
 
     // Update some fields and remove others in a single operation
-    await collection.updateOne("product", productId, {
+    await collection.updateById("product", productId, {
       name: "Gaming Laptop",
       price: 1299.99,
       description: removeField(),
@@ -458,17 +449,17 @@ Deno.test("UpdateOne: Mix update and remove fields", async (t) => {
 
     // Verify mixed update/remove
     const updatedProduct = await collection.findOne("product", { _id: productId });
-    assert(updatedProduct !== null);
-    assertEquals(updatedProduct.name, "Gaming Laptop");
-    assertEquals(updatedProduct.price, 1299.99);
-    assertEquals(updatedProduct.description, undefined); // Removed
-    assertEquals(updatedProduct.stock, 50); // Unchanged
-    assertEquals(updatedProduct.category, "Gaming");
+    expect(updatedProduct).not.toBeNull();
+    expect(updatedProduct!.name).toEqual("Gaming Laptop");
+    expect(updatedProduct!.price).toEqual(1299.99);
+    expect(updatedProduct!.description).toEqual(undefined); // Removed
+    expect(updatedProduct!.stock).toEqual(50); // Unchanged
+    expect(updatedProduct!.category).toEqual("Gaming");
   });
 });
 
-Deno.test("UpdateOne: Remove field with removeField() vs undefined", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("UpdateOne: Remove field with removeField() vs undefined", async () => {
+  await withDatabase("UpdateOne: Remove field with removeField() vs undefined", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         user: {
@@ -489,22 +480,22 @@ Deno.test("UpdateOne: Remove field with removeField() vs undefined", async (t) =
     });
 
     // removeField() explicitly removes, undefined is ignored (field not touched)
-    await collection.updateOne("user", userId, {
+    await collection.updateById("user", userId, {
       email: removeField(), // Explicit removal - will be unset
       phone: undefined, // Ignored - field remains unchanged
     });
 
     // email should be removed, phone should remain unchanged
     const updatedUser = await collection.findOne("user", { _id: userId });
-    assert(updatedUser !== null);
-    assertEquals(updatedUser.name, "John");
-    assertEquals(updatedUser.email, undefined); // Removed by removeField()
-    assertEquals(updatedUser.phone, "123-456"); // Unchanged because undefined is ignored
+    expect(updatedUser).not.toBeNull();
+    expect(updatedUser!.name).toEqual("John");
+    expect(updatedUser!.email).toEqual(undefined); // Removed by removeField()
+    expect(updatedUser!.phone).toEqual("123-456"); // Unchanged because undefined is ignored
   });
 });
 
-Deno.test("UpdateOne: Remove nested field with removeField()", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("UpdateOne: Remove nested field with removeField()", async () => {
+  await withDatabase("UpdateOne: Remove nested field with removeField()", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         user: {
@@ -538,13 +529,13 @@ Deno.test("UpdateOne: Remove nested field with removeField()", async (t) => {
 
     // Verify initial state
     const initialUser = await collection.findOne("user", { _id: userId });
-    assert(initialUser !== null);
-    assertEquals(initialUser.settings?.theme, "dark");
-    assertEquals(initialUser.settings?.language, "en");
-    assertEquals(initialUser.settings?.notifications?.email, true);
+    expect(initialUser).not.toBeNull();
+    expect(initialUser!.settings?.theme).toEqual("dark");
+    expect(initialUser!.settings?.language).toEqual("en");
+    expect(initialUser!.settings?.notifications?.email).toEqual(true);
 
     // Remove nested field using removeField() with partial() for merge behavior
-    await collection.updateOne("user", userId, {
+    await collection.updateById("user", userId, {
       settings: partial({
         theme: removeField(),
         language: "fr", // Update this one
@@ -553,16 +544,16 @@ Deno.test("UpdateOne: Remove nested field with removeField()", async (t) => {
 
     // Verify nested removal
     const afterUpdate = await collection.findOne("user", { _id: userId });
-    assert(afterUpdate !== null);
-    assertEquals(afterUpdate.name, "John");
-    assertEquals(afterUpdate.settings?.theme, undefined); // Removed
-    assertEquals(afterUpdate.settings?.language, "fr"); // Updated
-    assertEquals(afterUpdate.settings?.notifications?.email, true); // Unchanged
+    expect(afterUpdate).not.toBeNull();
+    expect(afterUpdate!.name).toEqual("John");
+    expect(afterUpdate!.settings?.theme).toEqual(undefined); // Removed
+    expect(afterUpdate!.settings?.language).toEqual("fr"); // Updated
+    expect(afterUpdate!.settings?.notifications?.email).toEqual(true); // Unchanged
   });
 });
 
-Deno.test("UpdateOne: Remove deeply nested field with removeField()", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("UpdateOne: Remove deeply nested field with removeField()", async () => {
+  await withDatabase("UpdateOne: Remove deeply nested field with removeField()", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         user: {
@@ -595,7 +586,7 @@ Deno.test("UpdateOne: Remove deeply nested field with removeField()", async (t) 
     });
 
     // Remove deeply nested fields using partial() for merge behavior
-    await collection.updateOne("user", userId, {
+    await collection.updateById("user", userId, {
       profile: partial({
         social: partial({
           twitter: removeField(),
@@ -607,17 +598,17 @@ Deno.test("UpdateOne: Remove deeply nested field with removeField()", async (t) 
 
     // Verify deep removal
     const afterUpdate = await collection.findOne("user", { _id: userId });
-    assert(afterUpdate !== null);
-    assertEquals(afterUpdate.name, "John");
-    assertEquals(afterUpdate.profile?.bio, "Developer"); // Unchanged
-    assertEquals(afterUpdate.profile?.social?.twitter, undefined); // Removed
-    assertEquals(afterUpdate.profile?.social?.github, "john-updated"); // Updated
-    assertEquals(afterUpdate.profile?.social?.linkedin, undefined); // Removed
+    expect(afterUpdate).not.toBeNull();
+    expect(afterUpdate!.name).toEqual("John");
+    expect(afterUpdate!.profile?.bio).toEqual("Developer"); // Unchanged
+    expect(afterUpdate!.profile?.social?.twitter).toEqual(undefined); // Removed
+    expect(afterUpdate!.profile?.social?.github).toEqual("john-updated"); // Updated
+    expect(afterUpdate!.profile?.social?.linkedin).toEqual(undefined); // Removed
   });
 });
 
-Deno.test("UpdateOne: Remove entire nested object with removeField()", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("UpdateOne: Remove entire nested object with removeField()", async () => {
+  await withDatabase("UpdateOne: Remove entire nested object with removeField()", async (db) => {
     const testModel = defineModel("test", {
       schema: {
         user: {
@@ -648,7 +639,7 @@ Deno.test("UpdateOne: Remove entire nested object with removeField()", async (t)
     });
 
     // Remove entire nested object
-    await collection.updateOne("user", userId, {
+    await collection.updateById("user", userId, {
       metadata: removeField(), // Remove entire object
       preferences: {
         theme: "light", // Update nested field
@@ -657,9 +648,9 @@ Deno.test("UpdateOne: Remove entire nested object with removeField()", async (t)
 
     // Verify removal
     const afterUpdate = await collection.findOne("user", { _id: userId });
-    assert(afterUpdate !== null);
-    assertEquals(afterUpdate.name, "John");
-    assertEquals(afterUpdate.metadata, undefined); // Entire object removed
-    assertEquals(afterUpdate.preferences?.theme, "light"); // Updated
+    expect(afterUpdate).not.toBeNull();
+    expect(afterUpdate!.name).toEqual("John");
+    expect(afterUpdate!.metadata).toEqual(undefined); // Entire object removed
+    expect(afterUpdate!.preferences?.theme).toEqual("light"); // Updated
   });
 });

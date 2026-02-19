@@ -1,10 +1,10 @@
-import { assert } from "@std/assert";
+import { test, expect } from "vitest";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
 import * as v from "../src/schema.ts";
 
-Deno.test("nonEmpty validation for strings", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("nonEmpty validation for strings", async () => {
+  await withDatabase("nonEmpty validation for strings", async (db) => {
     const schema = {
       name: v.pipe(v.string(), v.nonEmpty("Name cannot be empty")),
       description: v.string(),
@@ -17,7 +17,7 @@ Deno.test("nonEmpty validation for strings", async (t) => {
       name: "John",
       description: "A valid user",
     });
-    assert(userId, "Should insert valid document");
+    expect(userId).toBeTruthy();
 
     // Test empty string - should be rejected by MongoDB validator
     try {
@@ -25,20 +25,20 @@ Deno.test("nonEmpty validation for strings", async (t) => {
         name: "",
         description: "Invalid user",
       });
-      assert(false, "Should have failed validation for empty string");
+      expect(false).toBeTruthy();
     } catch (error) {
       // Expected to fail due to MongoDB validator
-      assert(error, "Should throw validation error");
+      expect(error).toBeTruthy();
     }
 
     // Test that we can retrieve the valid document
     const user = await users.getById(userId);
-    assert(user.name === "John", "Should retrieve the valid user");
+    expect(user.name === "John").toBeTruthy();
   });
 });
 
-Deno.test("nonEmpty validation for arrays", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("nonEmpty validation for arrays", async () => {
+  await withDatabase("nonEmpty validation for arrays", async (db) => {
     const schema = {
       tags: v.pipe(v.array(v.string()), v.nonEmpty("Tags cannot be empty")),
       optionalTags: v.array(v.string()),
@@ -51,7 +51,7 @@ Deno.test("nonEmpty validation for arrays", async (t) => {
       tags: ["javascript", "mongodb"],
       optionalTags: [],
     });
-    assert(docId, "Should insert valid document");
+    expect(docId).toBeTruthy();
 
     // Test empty array - should be rejected by MongoDB validator
     try {
@@ -59,21 +59,21 @@ Deno.test("nonEmpty validation for arrays", async (t) => {
         tags: [],
         optionalTags: ["optional"],
       });
-      assert(false, "Should have failed validation for empty array");
+      expect(false).toBeTruthy();
     } catch (error) {
       // Expected to fail due to MongoDB validator
-      assert(error, "Should throw validation error");
+      expect(error).toBeTruthy();
     }
 
     // Test that we can retrieve the valid document
     const doc = await documents.getById(docId);
-    assert(doc.tags.length === 2, "Should retrieve the valid document");
-    assert(doc.tags.includes("javascript"), "Should have javascript tag");
+    expect(doc.tags.length === 2).toBeTruthy();
+    expect(doc.tags.includes("javascript")).toBeTruthy();
   });
 });
 
-Deno.test("nonEmpty with other validations", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("nonEmpty with other validations", async () => {
+  await withDatabase("nonEmpty with other validations", async (db) => {
     const schema = {
       title: v.pipe(
         v.string(),
@@ -95,7 +95,7 @@ Deno.test("nonEmpty with other validations", async (t) => {
       title: "Valid Article Title",
       keywords: ["tech", "javascript"],
     });
-    assert(articleId, "Should insert valid document");
+    expect(articleId).toBeTruthy();
 
     // Test empty title
     try {
@@ -103,9 +103,9 @@ Deno.test("nonEmpty with other validations", async (t) => {
         title: "",
         keywords: ["tech"],
       });
-      assert(false, "Should have failed for empty title");
+      expect(false).toBeTruthy();
     } catch (error) {
-      assert(error, "Should throw validation error for empty title");
+      expect(error).toBeTruthy();
     }
 
     // Test title too short (should pass nonEmpty but fail minLength)
@@ -114,9 +114,9 @@ Deno.test("nonEmpty with other validations", async (t) => {
         title: "Hi", // 2 characters, fails minLength(3)
         keywords: ["tech"],
       });
-      assert(false, "Should have failed for title too short");
+      expect(false).toBeTruthy();
     } catch (error) {
-      assert(error, "Should throw validation error for short title");
+      expect(error).toBeTruthy();
     }
 
     // Test empty keywords array
@@ -125,17 +125,16 @@ Deno.test("nonEmpty with other validations", async (t) => {
         title: "Valid Title",
         keywords: [],
       });
-      assert(false, "Should have failed for empty keywords");
+      expect(false).toBeTruthy();
     } catch (error) {
-      assert(error, "Should throw validation error for empty keywords");
+      expect(error).toBeTruthy();
     }
 
     // Verify the valid document
     const article = await articles.getById(articleId);
-    assert(
+    expect(
       article.title === "Valid Article Title",
-      "Should have correct title",
-    );
-    assert(article.keywords.length === 2, "Should have 2 keywords");
+    ).toBeTruthy();
+    expect(article.keywords.length === 2).toBeTruthy();
   });
 });

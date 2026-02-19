@@ -1,13 +1,13 @@
 import * as v from "../src/schema.ts";
-import { assertEquals, assertExists } from "@std/assert";
+import { test, expect } from "vitest";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { withIndex } from "../src/indexes.ts";
 import { withDatabase } from "./+shared.ts";
 import { defineModel } from "../src/multi-collection-model.ts";
 
-Deno.test("applyIndexes - skip recreate when index spec and options identical", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("applyIndexes - skip recreate when index spec and options identical", async () => {
+  await withDatabase("applyIndexes - skip recreate when index spec and options identical", async (db) => {
     const schema1 = {
       username: withIndex(v.string(), {
         unique: true,
@@ -21,7 +21,7 @@ Deno.test("applyIndexes - skip recreate when index spec and options identical", 
     const idx = indexesBefore.find((i: { key?: Record<string, number> }) =>
       i.key && i.key.username === 1
     );
-    assertExists(idx);
+    expect(idx).toBeDefined();
 
     // Re-init collection with identical schema
     const coll2 = await collection(db, "users", schema1, { schemaManagement: "auto" });
@@ -29,20 +29,19 @@ Deno.test("applyIndexes - skip recreate when index spec and options identical", 
     const idxAfter = indexesAfter.find((i: { key?: Record<string, number> }) =>
       i.key && i.key.username === 1
     );
-    assertExists(idxAfter);
+    expect(idxAfter).toBeDefined();
 
     // Ensure the index wasn't changed: same name and same unique flag and collation
-    assertEquals(idx!.name, idxAfter!.name);
-    assertEquals(!!idx!.unique, !!idxAfter!.unique);
-    assertEquals(
+    expect(idx!.name).toEqual(idxAfter!.name);
+    expect(!!idx!.unique).toEqual(!!idxAfter!.unique);
+    expect(
       JSON.stringify(idx!.collation || {}),
-      JSON.stringify(idxAfter!.collation || {}),
-    );
+    ).toEqual(JSON.stringify(idxAfter!.collation || {}));
   });
 });
 
-Deno.test("applyIndexes - recreate index when options change", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("applyIndexes - recreate index when options change", async () => {
+  await withDatabase("applyIndexes - recreate index when options change", async (db) => {
     const schemaA = {
       name: withIndex(v.string(), {
         unique: true,
@@ -62,27 +61,27 @@ Deno.test("applyIndexes - recreate index when options change", async (t) => {
     const before = (await cA.collection.listIndexes().toArray()).find((
       i: { key?: Record<string, number> },
     ) => i.key && i.key.name === 1)!;
-    assertExists(before);
+    expect(before).toBeDefined();
 
     // Re-init with modified options
     const cB = await collection(db, "people", schemaB, { schemaManagement: "auto" });
     const after = (await cB.collection.listIndexes().toArray()).find((
       i: { key?: Record<string, number> },
     ) => i.key && i.key.name === 1)!;
-    assertExists(after);
+    expect(after).toBeDefined();
 
     // Collation should have been updated (compare important fields only)
     const beforeColl = before.collation as Record<string, unknown> | undefined;
     const afterColl = after.collation as Record<string, unknown> | undefined;
-    assertEquals(beforeColl?.locale, "en");
-    assertEquals(beforeColl?.strength, 2);
-    assertEquals(afterColl?.locale, "fr");
-    assertEquals(afterColl?.strength, 2);
+    expect(beforeColl?.locale).toEqual("en");
+    expect(beforeColl?.strength).toEqual(2);
+    expect(afterColl?.locale).toEqual("fr");
+    expect(afterColl?.strength).toEqual(2);
   });
 });
 
-Deno.test("multiCollection - index is created with partialFilterExpression scoped by type", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("multiCollection - index is created with partialFilterExpression scoped by type", async () => {
+  await withDatabase("multiCollection - index is created with partialFilterExpression scoped by type", async (db) => {
     const schema = {
       product: {
         sku: withIndex(v.string(), { unique: true }),
@@ -109,8 +108,8 @@ Deno.test("multiCollection - index is created with partialFilterExpression scope
       i: { key?: Record<string, number>; partialFilterExpression?: unknown },
     ) => i.key && i.key.slug === 1);
 
-    assertExists(skuIndex);
-    assertExists(slugIndex);
+    expect(skuIndex).toBeDefined();
+    expect(slugIndex).toBeDefined();
 
     // partialFilterExpression should include _type eq product / category
     const skuPFE = skuIndex!.partialFilterExpression as
@@ -119,13 +118,13 @@ Deno.test("multiCollection - index is created with partialFilterExpression scope
     const slugPFE = slugIndex!.partialFilterExpression as
       | Record<string, unknown>
       | undefined;
-    assertEquals((skuPFE?._type as Record<string, unknown>)?.$eq, "product");
-    assertEquals((slugPFE?._type as Record<string, unknown>)?.$eq, "category");
+    expect((skuPFE?._type as Record<string, unknown>)?.$eq).toEqual("product");
+    expect((slugPFE?._type as Record<string, unknown>)?.$eq).toEqual("category");
   });
 });
 
-Deno.test("applyIndexes - schema delta: adding an index creates it; removing from schema drops existing index", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("applyIndexes - schema delta: adding an index creates it; removing from schema drops existing index", async () => {
+  await withDatabase("applyIndexes - schema delta: adding an index creates it; removing from schema drops existing index", async (db) => {
     const schemaA = {
       a: withIndex(v.string(), { unique: true }),
       b: v.number(),
@@ -137,7 +136,7 @@ Deno.test("applyIndexes - schema delta: adding an index creates it; removing fro
     const aIdx = idxs.find((i: { key?: Record<string, number> }) =>
       i.key && i.key.a === 1
     );
-    assertExists(aIdx);
+    expect(aIdx).toBeDefined();
 
     // update schema: remove index on `a`, add index on `c`
     const schemaB = {
@@ -157,7 +156,7 @@ Deno.test("applyIndexes - schema delta: adding an index creates it; removing fro
     );
 
     // Expect old index to be gone and new index to exist
-    assertEquals(aIdxAfter, undefined); // Old index should be dropped
-    assertExists(cIdx); // New index should exist
+    expect(aIdxAfter).toEqual(undefined); // Old index should be dropped
+    expect(cIdx).toBeDefined(); // New index should exist
   });
 });

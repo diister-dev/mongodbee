@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { test, expect } from "vitest";
 import {
   checkTransactionEnabled,
   createSessionContext,
@@ -7,72 +7,72 @@ import {
 import { withDatabase } from "./+shared.ts";
 import type { ClientSession as _ClientSession } from "../mod.ts";
 
-Deno.test("checkTransactionEnabled: Should return true when transactions are supported", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("checkTransactionEnabled: Should return true when transactions are supported", async () => {
+  await withDatabase("checkTransactionEnabled: Should return true when transactions are supported", async (db) => {
     const client = db.client;
     const result = await checkTransactionEnabled(client, db);
 
     // Most test environments support transactions
-    assert(typeof result === "boolean");
+    expect(typeof result === "boolean").toBeTruthy();
 
     // If transactions are supported, result should be true
     if (result) {
-      assertEquals(result, true);
+      expect(result).toEqual(true);
     }
   });
 });
 
-Deno.test("checkTransactionEnabled: Should handle transaction failures gracefully", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("checkTransactionEnabled: Should handle transaction failures gracefully", async () => {
+  await withDatabase("checkTransactionEnabled: Should handle transaction failures gracefully", async (db) => {
     const client = db.client;
 
     // Test with a potentially problematic operation
     const result = await checkTransactionEnabled(client, db);
 
     // Should always return a boolean, never throw
-    assert(typeof result === "boolean");
+    expect(typeof result === "boolean").toBeTruthy();
   });
 });
 
-Deno.test("getSessionContext: Should create and cache session context", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("getSessionContext: Should create and cache session context", async () => {
+  await withDatabase("getSessionContext: Should create and cache session context", async (db) => {
     const client = db.client;
 
     // First call should create context
     const context1 = await getSessionContext(client);
-    assert(context1);
-    assertEquals(typeof context1.getSession, "function");
-    assertEquals(typeof context1.withSession, "function");
+    expect(context1).toBeTruthy();
+    expect(typeof context1.getSession).toEqual("function");
+    expect(typeof context1.withSession).toEqual("function");
 
     // Second call should return cached context
     const context2 = await getSessionContext(client);
-    assertEquals(context1, context2);
+    expect(context1).toEqual(context2);
   });
 });
 
-Deno.test("createSessionContext: Should create valid session context", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("createSessionContext: Should create valid session context", async () => {
+  await withDatabase("createSessionContext: Should create valid session context", async (db) => {
     const client = db.client;
 
     const context = await createSessionContext(client);
-    assert(context);
-    assertEquals(typeof context.getSession, "function");
-    assertEquals(typeof context.withSession, "function");
+    expect(context).toBeTruthy();
+    expect(typeof context.getSession).toEqual("function");
+    expect(typeof context.withSession).toEqual("function");
   });
 });
 
-Deno.test("SessionContext: getSession should return undefined when no session active", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("SessionContext: getSession should return undefined when no session active", async () => {
+  await withDatabase("SessionContext: getSession should return undefined when no session active", async (db) => {
     const client = db.client;
     const { getSession } = await getSessionContext(client);
 
     // No active session initially
-    assertEquals(getSession(), undefined);
+    expect(getSession()).toEqual(undefined);
   });
 });
 
-Deno.test("SessionContext: withSession should create new session when none active", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("SessionContext: withSession should create new session when none active", async () => {
+  await withDatabase("SessionContext: withSession should create new session when none active", async (db) => {
     const client = db.client;
     const { withSession, getSession } = await getSessionContext(client);
 
@@ -83,25 +83,25 @@ Deno.test("SessionContext: withSession should create new session when none activ
 
       // Should have a session within the callback
       const currentSession = getSession();
-      assert(currentSession !== undefined);
+      expect(currentSession !== undefined).toBeTruthy();
 
       return Promise.resolve("test-result");
     });
 
-    assertEquals(result, "test-result");
+    expect(result).toEqual("test-result");
 
     // Session should be ended after callback
-    assertEquals(getSession(), undefined);
+    expect(getSession()).toEqual(undefined);
 
     // Session should have been passed to callback
     if (sessionInCallback) {
-      assert(sessionInCallback);
+      expect(sessionInCallback).toBeTruthy();
     }
   });
 });
 
-Deno.test("SessionContext: withSession should reuse existing session", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("SessionContext: withSession should reuse existing session", async () => {
+  await withDatabase("SessionContext: withSession should reuse existing session", async (db) => {
     const client = db.client;
     const { withSession } = await getSessionContext(client);
 
@@ -114,42 +114,40 @@ Deno.test("SessionContext: withSession should reuse existing session", async (t)
 
         // Both should be the same session or both undefined
         if (outerSessionId && innerSessionId) {
-          assertEquals(outerSessionId, innerSessionId);
+          expect(outerSessionId).toEqual(innerSessionId);
         } else {
-          assertEquals(outerSession, innerSession);
+          expect(outerSession).toEqual(innerSession);
         }
 
         return Promise.resolve("inner-result");
       });
 
-      assertEquals(innerResult, "inner-result");
+      expect(innerResult).toEqual("inner-result");
       return "outer-result";
     });
 
-    assertEquals(outerResult, "outer-result");
+    expect(outerResult).toEqual("outer-result");
   });
 });
 
-Deno.test("SessionContext: withSession should handle errors and abort transaction", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("SessionContext: withSession should handle errors and abort transaction", async () => {
+  await withDatabase("SessionContext: withSession should handle errors and abort transaction", async (db) => {
     const client = db.client;
     const { withSession } = await getSessionContext(client);
 
     // Test that errors are properly handled
-    await assertRejects(
+    await expect(
       async () => {
         await withSession((_session) => {
           throw new Error("Test error");
         });
       },
-      Error,
-      "Test error",
-    );
+    ).rejects.toThrow("Test error");
   });
 });
 
-Deno.test("SessionContext: withSession should work with collections", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("SessionContext: withSession should work with collections", async () => {
+  await withDatabase("SessionContext: withSession should work with collections", async (db) => {
     const client = db.client;
     const { withSession } = await getSessionContext(client);
 
@@ -171,14 +169,14 @@ Deno.test("SessionContext: withSession should work with collections", async (t) 
       return foundDoc;
     });
 
-    assert(result);
-    assertEquals(result.name, "test");
-    assertEquals(result.value, 42);
+    expect(result).toBeTruthy();
+    expect(result.name).toEqual("test");
+    expect(result.value).toEqual(42);
   });
 });
 
-Deno.test("SessionContext: withSession should handle commit failures", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("SessionContext: withSession should handle commit failures", async () => {
+  await withDatabase("SessionContext: withSession should handle commit failures", async (db) => {
     const client = db.client;
     const { withSession } = await getSessionContext(client);
 
@@ -202,12 +200,12 @@ Deno.test("SessionContext: withSession should handle commit failures", async (t)
       return docs.length;
     });
 
-    assertEquals(result, 100);
+    expect(result).toEqual(100);
   });
 });
 
-Deno.test("SessionContext: Multiple clients should have separate contexts", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("SessionContext: Multiple clients should have separate contexts", async () => {
+  await withDatabase("SessionContext: Multiple clients should have separate contexts", async (db) => {
     const client1 = db.client;
     // We can't easily create a second client in tests, so we'll test the caching behavior
 
@@ -215,12 +213,12 @@ Deno.test("SessionContext: Multiple clients should have separate contexts", asyn
     const context2 = await getSessionContext(client1);
 
     // Same client should return same context
-    assertEquals(context1, context2);
+    expect(context1).toEqual(context2);
   });
 });
 
-Deno.test("SessionContext: withSession should handle async operations", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("SessionContext: withSession should handle async operations", async () => {
+  await withDatabase("SessionContext: withSession should handle async operations", async (db) => {
     const client = db.client;
     const { withSession } = await getSessionContext(client);
 
@@ -241,12 +239,12 @@ Deno.test("SessionContext: withSession should handle async operations", async (t
       return "async-complete";
     });
 
-    assertEquals(result, "async-complete");
+    expect(result).toEqual("async-complete");
   });
 });
 
-Deno.test("SessionContext: withSession should handle concurrent operations", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("SessionContext: withSession should handle concurrent operations", async () => {
+  await withDatabase("SessionContext: withSession should handle concurrent operations", async (db) => {
     const client = db.client;
     const { withSession } = await getSessionContext(client);
 
@@ -275,15 +273,15 @@ Deno.test("SessionContext: withSession should handle concurrent operations", asy
 
     const results = await Promise.all(promises);
 
-    assertEquals(results.length, 3);
+    expect(results.length).toEqual(3);
     results.forEach((result, i) => {
-      assertEquals(result, `operation-${i}`);
+      expect(result).toEqual(`operation-${i}`);
     });
   });
 });
 
-Deno.test("SessionContext: Should display warning when transactions disabled", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("SessionContext: Should display warning when transactions disabled", async () => {
+  await withDatabase("SessionContext: Should display warning when transactions disabled", async (db) => {
     const client = db.client;
 
     // Mock console.warn to capture warnings
@@ -320,8 +318,8 @@ Deno.test("SessionContext: Should display warning when transactions disabled", a
 
       // If transactions are disabled, warning should have been shown once
       if (firstWarning) {
-        assert(firstMessage.includes("MongoDB transactions are not enabled"));
-        assertEquals(warningCalled, false); // Should not warn again
+        expect(firstMessage.includes("MongoDB transactions are not enabled")).toBeTruthy();
+        expect(warningCalled).toEqual(false); // Should not warn again
       }
     } finally {
       console.warn = originalWarn;
@@ -329,8 +327,8 @@ Deno.test("SessionContext: Should display warning when transactions disabled", a
   });
 });
 
-Deno.test("SessionContext: Should handle transaction check edge cases", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("SessionContext: Should handle transaction check edge cases", async () => {
+  await withDatabase("SessionContext: Should handle transaction check edge cases", async (db) => {
     const client = db.client;
 
     // Test multiple transaction checks
@@ -338,8 +336,8 @@ Deno.test("SessionContext: Should handle transaction check edge cases", async (t
     const result2 = await checkTransactionEnabled(client, db);
 
     // Results should be consistent
-    assertEquals(result1, result2);
-    assert(typeof result1 === "boolean");
-    assert(typeof result2 === "boolean");
+    expect(result1).toEqual(result2);
+    expect(typeof result1 === "boolean").toBeTruthy();
+    expect(typeof result2 === "boolean").toBeTruthy();
   });
 });

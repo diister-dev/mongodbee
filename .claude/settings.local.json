@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(deno check:*)",
+      "Bash(find:*)",
+      "WebFetch(domain:jsr.io)"
+    ]
+  }
+}

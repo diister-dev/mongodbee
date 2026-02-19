@@ -1,5 +1,5 @@
 import * as v from "../../src/schema.ts";
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { test, expect } from "vitest";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import { defineModel } from "../../src/multi-collection-model.ts";
@@ -38,12 +38,8 @@ const testModel = defineModel("test", {
   },
 });
 
-Deno.test({
-  name: "Write Conflict: Concurrent updateOne on same document with Promise.all",
-  sanitizeOps: false,  // Disable sanitizer due to expected timer leaks from concurrent retries
-  sanitizeResources: false,
-  fn: async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Write Conflict: Concurrent updateOne on same document with Promise.all", async () => {
+  await withDatabase("Write Conflict: Concurrent updateOne on same document with Promise.all", async (db) => {
     const store = await multiCollection(db, "store", testModel);
 
     // Insert a counter document
@@ -57,14 +53,14 @@ Deno.test({
     const updatePromises = Array.from({ length: 5 }, (_, i) =>
       store.withSession(async () => {
         const current = await store.findOne("counter", { _id: counterId });
-        assert(current !== null);
+        expect(current).not.toBeNull();
 
         // Simulate some processing time
         await new Promise((resolve) => setTimeout(resolve, Math.random() * 50));
 
         // Update the counter
-        await store.updateOne("counter", counterId, {
-          value: current.value + 1,
+        await store.updateById("counter", counterId, {
+          value: current!.value + 1,
         });
 
         return i;
@@ -78,8 +74,8 @@ Deno.test({
 
       // If all updates succeed, verify final state
       const finalCounter = await store.findOne("counter", { _id: counterId });
-      assert(finalCounter !== null);
-      console.log(`Final counter value: ${finalCounter.value} (expected: 5)`);
+      expect(finalCounter).not.toBeNull();
+      console.log(`Final counter value: ${finalCounter!.value} (expected: 5)`);
 
       // Note: Due to race conditions, the final value might not be 5
       // This is expected without proper conflict resolution
@@ -92,20 +88,15 @@ Deno.test({
         const isWriteConflict = error.message.includes("Write conflict") ||
                                error.message.includes("plan execution");
         if (isWriteConflict) {
-          console.log("✓ Write conflict error detected as expected");
+          console.log("Write conflict error detected as expected");
         }
       }
     }
   });
-},
 });
 
-Deno.test({
-  name: "Write Conflict: Sequential vs concurrent updates comparison",
-  sanitizeOps: false,  // Disable sanitizer due to expected timer leaks from concurrent retries
-  sanitizeResources: false,
-  fn: async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Write Conflict: Sequential vs concurrent updates comparison", async () => {
+  await withDatabase("Write Conflict: Sequential vs concurrent updates comparison", async (db) => {
     const store = await multiCollection(db, "store", testModel);
 
     // Test 1: Sequential updates (should work fine)
@@ -117,16 +108,16 @@ Deno.test({
     for (let i = 0; i < 5; i++) {
       await store.withSession(async () => {
         const current = await store.findOne("counter", { _id: counterId1 });
-        assert(current !== null);
-        await store.updateOne("counter", counterId1, {
-          value: current.value + 1,
+        expect(current).not.toBeNull();
+        await store.updateById("counter", counterId1, {
+          value: current!.value + 1,
         });
       });
     }
 
     const sequentialResult = await store.findOne("counter", { _id: counterId1 });
-    assert(sequentialResult !== null);
-    assertEquals(sequentialResult.value, 5, "Sequential updates should all succeed");
+    expect(sequentialResult).not.toBeNull();
+    expect(sequentialResult!.value).toEqual(5);
 
     // Test 2: Concurrent updates (may cause conflicts)
     const counterId2 = await store.insertOne("counter", {
@@ -137,9 +128,9 @@ Deno.test({
     const concurrentUpdates = Array.from({ length: 5 }, () =>
       store.withSession(async () => {
         const current = await store.findOne("counter", { _id: counterId2 });
-        assert(current !== null);
-        await store.updateOne("counter", counterId2, {
-          value: current.value + 1,
+        expect(current).not.toBeNull();
+        await store.updateById("counter", counterId2, {
+          value: current!.value + 1,
         });
       })
     );
@@ -147,68 +138,62 @@ Deno.test({
     try {
       await Promise.all(concurrentUpdates);
       const concurrentResult = await store.findOne("counter", { _id: counterId2 });
-      assert(concurrentResult !== null);
-      console.log(`Concurrent result: ${concurrentResult.value} (may differ from 5)`);
+      expect(concurrentResult).not.toBeNull();
+      console.log(`Concurrent result: ${concurrentResult!.value} (may differ from 5)`);
     } catch (error) {
       console.log("Concurrent updates failed with:", error instanceof Error ? error.message : error);
     }
   });
-},
 });
 
-Deno.test({
-  name: "Write Conflict: Multiple updateOne in same withSession (should work)",
-  sanitizeOps: false,  // Disable sanitizer due to expected timer leaks from concurrent retries
-  sanitizeResources: false,
-  fn: async (t) => {
-    await withDatabase(t.name, async (db) => {
-      const store = await multiCollection(db, "store", testModel);
+test("Write Conflict: Multiple updateOne in same withSession (should work)", async () => {
+  await withDatabase("Write Conflict: Multiple updateOne in same withSession (should work)", async (db) => {
+    const store = await multiCollection(db, "store", testModel);
 
-      // Insert test data
-      const userId = await store.insertOne("user", {
-        name: "Alice",
-        email: "alice@example.com",
-        balance: 100,
-      });
-
-      const productId = await store.insertOne("product", {
-        name: "Widget",
-        price: 50,
-        stock: 10,
-      });
-
-      // Multiple updates to DIFFERENT documents in the same session should work fine
-      await store.withSession(async () => {
-        // Update user
-        await store.updateOne("user", userId, {
-          balance: 50,
-        });
-
-        // Update product
-        await store.updateOne("product", productId, {
-          stock: 9,
-        });
-
-        // Another update to user (same document, but sequential in same transaction)
-        await store.updateOne("user", userId, {
-          balance: 45,
-        });
-      });
-
-      // Verify all updates succeeded
-      const finalUser = await store.findOne("user", { _id: userId });
-      assert(finalUser !== null);
-      assertEquals(finalUser.balance, 45);
-
-      const finalProduct = await store.findOne("product", { _id: productId });
-      assert(finalProduct !== null);
-      assertEquals(finalProduct.stock, 9);
+    // Insert test data
+    const userId = await store.insertOne("user", {
+      name: "Alice",
+      email: "alice@example.com",
+      balance: 100,
     });
-  }
+
+    const productId = await store.insertOne("product", {
+      name: "Widget",
+      price: 50,
+      stock: 10,
+    });
+
+    // Multiple updates to DIFFERENT documents in the same session should work fine
+    await store.withSession(async () => {
+      // Update user
+      await store.updateById("user", userId, {
+        balance: 50,
+      });
+
+      // Update product
+      await store.updateById("product", productId, {
+        stock: 9,
+      });
+
+      // Another update to user (same document, but sequential in same transaction)
+      await store.updateById("user", userId, {
+        balance: 45,
+      });
+    });
+
+    // Verify all updates succeeded
+    const finalUser = await store.findOne("user", { _id: userId });
+    expect(finalUser).not.toBeNull();
+    expect(finalUser!.balance).toEqual(45);
+
+    const finalProduct = await store.findOne("product", { _id: productId });
+    expect(finalProduct).not.toBeNull();
+    expect(finalProduct!.stock).toEqual(9);
+  });
 });
 
-Deno.test("Write Conflict: Nested withSession calls on same document", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Write Conflict: Nested withSession calls on same document", async () => {
+  await withDatabase("Write Conflict: Nested withSession calls on same document", async (db) => {
     const store = await multiCollection(db, "store", testModel);
 
     const userId = await store.insertOne("user", {
@@ -220,31 +205,31 @@ Deno.test("Write Conflict: Nested withSession calls on same document", async (t)
     // Test nested session calls
     await store.withSession(async () => {
       // First update in outer session
-      await store.updateOne("user", userId, {
+      await store.updateById("user", userId, {
         balance: 900,
       });
 
       // Nested session (should reuse parent session)
       await store.withSession(async () => {
-        await store.updateOne("user", userId, {
+        await store.updateById("user", userId, {
           balance: 800,
         });
       });
 
       // Another update in outer session
-      await store.updateOne("user", userId, {
+      await store.updateById("user", userId, {
         balance: 700,
       });
     });
 
     const finalUser = await store.findOne("user", { _id: userId });
-    assert(finalUser !== null);
-    assertEquals(finalUser.balance, 700);
+    expect(finalUser).not.toBeNull();
+    expect(finalUser!.balance).toEqual(700);
   });
 });
 
-Deno.test("Write Conflict: UpdateMany with concurrent operations", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Write Conflict: UpdateMany with concurrent operations", async () => {
+  await withDatabase("Write Conflict: UpdateMany with concurrent operations", async (db) => {
     const store = await multiCollection(db, "store", testModel);
 
     // Insert multiple products
@@ -256,7 +241,7 @@ Deno.test("Write Conflict: UpdateMany with concurrent operations", async (t) => 
 
     // Test updateMany - updates different documents, should work fine
     await store.withSession(async () => {
-      await store.updateMany({
+      await store.updateManyByIds({
         product: {
           [productIds[0]]: { stock: 9 },
           [productIds[1]]: { stock: 19 },
@@ -266,20 +251,16 @@ Deno.test("Write Conflict: UpdateMany with concurrent operations", async (t) => 
     });
 
     // Verify all updates
-    const products = await store.find("product");
-    assertEquals(products.length, 3);
-    assertEquals(products.find((p) => p._id === productIds[0])?.stock, 9);
-    assertEquals(products.find((p) => p._id === productIds[1])?.stock, 19);
-    assertEquals(products.find((p) => p._id === productIds[2])?.stock, 29);
+    const products = await store.find("product").toArray();
+    expect(products.length).toEqual(3);
+    expect(products.find((p) => p._id === productIds[0])?.stock).toEqual(9);
+    expect(products.find((p) => p._id === productIds[1])?.stock).toEqual(19);
+    expect(products.find((p) => p._id === productIds[2])?.stock).toEqual(29);
   });
 });
 
-Deno.test({
-  name: "Write Conflict: Concurrent transactions on same document",
-  sanitizeOps: false,  // Disable sanitizer due to expected timer leaks from concurrent retries
-  sanitizeResources: false,
-  fn: async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Write Conflict: Concurrent transactions on same document", async () => {
+  await withDatabase("Write Conflict: Concurrent transactions on same document", async (db) => {
     const store = await multiCollection(db, "store", testModel);
 
     const userId = await store.insertOne("user", {
@@ -291,14 +272,14 @@ Deno.test({
     // Start two concurrent transactions that both try to update the same user
     const transaction1 = store.withSession(async () => {
       const user = await store.findOne("user", { _id: userId });
-      assert(user !== null);
+      expect(user).not.toBeNull();
 
       // Simulate some processing time
       await new Promise((resolve) => setTimeout(resolve, 50));
 
       // Transaction 1: Deduct 100
-      await store.updateOne("user", userId, {
-        balance: user.balance - 100,
+      await store.updateById("user", userId, {
+        balance: user!.balance - 100,
       });
 
       return "transaction1";
@@ -306,14 +287,14 @@ Deno.test({
 
     const transaction2 = store.withSession(async () => {
       const user = await store.findOne("user", { _id: userId });
-      assert(user !== null);
+      expect(user).not.toBeNull();
 
       // Simulate some processing time
       await new Promise((resolve) => setTimeout(resolve, 30));
 
       // Transaction 2: Deduct 200
-      await store.updateOne("user", userId, {
-        balance: user.balance - 200,
+      await store.updateById("user", userId, {
+        balance: user!.balance - 200,
       });
 
       return "transaction2";
@@ -326,8 +307,8 @@ Deno.test({
 
       // Check final balance (may be inconsistent due to race condition)
       const finalUser = await store.findOne("user", { _id: userId });
-      assert(finalUser !== null);
-      console.log(`Final balance: ${finalUser.balance} (original: 500)`);
+      expect(finalUser).not.toBeNull();
+      console.log(`Final balance: ${finalUser!.balance} (original: 500)`);
 
       // The expected behavior depends on transaction isolation
     } catch (error) {
@@ -338,16 +319,15 @@ Deno.test({
         const isWriteConflict = error.message.includes("Write conflict") ||
                                error.message.includes("plan execution");
         if (isWriteConflict) {
-          console.log("✓ Write conflict detected in concurrent transactions (expected)");
+          console.log("Write conflict detected in concurrent transactions (expected)");
         }
       }
     }
   });
-},
 });
 
-Deno.test("Write Conflict: Rapid fire updates without sessions", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Write Conflict: Rapid fire updates without sessions", async () => {
+  await withDatabase("Write Conflict: Rapid fire updates without sessions", async (db) => {
     const store = await multiCollection(db, "store", testModel);
 
     const counterId = await store.insertOne("counter", {
@@ -358,7 +338,7 @@ Deno.test("Write Conflict: Rapid fire updates without sessions", async (t) => {
     // Rapid updates to the same document
     // Note: These still use sessions internally via sessionContext.getSession()
     const updates = Array.from({ length: 10 }, (_, i) =>
-      store.updateOne("counter", counterId, {
+      store.updateById("counter", counterId, {
         value: i + 1,
       })
     );
@@ -367,16 +347,16 @@ Deno.test("Write Conflict: Rapid fire updates without sessions", async (t) => {
       await Promise.all(updates);
 
       const finalCounter = await store.findOne("counter", { _id: counterId });
-      assert(finalCounter !== null);
-      console.log(`Rapid fire final value: ${finalCounter.value}`);
+      expect(finalCounter).not.toBeNull();
+      console.log(`Rapid fire final value: ${finalCounter!.value}`);
     } catch (error) {
       console.log("Rapid fire updates failed:", error instanceof Error ? error.message : error);
     }
   });
 });
 
-Deno.test("Write Conflict: UpdateOne with version field (optimistic locking pattern)", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Write Conflict: UpdateOne with version field (optimistic locking pattern)", async () => {
+  await withDatabase("Write Conflict: UpdateOne with version field (optimistic locking pattern)", async (db) => {
     const store = await multiCollection(db, "store", testModel);
 
     const productId = await store.insertOne("product", {
@@ -389,25 +369,25 @@ Deno.test("Write Conflict: UpdateOne with version field (optimistic locking patt
     // Simulate optimistic locking pattern
     // Read the document with its version
     const product = await store.findOne("product", { _id: productId });
-    assert(product !== null);
-    const currentVersion = product.version;
+    expect(product).not.toBeNull();
+    const currentVersion = product!.version;
 
     // Update with version increment
-    await store.updateOne("product", productId, {
-      stock: product.stock - 1,
+    await store.updateById("product", productId, {
+      stock: product!.stock - 1,
       version: (currentVersion || 0) + 1,
     });
 
     // Verify version was updated
     const updatedProduct = await store.findOne("product", { _id: productId });
-    assert(updatedProduct !== null);
-    assertEquals(updatedProduct.version, 2);
-    assertEquals(updatedProduct.stock, 49);
+    expect(updatedProduct).not.toBeNull();
+    expect(updatedProduct!.version).toEqual(2);
+    expect(updatedProduct!.stock).toEqual(49);
   });
 });
 
-Deno.test("Write Conflict: Stress test with many concurrent operations", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Write Conflict: Stress test with many concurrent operations", async () => {
+  await withDatabase("Write Conflict: Stress test with many concurrent operations", async (db) => {
     const store = await multiCollection(db, "store", testModel);
 
     // Create multiple counters
@@ -425,10 +405,10 @@ Deno.test("Write Conflict: Stress test with many concurrent operations", async (
       const counterId = counterIds[i % counterIds.length];
       return store.withSession(async () => {
         const counter = await store.findOne("counter", { _id: counterId });
-        assert(counter !== null);
+        expect(counter).not.toBeNull();
 
-        await store.updateOne("counter", counterId, {
-          value: counter.value + 1,
+        await store.updateById("counter", counterId, {
+          value: counter!.value + 1,
         });
       });
     });
@@ -457,7 +437,7 @@ Deno.test("Write Conflict: Stress test with many concurrent operations", async (
     console.log(`Stress test results: ${successCount} succeeded, ${failureCount} failed`);
 
     // Verify final state
-    const finalCounters = await store.find("counter");
+    const finalCounters = await store.find("counter").toArray();
     finalCounters.forEach((counter) => {
       console.log(`Counter ${counter.name}: ${counter.value}`);
     });

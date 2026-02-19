@@ -1,4 +1,4 @@
-import { assert } from "@std/assert";
+import { test, expect } from "vitest";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
 import * as v from "../src/schema.ts";
@@ -11,8 +11,8 @@ const userSchema = {
   isActive: v.boolean(),
 } as const;
 
-Deno.test("Basic prepare → filter → format pipeline", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Basic prepare → filter → format pipeline", async () => {
+  await withDatabase("Basic prepare → filter → format pipeline", async (db) => {
     const users = await collection(db, "users", userSchema);
 
     // Insert test data
@@ -54,20 +54,19 @@ Deno.test("Basic prepare → filter → format pipeline", async (t) => {
       }),
     });
 
-    assert(results.length === 2, "Should return 2 active users");
-    assert(results[0].displayName === "Alice", "First user should be Alice");
-    assert(results[0].category === "young", "Alice should be young");
-    assert(results[0].domain === "test.com", "Domain should be test.com");
-    assert(
+    expect(results.length === 2).toBeTruthy();
+    expect(results[0].displayName === "Alice").toBeTruthy();
+    expect(results[0].category === "young").toBeTruthy();
+    expect(results[0].domain === "test.com").toBeTruthy();
+    expect(
       results[1].displayName === "Charlie",
-      "Second user should be Charlie",
-    );
-    assert(results[1].category === "adult", "Charlie should be adult");
+    ).toBeTruthy();
+    expect(results[1].category === "adult").toBeTruthy();
   });
 });
 
-Deno.test("Only prepare stage (no filter/format)", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Only prepare stage (no filter/format)", async () => {
+  await withDatabase("Only prepare stage (no filter/format)", async (db) => {
     const users = await collection(db, "users", userSchema);
 
     await users.insertOne({
@@ -91,16 +90,16 @@ Deno.test("Only prepare stage (no filter/format)", async (t) => {
       }),
     });
 
-    assert(results.length === 2, "Should return all users");
-    assert(results[0].ageGroup === "young", "Alice should be young");
-    assert(results[0].canVote === true, "Alice can vote");
-    assert(results[1].ageGroup === "adult", "Bob should be adult");
-    assert(results[1].canVote === true, "Bob can vote");
+    expect(results.length === 2).toBeTruthy();
+    expect(results[0].ageGroup === "young").toBeTruthy();
+    expect(results[0].canVote === true).toBeTruthy();
+    expect(results[1].ageGroup === "adult").toBeTruthy();
+    expect(results[1].canVote === true).toBeTruthy();
   });
 });
 
-Deno.test("Only filter stage (no prepare/format)", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Only filter stage (no prepare/format)", async () => {
+  await withDatabase("Only filter stage (no prepare/format)", async (db) => {
     const users = await collection(db, "users", userSchema);
 
     await users.insertOne({
@@ -126,14 +125,14 @@ Deno.test("Only filter stage (no prepare/format)", async (t) => {
       filter: (user) => user.age >= 30,
     });
 
-    assert(results.length === 2, "Should return 2 users >= 30");
-    assert(results[0].name === "Bob", "First should be Bob");
-    assert(results[1].name === "Charlie", "Second should be Charlie");
+    expect(results.length === 2).toBeTruthy();
+    expect(results[0].name === "Bob").toBeTruthy();
+    expect(results[1].name === "Charlie").toBeTruthy();
   });
 });
 
-Deno.test("Only format stage (no prepare/filter)", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Only format stage (no prepare/filter)", async () => {
+  await withDatabase("Only format stage (no prepare/filter)", async (db) => {
     const users = await collection(db, "users", userSchema);
 
     await users.insertOne({
@@ -157,15 +156,15 @@ Deno.test("Only format stage (no prepare/filter)", async (t) => {
       }),
     });
 
-    assert(results.length === 2, "Should return all users");
-    assert(results[0].fullName === "Alice", "First should be Alice");
-    assert(results[0].contact === "alice@test.com", "Should have email");
-    assert(results[1].fullName === "Bob", "Second should be Bob");
+    expect(results.length === 2).toBeTruthy();
+    expect(results[0].fullName === "Alice").toBeTruthy();
+    expect(results[0].contact === "alice@test.com").toBeTruthy();
+    expect(results[1].fullName === "Bob").toBeTruthy();
   });
 });
 
-Deno.test("Async external API simulation", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Async external API simulation", async () => {
+  await withDatabase("Async external API simulation", async (db) => {
     const users = await collection(db, "users", userSchema);
 
     await users.insertOne({
@@ -240,23 +239,21 @@ Deno.test("Async external API simulation", async (t) => {
       }),
     });
 
-    assert(results.length === 1, "Should return 1 verified user");
-    assert(results[0].user.name === "Alice", "Should be Alice");
-    assert(results[0].profile.reputation === 100, "Should have reputation");
-    assert(
+    expect(results.length === 1).toBeTruthy();
+    expect(results[0].user.name === "Alice").toBeTruthy();
+    expect(results[0].profile.reputation === 100).toBeTruthy();
+    expect(
       results[0].profile.badges.includes("premium"),
-      "Should have premium badge",
-    );
-    assert(results[0].settings.theme === "dark", "Should have preferences");
-    assert(
+    ).toBeTruthy();
+    expect(results[0].settings.theme === "dark").toBeTruthy();
+    expect(
       results[0].meta.enrichedAt instanceof Date,
-      "Should have enrichment timestamp",
-    );
+    ).toBeTruthy();
   });
 });
 
-Deno.test("Error handling in pipeline stages", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Error handling in pipeline stages", async () => {
+  await withDatabase("Error handling in pipeline stages", async (db) => {
     const users = await collection(db, "users", userSchema);
 
     await users.insertOne({
@@ -282,12 +279,11 @@ Deno.test("Error handling in pipeline stages", async (t) => {
           return { ...user, processed: true };
         },
       });
-      assert(false, "Should have thrown error");
+      expect(false).toBeTruthy();
     } catch (error) {
-      assert(
+      expect(
         (error as Error).message === "Simulated prepare error",
-        "Should catch prepare error",
-      );
+      ).toBeTruthy();
     }
 
     // Test error in filter
@@ -300,12 +296,11 @@ Deno.test("Error handling in pipeline stages", async (t) => {
           return true;
         },
       });
-      assert(false, "Should have thrown error");
+      expect(false).toBeTruthy();
     } catch (error) {
-      assert(
+      expect(
         (error as Error).message === "Simulated filter error",
-        "Should catch filter error",
-      );
+      ).toBeTruthy();
     }
 
     // Test error in format
@@ -318,18 +313,17 @@ Deno.test("Error handling in pipeline stages", async (t) => {
           return { processed: user.name };
         },
       });
-      assert(false, "Should have thrown error");
+      expect(false).toBeTruthy();
     } catch (error) {
-      assert(
+      expect(
         (error as Error).message === "Simulated format error",
-        "Should catch format error",
-      );
+      ).toBeTruthy();
     }
   });
 });
 
-Deno.test("Type safety verification", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Type safety verification", async () => {
+  await withDatabase("Type safety verification", async (db) => {
     const users = await collection(db, "users", userSchema);
 
     await users.insertOne({
@@ -343,9 +337,9 @@ Deno.test("Type safety verification", async (t) => {
     const { data: results } = await users.paginate({}, {
       prepare: async (user) => {
         // user should be WithId<User>
-        assert(typeof user.name === "string", "Should have name");
-        assert(typeof user.age === "number", "Should have age");
-        assert(typeof user._id !== "undefined", "Should have _id");
+        expect(typeof user.name === "string").toBeTruthy();
+        expect(typeof user.age === "number").toBeTruthy();
+        expect(typeof user._id !== "undefined").toBeTruthy();
 
         return {
           ...user,
@@ -355,19 +349,17 @@ Deno.test("Type safety verification", async (t) => {
 
       filter: (enrichedUser) => {
         // enrichedUser should have computedField
-        assert(
+        expect(
           enrichedUser.computedField === "computed",
-          "Should have computed field",
-        );
+        ).toBeTruthy();
         return true;
       },
 
       format: async (enrichedUser) => {
         // enrichedUser should still have computedField
-        assert(
+        expect(
           enrichedUser.computedField === "computed",
-          "Should still have computed field",
-        );
+        ).toBeTruthy();
 
         return {
           finalField: enrichedUser.name,
@@ -375,7 +367,7 @@ Deno.test("Type safety verification", async (t) => {
       },
     });
 
-    assert(results.length === 1, "Should return 1 result");
-    assert(results[0].finalField === "Alice", "Should have final field");
+    expect(results.length === 1).toBeTruthy();
+    expect(results[0].finalField === "Alice").toBeTruthy();
   });
 });

@@ -1,7 +1,7 @@
-import { assertEquals, assertRejects } from "@std/assert";
+import { test, expect } from "vitest";
 import { createQueueSystem } from "../src/utils/queue.ts";
 
-Deno.test("MongoOperationQueue - Basic functionality", async () => {
+test("MongoOperationQueue - Basic functionality", async () => {
   const queue = createQueueSystem({ maxConcurrent: 2 });
 
   // Test basic operation
@@ -9,10 +9,10 @@ Deno.test("MongoOperationQueue - Basic functionality", async () => {
     return Promise.resolve("success");
   });
 
-  assertEquals(result, "success");
+  expect(result).toEqual("success");
 });
 
-Deno.test("MongoOperationQueue - Concurrency limit", async () => {
+test("MongoOperationQueue - Concurrency limit", async () => {
   const queue = createQueueSystem({ maxConcurrent: 2 });
   const executionOrder: number[] = [];
   const startTimes: number[] = [];
@@ -35,16 +35,16 @@ Deno.test("MongoOperationQueue - Concurrency limit", async () => {
   const results = await Promise.all(promises);
 
   // All operations should complete
-  assertEquals(results.sort(), [1, 2, 3, 4]);
+  expect(results.sort()).toEqual([1, 2, 3, 4]);
 
   // Check that only 2 operations started immediately (within 30ms of each other)
   const firstBatch = startTimes.filter((time, index) =>
     index === 0 || time - startTimes[0] < 30
   );
-  assertEquals(firstBatch.length, 2);
+  expect(firstBatch.length).toEqual(2);
 });
 
-Deno.test("MongoOperationQueue - Priority ordering", async () => {
+test("MongoOperationQueue - Priority ordering", async () => {
   const queue = createQueueSystem({ maxConcurrent: 1 });
   const executionOrder: number[] = [];
 
@@ -67,10 +67,10 @@ Deno.test("MongoOperationQueue - Priority ordering", async () => {
   await Promise.all([promise1, promise2, promise3]);
 
   // Should execute in order: 1 (first started), 2 (priority 3), 3 (priority 2)
-  assertEquals(executionOrder, [1, 2, 3]);
+  expect(executionOrder).toEqual([1, 2, 3]);
 });
 
-Deno.test("MongoOperationQueue - Timeout handling", async () => {
+test("MongoOperationQueue - Timeout handling", async () => {
   const queue = createQueueSystem({ defaultTimeout: 30 }); // Very short timeout
 
   try {
@@ -82,27 +82,25 @@ Deno.test("MongoOperationQueue - Timeout handling", async () => {
     });
     throw new Error("Should have timed out");
   } catch (error) {
-    assertEquals((error as Error).message, "Operation timeout after 30ms");
+    expect((error as Error).message).toEqual("Operation timeout after 30ms");
   }
 
   // Wait a bit to ensure all timers are cleaned up
   await new Promise((resolve) => setTimeout(resolve, 60));
 });
 
-Deno.test("MongoOperationQueue - Error handling", async () => {
+test("MongoOperationQueue - Error handling", async () => {
   const queue = createQueueSystem();
 
-  await assertRejects(
+  await expect(
     () =>
       queue.add(() => {
         throw new Error("Operation failed");
       }),
-    Error,
-    "Operation failed",
-  );
+  ).rejects.toThrow("Operation failed");
 });
 
-Deno.test("MongoOperationQueue - Error isolation between operations", async () => {
+test("MongoOperationQueue - Error isolation between operations", async () => {
   const queue = createQueueSystem({ maxConcurrent: 2 });
   const executionOrder: number[] = [];
 
@@ -129,19 +127,19 @@ Deno.test("MongoOperationQueue - Error isolation between operations", async () =
   const results = await Promise.all(promises);
 
   // All operations should have executed
-  assertEquals(executionOrder.sort(), [1, 2, 3, 4, 5]);
+  expect(executionOrder.sort()).toEqual([1, 2, 3, 4, 5]);
 
   // Check that successful operations return correct results
-  assertEquals(results[0], "success-1");
-  assertEquals(results[2], "success-3");
-  assertEquals(results[4], "success-5");
+  expect(results[0]).toEqual("success-1");
+  expect(results[2]).toEqual("success-3");
+  expect(results[4]).toEqual("success-5");
 
   // Check that failed operations return errors
-  assertEquals((results[1] as Error).message, "failure-2");
-  assertEquals((results[3] as Error).message, "failure-4");
+  expect((results[1] as Error).message).toEqual("failure-2");
+  expect((results[3] as Error).message).toEqual("failure-4");
 });
 
-Deno.test("MongoOperationQueue - Retry functionality", async () => {
+test("MongoOperationQueue - Retry functionality", async () => {
   const queue = createQueueSystem({
     retry: true,
     retryAttempts: 2,
@@ -158,11 +156,11 @@ Deno.test("MongoOperationQueue - Retry functionality", async () => {
     return Promise.resolve("success after retry");
   });
 
-  assertEquals(result, "success after retry");
-  assertEquals(attempts, 2);
+  expect(result).toEqual("success after retry");
+  expect(attempts).toEqual(2);
 });
 
-Deno.test("MongoOperationQueue - Stats tracking", async () => {
+test("MongoOperationQueue - Stats tracking", async () => {
   const queue = createQueueSystem({ maxConcurrent: 1 });
 
   // Wait a bit to avoid timer conflicts from previous tests
@@ -170,10 +168,10 @@ Deno.test("MongoOperationQueue - Stats tracking", async () => {
 
   // Initial stats
   let stats = queue.getStats();
-  assertEquals(stats.pending, 0);
-  assertEquals(stats.running, 0);
-  assertEquals(stats.completed, 0);
-  assertEquals(stats.failed, 0);
+  expect(stats.pending).toEqual(0);
+  expect(stats.running).toEqual(0);
+  expect(stats.completed).toEqual(0);
+  expect(stats.failed).toEqual(0);
 
   // Add operations
   const promise1 = queue.add(() => {
@@ -187,21 +185,21 @@ Deno.test("MongoOperationQueue - Stats tracking", async () => {
   // Check stats while operations are pending/running
   await new Promise((resolve) => setTimeout(resolve, 5));
   stats = queue.getStats();
-  assertEquals(stats.running, 1);
-  assertEquals(stats.pending, 1);
+  expect(stats.running).toEqual(1);
+  expect(stats.pending).toEqual(1);
 
   // Wait for completion
   await Promise.all([promise1, promise2]);
 
   // Final stats
   stats = queue.getStats();
-  assertEquals(stats.pending, 0);
-  assertEquals(stats.running, 0);
-  assertEquals(stats.completed, 2);
-  assertEquals(stats.failed, 0);
+  expect(stats.pending).toEqual(0);
+  expect(stats.running).toEqual(0);
+  expect(stats.completed).toEqual(2);
+  expect(stats.failed).toEqual(0);
 });
 
-Deno.test("MongoOperationQueue - Drain functionality", async () => {
+test("MongoOperationQueue - Drain functionality", async () => {
   const queue = createQueueSystem({ maxConcurrent: 1 });
 
   // Wait a bit to avoid timer conflicts from previous tests
@@ -222,21 +220,21 @@ Deno.test("MongoOperationQueue - Drain functionality", async () => {
   await queue.drain();
   const endTime = Date.now();
 
-  // Should take at least 50ms (2 operations × 25ms each with concurrency 1)
+  // Should take at least 50ms (2 operations x 25ms each with concurrency 1)
   const duration = endTime - startTime;
-  assertEquals(duration >= 45, true); // Small buffer for timing variations
+  expect(duration >= 45).toEqual(true); // Small buffer for timing variations
 
   // Ensure all promises complete
   const results = await Promise.all(promises);
-  assertEquals(results, ["op1", "op2"]);
+  expect(results).toEqual(["op1", "op2"]);
 
   // Queue should be empty
   const stats = queue.getStats();
-  assertEquals(stats.pending, 0);
-  assertEquals(stats.running, 0);
+  expect(stats.pending).toEqual(0);
+  expect(stats.running).toEqual(0);
 });
 
-Deno.test("MongoOperationQueue - Clear functionality", async () => {
+test("MongoOperationQueue - Clear functionality", async () => {
   const queue = createQueueSystem({ maxConcurrent: 1 });
 
   // Add operations
@@ -257,9 +255,9 @@ Deno.test("MongoOperationQueue - Clear functionality", async () => {
 
   // First operation should complete (already running)
   const result1 = await promise1;
-  assertEquals(result1, "op1");
+  expect(result1).toEqual("op1");
 
   // Second operation should be rejected
   const error = await promise2Result;
-  assertEquals(error.message, "Queue cleared");
+  expect(error.message).toEqual("Queue cleared");
 });

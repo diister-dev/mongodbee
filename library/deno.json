@@ -10,7 +10,7 @@
     "@std/fs": "jsr:@std/fs@^1.0.5",
     "@std/assert": "jsr:@std/assert@^1.0.8",
     "valibot": "npm:valibot@^1.0.0",
-    "mongodb": "npm:mongodb@^6.16.0",
+    "mongodb": "npm:mongodb@^7.1.0",
     "@diister/valibot-mock": "jsr:@diister/valibot-mock@^0.1.0"
   },
   "exports": {
@@ -23,8 +23,8 @@
     "./migration/cli/bin": "./src/migration/cli/bin.ts"
   },
   "tasks": {
-    "test": "deno test -A --parallel --quiet",
-    "test:leaks": "deno test -A --parallel --quiet --trace-leaks",
+    "test": "deno run -A npm:vitest run",
+    "test:watch": "deno run -A npm:vitest",
     "migrate": "deno run --allow-read --allow-write --allow-net --allow-env src/migration/cli/bin.ts",
     "migrate:init": "deno task migrate init",
     "migrate:generate": "deno task migrate generate",

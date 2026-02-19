@@ -20,9 +20,13 @@ import {
 import { getLastAppliedMigration } from "./migration/state.ts";
 import { applyMultiCollectionIndexes } from "./indexes-applier.ts";
 import { isSchemaManaged } from "./runtime-config.ts";
+import { createStageBuilder } from "./stage-builder.ts";
+import type { AggregationStage, StageBuilder, MultiCollectionSchema } from "./stage-builder.ts";
 
 // Re-export dbId and refId for backwards compatibility
 export { dbId, refId } from "./ids.ts";
+// Re-export StageBuilder types for consumers
+export type { AggregationStage, StageBuilder } from "./stage-builder.ts";
 
 type CollectionOptions = {
   safeDelete?: boolean;
@@ -71,8 +75,6 @@ type ElementSchema<T extends Record<string, any>, K extends keyof T> =
 type AnySchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
 type MultiSchema<T extends Record<string, any>> = Elements<T>;
 
-type MultiCollectionSchema = Record<string, Record<string, AnySchema>>;
-
 /**
  * Type helper to allow field removal with removeField()
  * Makes all fields accept either their original type or a symbol (for removeField())
@@ -84,60 +86,6 @@ type DeepWithRemovable<T> = T extends Record<string, unknown>
 
 type WithRemovable<T> = {
   [K in keyof T]: DeepWithRemovable<T[K]> | symbol;
-};
-
-// Type for aggregation pipeline stages
-type AggregationStage = Record<string, unknown>;
-type StageBuilder<T extends MultiCollectionSchema> = {
-  match: <E extends keyof T>(
-    key: E,
-    filter: Record<string, unknown>,
-  ) => AggregationStage;
-  unwind: <E extends keyof T>(key: E, field: string) => AggregationStage;
-  lookup: <E extends keyof T>(
-    key: E,
-    localField: string,
-    foreignField: string,
-    asOrOptions?: string | {
-      as?: string;
-      pipeline?: (stage: StageBuilder<T>) => AggregationStage[];
-      let?: Record<string, unknown>;
-    },
-  ) => AggregationStage;
-  /** 
-   * Lookup without _type constraint - useful for polymorphic references 
-   * where the ID prefix (e.g., "collaborator:xxx") already guarantees uniqueness.
-   * Returns documents from any type in the collection.
-   */
-  anyLookup: (
-    localField: string,
-    foreignField: string,
-    asOrOptions?: string | {
-      as?: string;
-      pipeline?: (stage: StageBuilder<T>) => AggregationStage[];
-      let?: Record<string, unknown>;
-    },
-  ) => AggregationStage;
-  /**
-   * Lookup into an external collection (outside this multi-collection).
-   * Useful for joining with other MongoDB collections or other multi-collections.
-   */
-  externalLookup: (
-    fromCollection: string,
-    localField: string,
-    foreignField: string,
-    asOrOptions?: string | {
-      as?: string;
-      pipeline?: AggregationStage[];
-      let?: Record<string, unknown>;
-    },
-  ) => AggregationStage;
-  project: (projection: Record<string, 1 | 0 | string | Record<string, unknown>>) => AggregationStage;
-  addFields: (fields: Record<string, unknown>) => AggregationStage;
-  group: (grouping: Record<string, unknown>) => AggregationStage;
-  sort: (sort: Record<string, 1 | -1>) => AggregationStage;
-  limit: (limit: number) => AggregationStage;
-  skip: (skip: number) => AggregationStage;
 };
 
 type Input<T extends MultiCollectionSchema> = v.InferInput<
@@ -154,12 +102,32 @@ type Output<T extends MultiCollectionSchema> = v.InferOutput<
 type ExtractByType<T extends MultiCollectionSchema, K extends keyof T> =
   K extends K ? v.InferOutput<OutputElementSchema<T, K>> : never;
 
+// ─── Internal helpers ───
+
+/** Builds { _type: "x" } or { _type: { $in: ["x", "y"] } } */
+function buildTypeFilter(keys: string | string[]): Record<string, unknown> {
+  const keyArray = Array.isArray(keys) ? keys : [keys];
+  return keyArray.length === 1
+    ? { _type: keyArray[0] }
+    : { _type: { $in: keyArray } };
+}
+
+/** Builds { $and: [typeFilter, filter?] } */
+function buildTypeQuery(keys: string | string[], filter?: Record<string, unknown>): Record<string, unknown> {
+  const typeFilter = buildTypeFilter(keys);
+  return filter
+    ? { $and: [typeFilter, filter] }
+    : typeFilter;
+}
+
 /**
  * Type representing the enhanced MongoDB collection for storing multiple document types
  * @template T - Record mapping document type names to their schemas
  */
 type MultiCollectionResult<T extends MultiCollectionSchema> = {
   withSession: Awaited<ReturnType<typeof getSessionContext>>["withSession"];
+
+  // === INSERT ===
   insertOne<E extends keyof T>(
     key: E,
     doc: v.InferInput<ElementSchema<T, E>>,
@@ -168,19 +136,47 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
     key: E,
     docs: v.InferInput<ElementSchema<T, E>>[],
   ): Promise<(string)[]>;
+
+  // === READ ===
   getById<E extends keyof T>(
     key: E,
     id: string,
   ): Promise<v.InferOutput<OutputElementSchema<T, E>>>;
-  findOne<E extends keyof T>(
-    key: E,
-    filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
-  ): Promise<v.InferOutput<OutputElementSchema<T, E>> | null>;
+
+  /** Find documents of a single type - returns a Cursor */
   find<E extends keyof T>(
     key: E,
     filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
     options?: m.FindOptions,
-  ): Promise<v.InferOutput<OutputElementSchema<T, E>>[]>;
+  ): m.FindCursor<v.InferOutput<OutputElementSchema<T, E>>>;
+  /** Find documents across multiple types - returns a Cursor */
+  find<E extends (keyof T)[]>(
+    keys: E,
+    filter?: m.Filter<v.InferInput<OutputElementSchema<T, E[number]>>>,
+    options?: m.FindOptions,
+  ): m.FindCursor<ExtractByType<T, E[number]>>;
+  /** Find documents of any type - returns a Cursor */
+  findAny(
+    filter?: m.Filter<Input<T>>,
+    options?: m.FindOptions,
+  ): m.FindCursor<Output<T>>;
+
+  /** Find one document of a single type */
+  findOne<E extends keyof T>(
+    key: E,
+    filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
+  ): Promise<v.InferOutput<OutputElementSchema<T, E>> | null>;
+  /** Find one document across multiple types */
+  findOne<E extends (keyof T)[]>(
+    keys: E,
+    filter: m.Filter<v.InferInput<OutputElementSchema<T, E[number]>>>,
+  ): Promise<ExtractByType<T, E[number]> | null>;
+  /** Find one document of any type */
+  findOneAny(
+    filter: m.Filter<Input<T>>,
+  ): Promise<Output<T> | null>;
+
+  // === PAGINATE ===
   paginate<E extends keyof T, EN = v.InferOutput<OutputElementSchema<T, E>>, R = EN>(
     key: E,
     filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
@@ -205,24 +201,6 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
   /**
    * Cross-pagination: paginate across multiple types simultaneously.
    * Documents from all specified types are merged and sorted together.
-   *
-   * @example
-   * ```typescript
-   * // Paginate collaborators and visitors together
-   * const result = await catalog.paginate(
-   *   ["collaborator", "visitor"],
-   *   { active: true },
-   *   { limit: 10, sort: { createdAt: -1 } }
-   * );
-   * // result.data is (Collaborator | Visitor)[]
-   *
-   * // With naturalIdSort to sort by ULID creation time (ignoring type prefix)
-   * const result2 = await catalog.paginate(
-   *   ["collaborator", "visitor"],
-   *   {},
-   *   { naturalIdSort: true }
-   * );
-   * ```
    */
   paginate<E extends (keyof T)[], EN = ExtractByType<T, E[number]>, R = EN>(
     keys: E,
@@ -235,7 +213,6 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
       /**
        * When true, sorts by the ULID part of _id (after the type prefix),
        * giving chronological ordering across different types.
-       * Only applies when sort includes _id or when using default sort.
        */
       naturalIdSort?: boolean;
       /** Pipeline stages to execute server-side before pagination (lookups, addFields, etc.) */
@@ -251,19 +228,29 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
     position: number;
     data: R[];
   }>;
+
+  // === COUNT ===
+  /** Count documents of a single type */
   countDocuments<E extends keyof T>(
     key: E,
     filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
     options?: m.CountDocumentsOptions,
   ): Promise<number>;
-  deleteId<E extends keyof T>(key: E, id: string): Promise<number>;
-  deleteIds<E extends keyof T>(key: E, ids: string[]): Promise<number>;
-  deleteMany<E extends keyof T>(
-    key: E,
-    filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
+  /** Count documents across multiple types */
+  countDocuments<E extends (keyof T)[]>(
+    keys: E,
+    filter?: m.Filter<v.InferInput<OutputElementSchema<T, E[number]>>>,
+    options?: m.CountDocumentsOptions,
   ): Promise<number>;
-  deleteAny(filter: m.Filter<Input<T>>): Promise<number>;
-  updateOne<E extends keyof T>(
+  /** Count documents of any type */
+  countAny(
+    filter?: m.Filter<Input<T>>,
+    options?: m.CountDocumentsOptions,
+  ): Promise<number>;
+
+  // === UPDATE ===
+  /** Update a single document by ID */
+  updateById<E extends keyof T>(
     key: E,
     id: string,
     doc: Omit<
@@ -271,7 +258,26 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
       "_id" | "type"
     >,
   ): Promise<number>;
-  updateMany(
+  /** Update a single document by filter */
+  updateOne<E extends keyof T>(
+    key: E,
+    filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
+    doc: Omit<
+      WithRemovable<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>>,
+      "_id" | "type"
+    >,
+  ): Promise<number>;
+  /** Update multiple documents of a type by filter */
+  updateMany<E extends keyof T>(
+    key: E,
+    filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
+    doc: Omit<
+      WithRemovable<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>>,
+      "_id" | "type"
+    >,
+  ): Promise<number>;
+  /** Bulk update multiple documents by IDs across types */
+  updateManyByIds(
     operation: {
       [key in keyof T]?: {
         [id: string]: Omit<
@@ -281,9 +287,31 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
       };
     },
   ): Promise<number>;
+
+  // === DELETE ===
+  /** Delete a single document by ID */
+  deleteById<E extends keyof T>(key: E, id: string): Promise<number>;
+  /** Delete multiple documents by IDs */
+  deleteByIds<E extends keyof T>(key: E, ids: string[]): Promise<number>;
+  /** Delete documents of a single type by filter */
+  deleteMany<E extends keyof T>(
+    key: E,
+    filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
+  ): Promise<number>;
+  /** Delete documents across multiple types by filter */
+  deleteMany<E extends (keyof T)[]>(
+    keys: E,
+    filter: m.Filter<v.InferInput<OutputElementSchema<T, E[number]>>>,
+  ): Promise<number>;
+  /** Delete documents of any type by filter */
+  deleteAny(filter: m.Filter<Input<T>>): Promise<number>;
+
+  // === AGGREGATE ===
   aggregate(
     stageBuilder: (stage: StageBuilder<T>) => AggregationStage[],
   ): Promise<any[]>;
+
+  // === OTHER ===
   drop(options: { force: true }): Promise<boolean>;
 };
 
@@ -526,57 +554,124 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         },
         async getById(key, id) {
             const session = sessionContext.getSession();
-            const result = await collection.findOne({
-                $and: [
-                    { _type: key as string },
-                    { _id: id },
-                ]
-            } as any, { session });
+            const query = buildTypeQuery(key as string, { _id: id });
+            const result = await collection.findOne(query as any, { session });
 
             if (!result) {
                 throw new Error("No element found");
             }
-            
+
             return v.parse(schema, result);
         },
-        async findOne(key, filter) {
+        findOne(keyOrKeys: any, filter: any) {
+            const keys = Array.isArray(keyOrKeys) ? keyOrKeys as string[] : [keyOrKeys as string];
             const session = sessionContext.getSession();
-            const result = await collection.findOne({
-                $and: [
-                    { _type: key as string },
-                    filter,
-                ]
-            } as any, { session });
+            const query = buildTypeQuery(keys, filter);
 
-            if (!result) {
-                return null;
-            }
-            
-            return v.parse(schema, result);
-        },
-        async find(key, filter, options) {
-            const typeChecker = {
-                _type: key as string,
-            };
-
-            const session = sessionContext.getSession();
-            const cursor = collection.find({
-                $and: filter ? [typeChecker, filter] : [typeChecker],
-            } as any, { session, ...options });
-            
-            const result = await cursor.toArray();
-            let invalidsCount = 0;
-
-            const output = result.map((item) => {
-                const parsed = v.safeParse(schema, item);
-                if(!parsed.success) {
-                    invalidsCount++;
+            const doFind = async () => {
+                const result = await collection.findOne(query as any, { session });
+                if (!result) {
                     return null;
                 }
-                return parsed.output;
-            }).filter((item): item is v.InferOutput<OutputElementSchema<T, typeof key>> => item !== null);
-            
-            return output;
+                return v.parse(schema, result);
+            };
+            return doFind();
+        },
+        findOneAny(filter: any) {
+            const session = sessionContext.getSession();
+            const doFind = async () => {
+                const result = await collection.findOne(filter as any, { session });
+                if (!result) {
+                    return null;
+                }
+                return v.parse(schema, result);
+            };
+            return doFind();
+        },
+        find(keyOrKeys: any, filter?: any, options?: any) {
+            const keys = Array.isArray(keyOrKeys) ? keyOrKeys as string[] : [keyOrKeys as string];
+            const query = buildTypeQuery(keys, filter);
+            const session = sessionContext.getSession();
+            const cursor = collection.find(query as any, { session, ...options });
+
+            // Wrap toArray to add validation
+            const originalToArray = cursor.toArray.bind(cursor);
+            cursor.toArray = async () => {
+                const results = await originalToArray();
+                let invalidsCount = 0;
+
+                const output = results.map((item) => {
+                    const parsed = v.safeParse(schema, item);
+                    if (!parsed.success) {
+                        invalidsCount++;
+                        return null;
+                    }
+                    return parsed.output;
+                }).filter((item): item is NonNullable<typeof item> => item !== null);
+
+                if (invalidsCount > 0) {
+                    console.warn(
+                        `Warning: ${invalidsCount} invalid documents were ignored during find operation`,
+                    );
+                }
+
+                return output;
+            };
+
+            // Wrap next to add validation
+            const originalNext = cursor.next.bind(cursor);
+            cursor.next = async () => {
+                while (true) {
+                    const doc = await originalNext();
+                    if (!doc) return null;
+                    const result = v.safeParse(schema, doc);
+                    if (result.success) return result.output as any;
+                    // Skip invalid, try next
+                }
+            };
+
+            return cursor as any;
+        },
+        findAny(filter?: any, options?: any) {
+            const session = sessionContext.getSession();
+            const cursor = collection.find((filter || {}) as any, { session, ...options });
+
+            // Wrap toArray to add validation
+            const originalToArray = cursor.toArray.bind(cursor);
+            cursor.toArray = async () => {
+                const results = await originalToArray();
+                let invalidsCount = 0;
+
+                const output = results.map((item) => {
+                    const parsed = v.safeParse(schema, item);
+                    if (!parsed.success) {
+                        invalidsCount++;
+                        return null;
+                    }
+                    return parsed.output;
+                }).filter((item): item is NonNullable<typeof item> => item !== null);
+
+                if (invalidsCount > 0) {
+                    console.warn(
+                        `Warning: ${invalidsCount} invalid documents were ignored during findAny operation`,
+                    );
+                }
+
+                return output;
+            };
+
+            // Wrap next to add validation
+            const originalNext = cursor.next.bind(cursor);
+            cursor.next = async () => {
+                while (true) {
+                    const doc = await originalNext();
+                    if (!doc) return null;
+                    const result = v.safeParse(schema, doc);
+                    if (result.success) return result.output as any;
+                }
+            };
+
+            return cursor as any;
         },
         // Implementation supports both single key and array of keys
         // Type safety is enforced through the overload signatures above
@@ -602,13 +697,9 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             const keys = Array.isArray(keyOrKeys) ? keyOrKeys as (keyof T)[] : [keyOrKeys as keyof T];
             const isCrossPagination = Array.isArray(keyOrKeys);
 
-            // Build type checker: single type or $in for multiple types
-            const typeChecker = keys.length === 1
-                ? { _type: keys[0] as string }
-                : { _type: { $in: keys as string[] } };
-
-            // Build the base query with type filter
-            const baseQuery = filter ? [typeChecker, filter] : [typeChecker];
+            // Build type filter and base query using helpers
+            const typeFilter = buildTypeFilter(keys as string[]);
+            const baseQuery = filter ? [typeFilter, filter] : [typeFilter];
             let query: Record<string, unknown> = { $and: baseQuery };
 
             // Normalize sort to object format
@@ -760,167 +851,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 }
             }
 
-            // Create StageBuilder for pipeline support
-            const createStageBuilder = (): StageBuilder<T> => ({
-                match: (matchKey, matchFilter) => ({
-                    $match: {
-                        _type: matchKey as string,
-                        ...matchFilter,
-                    },
-                }),
-                unwind: (_unwindKey, field) => ({
-                    $unwind: `$${field}`,
-                }),
-                lookup: (lookupKey, localField, foreignField, asOrOptions) => {
-                    // Simple case: string parameter is the 'as' field name
-                    // Automatically filter by _type for multi-collection support
-                    if (typeof asOrOptions === 'string') {
-                        return {
-                            $lookup: {
-                                from: collectionName,
-                                let: { localValue: `$${localField}` },
-                                pipeline: [
-                                    {
-                                        $match: {
-                                            $expr: {
-                                                $and: [
-                                                    { $eq: [`$${foreignField}`, "$$localValue"] },
-                                                    { $eq: ["$_type", lookupKey as string] },
-                                                ],
-                                            },
-                                        },
-                                    },
-                                ],
-                                as: asOrOptions,
-                            },
-                        };
-                    }
-
-                    // Advanced case: object with options
-                    const lookupOptions = asOrOptions || {};
-                    const as = lookupOptions.as || localField;
-                    
-                    // Build the lookup with automatic _type filter
-                    const lookupStage: Record<string, unknown> = {
-                        from: collectionName,
-                        let: { localValue: `$${localField}`, ...(lookupOptions.let || {}) },
-                        as,
-                    };
-
-                    // Build pipeline: start with _type match, then add user pipeline if provided
-                    const basePipeline: AggregationStage[] = [
-                        {
-                            $match: {
-                                $expr: {
-                                    $and: [
-                                        { $eq: [`$${foreignField}`, "$$localValue"] },
-                                        { $eq: ["$_type", lookupKey as string] },
-                                    ],
-                                },
-                            },
-                        },
-                    ];
-
-                    // Add user-provided pipeline stages after the base filter
-                    if (lookupOptions.pipeline) {
-                        const userPipeline = lookupOptions.pipeline(createStageBuilder());
-                        basePipeline.push(...userPipeline);
-                    }
-
-                    lookupStage.pipeline = basePipeline;
-
-                    return { $lookup: lookupStage };
-                },
-                anyLookup: (localField, foreignField, asOrOptions) => {
-                    // Simple case: string parameter is the 'as' field name
-                    // No _type filter - matches any document type
-                    if (typeof asOrOptions === 'string') {
-                        return {
-                            $lookup: {
-                                from: collectionName,
-                                localField,
-                                foreignField,
-                                as: asOrOptions,
-                            },
-                        };
-                    }
-
-                    // Advanced case: object with options
-                    const anyLookupOptions = asOrOptions || {};
-                    const as = anyLookupOptions.as || localField;
-                    const anyLookupStage: Record<string, unknown> = {
-                        from: collectionName,
-                        localField,
-                        foreignField,
-                        as,
-                    };
-
-                    // Add let variables if provided
-                    if (anyLookupOptions.let) {
-                        anyLookupStage.let = anyLookupOptions.let;
-                    }
-
-                    // Add pipeline if provided (execute the builder function)
-                    if (anyLookupOptions.pipeline) {
-                        anyLookupStage.pipeline = anyLookupOptions.pipeline(createStageBuilder());
-                    }
-
-                    return { $lookup: anyLookupStage };
-                },
-                externalLookup: (fromCollection, localField, foreignField, asOrOptions) => {
-                    // Simple case: string parameter is the 'as' field name
-                    if (typeof asOrOptions === 'string') {
-                        return {
-                            $lookup: {
-                                from: fromCollection,
-                                localField,
-                                foreignField,
-                                as: asOrOptions,
-                            },
-                        };
-                    }
-
-                    // Advanced case: object with options
-                    const extLookupOptions = asOrOptions || {};
-                    const as = extLookupOptions.as || localField;
-                    const extLookupStage: Record<string, unknown> = {
-                        from: fromCollection,
-                        localField,
-                        foreignField,
-                        as,
-                    };
-
-                    // Add let variables if provided
-                    if (extLookupOptions.let) {
-                        extLookupStage.let = extLookupOptions.let;
-                    }
-
-                    // Add pipeline if provided (raw pipeline, not using StageBuilder)
-                    if (extLookupOptions.pipeline) {
-                        extLookupStage.pipeline = extLookupOptions.pipeline;
-                    }
-
-                    return { $lookup: extLookupStage };
-                },
-                project: (projection) => ({
-                    $project: projection,
-                }),
-                addFields: (fields) => ({
-                    $addFields: fields,
-                }),
-                group: (grouping) => ({
-                    $group: grouping,
-                }),
-                sort: (sortSpec) => ({
-                    $sort: sortSpec,
-                }),
-                limit: (limitVal) => ({
-                    $limit: limitVal,
-                }),
-                skip: (skipVal) => ({
-                    $skip: skipVal,
-                })
-            });
+            const stageBuilderInstance = createStageBuilder<T>(collectionName);
 
             // Build cursor - use aggregate if pipeline is provided or naturalIdSort is enabled
             // deno-lint-ignore no-explicit-any
@@ -941,7 +872,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
             if (pipelineBuilder || useNaturalIdSort) {
                 // Build aggregation pipeline with user stages
-                const userPipeline = pipelineBuilder ? pipelineBuilder(createStageBuilder()) : [];
+                const userPipeline = pipelineBuilder ? pipelineBuilder(stageBuilderInstance) : [];
 
                 // For naturalIdSort, we need to add _ulid BEFORE the cursor filter can use it
                 // So we split the query: base type filter first, then add _ulid, then cursor filter
@@ -1022,21 +953,17 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 data: elements,
             };
         },
-        countDocuments(key, filter, options?) {
+        countDocuments(keyOrKeys: any, filter?: any, options?: any) {
+            const keys = Array.isArray(keyOrKeys) ? keyOrKeys as string[] : [keyOrKeys as string];
             const session = sessionContext.getSession();
-            
-            const typeChecker = {
-                _type: key as string,
-            };
-            
-            // Build the query using the same logic as find()
-            const query = {
-                $and: filter ? [typeChecker, filter] : [typeChecker],
-            };
-            
+            const query = buildTypeQuery(keys, filter);
             return collection.countDocuments(query as never, { session, ...options });
         },
-        async deleteId(key, id) {
+        countAny(filter?: any, options?: any) {
+            const session = sessionContext.getSession();
+            return collection.countDocuments((filter || {}) as never, { session, ...options });
+        },
+        async deleteById(key, id) {
             const schema = schemaWithId[key];
             v.parse(schema._id, id);
 
@@ -1060,7 +987,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
             return result.deletedCount;
         },
-        async deleteIds(key, ids) {
+        async deleteByIds(key, ids) {
             const schema = schemaWithId[key];
             ids.forEach((id) => {
                 v.parse(schema._id, id);
@@ -1085,16 +1012,12 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
             return result.deletedCount;
         },
-        async deleteMany(key, filter) {
+        async deleteMany(keyOrKeys: any, filter: any) {
+            const keys = Array.isArray(keyOrKeys) ? keyOrKeys as string[] : [keyOrKeys as string];
             const session = sessionContext.getSession();
+            const query = buildTypeQuery(keys, filter);
 
-            // Combine the user filter with the type filter
-            const combinedFilter = {
-                ...filter,
-                _type: key as string,
-            } as any;
-
-            const result = await collection.deleteMany(combinedFilter, { session });
+            const result = await collection.deleteMany(query as any, { session });
 
             if (!result.acknowledged) {
                 throw new Error("Delete failed");
@@ -1113,7 +1036,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
             return result.deletedCount;
         },
-        async updateOne(key, id, doc) {
+        async updateById(key, id, doc) {
             // Validation happens outside retry - no need to retry validation errors
             const dotSchema = dotSchemaElements[key];
             if(!dotSchema) {
@@ -1169,7 +1092,103 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 return result.modifiedCount;
             });
         },
-        async updateMany(operation) {
+        async updateOne(key, filter, doc) {
+            const dotSchema = dotSchemaElements[key];
+            if(!dotSchema) {
+                throw new Error(`Invalid element type`);
+            }
+
+            const { set, unset } = extractFieldsToRemove(doc as Record<string, unknown>);
+
+            if (Object.keys(set).length > 0) {
+                v.parse(dotSchema, set);
+            }
+
+            return retryOnWriteConflict(async () => {
+                const session = sessionContext.getSession();
+
+                const sanitizedDoc = sanitizeForMongoDB(set, {
+                    undefinedBehavior: opts.undefinedBehavior || "remove",
+                    deep: true,
+                });
+
+                const updateOps: Record<string, unknown> = {};
+                if (Object.keys(sanitizedDoc as Record<string, unknown>).length > 0) {
+                    updateOps.$set = sanitizedDoc;
+                }
+                if (Object.keys(unset).length > 0) {
+                    updateOps.$unset = unset;
+                }
+
+                if (Object.keys(updateOps).length === 0) {
+                    return 0;
+                }
+
+                const query = buildTypeQuery(key as string, filter as Record<string, unknown>);
+                const result = await collection.updateOne(
+                    query as m.Filter<TOutput>,
+                    updateOps as m.UpdateFilter<TOutput>,
+                    { session },
+                );
+
+                if(!result.acknowledged) {
+                    throw new Error("Update failed");
+                }
+
+                if (result.matchedCount === 0) {
+                    throw new Error("No element that match the filter to update");
+                }
+
+                return result.modifiedCount;
+            });
+        },
+        async updateMany(key, filter, doc) {
+            const dotSchema = dotSchemaElements[key];
+            if(!dotSchema) {
+                throw new Error(`Invalid element type`);
+            }
+
+            const { set, unset } = extractFieldsToRemove(doc as Record<string, unknown>);
+
+            if (Object.keys(set).length > 0) {
+                v.parse(dotSchema, set);
+            }
+
+            return retryOnWriteConflict(async () => {
+                const session = sessionContext.getSession();
+
+                const sanitizedDoc = sanitizeForMongoDB(set, {
+                    undefinedBehavior: opts.undefinedBehavior || "remove",
+                    deep: true,
+                });
+
+                const updateOps: Record<string, unknown> = {};
+                if (Object.keys(sanitizedDoc as Record<string, unknown>).length > 0) {
+                    updateOps.$set = sanitizedDoc;
+                }
+                if (Object.keys(unset).length > 0) {
+                    updateOps.$unset = unset;
+                }
+
+                if (Object.keys(updateOps).length === 0) {
+                    return 0;
+                }
+
+                const query = buildTypeQuery(key as string, filter as Record<string, unknown>);
+                const result = await collection.updateMany(
+                    query as m.Filter<TOutput>,
+                    updateOps as m.UpdateFilter<TOutput>,
+                    { session },
+                );
+
+                if(!result.acknowledged) {
+                    throw new Error("Update failed");
+                }
+
+                return result.modifiedCount;
+            });
+        },
+        async updateManyByIds(operation) {
             return retryOnWriteConflict(async () => {
                 const bulkOps: any[] = [];
                 for(const type in operation) {
@@ -1239,167 +1258,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             });
         },
         async aggregate(stageBuilder) {
-            const stage: StageBuilder<T> = {
-                match: (key, filter) => ({
-                    $match: {
-                        _type: key as string,
-                        ...filter,
-                    },
-                }),
-                unwind: (_key, field) => ({
-                    $unwind: `$${field}`,
-                }),
-                lookup: (lookupKey, localField, foreignField, asOrOptions) => {
-                    // Simple case: string parameter is the 'as' field name
-                    // Automatically filter by _type for multi-collection support
-                    if (typeof asOrOptions === 'string') {
-                        return {
-                            $lookup: {
-                                from: collectionName,
-                                let: { localValue: `$${localField}` },
-                                pipeline: [
-                                    {
-                                        $match: {
-                                            $expr: {
-                                                $and: [
-                                                    { $eq: [`$${foreignField}`, "$$localValue"] },
-                                                    { $eq: ["$_type", lookupKey as string] },
-                                                ],
-                                            },
-                                        },
-                                    },
-                                ],
-                                as: asOrOptions,
-                            },
-                        };
-                    }
-
-                    // Advanced case: object with options
-                    const options = asOrOptions || {};
-                    const as = options.as || localField;
-                    
-                    // Build the lookup with automatic _type filter
-                    const lookupStage: Record<string, unknown> = {
-                        from: collectionName,
-                        let: { localValue: `$${localField}`, ...(options.let || {}) },
-                        as,
-                    };
-
-                    // Build pipeline: start with _type match, then add user pipeline if provided
-                    const basePipeline: AggregationStage[] = [
-                        {
-                            $match: {
-                                $expr: {
-                                    $and: [
-                                        { $eq: [`$${foreignField}`, "$$localValue"] },
-                                        { $eq: ["$_type", lookupKey as string] },
-                                    ],
-                                },
-                            },
-                        },
-                    ];
-
-                    // Add user-provided pipeline stages after the base filter
-                    if (options.pipeline) {
-                        const userPipeline = options.pipeline(stage);
-                        basePipeline.push(...userPipeline);
-                    }
-
-                    lookupStage.pipeline = basePipeline;
-
-                    return { $lookup: lookupStage };
-                },
-                anyLookup: (localField, foreignField, asOrOptions) => {
-                    // Simple case: string parameter is the 'as' field name
-                    // No _type filter - matches any document type
-                    if (typeof asOrOptions === 'string') {
-                        return {
-                            $lookup: {
-                                from: collectionName,
-                                localField,
-                                foreignField,
-                                as: asOrOptions,
-                            },
-                        };
-                    }
-
-                    // Advanced case: object with options
-                    const anyLookupOptions = asOrOptions || {};
-                    const as = anyLookupOptions.as || localField;
-                    const anyLookupStage: Record<string, unknown> = {
-                        from: collectionName,
-                        localField,
-                        foreignField,
-                        as,
-                    };
-
-                    // Add let variables if provided
-                    if (anyLookupOptions.let) {
-                        anyLookupStage.let = anyLookupOptions.let;
-                    }
-
-                    // Add pipeline if provided (execute the builder function)
-                    if (anyLookupOptions.pipeline) {
-                        anyLookupStage.pipeline = anyLookupOptions.pipeline(stage);
-                    }
-
-                    return { $lookup: anyLookupStage };
-                },
-                externalLookup: (fromCollection, localField, foreignField, asOrOptions) => {
-                    // Simple case: string parameter is the 'as' field name
-                    if (typeof asOrOptions === 'string') {
-                        return {
-                            $lookup: {
-                                from: fromCollection,
-                                localField,
-                                foreignField,
-                                as: asOrOptions,
-                            },
-                        };
-                    }
-
-                    // Advanced case: object with options
-                    const extLookupOptions = asOrOptions || {};
-                    const as = extLookupOptions.as || localField;
-                    const extLookupStage: Record<string, unknown> = {
-                        from: fromCollection,
-                        localField,
-                        foreignField,
-                        as,
-                    };
-
-                    // Add let variables if provided
-                    if (extLookupOptions.let) {
-                        extLookupStage.let = extLookupOptions.let;
-                    }
-
-                    // Add pipeline if provided (raw pipeline, not using StageBuilder)
-                    if (extLookupOptions.pipeline) {
-                        extLookupStage.pipeline = extLookupOptions.pipeline;
-                    }
-
-                    return { $lookup: extLookupStage };
-                },
-                project: (projection) => ({
-                    $project: projection,
-                }),
-                addFields: (fields) => ({
-                    $addFields: fields,
-                }),
-                group: (grouping) => ({
-                    $group: grouping,
-                }),
-                sort: (sort) => ({
-                    $sort: sort,
-                }),
-                limit: (limit) => ({
-                    $limit: limit,
-                }),
-                skip: (skip) => ({
-                    $skip: skip,
-                })
-            };
-
+            const stage = createStageBuilder<T>(collectionName);
             const session = sessionContext.getSession();
 
             const pipeline = stageBuilder(stage);

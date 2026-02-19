@@ -1,12 +1,12 @@
 import * as v from "../src/schema.ts";
-import { assertEquals, assertExists } from "@std/assert";
+import { test, expect } from "vitest";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
 import { MongoClient, ObjectId } from "mongodb";
 import { closeAllWatchers } from "../src/change-stream.ts";
 
-Deno.test("Collection watcher events test", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection watcher events test", async () => {
+  await withDatabase("Collection watcher events test", async (db) => {
     // Test variables to track events
     const events: { [key: string]: number } = {
       insert: 0,
@@ -72,15 +72,15 @@ Deno.test("Collection watcher events test", async (t) => {
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // Assert events were fired
-    assertEquals(events.insert, 1, "Insert event should be triggered once");
-    assertEquals(events.update, 1, "Update event should be triggered once");
-    assertEquals(events.replace, 1, "Replace event should be triggered once");
-    assertEquals(events.delete, 1, "Delete event should be triggered once");
+    expect(events.insert).toEqual(1);
+    expect(events.update).toEqual(1);
+    expect(events.replace).toEqual(1);
+    expect(events.delete).toEqual(1);
   });
 });
 
-Deno.test("Collection watcher event unsubscribe", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection watcher event unsubscribe", async () => {
+  await withDatabase("Collection watcher event unsubscribe", async (db) => {
     let insertCount = 0;
     let updateCount = 0;
 
@@ -133,16 +133,12 @@ Deno.test("Collection watcher event unsubscribe", async (t) => {
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // Insert count should still be 1, update count should be 2
-    assertEquals(
+    expect(
       insertCount,
-      1,
-      "Insert listener should have been called once before unsubscribing",
-    );
-    assertEquals(
+    ).toEqual(1);
+    expect(
       updateCount,
-      2,
-      "Update listener should have been called twice",
-    );
+    ).toEqual(2);
 
     // Unsubscribe the other listener
     unsubscribeUpdate();
@@ -157,13 +153,13 @@ Deno.test("Collection watcher event unsubscribe", async (t) => {
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // Counts should remain the same
-    assertEquals(insertCount, 1, "Insert count should remain 1");
-    assertEquals(updateCount, 2, "Update count should remain 2");
+    expect(insertCount).toEqual(1);
+    expect(updateCount).toEqual(2);
   });
 });
 
-Deno.test("Multiple collections with watchers", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Multiple collections with watchers", async () => {
+  await withDatabase("Multiple collections with watchers", async (db) => {
     // Create two different collections and ensure events don't cross-contaminate
     const events = {
       usersInsert: 0,
@@ -200,15 +196,15 @@ Deno.test("Multiple collections with watchers", async (t) => {
     // Wait for events to be processed
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
-    assertEquals(events.usersInsert, 1, "Should have 1 user insert event");
-    assertEquals(events.postsInsert, 2, "Should have 2 post insert events");
+    expect(events.usersInsert).toEqual(1);
+    expect(events.postsInsert).toEqual(2);
   });
 });
 
-Deno.test("FinalizationRegistry cleanup test", async (t) => {
+test("FinalizationRegistry cleanup test", async () => {
   // This test is more theoretical as it's hard to verify garbage collection,
   // but we can check that creating and disposing collections doesn't cause errors
-  await withDatabase(t.name, async (db) => {
+  await withDatabase("FinalizationRegistry cleanup test", async (db) => {
     for (let i = 0; i < 5; i++) {
       const collName = `test_coll_${i}`;
       const testColl = await collection(db, collName, {
@@ -231,16 +227,16 @@ Deno.test("FinalizationRegistry cleanup test", async (t) => {
 
       // We don't have direct access to the watchers WeakMap, so we're just
       // verifying that the code runs without errors
-      assertExists(testColl);
+      expect(testColl).toBeDefined();
     }
 
     // Success if we make it here without errors
-    assertEquals(true, true);
+    expect(true).toEqual(true);
   });
 });
 
-Deno.test("Collection destroy and recreate test", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Collection destroy and recreate test", async () => {
+  await withDatabase("Collection destroy and recreate test", async (db) => {
     let insertEvents = 0;
 
     // Define a simple schema
@@ -268,7 +264,7 @@ Deno.test("Collection destroy and recreate test", async (t) => {
     // Wait for event to be processed
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
-    assertEquals(insertEvents, 1, "Insert event should be triggered once");
+    expect(insertEvents).toEqual(1);
 
     // Drop the collection
     await users.drop();
@@ -289,16 +285,14 @@ Deno.test("Collection destroy and recreate test", async (t) => {
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // Event count should now be 2
-    assertEquals(
+    expect(
       insertEvents,
-      2,
-      "Insert event should be triggered after collection recreation",
-    );
+    ).toEqual(2);
   });
 });
 
-Deno.test("Database drop and recreate test", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Database drop and recreate test", async () => {
+  await withDatabase("Database drop and recreate test", async (db) => {
     let insertEvents = 0;
     let updateEvents = 0;
 
@@ -337,8 +331,8 @@ Deno.test("Database drop and recreate test", async (t) => {
     // Wait for events to be processed
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
-    assertEquals(insertEvents, 1, "Insert event should be triggered once");
-    assertEquals(updateEvents, 1, "Update event should be triggered once");
+    expect(insertEvents).toEqual(1);
+    expect(updateEvents).toEqual(1);
 
     // Close all watchers before dropping the database
     await closeAllWatchers(db);
@@ -371,21 +365,17 @@ Deno.test("Database drop and recreate test", async (t) => {
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // Event counts should be updated
-    assertEquals(
+    expect(
       insertEvents,
-      2,
-      "Insert event should be triggered after database recreation",
-    );
-    assertEquals(
+    ).toEqual(2);
+    expect(
       updateEvents,
-      2,
-      "Update event should be triggered after database recreation",
-    );
+    ).toEqual(2);
   });
 });
 
-Deno.test("Database cascade creation", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("Database cascade creation", async () => {
+  await withDatabase("Database cascade creation", async (db) => {
     // Create a collection with a schema
     const userSchema = {
       name: v.string(),
@@ -419,13 +409,11 @@ Deno.test("Database cascade creation", async (t) => {
     // Wait for events to be processed
     await new Promise((resolve) => setTimeout(resolve, 1000));
     // Assert that the cascade stopped after 10 inserts
-    assertEquals(insertCount, 10, "Insert event should be triggered 10 times");
+    expect(insertCount).toEqual(10);
     // Check that the collection has 11 documents (1 initial + 10 cascaded)
     const count = await users.countDocuments();
-    assertEquals(
+    expect(
       count,
-      10,
-      "Collection should have 10 documents after cascade",
-    );
+    ).toEqual(10);
   });
 });

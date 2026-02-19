@@ -1,5 +1,5 @@
 import * as v from "../src/schema.ts";
-import { assertEquals, assertExists, assertRejects } from "@std/assert";
+import { test, expect } from "vitest";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { withIndex } from "../src/indexes.ts";
@@ -8,8 +8,8 @@ import { MongoServerError } from "mongodb";
 import { slug } from "@diister/mongodbee/schema";
 import { defineModel } from "../src/multi-collection-model.ts";
 
-Deno.test("withIndex - Basic index creation", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("withIndex - Basic index creation", async () => {
+  await withDatabase("withIndex - Basic index creation", async (db) => {
     const userSchema = {
       username: withIndex(v.string()),
       email: v.string(),
@@ -20,7 +20,7 @@ Deno.test("withIndex - Basic index creation", async (t) => {
     const users = await collection(db, "users", userSchema, { schemaManagement: "auto" });
 
     // Verify the collection was created
-    assertExists(users);
+    expect(users).toBeDefined();
 
     // Insert test data
     await users.insertOne({
@@ -32,12 +32,12 @@ Deno.test("withIndex - Basic index creation", async (t) => {
     // Verify index exists by checking collection indexes
     const indexes = await users.collection.listIndexes().toArray();
     const usernameIndex = indexes.find((idx) => idx.key?.username === 1);
-    assertExists(usernameIndex);
+    expect(usernameIndex).toBeDefined();
   });
 });
 
-Deno.test("withIndex - Unique index constraint", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("withIndex - Unique index constraint", async () => {
+  await withDatabase("withIndex - Unique index constraint", async (db) => {
     const userSchema = {
       username: v.string(),
       email: withIndex(v.string(), { unique: true }),
@@ -53,21 +53,19 @@ Deno.test("withIndex - Unique index constraint", async (t) => {
     });
 
     // Try to insert second user with same email - should fail
-    await assertRejects(
+    await expect(
       async () => {
         await users.insertOne({
           username: "user2",
           email: "test@example.com",
         });
       },
-      MongoServerError,
-      "duplicate key",
-    );
+    ).rejects.toThrow("duplicate key");
   });
 });
 
-Deno.test("withIndex - Case insensitive index", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("withIndex - Case insensitive index", async () => {
+  await withDatabase("withIndex - Case insensitive index", async (db) => {
     const userSchema = {
       username: v.string(),
       email: withIndex(v.string(), { unique: true, insensitive: true }),
@@ -83,21 +81,19 @@ Deno.test("withIndex - Case insensitive index", async (t) => {
     });
 
     // Try to insert second user with different case email - should fail due to case insensitive index
-    await assertRejects(
+    await expect(
       async () => {
         await users.insertOne({
           username: "user2",
           email: "test@EXAMPLE.com",
         });
       },
-      MongoServerError,
-      "duplicate key",
-    );
+    ).rejects.toThrow("duplicate key");
   });
 });
 
-Deno.test("withIndex - Custom collation", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("withIndex - Custom collation", async () => {
+  await withDatabase("withIndex - Custom collation", async (db) => {
     const userSchema = {
       name: withIndex(v.string(), {
         unique: true,
@@ -116,21 +112,19 @@ Deno.test("withIndex - Custom collation", async (t) => {
     });
 
     // Try to insert user with accent differences - should fail due to collation
-    await assertRejects(
+    await expect(
       async () => {
         await users.insertOne({
           name: "Jose", // Without accent
           email: "jose2@example.com",
         });
       },
-      MongoServerError,
-      "duplicate key",
-    );
+    ).rejects.toThrow("duplicate key");
   });
 });
 
-Deno.test("withIndex - Multiple indexes on different fields", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("withIndex - Multiple indexes on different fields", async () => {
+  await withDatabase("withIndex - Multiple indexes on different fields", async (db) => {
     const userSchema = {
       username: withIndex(v.string(), { unique: true }),
       email: withIndex(v.string(), { unique: true }),
@@ -145,7 +139,7 @@ Deno.test("withIndex - Multiple indexes on different fields", async (t) => {
     const indexes = await users.collection.listIndexes().toArray();
 
     // Should have default _id index plus our 3 custom indexes
-    assertEquals(indexes.length, 4);
+    expect(indexes.length).toEqual(4);
 
     const usernameIndex = indexes.find((idx) =>
       idx.key?.username === 1 && idx.unique === true
@@ -155,14 +149,14 @@ Deno.test("withIndex - Multiple indexes on different fields", async (t) => {
     );
     const ageIndex = indexes.find((idx) => idx.key?.age === 1 && !idx.unique);
 
-    assertExists(usernameIndex);
-    assertExists(emailIndex);
-    assertExists(ageIndex);
+    expect(usernameIndex).toBeDefined();
+    expect(emailIndex).toBeDefined();
+    expect(ageIndex).toBeDefined();
   });
 });
 
-Deno.test("withIndex - Multi-collection with type scoped indexes", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("withIndex - Multi-collection with type scoped indexes", async () => {
+  await withDatabase("withIndex - Multi-collection with type scoped indexes", async (db) => {
     const catalogSchema = {
       product: {
         name: v.string(),
@@ -210,7 +204,7 @@ Deno.test("withIndex - Multi-collection with type scoped indexes", async (t) => 
     });
 
     // Try to insert product with duplicate SKU - should fail
-    await assertRejects(
+    await expect(
       async () => {
         await catalog.insertOne("product", {
           name: "Another Laptop",
@@ -218,21 +212,17 @@ Deno.test("withIndex - Multi-collection with type scoped indexes", async (t) => 
           price: 1299.99,
         });
       },
-      MongoServerError,
-      "duplicate key",
-    );
+    ).rejects.toThrow("duplicate key");
 
     // Try to insert category with duplicate slug - should fail
-    await assertRejects(
+    await expect(
       async () => {
         await catalog.insertOne("category", {
           name: "Electronics 2",
           slug: "electronics", // Duplicate slug
         });
       },
-      MongoServerError,
-      "duplicate key",
-    );
+    ).rejects.toThrow("duplicate key");
 
     // Verify that same values can exist across different types
     // This should succeed because indexes are type-scoped
@@ -243,8 +233,8 @@ Deno.test("withIndex - Multi-collection with type scoped indexes", async (t) => 
   });
 });
 
-Deno.test("withIndex - Multi-collection with scoped indexes by type", async (e) => {
-  await withDatabase(e.name, async (db) => {
+test("withIndex - Multi-collection with scoped indexes by type", async () => {
+  await withDatabase("withIndex - Multi-collection with scoped indexes by type", async (db) => {
     const catalogSchema = {
       products: {
         name: v.string(),
@@ -287,7 +277,7 @@ Deno.test("withIndex - Multi-collection with scoped indexes by type", async (e) 
     });
 
     // Insert another product with same slug - should fail
-    await assertRejects(
+    await expect(
       async () => {
         await catalog.insertOne("products", {
           name: "Gaming Laptop",
@@ -295,12 +285,10 @@ Deno.test("withIndex - Multi-collection with scoped indexes by type", async (e) 
           slug: "laptop-2023", // Duplicate slug for products
         });
       },
-      MongoServerError,
-      "duplicate key",
-    );
+    ).rejects.toThrow("duplicate key");
 
     // Insert another car with same slug - should fail
-    await assertRejects(
+    await expect(
       async () => {
         await catalog.insertOne("cars", {
           name: "Luxury Car",
@@ -308,25 +296,23 @@ Deno.test("withIndex - Multi-collection with scoped indexes by type", async (e) 
           slug: "tesla-model-s", // Duplicate slug for cars
         });
       },
-      MongoServerError,
-      "duplicate key",
-    );
+    ).rejects.toThrow("duplicate key");
 
     // Verify products and cars can be queried correctly
-    const products = await catalog.find("products");
-    const cars = await catalog.find("cars");
-    assertEquals(products.length, 1);
-    assertEquals(cars.length, 2);
-    assertEquals(products[0].slug, "laptop-2023");
-    assertEquals(cars[0].slug, "tesla-model-s");
-    assertEquals(cars[1].slug, "laptop-2023"); // Car with same slug as product
-    assertEquals(cars[1]._type, "cars"); // Ensure type is preserved
-    assertEquals(products[0]._type, "products"); // Ensure type is preserved
+    const products = await catalog.find("products").toArray();
+    const cars = await catalog.find("cars").toArray();
+    expect(products.length).toEqual(1);
+    expect(cars.length).toEqual(2);
+    expect(products[0].slug).toEqual("laptop-2023");
+    expect(cars[0].slug).toEqual("tesla-model-s");
+    expect(cars[1].slug).toEqual("laptop-2023"); // Car with same slug as product
+    expect(cars[1]._type).toEqual("cars"); // Ensure type is preserved
+    expect(products[0]._type).toEqual("products"); // Ensure type is preserved
   });
 });
 
-Deno.test("withIndex - Multi-collection with scoped deep indexes by type", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("withIndex - Multi-collection with scoped deep indexes by type", async () => {
+  await withDatabase("withIndex - Multi-collection with scoped deep indexes by type", async (db) => {
     const catalogSchema = {
       products: {
         name: v.string(),
@@ -379,7 +365,7 @@ Deno.test("withIndex - Multi-collection with scoped deep indexes by type", async
     });
 
     // Insert another product with same slug - should fail
-    await assertRejects(
+    await expect(
       async () => {
         await catalog.insertOne("products", {
           name: "Gaming Laptop",
@@ -389,12 +375,10 @@ Deno.test("withIndex - Multi-collection with scoped deep indexes by type", async
           },
         });
       },
-      MongoServerError,
-      "duplicate key",
-    );
+    ).rejects.toThrow("duplicate key");
 
     // Insert another car with same slug - should fail
-    await assertRejects(
+    await expect(
       async () => {
         await catalog.insertOne("cars", {
           name: "Luxury Car",
@@ -404,25 +388,23 @@ Deno.test("withIndex - Multi-collection with scoped deep indexes by type", async
           },
         });
       },
-      MongoServerError,
-      "duplicate key",
-    );
+    ).rejects.toThrow("duplicate key");
 
     // Verify products and cars can be queried correctly
-    const products = await catalog.find("products");
-    const cars = await catalog.find("cars");
-    assertEquals(products.length, 1);
-    assertEquals(cars.length, 2);
-    assertEquals(products[0].details.slug, "laptop-2023");
-    assertEquals(cars[0].details.slug, "tesla-model-s");
-    assertEquals(cars[1].details.slug, "laptop-2023"); // Car with same slug as product
-    assertEquals(cars[1]._type, "cars"); // Ensure type is preserved
-    assertEquals(products[0]._type, "products"); // Ensure type is preserved
+    const products = await catalog.find("products").toArray();
+    const cars = await catalog.find("cars").toArray();
+    expect(products.length).toEqual(1);
+    expect(cars.length).toEqual(2);
+    expect(products[0].details.slug).toEqual("laptop-2023");
+    expect(cars[0].details.slug).toEqual("tesla-model-s");
+    expect(cars[1].details.slug).toEqual("laptop-2023"); // Car with same slug as product
+    expect(cars[1]._type).toEqual("cars"); // Ensure type is preserved
+    expect(products[0]._type).toEqual("products"); // Ensure type is preserved
   });
 });
 
-Deno.test("withIndex - Automatic type field in multi-collection", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("withIndex - Automatic type field in multi-collection", async () => {
+  await withDatabase("withIndex - Automatic type field in multi-collection", async (db) => {
     const catalogSchema = {
       product: {
         name: v.string(),
@@ -451,18 +433,18 @@ Deno.test("withIndex - Automatic type field in multi-collection", async (t) => {
     });
 
     // Verify type field is automatically added
-    const products = await catalog.find("product");
-    const categories = await catalog.find("category");
+    const products = await catalog.find("product").toArray();
+    const categories = await catalog.find("category").toArray();
 
-    assertEquals(products.length, 1);
-    assertEquals(categories.length, 1);
-    assertEquals(products[0]._type, "product");
-    assertEquals(categories[0]._type, "category");
+    expect(products.length).toEqual(1);
+    expect(categories.length).toEqual(1);
+    expect(products[0]._type).toEqual("product");
+    expect(categories[0]._type).toEqual("category");
   });
 });
 
-Deno.test("withIndex - Union schemas with unique constraints", async (t) => {
-  await withDatabase(t.name, async (db) => {
+test("withIndex - Union schemas with unique constraints", async () => {
+  await withDatabase("withIndex - Union schemas with unique constraints", async (db) => {
     // Test union schema like SIRET/SIREN
     const NumberOrString = v.union([v.string(), v.number()]);
 
@@ -488,33 +470,29 @@ Deno.test("withIndex - Union schemas with unique constraints", async (t) => {
     });
 
     // Should prevent duplicate string value
-    await assertRejects(
+    await expect(
       async () => {
         await coll.insertOne({
           id: "test3",
           value: "string_value", // Same as first
         });
       },
-      MongoServerError,
-      "duplicate key",
-    );
+    ).rejects.toThrow("duplicate key");
 
     // Should prevent duplicate number value
-    await assertRejects(
+    await expect(
       async () => {
         await coll.insertOne({
           id: "test4",
           value: 42, // Same as second
         });
       },
-      MongoServerError,
-      "duplicate key",
-    );
+    ).rejects.toThrow("duplicate key");
 
     // Verify indexes were created correctly
     const indexes = await coll.collection.listIndexes().toArray();
     const valueIndex = indexes.find((idx) => idx.key?.value === 1);
-    assertExists(valueIndex);
-    assertEquals(valueIndex.unique, true);
+    expect(valueIndex).toBeDefined();
+    expect(valueIndex.unique).toEqual(true);
   });
 });

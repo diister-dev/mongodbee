@@ -7,8 +7,14 @@
  * @module
  */
 
-import { existsSync } from "@std/fs";
-import * as path from "@std/path";
+import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const LIBRARY_NODE_MODULES = path.resolve(__dirname, "..", "..", "..", "node_modules");
 
 /**
  * Creates a temporary directory and executes work within it.
@@ -26,16 +32,30 @@ import * as path from "@std/path";
  * // tempDir is automatically cleaned up
  * ```
  */
+/**
+ * Sets up node_modules in a temp directory by symlinking to the library's node_modules.
+ * This allows dynamically imported migration files to resolve @diister/mongodbee/migration.
+ */
+export async function setupTempNodeModules(tempDir: string): Promise<void> {
+  const target = path.join(tempDir, "node_modules");
+  await fsp.symlink(
+    LIBRARY_NODE_MODULES,
+    target,
+    os.platform() === "win32" ? "junction" : "dir",
+  );
+}
+
 export async function withTempDir(
   work: (tempDir: string) => Promise<void>,
 ): Promise<void> {
-  const tempDir = await Deno.makeTempDir({ prefix: "mongodbee_test_" });
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "mongodbee_test_"));
 
   try {
+    await setupTempNodeModules(tempDir);
     await work(tempDir);
   } finally {
     try {
-      await Deno.remove(tempDir, { recursive: true });
+      await fsp.rm(tempDir, { recursive: true });
     } catch {
       // Ignore cleanup errors (may be locked on Windows)
     }
@@ -58,10 +78,10 @@ export async function fileContains(
   filePath: string,
   content: string,
 ): Promise<boolean> {
-  if (!existsSync(filePath)) {
+  if (!fs.existsSync(filePath)) {
     return false;
   }
-  const fileContent = await Deno.readTextFile(filePath);
+  const fileContent = await fsp.readFile(filePath, "utf-8");
   return fileContent.includes(content);
 }
 
@@ -77,10 +97,10 @@ export async function fileContains(
  * ```
  */
 export async function readFile(filePath: string): Promise<string | null> {
-  if (!existsSync(filePath)) {
+  if (!fs.existsSync(filePath)) {
     return null;
   }
-  return await Deno.readTextFile(filePath);
+  return await fsp.readFile(filePath, "utf-8");
 }
 
 /**
@@ -95,11 +115,11 @@ export async function readFile(filePath: string): Promise<string | null> {
  * ```
  */
 export function listFiles(dirPath: string): string[] {
-  if (!existsSync(dirPath)) {
+  if (!fs.existsSync(dirPath)) {
     return [];
   }
-  return [...Deno.readDirSync(dirPath)]
-    .filter((entry) => entry.isFile)
+  return fs.readdirSync(dirPath, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
     .map((entry) => entry.name);
 }
 

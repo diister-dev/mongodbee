@@ -25,7 +25,11 @@ async function deleteTestDatabase(client: MongoClient, prefix = "UNKNOWN") {
   const dbs = await client.db().admin().listDatabases();
   for (const db of dbs.databases) {
     if (db.name.startsWith(computePrefix(prefix))) {
-      await client.db(db.name).dropDatabase();
+      try {
+        await client.db(db.name).dropDatabase();
+      } catch {
+        // Ignore errors if database is already being dropped by another fork
+      }
     }
   }
 }
@@ -34,7 +38,7 @@ export async function withDatabase(
   prefix: string,
   work: (db: Db) => Promise<void>,
 ) {
-  const client = new MongoClient("mongodb://localhost:27017");
+  const client = new MongoClient("mongodb://127.0.0.1:27017");
   await deleteTestDatabase(client, prefix);
   const db = client.db(randomDBName(prefix));
   try {
@@ -42,7 +46,11 @@ export async function withDatabase(
   } finally {
     // Close all change streams before dropping the database
     await closeAllWatchers(db);
-    await db.dropDatabase(); // Uncomment to debug after test
+    try {
+      await db.dropDatabase();
+    } catch {
+      // Ignore errors if database is already being dropped by another fork
+    }
     await client.close();
   }
 }
