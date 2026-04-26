@@ -518,3 +518,47 @@ Deno.test("withIndex - Union schemas with unique constraints", async (t) => {
     assertEquals(valueIndex.unique, true);
   });
 });
+
+Deno.test("withIndex - TTL index creation", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const eventSchema = {
+      expiresAt: withIndex(v.date(), { expireAfterSeconds: 3600 }),
+      payload: v.string(),
+    };
+
+    const events = await collection(db, "events", eventSchema, {
+      schemaManagement: "auto",
+    });
+
+    const indexes = await events.collection.listIndexes().toArray();
+    const ttl = indexes.find((idx) => idx.key?.expiresAt === 1);
+    assertExists(ttl);
+    assertEquals(ttl?.expireAfterSeconds, 3600);
+  });
+});
+
+Deno.test("withIndex - TTL with partialFilterExpression", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const emailSchema = {
+      sentAt: withIndex(v.date(), {
+        expireAfterSeconds: 7776000,
+        partialFilterExpression: { kind: "live", status: "SENT" },
+      }),
+      kind: v.string(),
+      status: v.string(),
+    };
+
+    const emails = await collection(db, "emails", emailSchema, {
+      schemaManagement: "auto",
+    });
+
+    const indexes = await emails.collection.listIndexes().toArray();
+    const ttl = indexes.find((idx) => idx.key?.sentAt === 1);
+    assertExists(ttl);
+    assertEquals(ttl?.expireAfterSeconds, 7776000);
+    assertEquals(ttl?.partialFilterExpression, {
+      kind: "live",
+      status: "SENT",
+    });
+  });
+});

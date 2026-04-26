@@ -19,11 +19,28 @@ export type IndexMetadata = {
   unique?: boolean;
   insensitive?: boolean;
   collation?: m.CollationOptions;
+  /**
+   * Number of seconds after the indexed field's value at which MongoDB will
+   * purge the document (TTL index). Requires the indexed field to be a BSON
+   * Date — on non-Date fields MongoDB silently no-ops the TTL behavior. `0`
+   * is a valid value meaning "expire when current time >= the field's value".
+   */
+  expireAfterSeconds?: number;
+  /**
+   * MongoDB partial-filter expression. The index only covers documents
+   * matching this filter. Combine with TTL to scope purges (e.g.
+   * `{ status: "SENT" }`), or with `unique` to scope uniqueness. In
+   * multi-collections this filter is automatically AND-merged with the
+   * `_type` scoping filter.
+   */
+  partialFilterExpression?: m.Document;
 };
 
 export type IndexDatabase = {
   unique?: boolean;
   collation?: m.CollationOptions;
+  expireAfterSeconds?: number;
+  partialFilterExpression?: m.Document;
 };
 
 /**
@@ -71,6 +88,12 @@ export function withIndex<
     indexDatabase.collation = options.collation;
   } else if (options.insensitive) {
     indexDatabase.collation = { locale: "en", strength: 2 };
+  }
+  if (options.expireAfterSeconds !== undefined) {
+    indexDatabase.expireAfterSeconds = options.expireAfterSeconds;
+  }
+  if (options.partialFilterExpression) {
+    indexDatabase.partialFilterExpression = options.partialFilterExpression;
   }
 
   return v.pipe(
@@ -181,7 +204,12 @@ function normalizeCollation(collation: unknown): Record<string, unknown> | undef
  */
 export function normalizeIndexOptions(
   opts: unknown,
-): { unique: boolean; collation?: string; partialFilterExpression?: string } {
+): {
+  unique: boolean;
+  collation?: string;
+  partialFilterExpression?: string;
+  expireAfterSeconds?: number;
+} {
   const obj = (opts as Record<string, unknown> | undefined) ?? {};
   const objTyped = obj as Record<string, unknown>;
   const hasUnique = Object.prototype.hasOwnProperty.call(objTyped, "unique")
@@ -195,9 +223,14 @@ export function normalizeIndexOptions(
     Object.prototype.hasOwnProperty.call(objTyped, "partialFilterExpression")
       ? objTyped["partialFilterExpression"]
       : undefined;
+  const ttlVal =
+    Object.prototype.hasOwnProperty.call(objTyped, "expireAfterSeconds")
+      ? objTyped["expireAfterSeconds"]
+      : undefined;
   return {
     unique: hasUnique,
     collation: collationVal ? JSON.stringify(normalizeCollation(collationVal)) : undefined,
     partialFilterExpression: pfeVal ? JSON.stringify(pfeVal) : undefined,
+    expireAfterSeconds: typeof ttlVal === "number" ? ttlVal : undefined,
   };
 }

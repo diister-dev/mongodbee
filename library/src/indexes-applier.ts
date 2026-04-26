@@ -113,6 +113,9 @@ export async function applyCollectionIndexes(
       name: indexPath,
     };
 
+    // Note: changes to expireAfterSeconds rebuild the index via drop+recreate.
+    // MongoDB's collMod could change just the TTL value online, but we keep
+    // drop+recreate for consistency with how unique/collation changes are handled.
     let needsRecreate = true;
     if (existingIndex) {
       const existingNorm = normalizeIndexOptions(existingIndex);
@@ -121,7 +124,8 @@ export async function applyCollectionIndexes(
         existingNorm.unique === desiredNorm.unique &&
         existingNorm.collation === desiredNorm.collation &&
         existingNorm.partialFilterExpression ===
-          desiredNorm.partialFilterExpression
+          desiredNorm.partialFilterExpression &&
+        existingNorm.expireAfterSeconds === desiredNorm.expireAfterSeconds
       ) {
         needsRecreate = false;
       }
@@ -303,12 +307,20 @@ export async function applyMultiCollectionIndexes(
       ) || currentIndexes.find((i) => keyEqual(i.key || {}, keySpec));
 
       // partialFilterExpression is needed to scope unique constraints by type
-      // e.g., two different types can have the same value on a unique field
+      // e.g., two different types can have the same value on a unique field.
+      // If the user provided their own partialFilterExpression on the index,
+      // AND-merge it with the type filter so both conditions are enforced.
+      // Order is fixed [userFilter, typeFilter] so JSON.stringify in
+      // normalizeIndexOptions produces a stable diff key across reapplies.
+      const userFilter = index.metadata.partialFilterExpression;
+      const typeFilter = { _type: { $eq: type } };
+      const partialFilterExpression = userFilter
+        ? { $and: [userFilter, typeFilter] }
+        : typeFilter;
+
       const desiredOptions = {
         ...index.metadata,
-        partialFilterExpression: {
-          _type: { $eq: type },
-        },
+        partialFilterExpression,
         name: indexName,
       };
 
@@ -320,7 +332,8 @@ export async function applyMultiCollectionIndexes(
           existingNorm.unique === desiredNorm.unique &&
           existingNorm.collation === desiredNorm.collation &&
           existingNorm.partialFilterExpression ===
-            desiredNorm.partialFilterExpression
+            desiredNorm.partialFilterExpression &&
+          existingNorm.expireAfterSeconds === desiredNorm.expireAfterSeconds
         ) {
           needsRecreate = false;
         }

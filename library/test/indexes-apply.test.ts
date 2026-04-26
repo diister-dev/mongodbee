@@ -161,3 +161,115 @@ Deno.test("applyIndexes - schema delta: adding an index creates it; removing fro
     assertExists(cIdx); // New index should exist
   });
 });
+
+Deno.test("applyIndexes - changing expireAfterSeconds triggers recreate", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const schemaA = {
+      ts: withIndex(v.date(), { expireAfterSeconds: 3600 }),
+    };
+    const schemaB = {
+      ts: withIndex(v.date(), { expireAfterSeconds: 7200 }),
+    };
+
+    const cA = await collection(db, "ttl_change", schemaA, {
+      schemaManagement: "auto",
+    });
+    const before = (await cA.collection.listIndexes().toArray()).find((i) =>
+      i.key?.ts === 1
+    );
+    assertExists(before);
+    assertEquals(before?.expireAfterSeconds, 3600);
+
+    const cB = await collection(db, "ttl_change", schemaB, {
+      schemaManagement: "auto",
+    });
+    const after = (await cB.collection.listIndexes().toArray()).find((i) =>
+      i.key?.ts === 1
+    );
+    assertExists(after);
+    assertEquals(after?.expireAfterSeconds, 7200);
+  });
+});
+
+Deno.test("applyIndexes - identical TTL spec does not recreate", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const schema = {
+      ts: withIndex(v.date(), { expireAfterSeconds: 3600 }),
+    };
+
+    const c1 = await collection(db, "ttl_idempotent", schema, {
+      schemaManagement: "auto",
+    });
+    const before = (await c1.collection.listIndexes().toArray()).find((i) =>
+      i.key?.ts === 1
+    );
+    assertExists(before);
+
+    const c2 = await collection(db, "ttl_idempotent", schema, {
+      schemaManagement: "auto",
+    });
+    const after = (await c2.collection.listIndexes().toArray()).find((i) =>
+      i.key?.ts === 1
+    );
+    assertExists(after);
+
+    // Index version stays the same when not recreated
+    assertEquals(before?.v, after?.v);
+    assertEquals(before?.expireAfterSeconds, after?.expireAfterSeconds);
+  });
+});
+
+Deno.test("applyMultiCollectionIndexes - merges user partialFilterExpression with type filter", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const schema = {
+      email: {
+        sentAt: withIndex(v.date(), {
+          expireAfterSeconds: 7776000,
+          partialFilterExpression: { status: { $eq: "SENT" } },
+        }),
+        status: v.string(),
+      },
+    };
+
+    const _mc = await multiCollection(
+      db,
+      "mailbox",
+      defineModel("mailbox", { schema }),
+      { schemaManagement: "auto" },
+    );
+
+    const indexes = await db.collection("mailbox").listIndexes().toArray();
+    const ttl = indexes.find((i: { name?: string }) => i.name === "email_sentAt");
+    assertExists(ttl);
+    assertEquals(ttl?.expireAfterSeconds, 7776000);
+    assertEquals(ttl?.partialFilterExpression, {
+      $and: [
+        { status: { $eq: "SENT" } },
+        { _type: { $eq: "email" } },
+      ],
+    });
+  });
+});
+
+Deno.test("applyMultiCollectionIndexes - bare type filter when no user filter", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const schema = {
+      email: {
+        sentAt: withIndex(v.date(), { expireAfterSeconds: 7776000 }),
+      },
+    };
+
+    const _mc = await multiCollection(
+      db,
+      "mailbox_bare",
+      defineModel("mailbox_bare", { schema }),
+      { schemaManagement: "auto" },
+    );
+
+    const indexes = await db.collection("mailbox_bare").listIndexes().toArray();
+    const ttl = indexes.find((i: { name?: string }) => i.name === "email_sentAt");
+    assertExists(ttl);
+    assertEquals(ttl?.expireAfterSeconds, 7776000);
+    assertEquals(ttl?.partialFilterExpression, { _type: { $eq: "email" } });
+  });
+});

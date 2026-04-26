@@ -27,3 +27,18 @@ Deno.test("normalizeIndexOptions handles undefined safely", () => {
   assertEquals(norm.collation, undefined);
   assertEquals(norm.partialFilterExpression, undefined);
 });
+
+Deno.test("normalizeIndexOptions extracts expireAfterSeconds", () => {
+  const norm = normalizeIndexOptions({ expireAfterSeconds: 3600 });
+  assertEquals(norm.expireAfterSeconds, 3600);
+});
+
+Deno.test("normalizeIndexOptions preserves expireAfterSeconds: 0", () => {
+  const norm = normalizeIndexOptions({ expireAfterSeconds: 0 });
+  assertEquals(norm.expireAfterSeconds, 0);
+});
+
+Deno.test("normalizeIndexOptions returns undefined when expireAfterSeconds absent", () => {
+  const norm = normalizeIndexOptions({ unique: true });
+  assertEquals(norm.expireAfterSeconds, undefined);
+});
