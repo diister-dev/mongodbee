@@ -225,11 +225,25 @@ export type CollectionResult<
         filter?: (doc: E) => Promise<boolean> | boolean;
         format?: (doc: E) => Promise<R> | R;
         pipeline?: (stage: SimpleStageBuilder) => AggregationStage[];
+        /**
+         * Skip the `countDocuments` call(s). `total` and `position` will be
+         * `undefined` in the result. Useful when the caller only needs the
+         * page data and doesn't care about absolute position in the result set.
+         */
+        skipTotal?: boolean;
+        /**
+         * Fetch one extra document past `limit` to set `hasMore` cheaply
+         * (no second count). The extra row is dropped before the result is
+         * returned. Combine with `skipTotal: true` for fully count-free
+         * pagination.
+         */
+        peek?: boolean;
       },
     ) => Promise<{
-      total: number;
-      position: number;
+      total?: number;
+      position?: number;
       data: R[];
+      hasMore?: boolean;
     }>;
 
     // From mongodb.Collection
@@ -689,12 +703,18 @@ export async function collection<
         filter?: (doc: E) => Promise<boolean> | boolean,
         format?: (doc: E) => Promise<R>,
         pipeline?: (stage: SimpleStageBuilder) => AggregationStage[],
+        skipTotal?: boolean,
+        peek?: boolean,
     }): Promise<{
-        total: number,
-        position: number,
+        total?: number,
+        position?: number,
         data: R[],
+        hasMore?: boolean,
     }> {
-        let { limit = 100, afterId, beforeId, sort, prepare, filter: customFilter, format, pipeline: pipelineBuilder } = options || {};
+        const { skipTotal = false, peek = false } = options || {};
+        const requestedLimit = options?.limit ?? 100;
+        let limit = peek ? requestedLimit + 1 : requestedLimit;
+        let { afterId, beforeId, sort, prepare, filter: customFilter, format, pipeline: pipelineBuilder } = options || {};
         const session = sessionContext.getSession();
         const baseQuery: m.Filter<TInput> = { ...filter };
         let query: m.Filter<TInput> = { ...filter };
@@ -779,7 +799,7 @@ export async function collection<
 
         let total: number | undefined;
         let position: number | undefined;
-        {
+        if (!skipTotal) {
             // Count total documents matching the base filter
             total = await collection.countDocuments(baseQuery, { session });
 
@@ -941,25 +961,39 @@ export async function collection<
           }
         }
 
+        // If peek was requested, pop the extra row (fetched in cursor's natural order, before any beforeId reverse)
+        let hasMore: boolean | undefined;
+        if (peek) {
+            if (elements.length > requestedLimit) {
+                hasMore = true;
+                elements.pop();
+            } else {
+                hasMore = false;
+            }
+        }
+
         // If paginating backwards (beforeId), reverse to maintain consistent order with forward pagination
         if (beforeId) {
             elements.reverse();
             // Calculate position: count of elements before the first returned element
             // After reverse, elements[0] is the earliest in the sorted order
             // Position = total elements before anchor - elements returned
-            const beforeFilter = await buildCursorFilter(beforeId, 'before');
-            if (beforeFilter) {
-                const beforeCount = await collection.countDocuments({ ...baseQuery, ...beforeFilter } as m.Filter<TInput>, { session });
-                position = Math.max(0, beforeCount - elements.length);
-            } else {
-                position = 0;
+            if (!skipTotal) {
+                const beforeFilter = await buildCursorFilter(beforeId, 'before');
+                if (beforeFilter) {
+                    const beforeCount = await collection.countDocuments({ ...baseQuery, ...beforeFilter } as m.Filter<TInput>, { session });
+                    position = Math.max(0, beforeCount - elements.length);
+                } else {
+                    position = 0;
+                }
             }
         }
 
         return {
             total,
-            position: position as number,
+            position,
             data: elements,
+            ...(peek ? { hasMore } : {}),
         };
     },
     countDocuments(filter, options?) {

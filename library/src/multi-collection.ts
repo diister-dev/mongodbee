@@ -196,11 +196,16 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
       ) => Promise<EN> | EN;
       filter?: (doc: EN) => Promise<boolean> | boolean;
       format?: (doc: EN) => Promise<R> | R;
+      /** Skip the countDocuments call(s); total/position will be undefined. */
+      skipTotal?: boolean;
+      /** Fetch one extra document to set hasMore cheaply; the extra row is dropped. */
+      peek?: boolean;
     },
   ): Promise<{
-    total: number;
-    position: number;
+    total?: number;
+    position?: number;
     data: R[];
+    hasMore?: boolean;
   }>;
   /**
    * Cross-pagination: paginate across multiple types simultaneously.
@@ -245,11 +250,16 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
       ) => Promise<EN> | EN;
       filter?: (doc: EN) => Promise<boolean> | boolean;
       format?: (doc: EN) => Promise<R> | R;
+      /** Skip the countDocuments call(s); total/position will be undefined. */
+      skipTotal?: boolean;
+      /** Fetch one extra document to set hasMore cheaply; the extra row is dropped. */
+      peek?: boolean;
     },
   ): Promise<{
-    total: number;
-    position: number;
+    total?: number;
+    position?: number;
     data: R[];
+    hasMore?: boolean;
   }>;
   countDocuments<E extends keyof T>(
     key: E,
@@ -593,9 +603,14 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 prepare?: (doc: any) => Promise<any> | any,
                 filter?: (doc: any) => Promise<boolean> | boolean,
                 format?: (doc: any) => Promise<any> | any,
+                skipTotal?: boolean,
+                peek?: boolean,
             }
         ) {
-            let { limit = 100, afterId, beforeId, sort, naturalIdSort, pipeline: pipelineBuilder, prepare, filter: customFilter, format } = options || {};
+            const { skipTotal = false, peek = false } = options || {};
+            const requestedLimit = options?.limit ?? 100;
+            let limit = peek ? requestedLimit + 1 : requestedLimit;
+            let { afterId, beforeId, sort, naturalIdSort, pipeline: pipelineBuilder, prepare, filter: customFilter, format } = options || {};
             const session = sessionContext.getSession();
 
             // Support both single key and array of keys for cross-pagination
@@ -740,7 +755,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
             let total: number | undefined;
             let position: number | undefined;
-            {
+            if (!skipTotal) {
                 const baseCountQuery = { $and: baseQuery };
                 total = await collection.countDocuments(baseCountQuery as never, { session });
 
@@ -1003,23 +1018,37 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 await cursor.close();
             }
 
+            // If peek was requested, pop the extra row (cursor's natural order, before any beforeId reverse)
+            let hasMore: boolean | undefined;
+            if (peek) {
+                if (elements.length > requestedLimit) {
+                    hasMore = true;
+                    elements.pop();
+                } else {
+                    hasMore = false;
+                }
+            }
+
             // If paginating backwards (beforeId), reverse to maintain consistent order with forward pagination
             if (beforeId) {
                 elements.reverse();
                 // Calculate position: count of elements before the first returned element
-                const beforeFilter = await buildCursorFilter(beforeId, 'before');
-                if (beforeFilter) {
-                    const beforeCount = await collection.countDocuments({ $and: [...baseQuery, beforeFilter] } as never, { session });
-                    position = Math.max(0, beforeCount - elements.length);
-                } else {
-                    position = 0;
+                if (!skipTotal) {
+                    const beforeFilter = await buildCursorFilter(beforeId, 'before');
+                    if (beforeFilter) {
+                        const beforeCount = await collection.countDocuments({ $and: [...baseQuery, beforeFilter] } as never, { session });
+                        position = Math.max(0, beforeCount - elements.length);
+                    } else {
+                        position = 0;
+                    }
                 }
             }
 
             return {
                 total,
-                position: position as number,
+                position,
                 data: elements,
+                ...(peek ? { hasMore } : {}),
             };
         },
         countDocuments(key, filter, options?) {

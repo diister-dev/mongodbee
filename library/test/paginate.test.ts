@@ -967,3 +967,113 @@ Deno.test("Paginate accumulation with _id descending - no duplicates across 5+ p
     assertEquals(uniqueIds.size, 25, "There are duplicate IDs in the accumulated results");
   });
 });
+
+Deno.test("Paginate skipTotal omits total and position", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const itemSchema = { name: v.string(), value: v.number() };
+    const items = await collection(db, "items", itemSchema);
+    const testData = [];
+    for (let i = 1; i <= 12; i++) {
+      testData.push({ name: `Item ${i}`, value: i });
+    }
+    await items.insertMany(testData);
+
+    const page = await items.paginate({}, { limit: 5, skipTotal: true });
+    assertEquals(page.data.length, 5);
+    assertEquals(page.total, undefined);
+    assertEquals(page.position, undefined);
+    assertEquals(page.hasMore, undefined);
+  });
+});
+
+Deno.test("Paginate peek returns hasMore and drops the extra row", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const itemSchema = { name: v.string(), value: v.number() };
+    const items = await collection(db, "items", itemSchema);
+    const testData = [];
+    for (let i = 1; i <= 12; i++) {
+      testData.push({ name: `Item ${i}`, value: i });
+    }
+    await items.insertMany(testData);
+
+    // 12 docs, limit 5 → hasMore=true, data length still 5
+    const firstPage = await items.paginate({}, { limit: 5, peek: true });
+    assertEquals(firstPage.data.length, 5);
+    assertEquals(firstPage.hasMore, true);
+    // total is still computed (peek alone doesn't disable total)
+    assertEquals(firstPage.total, 12);
+
+    // Last page: 12 docs, limit 12 → hasMore=false
+    const lastPage = await items.paginate({}, { limit: 12, peek: true });
+    assertEquals(lastPage.data.length, 12);
+    assertEquals(lastPage.hasMore, false);
+
+    // Limit larger than dataset → hasMore=false
+    const overshoot = await items.paginate({}, { limit: 50, peek: true });
+    assertEquals(overshoot.data.length, 12);
+    assertEquals(overshoot.hasMore, false);
+  });
+});
+
+Deno.test("Paginate skipTotal + peek is fully count-free", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const itemSchema = { name: v.string(), value: v.number() };
+    const items = await collection(db, "items", itemSchema);
+    const testData = [];
+    for (let i = 1; i <= 12; i++) {
+      testData.push({ name: `Item ${i}`, value: i });
+    }
+    await items.insertMany(testData);
+
+    const page = await items.paginate({}, {
+      limit: 5,
+      skipTotal: true,
+      peek: true,
+    });
+    assertEquals(page.data.length, 5);
+    assertEquals(page.total, undefined);
+    assertEquals(page.position, undefined);
+    assertEquals(page.hasMore, true);
+  });
+});
+
+Deno.test("Paginate peek with afterId paginates without losing rows", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const itemSchema = { name: v.string(), value: v.number() };
+    const items = await collection(db, "items", itemSchema);
+    const testData = [];
+    for (let i = 1; i <= 10; i++) {
+      testData.push({ name: `Item ${i}`, value: i });
+    }
+    await items.insertMany(testData);
+
+    const firstPage = await items.paginate({}, { limit: 4, peek: true });
+    assertEquals(firstPage.data.length, 4);
+    assertEquals(firstPage.hasMore, true);
+
+    const secondPage = await items.paginate({}, {
+      limit: 4,
+      peek: true,
+      afterId: firstPage.data[firstPage.data.length - 1]._id,
+    });
+    assertEquals(secondPage.data.length, 4);
+    assertEquals(secondPage.hasMore, true);
+
+    const thirdPage = await items.paginate({}, {
+      limit: 4,
+      peek: true,
+      afterId: secondPage.data[secondPage.data.length - 1]._id,
+    });
+    assertEquals(thirdPage.data.length, 2);
+    assertEquals(thirdPage.hasMore, false);
+
+    // Together they cover all 10 rows with no overlap
+    const seen = new Set<string>();
+    for (
+      const d of [...firstPage.data, ...secondPage.data, ...thirdPage.data]
+    ) {
+      seen.add(d._id.toString());
+    }
+    assertEquals(seen.size, 10);
+  });
+});
