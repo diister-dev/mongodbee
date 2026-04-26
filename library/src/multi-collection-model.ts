@@ -26,9 +26,10 @@ export type MultiModelSchema = Record<string, Record<string, AnySchema>>;
  */
 export type MultiCollectionModel<
   T extends MultiModelSchema = MultiModelSchema,
+  Name extends string = string,
 > = {
   /** Unique name of the model (used as template identifier) */
-  readonly name: string;
+  readonly name: Name;
 
   /** Schema definition for each document type in this model */
   readonly schema: T;
@@ -43,7 +44,7 @@ export type MultiCollectionModel<
    * Expose the schema in the format expected by schemas.ts
    * Returns an object with the model name as key and schema as value
    */
-  expose(): { [K in typeof name]: T };
+  expose(): { [K in Name]: T };
 
   /**
    * Get a summary of the model structure
@@ -114,10 +115,13 @@ export type MultiCollectionModelOptions<T extends MultiModelSchema> = {
  * const orsay = await multiCollection(db, "catalog_orsay", catalogModel);
  * ```
  */
-export function defineModel<const T extends MultiModelSchema>(
-  name: string,
+export function defineModel<
+  const Name extends string,
+  const T extends MultiModelSchema,
+>(
+  name: Name,
   options: MultiCollectionModelOptions<T>,
-): MultiCollectionModel<T> {
+): MultiCollectionModel<T, Name> {
   const { schema, version = "1.0.0", metadata } = options;
 
   // Validate model name
@@ -130,14 +134,14 @@ export function defineModel<const T extends MultiModelSchema>(
     throw new Error(`Model "${name}" must define at least one document type`);
   }
 
-  const model: MultiCollectionModel<T> = {
+  const model: MultiCollectionModel<T, Name> = {
     name,
     schema,
     version,
     metadata,
 
     expose() {
-      return { [this.name]: this.schema } as { [K in typeof this.name]: T };
+      return { [this.name]: this.schema } as { [K in Name]: T };
     },
 
     getSummary() {
