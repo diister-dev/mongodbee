@@ -39,7 +39,10 @@ function buildPipelineResult<T>(pipe: any) {
     }, {});
 }
 
-function constructorToValidator(schema: UnknownSchema | UnknownValidation) {
+function constructorToValidator(
+  schema: UnknownSchema | UnknownValidation,
+  ctx: { lazyStack: Set<v.LazySchema<any>> } = { lazyStack: new Set() },
+) {
   const { kind, type } = schema;
 
   if (kind == "schema") {
@@ -85,7 +88,7 @@ function constructorToValidator(schema: UnknownSchema | UnknownValidation) {
             }
           }
 
-          const validator = constructorToValidator(value);
+          const validator = constructorToValidator(value, ctx);
           if (validator) {
             properties[key] = validator;
           }
@@ -158,7 +161,7 @@ function constructorToValidator(schema: UnknownSchema | UnknownValidation) {
       }
       case "array": {
         const s = schema as v.ArraySchema<any, undefined>;
-        const items = constructorToValidator(s.item) as any;
+        const items = constructorToValidator(s.item, ctx) as any;
         const pipes: Record<string, any> = buildPipelineResult(
           (s as any).pipe ?? [],
         );
@@ -183,11 +186,11 @@ function constructorToValidator(schema: UnknownSchema | UnknownValidation) {
       }
       case "optional": {
         const s = schema as v.OptionalSchema<any, any>;
-        return constructorToValidator(s.wrapped);
+        return constructorToValidator(s.wrapped, ctx);
       }
       case "nullable": {
         const s = schema as v.OptionalSchema<any, any>;
-        const wrappedValidator = constructorToValidator(s.wrapped) as any;
+        const wrappedValidator = constructorToValidator(s.wrapped, ctx) as any;
 
         if (!wrappedValidator) {
           return {
@@ -209,7 +212,7 @@ function constructorToValidator(schema: UnknownSchema | UnknownValidation) {
         const anyOf: any[] = [];
 
         for (const value of s.options) {
-          const element = constructorToValidator(value);
+          const element = constructorToValidator(value, ctx);
           if (element) {
             anyOf.push(element);
           }
@@ -224,7 +227,7 @@ function constructorToValidator(schema: UnknownSchema | UnknownValidation) {
         const allOf: any[] = [];
 
         for (const value of s.options) {
-          const element = constructorToValidator(value);
+          const element = constructorToValidator(value, ctx);
           if (element) {
             allOf.push(element);
           }
@@ -317,8 +320,11 @@ function constructorToValidator(schema: UnknownSchema | UnknownValidation) {
         const s = schema as v.RecordSchema<any, UnknownSchema, any>;
 
         // Build validators for key and value
-        const keyValidator = constructorToValidator(s.key as any) as any;
-        const valueValidator = constructorToValidator(s.value as any) as any;
+        const keyValidator = constructorToValidator(s.key as any, ctx) as any;
+        const valueValidator = constructorToValidator(
+          s.value as any,
+          ctx,
+        ) as any;
 
         const result: any = {
           bsonType: "object",
@@ -346,8 +352,22 @@ function constructorToValidator(schema: UnknownSchema | UnknownValidation) {
 
         return result;
       }
-      case "any": {
+      case "any":
+      case "unknown": {
         return;
+      }
+      case "lazy": {
+        const s = schema as v.LazySchema<any>;
+        if (ctx.lazyStack.has(s)) {
+          return {};
+        }
+        ctx.lazyStack.add(s);
+        try {
+          const wrapped = s.getter(undefined);
+          return constructorToValidator(wrapped, ctx);
+        } finally {
+          ctx.lazyStack.delete(s);
+        }
       }
       default: {
         throw new Error(`Unsupported schema type: ${type}`);
@@ -393,6 +413,9 @@ function constructorToValidator(schema: UnknownSchema | UnknownValidation) {
           minLength: 1,
           minItems: 1,
         };
+      }
+      case "integer": {
+        return { multipleOf: 1 };
       }
       default: {
         // Check if requirement is a regex

@@ -893,3 +893,83 @@ Deno.test("Record validation edge cases", () => {
   const valid2 = v.safeParse(schema, { data: {} });
   assert(valid2.success);
 });
+
+Deno.test("Integer validation produces multipleOf: 1", () => {
+  const schema = v.object({
+    count: v.pipe(v.number(), v.integer()),
+    nonNegInt: v.pipe(v.number(), v.integer(), v.minValue(0)),
+  });
+
+  const validator = toMongoValidator(schema);
+  const jsonSchema = validator.$jsonSchema!;
+
+  assertEquals(jsonSchema.properties!.count, {
+    bsonType: "number",
+    description: "must be a number",
+    multipleOf: 1,
+  });
+
+  assertEquals(jsonSchema.properties!.nonNegInt, {
+    bsonType: "number",
+    description: "must be a number",
+    multipleOf: 1,
+    minimum: 0,
+  });
+});
+
+Deno.test("Unknown schema type", () => {
+  const schema = v.object({
+    payload: v.unknown(),
+  });
+
+  const validator = toMongoValidator(schema);
+  const jsonSchema = validator.$jsonSchema!;
+
+  assert(jsonSchema.properties!.payload === undefined);
+  assertEquals(jsonSchema.required!.includes("payload"), true);
+});
+
+Deno.test("Lazy schema (non-recursive) resolves to wrapped schema", () => {
+  const schema = v.object({
+    name: v.lazy(() => v.string()),
+  });
+
+  const validator = toMongoValidator(schema);
+  const jsonSchema = validator.$jsonSchema!;
+
+  assertEquals(jsonSchema.properties!.name, {
+    bsonType: "string",
+    description: "must be a string",
+  });
+  assert(jsonSchema.required!.includes("name"));
+});
+
+Deno.test("Lazy schema (recursive in array) breaks cycle without throwing", () => {
+  type Tree = { value: string; children: Tree[] };
+  const Tree: v.GenericSchema<Tree> = v.object({
+    value: v.string(),
+    children: v.array(v.lazy(() => Tree)),
+  });
+
+  const validator = toMongoValidator(Tree);
+  const root = validator.$jsonSchema!;
+
+  assertEquals(root.bsonType, "object");
+  assertEquals(root.required!.slice().sort(), ["children", "value"]);
+  assertEquals(root.properties!.value, {
+    bsonType: "string",
+    description: "must be a string",
+  });
+
+  // First-level unrolling: children.items is the resolved Tree shape.
+  // The cycle guard fires on second re-entry, so the deeper items is {}.
+  const items = root.properties!.children.items;
+  assertEquals(root.properties!.children.bsonType, "array");
+  assertEquals(items.bsonType, "object");
+  assertEquals(items.properties.value, {
+    bsonType: "string",
+    description: "must be a string",
+  });
+  assertEquals(items.properties.children.bsonType, "array");
+  assertEquals(items.properties.children.items, {});
+});
