@@ -237,6 +237,14 @@ export class SchemaNavigator {
         );
         break;
       }
+      case "variant": {
+        this.navigateVariantSchema(
+          schema as v.VariantSchema<string, v.VariantOptions<string>, never>,
+          visitor,
+          context,
+        );
+        break;
+      }
       case "intersect": {
         this.navigateIntersectSchema(
           schema as v.IntersectSchema<
@@ -418,6 +426,26 @@ export class SchemaNavigator {
     schema.options.forEach((option: UnknownSchema, index: number) => {
       const childContext: NavigationContext = {
         path: [...context.path, `$union[${index}]`],
+        depth: context.depth + 1,
+        parent: schema,
+        key: index,
+      };
+
+      this.visitNodeRecursive(option, visitor, childContext);
+    });
+  }
+
+  /**
+   * Navigate in a variant schema (discriminated union)
+   */
+  private navigateVariantSchema(
+    schema: v.VariantSchema<string, v.VariantOptions<string>, never>,
+    visitor: SchemaVisitor,
+    context: NavigationContext,
+  ): void {
+    schema.options.forEach((option: UnknownSchema, index: number) => {
+      const childContext: NavigationContext = {
+        path: [...context.path, `$variant[${index}]`],
         depth: context.depth + 1,
         parent: schema,
         key: index,
@@ -654,6 +682,7 @@ export class SchemaNavigator {
       "object",
       "array",
       "union",
+      "variant",
       "intersect",
       "tuple",
       "record",

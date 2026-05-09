@@ -275,6 +275,68 @@ Deno.test("Union schema", () => {
   assertEquals(jsonSchema.required!.includes("optionalField"), false);
 });
 
+Deno.test("Variant schema (discriminated union)", () => {
+  // Variants are discriminated unions where one literal field selects the
+  // branch. From the JSON Schema POV they map to `anyOf` like a plain
+  // `v.union`, with the discriminator naturally enforced by each branch's
+  // literal field producing an `enum: [value]` constraint.
+  const schema = v.object({
+    personRef: v.variant("kind", [
+      v.object({
+        kind: v.literal("user"),
+        userId: v.string(),
+      }),
+      v.object({
+        kind: v.literal("accountless"),
+        accountlessIdentityId: v.string(),
+      }),
+    ]),
+  });
+
+  const validator = toMongoValidator(schema);
+  const jsonSchema = validator.$jsonSchema!;
+
+  // Top level must include the variant field as required.
+  assertEquals(jsonSchema.required!.includes("personRef"), true);
+
+  // Each branch is emitted as an object validator with its own required
+  // fields and the discriminator pinned via the literal's `enum: [value]`.
+  assertEquals(jsonSchema.properties!.personRef, {
+    anyOf: [
+      {
+        bsonType: "object",
+        properties: {
+          kind: {
+            bsonType: "string",
+            enum: ["user"],
+            description: "must be user",
+          },
+          userId: {
+            bsonType: "string",
+            description: "must be a string",
+          },
+        },
+        required: ["kind", "userId"],
+      },
+      {
+        bsonType: "object",
+        properties: {
+          kind: {
+            bsonType: "string",
+            enum: ["accountless"],
+            description: "must be accountless",
+          },
+          accountlessIdentityId: {
+            bsonType: "string",
+            description: "must be a string",
+          },
+        },
+        required: ["kind", "accountlessIdentityId"],
+      },
+    ],
+  });
+});
+
 Deno.test("Intersect schema", () => {
   const nameSchema = v.object({ name: v.string() });
   const ageSchema = v.object({ age: v.number() });

@@ -222,6 +222,21 @@ function constructorToValidator(
           anyOf,
         };
       }
+      case "variant": {
+        const s = schema as v.VariantSchema<any, any, any>;
+        const anyOf: any[] = [];
+
+        for (const value of s.options) {
+          const element = constructorToValidator(value, ctx);
+          if (element) {
+            anyOf.push(element);
+          }
+        }
+
+        return {
+          anyOf,
+        };
+      }
       case "intersect": {
         const s = schema as v.IntersectSchema<any, any>;
         const allOf: any[] = [];

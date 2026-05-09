@@ -207,6 +207,41 @@ Deno.test("SchemaNavigator: Union schema navigation", () => {
   assertEquals(stringOption.depth, 1);
 });
 
+Deno.test("SchemaNavigator: Variant schema navigation", () => {
+  const navigator = new SchemaNavigator();
+  const visitor = new CollectingVisitor();
+
+  const schema = v.variant("kind", [
+    v.object({ kind: v.literal("user"), userId: v.string() }),
+    v.object({ kind: v.literal("guest"), guestId: v.string() }),
+  ]);
+
+  navigator.navigate(schema, visitor);
+
+  // variant container + 2 object branches
+  assertEquals(visitor.containers.length, 3);
+
+  const variantNode = visitor.nodes.find((n) => n.schema.type === "variant");
+  assertExists(variantNode);
+  assertEquals(variantNode.path, []);
+
+  // Branches must be reached under $variant[i]
+  const firstBranch = visitor.nodes.find((n) =>
+    n.schema.type === "object" && n.key === 0
+  );
+  assertExists(firstBranch);
+  assertEquals(firstBranch.path, ["$variant[0]"]);
+  assertEquals(firstBranch.depth, 1);
+
+  // Properties inside a branch must be reachable (this is what extractIndexes
+  // depends on — without variant handling, these would never be visited).
+  const userIdNode = visitor.nodes.find((n) =>
+    n.schema.type === "string" && n.key === "userId"
+  );
+  assertExists(userIdNode);
+  assertEquals(userIdNode.path, ["$variant[0]", "userId"]);
+});
+
 Deno.test("SchemaNavigator: Intersect schema navigation", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
