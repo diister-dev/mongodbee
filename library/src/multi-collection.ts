@@ -753,28 +753,6 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
               sort = reversedSort;
             }
 
-            let total: number | undefined;
-            let position: number | undefined;
-            if (!skipTotal) {
-                const baseCountQuery = { $and: baseQuery };
-                total = await collection.countDocuments(baseCountQuery as never, { session });
-
-                if (afterId) {
-                    const afterFilter = await buildCursorFilter(afterId, 'after');
-                    if (afterFilter) {
-                        const afterCount = await collection.countDocuments({ $and: [...baseQuery, afterFilter] } as never, { session });
-                        position = total - afterCount;
-                    } else {
-                        position = 1;
-                    }
-                } else if (beforeId) {
-                    // For beforeId, we need to calculate position after we know how many items will be returned
-                    position = -1; // Marker for "needs calculation"
-                } else {
-                    position = 0;
-                }
-            }
-
             // Create StageBuilder for pipeline support
             const createStageBuilder = (): StageBuilder<T> => ({
                 match: (matchKey, matchFilter) => ({
@@ -954,10 +932,69 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 }
             };
 
-            if (pipelineBuilder || useNaturalIdSort) {
-                // Build aggregation pipeline with user stages
-                const userPipeline = pipelineBuilder ? pipelineBuilder(createStageBuilder()) : [];
+            // Build user pipeline once — used both for the data fetch
+            // below AND for the count above (so `total` reflects docs
+            // that survive the pipeline's $match stages, not just the
+            // base type filter).
+            const userPipeline = pipelineBuilder ? pipelineBuilder(createStageBuilder()) : [];
 
+            // Count total + position. When a user pipeline is present,
+            // the count must reflect docs that survive the WHOLE
+            // pipeline (e.g. $lookup-based JOIN filters), not just the
+            // base $match — otherwise the UI shows misleading counts
+            // when a pipeline narrows the result set.
+            let total: number | undefined;
+            let position: number | undefined;
+            if (!skipTotal) {
+                if (userPipeline.length > 0) {
+                    const countPipeline: AggregationStage[] = [
+                        { $match: { $and: baseQuery } },
+                        ...userPipeline,
+                        { $count: "total" },
+                    ];
+                    const totalResult = await collection.aggregate(countPipeline, { session }).toArray();
+                    total = (totalResult[0]?.total as number | undefined) ?? 0;
+
+                    if (afterId) {
+                        const afterFilter = await buildCursorFilter(afterId, 'after');
+                        if (afterFilter) {
+                            const afterPipeline: AggregationStage[] = [
+                                { $match: { $and: [...baseQuery, afterFilter] } },
+                                ...userPipeline,
+                                { $count: "total" },
+                            ];
+                            const afterResult = await collection.aggregate(afterPipeline, { session }).toArray();
+                            const afterCount = (afterResult[0]?.total as number | undefined) ?? 0;
+                            position = total - afterCount;
+                        } else {
+                            position = 1;
+                        }
+                    } else if (beforeId) {
+                        position = -1;
+                    } else {
+                        position = 0;
+                    }
+                } else {
+                    const baseCountQuery = { $and: baseQuery };
+                    total = await collection.countDocuments(baseCountQuery as never, { session });
+
+                    if (afterId) {
+                        const afterFilter = await buildCursorFilter(afterId, 'after');
+                        if (afterFilter) {
+                            const afterCount = await collection.countDocuments({ $and: [...baseQuery, afterFilter] } as never, { session });
+                            position = total - afterCount;
+                        } else {
+                            position = 1;
+                        }
+                    } else if (beforeId) {
+                        position = -1;
+                    } else {
+                        position = 0;
+                    }
+                }
+            }
+
+            if (pipelineBuilder || useNaturalIdSort) {
                 // For naturalIdSort, we need to add _ulid BEFORE the cursor filter can use it
                 // So we split the query: base type filter first, then add _ulid, then cursor filter
                 const aggregatePipeline: AggregationStage[] = useNaturalIdSort

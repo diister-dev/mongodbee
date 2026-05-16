@@ -797,31 +797,6 @@ export async function collection<
             sort = reversedSort;
         }
 
-        let total: number | undefined;
-        let position: number | undefined;
-        if (!skipTotal) {
-            // Count total documents matching the base filter
-            total = await collection.countDocuments(baseQuery, { session });
-
-            if (afterId) {
-                // Position is the count of documents before the first returned element
-                // For afterId, this is the count of documents up to and including the anchor
-                const afterFilter = await buildCursorFilter(afterId, 'after');
-                if (afterFilter) {
-                    const afterCount = await collection.countDocuments({ ...baseQuery, ...afterFilter } as m.Filter<TInput>, { session });
-                    position = total - afterCount; // Elements before the first returned = total - elements after anchor
-                } else {
-                    position = 1;
-                }
-            } else if (beforeId) {
-                // For beforeId, we need to calculate position after we know how many items will be returned
-                // We'll compute it after fetching results - for now mark as needing calculation
-                position = -1; // Marker for "needs calculation"
-            } else {
-                position = 0;
-            }
-        }
-
         // Stage builder for simple collections
         const stageBuilder: SimpleStageBuilder = {
           match: (matchFilter: Record<string, unknown>) => ({ $match: matchFilter }),
@@ -882,6 +857,63 @@ export async function collection<
 
         // Build aggregation pipeline if provided
         const customPipeline = pipelineBuilder ? pipelineBuilder(stageBuilder) : [];
+
+        // Count total + position. When a custom pipeline is present, the
+        // count must reflect docs that pass through the WHOLE pipeline
+        // (e.g. $lookup-based JOIN filters), not just the base $match —
+        // otherwise the UI shows misleading "2 / 15" when only 2 docs
+        // survive the pipeline. We run a sibling aggregation that mirrors
+        // the data pipeline up to the matching stages and appends $count.
+        let total: number | undefined;
+        let position: number | undefined;
+        if (!skipTotal) {
+            if (customPipeline.length > 0) {
+                const countPipeline: m.Document[] = [
+                    { $match: baseQuery },
+                    ...customPipeline,
+                    { $count: "total" },
+                ];
+                const totalResult = await collection.aggregate(countPipeline, { session }).toArray();
+                total = (totalResult[0]?.total as number | undefined) ?? 0;
+
+                if (afterId) {
+                    const afterFilter = await buildCursorFilter(afterId, 'after');
+                    if (afterFilter) {
+                        const afterPipeline: m.Document[] = [
+                            { $match: { ...baseQuery, ...afterFilter } },
+                            ...customPipeline,
+                            { $count: "total" },
+                        ];
+                        const afterResult = await collection.aggregate(afterPipeline, { session }).toArray();
+                        const afterCount = (afterResult[0]?.total as number | undefined) ?? 0;
+                        position = total - afterCount;
+                    } else {
+                        position = 1;
+                    }
+                } else if (beforeId) {
+                    position = -1; // computed post-fetch (same marker as the find-path)
+                } else {
+                    position = 0;
+                }
+            } else {
+                // Find-style fast path: countDocuments is cheaper than aggregate.
+                total = await collection.countDocuments(baseQuery, { session });
+
+                if (afterId) {
+                    const afterFilter = await buildCursorFilter(afterId, 'after');
+                    if (afterFilter) {
+                        const afterCount = await collection.countDocuments({ ...baseQuery, ...afterFilter } as m.Filter<TInput>, { session });
+                        position = total - afterCount;
+                    } else {
+                        position = 1;
+                    }
+                } else if (beforeId) {
+                    position = -1;
+                } else {
+                    position = 0;
+                }
+            }
+        }
 
         let hardLimit = 10_000;
         const elements: R[] = [];

@@ -304,10 +304,8 @@ Deno.test("Collection paginate with pipeline - match stage", async (t) => {
         stage.match({ ageCategory: "senior" }),
       ],
     });
-
-    // Note: total is still 3 because it counts before pipeline
-    expect(result.total).toBe(3);
-    // But only 2 results after pipeline match
+    
+    expect(result.total).toBe(2);
     expect(result.data.length).toBe(2);
     expect(result.data[0].name).toBe("Alice");
     expect(result.data[1].name).toBe("Charlie");
