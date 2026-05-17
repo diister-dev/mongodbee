@@ -181,6 +181,28 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
     filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
     options?: m.FindOptions,
   ): Promise<v.InferOutput<OutputElementSchema<T, E>>[]>;
+  /**
+   * Find the first document matching a cross-type filter — no `_type`
+   * constraint injected. Symmetric to `deleteAny` ; useful when the
+   * caller branches on `_type` inside the filter (e.g. polymorphic
+   * existence check with a `$or` across distinct types).
+   *
+   * Returns `null` if no doc matches. The result is validated against the
+   * union schema and typed as the union of all element shapes.
+   */
+  findOneAny(
+    filter: m.Filter<Input<T>>,
+  ): Promise<Output<T> | null>;
+  /**
+   * Find all documents matching a cross-type filter — no `_type` constraint
+   * injected. Symmetric to `deleteAny`. Each result is validated against
+   * the union schema ; invalid docs are silently dropped (same posture as
+   * `find`).
+   */
+  findAny(
+    filter: m.Filter<Input<T>>,
+    options?: m.FindOptions,
+  ): Promise<Output<T>[]>;
   paginate<E extends keyof T, EN = v.InferOutput<OutputElementSchema<T, E>>, R = EN>(
     key: E,
     filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
@@ -1178,6 +1200,27 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             }
 
             return result.deletedCount;
+        },
+        async findOneAny(filter) {
+            const session = sessionContext.getSession();
+            const result = await collection.findOne(filter as any, { session });
+            if (!result) {
+                return null;
+            }
+            return v.parse(schema, result);
+        },
+        async findAny(filter, options) {
+            const session = sessionContext.getSession();
+            const cursor = collection.find(filter as any, { session, ...options });
+            const result = await cursor.toArray();
+
+            const output = result.map((item) => {
+                const parsed = v.safeParse(schema, item);
+                if (!parsed.success) return null;
+                return parsed.output;
+            }).filter((item): item is Output<T> => item !== null);
+
+            return output;
         },
         async updateOne(key, id, doc) {
             // Validation happens outside retry - no need to retry validation errors
