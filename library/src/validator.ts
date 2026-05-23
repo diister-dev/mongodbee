@@ -458,6 +458,9 @@ function constructorToValidator(
       case "integer": {
         return { multipleOf: 1 };
       }
+      case "finite": {
+        return;
+      }
       default: {
         // Check if requirement is a regex
         if ((schema as v.RegexAction<any, any>).requirement instanceof RegExp) {

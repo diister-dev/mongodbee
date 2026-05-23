@@ -1044,6 +1044,28 @@ Deno.test("Integer validation produces multipleOf: 1", () => {
   });
 });
 
+Deno.test("Finite validation is silently ignored (MongoDB has no equivalent)", () => {
+  const schema = v.object({
+    price: v.pipe(v.number(), v.finite()),
+    amount: v.pipe(v.number(), v.finite(), v.minValue(0)),
+  });
+
+  const validator = toMongoValidator(schema);
+  const jsonSchema = validator.$jsonSchema!;
+
+  // finite() should not add any constraint nor break the surrounding pipe
+  assertEquals(jsonSchema.properties!.price, {
+    bsonType: "number",
+    description: "must be a number",
+  });
+
+  assertEquals(jsonSchema.properties!.amount, {
+    bsonType: "number",
+    description: "must be a number",
+    minimum: 0,
+  });
+});
+
 Deno.test("Unknown schema type", () => {
   const schema = v.object({
     payload: v.unknown(),
