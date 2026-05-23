@@ -76,6 +76,13 @@ function constructorToValidator(
             ) {
               isRequired = false;
             }
+            // Not required if nullish and no default value
+            if (
+              type == "nullish" &&
+              !(value as v.NullishSchema<any, any>).default
+            ) {
+              isRequired = false;
+            }
             if (type == "union") {
               const s = value as v.UnionSchema<any, any>;
               isRequired = s.options.some((v: UnknownSchema) =>
@@ -190,6 +197,25 @@ function constructorToValidator(
       }
       case "nullable": {
         const s = schema as v.OptionalSchema<any, any>;
+        const wrappedValidator = constructorToValidator(s.wrapped, ctx) as any;
+
+        if (!wrappedValidator) {
+          return {
+            anyOf: [
+              { bsonType: "null" },
+            ],
+          };
+        }
+
+        return {
+          anyOf: [
+            wrappedValidator,
+            { bsonType: "null" },
+          ],
+        };
+      }
+      case "nullish": {
+        const s = schema as v.NullishSchema<any, any>;
         const wrappedValidator = constructorToValidator(s.wrapped, ctx) as any;
 
         if (!wrappedValidator) {

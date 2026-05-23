@@ -769,6 +769,71 @@ Deno.test("Nullable schema", () => {
   assert(jsonSchema.required!.includes("nullableStringWithDefault"));
 });
 
+Deno.test("Nullish schema", () => {
+  const schema = v.object({
+    nullishString: v.nullish(v.string()),
+    nullishNumber: v.nullish(v.number()),
+    nullishObject: v.nullish(v.object({ name: v.string() })),
+    nullishStringWithDefault: v.nullish(v.string(), "default"),
+  });
+
+  const validator = toMongoValidator(schema);
+  const jsonSchema = validator.$jsonSchema!;
+
+  // Test nullish string
+  assertEquals(jsonSchema.properties!.nullishString, {
+    anyOf: [
+      {
+        bsonType: "string",
+        description: "must be a string",
+      },
+      {
+        bsonType: "null",
+      },
+    ],
+  });
+
+  // Test nullish number
+  assertEquals(jsonSchema.properties!.nullishNumber, {
+    anyOf: [
+      {
+        bsonType: "number",
+        description: "must be a number",
+      },
+      {
+        bsonType: "null",
+      },
+    ],
+  });
+
+  // Test nullish object
+  assertEquals(jsonSchema.properties!.nullishObject, {
+    anyOf: [
+      {
+        bsonType: "object",
+        properties: {
+          name: {
+            bsonType: "string",
+            description: "must be a string",
+          },
+        },
+        required: ["name"],
+      },
+      {
+        bsonType: "null",
+      },
+    ],
+  });
+
+  // Nullish without default should NOT be required (undefined is allowed)
+  assert(!jsonSchema.required!.includes("nullishString"));
+  assert(!jsonSchema.required!.includes("nullishNumber"));
+  assert(!jsonSchema.required!.includes("nullishObject"));
+
+  // Nullish with default IS required (MongoDB doesn't apply defaults, so the field must be present)
+  assert(jsonSchema.required!.includes("nullishStringWithDefault"));
+});
+
 Deno.test("Nullable with validations", () => {
   const schema = v.object({
     nullableEmail: v.nullable(v.pipe(v.string(), v.regex(/^.+@.+\..+$/))),
