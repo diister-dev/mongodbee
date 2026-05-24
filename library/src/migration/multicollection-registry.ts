@@ -18,6 +18,9 @@ import {
 import { isMigrationAncestor } from "./definition.ts";
 import type { MigrationDefinition } from "./types.ts";
 import { getSessionContext } from "../session.ts";
+import { createLogger } from "../utils/logger.ts";
+
+const log = createLogger("registry");
 
 /**
  * Helper to get session from database client
@@ -272,6 +275,7 @@ export async function createMultiCollectionInfo(
   collectionType: string,
   migrationId: string = "unknown",
 ): Promise<void> {
+  log.debug(`createMultiCollectionInfo(${collectionName}, type=${collectionType}, migration=${migrationId})`);
   const session = getSessionFromDb(db);
   const collection = db.collection(collectionName);
   const mongodbeeVersion = getCurrentVersion();
@@ -283,6 +287,7 @@ export async function createMultiCollectionInfo(
     createdAt: new Date(),
   };
 
+  log.debug(`createMultiCollectionInfo(${collectionName}): insertOne _information`);
   await collection.insertOne(info as Record<string, unknown>, { session });
 
   // Also create the migrations tracking document with initial migration
@@ -302,7 +307,9 @@ export async function createMultiCollectionInfo(
     appliedMigrations: [initialOperation],
   };
 
+  log.debug(`createMultiCollectionInfo(${collectionName}): insertOne _migrations`);
   await collection.insertOne(migrations as Record<string, unknown>, { session });
+  log.debug(`createMultiCollectionInfo(${collectionName}): done`);
 }
 
 /**
@@ -519,14 +526,17 @@ export async function multiCollectionInstanceExists(
   db: Db,
   collectionName: string,
 ): Promise<boolean> {
+  log.debug(`multiCollectionInstanceExists(${collectionName})`);
   try {
     const session = getSessionFromDb(db);
     const collection = db.collection(collectionName);
     const info = await collection.findOne({
       _type: MULTI_COLLECTION_INFO_TYPE,
     }, { session }) as MultiCollectionInfo | null;
+    log.debug(`multiCollectionInstanceExists(${collectionName}): ${info !== null}`);
     return info !== null;
-  } catch (_error) {
+  } catch (error) {
+    log.warn(`multiCollectionInstanceExists(${collectionName}) threw, treating as false:`, error);
     return false;
   }
 }

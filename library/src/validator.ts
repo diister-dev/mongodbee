@@ -458,7 +458,10 @@ function constructorToValidator(
       case "integer": {
         return { multipleOf: 1 };
       }
-      case "finite": {
+      case "finite":
+      case "check":
+      case "url": {
+        // Not expressible in MongoDB JSON Schema — Valibot still enforces it at the app layer.
         return;
       }
       default: {

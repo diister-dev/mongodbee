@@ -6,6 +6,10 @@
  * have built-in concurrency limits in MongoDB.
  */
 
+import { createLogger } from "./logger.ts";
+
+const log = createLogger("queue");
+
 export interface QueueOptions {
   /** Maximum number of concurrent operations (default: 3) */
   maxConcurrent?: number;
@@ -96,6 +100,11 @@ export class MongoOperationQueue {
         this.pendingTasks.splice(insertIndex, 0, task as QueueTask);
       }
 
+      log.debug(
+        `enqueue ${task.id} priority=${task.priority} timeout=${task.timeout}ms`,
+        `pending=${this.pendingTasks.length} running=${this.runningTasks.size}/${this.maxConcurrent}`,
+      );
+
       // Try to process the queue
       this.processQueue();
     });
@@ -152,6 +161,11 @@ export class MongoOperationQueue {
     task.attempts = (task.attempts ?? 0) + 1;
 
     let timeoutId: number | undefined;
+    const startedAt = Date.now();
+    log.debug(
+      `start ${task.id} attempt=${task.attempts}`,
+      `pending=${this.pendingTasks.length} running=${this.runningTasks.size}/${this.maxConcurrent}`,
+    );
 
     try {
       // Set up timeout
@@ -170,6 +184,10 @@ export class MongoOperationQueue {
       // Success
       this.runningTasks.delete(task as QueueTask);
       this.completedCount++;
+      log.debug(
+        `done  ${task.id} in ${Date.now() - startedAt}ms`,
+        `pending=${this.pendingTasks.length} running=${this.runningTasks.size}/${this.maxConcurrent}`,
+      );
       task.resolve(result);
     } catch (error) {
       // Check if we should retry
@@ -179,6 +197,10 @@ export class MongoOperationQueue {
         error instanceof Error &&
         !error.message.includes("timeout")
       ) {
+        log.warn(
+          `retry ${task.id} attempt=${task.attempts}/${this.retryAttempts} after error:`,
+          error,
+        );
         // Retry after delay
         setTimeout(() => {
           this.executeTask(task);
@@ -189,6 +211,10 @@ export class MongoOperationQueue {
       // Failed permanently
       this.runningTasks.delete(task as QueueTask);
       this.failedCount++;
+      log.warn(
+        `fail  ${task.id} in ${Date.now() - startedAt}ms:`,
+        error,
+      );
       task.reject(error instanceof Error ? error : new Error(String(error)));
     } finally {
       // Cleanup

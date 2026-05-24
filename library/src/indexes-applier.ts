@@ -12,6 +12,9 @@ import * as m from "mongodb";
 import type * as v from "./schema.ts";
 import { extractIndexes, keyEqual, normalizeIndexOptions } from "./indexes.ts";
 import { sanitizePathName } from "./schema-navigator.ts";
+import { createLogger } from "./utils/logger.ts";
+
+const log = createLogger("indexes-applier");
 
 export interface ApplyIndexesOptions {
   /**
@@ -225,7 +228,10 @@ export async function applyMultiCollectionIndexes(
   schemasPerType: Record<string, v.ObjectSchema<any, any>>,
   options: ApplyIndexesOptions = {}
 ): Promise<void> {
+  const collName = collection.collectionName;
+  log.debug(`applyMultiCollectionIndexes(${collName}): list current indexes`);
   const currentIndexes = await collection.indexes();
+  log.debug(`applyMultiCollectionIndexes(${collName}): found ${currentIndexes.length} existing indexes`);
 
   // Ensure _type index exists - this is critical for multi-collection performance
   // All queries filter by _type, and partial indexes depend on efficient _type filtering
@@ -233,6 +239,7 @@ export async function applyMultiCollectionIndexes(
   const hasTypeIndex = currentIndexes.some((i) => i.name === typeIndexName);
 
   if (!hasTypeIndex) {
+    log.debug(`applyMultiCollectionIndexes(${collName}): create _type index`);
     const createFn = () => collection.createIndex(
       { _type: 1 },
       { name: typeIndexName }
@@ -243,6 +250,7 @@ export async function applyMultiCollectionIndexes(
     } else {
       await createFn();
     }
+    log.debug(`applyMultiCollectionIndexes(${collName}): _type index created`);
   }
 
   // Extract indexes for all types
@@ -356,6 +364,7 @@ export async function applyMultiCollectionIndexes(
 
   // Drop indexes
   if (indexesToDrop.length > 0) {
+    log.debug(`applyMultiCollectionIndexes(${collName}): dropping ${indexesToDrop.length} indexes: ${indexesToDrop.join(", ")}`);
     const dropPromises = indexesToDrop.map((indexName) => {
       const dropFn = () => collection.dropIndex(indexName).catch((e) => {
         // tolerate index already dropped
@@ -377,10 +386,15 @@ export async function applyMultiCollectionIndexes(
     });
 
     await Promise.all(dropPromises);
+    log.debug(`applyMultiCollectionIndexes(${collName}): drops done`);
   }
 
   // Create indexes
   if (indexesToCreate.length > 0) {
+    log.debug(
+      `applyMultiCollectionIndexes(${collName}): creating ${indexesToCreate.length} indexes:`,
+      indexesToCreate.map((i) => i.options.name).join(", "),
+    );
     const createPromises = indexesToCreate.map((indexSpec) => {
       const createFn = () => collection.createIndex(
         indexSpec.key,
@@ -391,5 +405,6 @@ export async function applyMultiCollectionIndexes(
     });
 
     await Promise.all(createPromises);
+    log.debug(`applyMultiCollectionIndexes(${collName}): creates done`);
   }
 }

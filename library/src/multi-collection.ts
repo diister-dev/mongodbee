@@ -20,6 +20,9 @@ import {
 import { getLastAppliedMigration } from "./migration/state.ts";
 import { applyMultiCollectionIndexes } from "./indexes-applier.ts";
 import { isSchemaManaged } from "./runtime-config.ts";
+import { createLogger } from "./utils/logger.ts";
+
+const log = createLogger("multi-collection");
 
 // Re-export dbId and refId for backwards compatibility
 export { dbId, refId } from "./ids.ts";
@@ -410,6 +413,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
   };
 
   async function applyValidator() {
+    log.debug(`applyValidator(${collectionName}): listCollections`);
     const collections = await db.listCollections({ name: collectionName })
       .toArray();
 
@@ -429,11 +433,14 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     );
 
     if (collections.length === 0) {
+      log.debug(`applyValidator(${collectionName}): createCollection`);
       // Create the collection with the validator
       await db.createCollection(collectionName, {
         validator,
       });
+      log.debug(`applyValidator(${collectionName}): createCollection done`);
     } else {
+      log.debug(`applyValidator(${collectionName}): exists, comparing validator`);
       // Check collection options
       const existingOptions = await db.command({
         listCollections: 1,
@@ -445,26 +452,32 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
       const sameSchema = dirtyEquivalent(currentSchema, validator);
 
       if (sameSchema) {
+        log.debug(`applyValidator(${collectionName}): validator unchanged, skipping`);
         return; // No need to update
       }
 
+      log.debug(`applyValidator(${collectionName}): collMod (updating validator)`);
       // Update the collection with the validator
       await db.command({
         collMod: collectionName,
         validator,
       });
+      log.debug(`applyValidator(${collectionName}): collMod done`);
     }
   }
 
   async function applyIndexes() {
+    log.debug(`applyIndexes(${collectionName}): start`);
     await applyMultiCollectionIndexes(collection, schemaElements, {
       queue: mongoOperationQueue,
-    })
+    });
+    log.debug(`applyIndexes(${collectionName}): done`);
   }
 
   let sessionContext: Awaited<ReturnType<typeof getSessionContext>>;
 
   async function init() {
+    log.debug(`init(${collectionName}): begin`);
     sessionContext = getSessionContext(db.client);
 
     // Determine if we should auto-apply schema and indexes
@@ -478,6 +491,9 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
     // Prevent add validator if a session is active
     const insideSession = !!sessionContext.getSession();
+    log.debug(
+      `init(${collectionName}): shouldAutoApply=${shouldAutoApply} insideSession=${insideSession} useModel=${useModel}`,
+    );
 
     if (shouldAutoApply && !insideSession) {
       await applyValidator();
@@ -486,24 +502,31 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
       // Auto-initialize metadata for multi-collection model (only in auto mode)
       // In managed mode, migrations handle metadata creation
       // Check if metadata already exists
+      log.debug(`init(${collectionName}): check multiCollectionInstanceExists`);
       const exists = await multiCollectionInstanceExists(db, collectionName);
+      log.debug(`init(${collectionName}): exists=${exists}`);
 
       if (!exists) {
         // Get the current migration version
+        log.debug(`init(${collectionName}): getLastAppliedMigration`);
         const lastMigration = await getLastAppliedMigration(db);
         const currentMigrationId = lastMigration?.id || "current";
+        log.debug(`init(${collectionName}): migrationId=${currentMigrationId}`);
 
         // Create metadata for this instance
         if(useModel) {
+          log.debug(`init(${collectionName}): createMultiCollectionInfo`);
           await createMultiCollectionInfo(
             db,
             collectionName,
             (model as MultiCollectionModel<T>).name,
             currentMigrationId,
           );
+          log.debug(`init(${collectionName}): createMultiCollectionInfo done`);
         }
       }
     }
+    log.debug(`init(${collectionName}): end`);
   }
 
   const collection = db.collection<TOutput>(collectionName, opts);
@@ -1263,7 +1286,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 const result = await collection.updateOne({
                     _id: id,
                     _type: key as string,
-                } as m.Filter<TOutput>, updateOps as m.UpdateFilter<TOutput>, { session });
+                } as unknown as m.Filter<TOutput>, updateOps as m.UpdateFilter<TOutput>, { session });
 
                 if(!result.acknowledged) {
                     throw new Error("Update failed");
@@ -1664,6 +1687,7 @@ export async function createMultiCollectionInstance<const T extends MultiCollect
   model: MultiCollectionModel<T>,
   options?: m.CollectionOptions & CollectionOptions,
 ): Promise<MultiCollectionResult<T>> {
+  log.debug(`createMultiCollectionInstance(${collectionName}): begin model=${model?.name}`);
   // Check if we're in a session - DDL operations are incompatible with transactions
   const { getSession } = getSessionContext(db.client);
   const activeSession = getSession();
@@ -1678,7 +1702,9 @@ export async function createMultiCollectionInstance<const T extends MultiCollect
   }
 
   // Check if already exists
+  log.debug(`createMultiCollectionInstance(${collectionName}): multiCollectionInstanceExists`);
   const exists = await multiCollectionInstanceExists(db, collectionName);
+  log.debug(`createMultiCollectionInstance(${collectionName}): exists=${exists}`);
   if (exists) {
     throw new Error(
       `Multi-collection instance "${collectionName}" already exists.`
@@ -1689,10 +1715,13 @@ export async function createMultiCollectionInstance<const T extends MultiCollect
   // This will apply validators, indexes, AND create metadata automatically
   // because we're using schemaManagement: "auto" with a model
   // The migration ID is determined from the current migration state
-  return await multiCollection(db, collectionName, model, {
+  log.debug(`createMultiCollectionInstance(${collectionName}): delegating to multiCollection()`);
+  const result = await multiCollection(db, collectionName, model, {
     ...options,
     schemaManagement: "auto", // Force immediate application + metadata creation
   });
+  log.debug(`createMultiCollectionInstance(${collectionName}): end`);
+  return result;
 }
 
 // Re-export utility functions from multicollection-registry for public use
