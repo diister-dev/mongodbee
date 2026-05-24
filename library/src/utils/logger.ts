@@ -52,8 +52,11 @@ function readEnv(name: string): string | undefined {
 }
 
 const debugSpec = readEnv("MONGODBEE_DEBUG");
-const levelSpec = (readEnv("MONGODBEE_LOG_LEVEL") || "info").toLowerCase() as Level;
-const minLevel = LEVEL_ORDER[levelSpec] ?? LEVEL_ORDER.info;
+// If MONGODBEE_DEBUG is set, default level is "debug" (the whole point is to see
+// debug logs); otherwise default to "info" so warn/error still surface.
+const defaultLevel: Level = debugSpec ? "debug" : "info";
+const levelSpec = (readEnv("MONGODBEE_LOG_LEVEL") || defaultLevel).toLowerCase() as Level;
+const minLevel = LEVEL_ORDER[levelSpec] ?? LEVEL_ORDER[defaultLevel];
 
 const includePatterns: string[] = [];
 const excludePatterns: string[] = [];
@@ -114,14 +117,7 @@ function emit(level: Level, namespace: string, args: unknown[]): void {
   const delta = formatDelta(namespace, now);
   const message = args.map(formatArg).join(" ");
   const line = `[mongodbee:${namespace}] ${level.toUpperCase()} ${message} (${delta})`;
-  // Always write to stderr — debug logs should not pollute stdout.
-  if (level === "error" || level === "warn") {
-    // eslint-disable-next-line no-console
-    console.error(line);
-  } else {
-    // eslint-disable-next-line no-console
-    console.error(line);
-  }
+  console.log(line);
 }
 
 export interface Logger {
