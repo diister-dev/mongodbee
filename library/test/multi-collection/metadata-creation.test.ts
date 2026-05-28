@@ -66,7 +66,7 @@ Deno.test("Metadata creation: createMultiCollectionInstance with model SHOULD cr
 Deno.test("Metadata creation: newMultiCollection with model SHOULD create metadata", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create collection with model (not instance)
-    const collection = await newMultiCollection(db, "test_with_model", testModel.schema);
+    await newMultiCollection(db, "test_with_model", testModel.schema);
 
     // Check for metadata documents
     const rawCollection = db.collection("test_with_model");

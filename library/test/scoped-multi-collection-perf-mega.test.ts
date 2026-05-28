@@ -43,10 +43,6 @@ function fmt(ms: number) {
   return `${(ms / 1000).toFixed(1).padStart(9)} s`;
 }
 
-function fmtMs(ms: number) {
-  return `${ms.toFixed(0).padStart(9)} ms`;
-}
-
 function scopeId(i: number): string {
   return `exposition:e${String(i).padStart(8, "0")}`;
 }

@@ -5,7 +5,6 @@ import { multiCollection } from "../src/multi-collection.ts";
 import { withIndex } from "../src/indexes.ts";
 import { withDatabase } from "./+shared.ts";
 import { MongoServerError } from "mongodb";
-import { slug } from "@diister/mongodbee/schema";
 import { defineModel } from "../src/multi-collection-model.ts";
 
 Deno.test("withIndex - Basic index creation", async (t) => {

@@ -1,6 +1,6 @@
 {
   "name": "@diister/mongodbee",
-  "version": "0.22.4",
+  "version": "0.23.0-beta.1",
   "license": "MIT",
   "imports": {
     "@std/ulid": "jsr:@std/ulid@1.0.0",
@@ -20,11 +20,17 @@
     "./ids": "./src/ids.ts",
     "./indexes": "./src/indexes.ts",
     "./schema-navigator": "./src/schema-navigator.ts",
+    "./types": "./src/types.ts",
     "./migration": "./src/migration/mod.ts",
     "./migration/cli": "./src/migration/cli/mod.ts",
     "./migration/cli/bin": "./src/migration/cli/bin.ts"
   },
+  "compilerOptions": {
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
   "tasks": {
+    "check": "deno check mod.ts schema.ts session.ts src/ids.ts src/indexes.ts src/schema-navigator.ts src/types.ts src/migration/mod.ts src/migration/cli/mod.ts src/migration/cli/bin.ts",
     "test": "deno test -A --parallel --quiet",
     "test:leaks": "deno test -A --parallel --quiet --trace-leaks",
     "migrate": "deno run --allow-read --allow-write --allow-net --allow-env src/migration/cli/bin.ts",

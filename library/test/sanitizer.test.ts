@@ -400,14 +400,6 @@ Deno.test("Configuration: error behavior throws on undefined", () => {
 
 Deno.test("Real-world scenario: User profile update with different field intentions", () => {
   // Simulates a realistic user profile update scenario
-  const currentProfile = {
-    name: "John Doe",
-    email: "john@example.com",
-    phone: "123-456-7890",
-    bio: "Software developer",
-    avatar: "http://example.com/avatar.jpg",
-  };
-
   // User wants to:
   // 1. Update name
   // 2. Remove phone (explicit)

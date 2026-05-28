@@ -2,7 +2,6 @@ import * as v from "../../src/schema.ts";
 import { assertEquals, assertRejects } from "@std/assert";
 import {
   multiCollection,
-  newMultiCollection,
   createMultiCollectionInstance,
   discoverMultiCollectionInstances,
   getMultiCollectionInfo,

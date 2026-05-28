@@ -211,14 +211,26 @@ export async function discoverMultiCollectionInstances(
   // List all collections in the database
   // Note: listCollections cannot run in a transaction, so we don't pass session here
   const collections = await db.listCollections().toArray();
-  const instances: string[] = [];
+  const instances = new Set<string>();
 
-  // Check each collection for multi-collection metadata
+  // Instances are named `<model>:<id>` by convention. Match by that name first
+  // so an instance is discovered even when its `_information` bookkeeping doc
+  // is missing or corrupt — otherwise a consolidation would SILENTLY skip its
+  // data. Fall back to the `_information.collectionType` metadata for instances
+  // whose name doesn't follow the prefix convention.
+  const namePrefix = `${collectionType}:`;
+
   for (const collInfo of collections) {
     const collName = collInfo.name;
 
     // Skip system collections
     if (collName.startsWith("system.") || collName.startsWith("mongodbee_")) {
+      continue;
+    }
+
+    // Name-convention match (robust to missing/corrupt metadata).
+    if (collName.startsWith(namePrefix)) {
+      instances.add(collName);
       continue;
     }
 
@@ -231,7 +243,7 @@ export async function discoverMultiCollectionInstances(
       }, { session }) as MultiCollectionInfo | null;
 
       if (info && info.collectionType === collectionType) {
-        instances.push(collName); // Return the full collection name
+        instances.add(collName); // Return the full collection name
       }
     } catch (_error) {
       // Silently skip collections that can't be read
@@ -239,7 +251,7 @@ export async function discoverMultiCollectionInstances(
     }
   }
 
-  return instances.sort((a, b) => a.localeCompare(b));
+  return [...instances].sort((a, b) => a.localeCompare(b));
 }
 
 /**

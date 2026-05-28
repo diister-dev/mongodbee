@@ -305,6 +305,79 @@ export type FlowRule = {
   lossy?: boolean;
 };
 
+/** Context passed to the `flowToScope` derivers for each source document. */
+export type FlowToScopeContext = {
+  /** Set when the source is a plain collection. */
+  sourceCollection?: string;
+  /** Set when the source is a multi-model instance — the instance's name. */
+  instanceName?: string;
+  /** Set when the source is a multi-collection type. */
+  documentType?: string;
+};
+
+/** Where a {@link FlowToScopeRule} reads its documents from. */
+export type FlowToScopeSource =
+  | { kind: "collection"; name: string; where?: Record<string, unknown> }
+  | { kind: "multiModelInstances"; model: string }
+  | { kind: "multiCollectionType"; collectionName: string; documentType: string };
+
+/**
+ * Route documents from a source (a plain collection, every instance of a
+ * multi-model, or a multi-collection type) INTO a scoped multi-collection,
+ * deriving the `_scope` per document. The general primitive behind
+ * "consolidate N collections into one scoped collection" — composes rather
+ * than hard-coding any particular migration.
+ *
+ * All knobs are general: `scope` (where each doc lands), `toType` (its
+ * `_type`), `map` (per-doc transform, incl. re-keying via `_id`),
+ * `onConflict` + `merge` (when a `(scope,type,_id)` target already exists),
+ * and `sourceDisposition` (copy vs move). Forward-only by default
+ * (`irreversible`).
+ */
+export type FlowToScopeRule = {
+  type: "flow_to_scope";
+  from: FlowToScopeSource;
+  into: { collection: string };
+  /** Target scope value for a source document. */
+  scope: (doc: Record<string, unknown>, ctx: FlowToScopeContext) => string;
+  /** Target `_type`. Defaults to the document's existing `_type`. */
+  toType?: (doc: Record<string, unknown>, ctx: FlowToScopeContext) => string;
+  /** Per-document transform (e.g. re-key by setting/removing `_id`). */
+  map?: (
+    doc: Record<string, unknown>,
+    ctx: FlowToScopeContext,
+  ) => Record<string, unknown>;
+  /** What to do when a `(scope, type, _id)` document already exists in the target. */
+  onConflict?: "error" | "skip" | "merge";
+  /** Required when `onConflict === "merge"` — combine existing + incoming. */
+  merge?: (
+    existing: Record<string, unknown>,
+    incoming: Record<string, unknown>,
+  ) => Record<string, unknown>;
+  /** `keep` = copy ; `consume` = move (delete/drop the source). */
+  sourceDisposition: "keep" | "consume";
+  irreversible?: boolean;
+  lossy?: boolean;
+};
+
+/**
+ * Rule for renaming a physical collection. The clean primitive behind a
+ * temp→final swap during a scoped-collection consolidation, where the new
+ * scoped collection shares its name with a legacy source: build into a temp
+ * name, consume the sources, then rename the temp over the (now-free) name.
+ *
+ * Reversible — `down` renames `to` back to `from` — unless `dropTarget` drops
+ * an existing target, which cannot be restored (then it is lossy).
+ */
+export type RenameCollectionRule = {
+  type: "rename_collection";
+  from: string;
+  to: string;
+  /** Drop `to` first if it already exists (a plain rename fails otherwise). */
+  dropTarget?: boolean;
+  lossy?: boolean;
+};
+
 /**
  * Union type representing all possible migration operations
  */
@@ -334,9 +407,11 @@ export type MigrationRule =
   | RenameMultiModelInstancesTypeRule
   // Cross-collection
   | FlowRule
+  | FlowToScopeRule
   // Other
   | UpdateIndexesRule
-  | MarkAsMultiModelTypeRule;
+  | MarkAsMultiModelTypeRule
+  | RenameCollectionRule;
 
 /**
  * Transformation rule for bidirectional document changes
@@ -707,11 +782,52 @@ export interface MigrationBuilder {
   }): MigrationBuilder;
 
   /**
+   * Route documents from a source (collection / all instances of a
+   * multi-model / a multi-collection type) into a scoped multi-collection,
+   * deriving `_scope` per document. The composable primitive for
+   * consolidating N collections into one scoped collection. Forward-only
+   * (irreversible) by default.
+   */
+  flowToScope(config: {
+    from: FlowToScopeSource;
+    into: { collection: string };
+    scope: (doc: Record<string, unknown>, ctx: FlowToScopeContext) => string;
+    toType?: (doc: Record<string, unknown>, ctx: FlowToScopeContext) => string;
+    map?: (
+      doc: Record<string, unknown>,
+      ctx: FlowToScopeContext,
+    ) => Record<string, unknown>;
+    onConflict?: "error" | "skip" | "merge";
+    merge?: (
+      existing: Record<string, unknown>,
+      incoming: Record<string, unknown>,
+    ) => Record<string, unknown>;
+    /** "keep" = copy ; "consume" = move (delete/drop source). */
+    source?: "keep" | "consume";
+  }): MigrationBuilder;
+
+  /**
    * Updates indexes on an existing collection to match the schema
    * @param collectionName - The name of the collection
    * @returns The main migration builder for method chaining
    */
   updateIndexes(collectionName: string): MigrationBuilder;
+
+  /**
+   * Renames a physical collection (`from` → `to`). The clean way to land a new
+   * scoped collection whose name collides with a legacy source: build into a
+   * temp name, consume the sources, then `renameCollection(temp, finalName)`.
+   * Reversible unless `dropTarget` is used (drops an existing target).
+   *
+   * @param from - Current collection name
+   * @param to - New collection name
+   * @returns The main migration builder for method chaining
+   */
+  renameCollection(
+    from: string,
+    to: string,
+    options?: { dropTarget?: boolean },
+  ): MigrationBuilder;
 
   /**
    * Marks an existing collection as a multi-collection instance

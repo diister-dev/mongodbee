@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertExists } from "@std/assert";
+import { assert, assertEquals } from "@std/assert";
 import { withDatabase } from "./+shared.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";

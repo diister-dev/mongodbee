@@ -125,10 +125,11 @@ export async function retryOnWriteConflict<T>(
       // Try to execute the operation
       return await operation();
     } catch (error) {
-      console.error("Retry attempt", attempt + 1, "due to error:", error);
       lastError = error instanceof Error ? error : new Error(String(error));
 
-      // Check if we should retry this error
+      // Check if we should retry this error — only log/announce a retry once
+      // we've actually decided to retry (avoids noisy "Retry attempt" lines
+      // for application errors that are immediately rethrown).
       if (!shouldRetry(error)) {
         throw error;
       }
@@ -137,6 +138,8 @@ export async function retryOnWriteConflict<T>(
       if (attempt >= maxRetries) {
         throw error;
       }
+
+      console.error("Retry attempt", attempt + 1, "due to write conflict:", error);
 
       // Calculate delay for next retry
       let delayMs = initialDelay;

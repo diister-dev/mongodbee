@@ -363,7 +363,6 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
   const collectionSchema = (useModel
     ? (model as MultiCollectionModel<T>).schema
     : model) as T;
-  type TInput = Input<T>;
   type TOutput = Output<T>;
 
   const schemaWithId = Object.entries(collectionSchema).reduce(
@@ -660,7 +659,6 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
             // Support both single key and array of keys for cross-pagination
             const keys = Array.isArray(keyOrKeys) ? keyOrKeys as (keyof T)[] : [keyOrKeys as keyof T];
-            const isCrossPagination = Array.isArray(keyOrKeys);
 
             // Build type checker: single type or $in for multiple types
             const typeChecker = keys.length === 1

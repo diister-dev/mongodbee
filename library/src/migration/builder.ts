@@ -49,6 +49,8 @@ import type {
   MultiCollectionBuilder,
   MultiModelInstanceBuilder,
   MultiCollectionTypeBuilder,
+  ScopedMultiCollectionBuilder,
+  ScopedMultiCollectionTypeBuilder,
   SchemasDefinition,
   SeedCollectionRule,
   TransformCollectionRule,
@@ -511,6 +513,100 @@ function createMultiModelInstancesTypeBuilder(
   
 
 /**
+ * Creates a scoped-multi-collection type builder.
+ */
+function createScopedMultiCollectionTypeBuilder(
+  state: MigrationState,
+  collectionName: string,
+  documentType: string,
+  parentBuilder: ScopedMultiCollectionBuilder,
+  options: MigrationBuilderOptions,
+): ScopedMultiCollectionTypeBuilder {
+  function typeSchema() {
+    const schema = options.schemas?.scopedMultiCollections?.[collectionName]
+      ?.types?.[documentType];
+    if (!schema) {
+      throw new Error(
+        `Cannot configure type "${documentType}" in scoped multi-collection ` +
+          `"${collectionName}": schema not found in ` +
+          `migration.schemas.scopedMultiCollections`,
+      );
+    }
+    return schema;
+  }
+
+  const builder: ScopedMultiCollectionTypeBuilder = {
+    seed(scope, documents) {
+      state.operations.push({
+        type: "seed_scoped_multicollection_type",
+        collectionName,
+        scope,
+        documentType,
+        documents,
+        schema: typeSchema(),
+      });
+      return builder;
+    },
+
+    transform(rule) {
+      const schema = typeSchema();
+      const parentSchema = options.parentSchemas?.scopedMultiCollections
+        ?.[collectionName]?.types?.[documentType];
+
+      state.operations.push({
+        type: "transform_scoped_multicollection_type",
+        collectionName,
+        documentType,
+        up: rule.up,
+        down: rule.down,
+        schema,
+        parentSchema,
+        scopeFilter: rule.scopeFilter,
+        irreversible: rule.irreversible,
+        lossy: rule.lossy,
+      });
+
+      if (rule.irreversible) state.mark({ type: "irreversible" });
+      if (rule.lossy) state.mark({ type: "lossy" });
+
+      return builder;
+    },
+
+    end() {
+      return parentBuilder;
+    },
+  };
+
+  return builder;
+}
+
+/**
+ * Creates a scoped-multi-collection builder.
+ */
+function createScopedMultiCollectionBuilder(
+  state: MigrationState,
+  collectionName: string,
+  mainBuilder: MigrationBuilder,
+  options: MigrationBuilderOptions,
+): ScopedMultiCollectionBuilder {
+  const builder: ScopedMultiCollectionBuilder = {
+    type(typeName) {
+      return createScopedMultiCollectionTypeBuilder(
+        state,
+        collectionName,
+        typeName,
+        builder,
+        options,
+      );
+    },
+    end() {
+      return mainBuilder;
+    },
+  };
+  return builder;
+}
+
+/**
  * Creates the main migration builder with functional operations
  */
 function createMigrationBuilder(
@@ -611,16 +707,29 @@ function createMigrationBuilder(
       );
     },
 
-    createScopedMultiCollection(_name) {
-      throw new Error(
-        "createScopedMultiCollection: not implemented yet — wait for task #11",
-      );
+    createScopedMultiCollection(name) {
+      const schema = options.schemas?.scopedMultiCollections?.[name];
+      if (!schema) {
+        throw new Error(
+          `Cannot create scoped multi-collection ${name}: schema not found ` +
+            `in migration.schemas.scopedMultiCollections`,
+        );
+      }
+
+      state.operations.push({
+        type: "create_scoped_multicollection",
+        collectionName: name,
+        schema,
+      });
+
+      // Creating a collection makes rollback lossy (it drops the collection).
+      state.mark({ type: "lossy" });
+
+      return createScopedMultiCollectionBuilder(state, name, builder, options);
     },
 
-    scopedMultiCollection(_name) {
-      throw new Error(
-        "scopedMultiCollection: not implemented yet — wait for task #11",
-      );
+    scopedMultiCollection(name) {
+      return createScopedMultiCollectionBuilder(state, name, builder, options);
     },
 
     flow(config) {
@@ -647,6 +756,24 @@ function createMigrationBuilder(
       return builder;
     },
 
+    flowToScope(config) {
+      state.operations.push({
+        type: "flow_to_scope",
+        from: config.from,
+        into: config.into,
+        scope: config.scope,
+        toType: config.toType,
+        map: config.map,
+        onConflict: config.onConflict,
+        merge: config.merge,
+        sourceDisposition: config.source ?? "keep",
+        // Consolidations are forward-only — a merge has no general inverse.
+        irreversible: true,
+      });
+      state.mark({ type: "irreversible" });
+      return builder;
+    },
+
     updateIndexes(collectionName) {
       // Extract schema for this collection from options
       const collectionSchema = options.schemas?.collections?.[collectionName];
@@ -666,6 +793,22 @@ function createMigrationBuilder(
       // Updating indexes is lossy (rollback doesn't restore old indexes)
       state.mark({ type: "lossy" });
 
+      return builder;
+    },
+
+    renameCollection(from, to, renameOptions) {
+      const dropTarget = renameOptions?.dropTarget ?? false;
+      state.operations.push({
+        type: "rename_collection",
+        from,
+        to,
+        dropTarget,
+        // Dropping an existing target can't be rolled back.
+        lossy: dropTarget,
+      });
+      // A plain rename is reversible (down renames back); dropTarget loses the
+      // overwritten target.
+      if (dropTarget) state.mark({ type: "lossy" });
       return builder;
     },
 

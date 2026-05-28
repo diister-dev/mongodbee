@@ -522,9 +522,7 @@ Deno.test("MultiCollection: Performance with undefined sanitization", async () =
       });
     }
 
-    const startTime = Date.now();
     const itemIds = await mc.insertMany("items", testData);
-    const endTime = Date.now();
 
     assertEquals(itemIds.length, 50);
     // Performance validation: should handle 50 documents efficiently

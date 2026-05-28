@@ -10,7 +10,6 @@
 
 import type { Db } from "../../mongodb.ts";
 import type { MigrationDefinition, MigrationRule, SchemasDefinition } from "../types.ts";
-import { ulid } from "@std/ulid";
 import * as v from "valibot";
 import { toMongoValidator } from "../../validator.ts";
 import { applyCollectionIndexes, applyMultiCollectionIndexes } from "../../indexes-applier.ts";
@@ -26,13 +25,7 @@ import {
 } from "../multicollection-registry.ts";
 import { flowTargetId, extractIdPrefix, resolveSeedId } from "../utils/seed-id.ts";
 import { getIrreversibleOperations } from "../builder.ts";
-
-/**
- * Generates a new unique ID using ULID
- */
-function newId() {
-  return ulid().toLowerCase();
-}
+import { scopedMultiCollection } from "../../scoped-multi-collection.ts";
 
 /**
  * Resolve the `_id` of a seed document: honour an explicit `_id`, else
@@ -224,6 +217,21 @@ export function createMongodbApplier(
         }
       }
     }
+
+    // Synchronize scoped multi-collections — delegate to the runtime factory
+    // so validator + scoped indexes match exactly what scopedMultiCollection()
+    // would apply.
+    if (schemas.scopedMultiCollections) {
+      for (const [collectionName, scopedSchema] of Object.entries(schemas.scopedMultiCollections)) {
+        if (await collectionExists(collectionName)) {
+          await scopedMultiCollection(db, collectionName, {
+            scope: scopedSchema.scope,
+            // deno-lint-ignore no-explicit-any
+            types: scopedSchema.types as any,
+          });
+        }
+      }
+    }
   }
 
   /**
@@ -252,6 +260,13 @@ export function createMongodbApplier(
         for (const instanceName of instances) {
           await disableValidator(instanceName);
         }
+      }
+    }
+
+    // Disable validators for scoped multi-collections
+    if (schemas.scopedMultiCollections) {
+      for (const collectionName of Object.keys(schemas.scopedMultiCollections)) {
+        await disableValidator(collectionName);
       }
     }
   }
@@ -364,6 +379,29 @@ export function createMongodbApplier(
           throw new Error(`Collection ${operation.collectionName} does not exist`);
         }
         await db.collection(operation.collectionName).drop();
+      }
+    },
+
+    rename_collection: {
+      apply: async (operation) => {
+        if (!await collectionExists(operation.from)) {
+          if (opts.strictValidation) {
+            throw new Error(`Cannot rename: collection ${operation.from} does not exist`);
+          }
+          return;
+        }
+        await db.renameCollection(operation.from, operation.to, {
+          dropTarget: operation.dropTarget ?? false,
+        });
+      },
+      reverse: async (operation) => {
+        if (!await collectionExists(operation.to)) {
+          if (opts.strictValidation) {
+            throw new Error(`Cannot rename back: collection ${operation.to} does not exist`);
+          }
+          return;
+        }
+        await db.renameCollection(operation.to, operation.from);
       }
     },
 
@@ -1013,6 +1051,106 @@ export function createMongodbApplier(
         }
       },
     },
+    flow_to_scope: {
+      apply: async (operation) => {
+        const target = db.collection(operation.into.collection);
+        const from = operation.from;
+
+        // Resolve the concrete source collections + the context for each.
+        const sources: {
+          coll: string;
+          ctx: { sourceCollection?: string; instanceName?: string; documentType?: string };
+          where?: Record<string, unknown>;
+        }[] = [];
+        if (from.kind === "collection") {
+          sources.push({ coll: from.name, ctx: { sourceCollection: from.name }, where: from.where });
+        } else if (from.kind === "multiModelInstances") {
+          const instances = await discoverMultiCollectionInstances(db, from.model);
+          for (const inst of instances) {
+            sources.push({
+              coll: inst,
+              ctx: { instanceName: inst },
+              // Skip the multi-collection's internal bookkeeping docs
+              // (`_information`/`_migrations`) — they are mongodbee plumbing,
+              // not real sub-documents, and would collide on `_id` across
+              // instances when flowed into one scoped collection.
+              where: {
+                _type: {
+                  $nin: [MULTI_COLLECTION_INFO_TYPE, MULTI_COLLECTION_MIGRATIONS_TYPE],
+                },
+              },
+            });
+          }
+        } else {
+          sources.push({
+            coll: from.collectionName,
+            ctx: { documentType: from.documentType },
+            where: { _type: from.documentType },
+          });
+        }
+
+        for (const src of sources) {
+          // Never flow a collection into itself: the target is not a source
+          // (guards against discovery returning the in-progress target, which
+          // would re-read + re-insert and collide on `_id`).
+          if (src.coll === operation.into.collection) continue;
+          const sourceColl = db.collection(src.coll);
+          const cursor = sourceColl.find((src.where ?? {}) as Record<string, unknown>);
+          for await (const raw of cursor) {
+            const doc = raw as Record<string, unknown>;
+            const scope = operation.scope(doc, src.ctx);
+            const mapped = operation.map ? operation.map({ ...doc }, src.ctx) : { ...doc };
+            const toType = operation.toType
+              ? operation.toType(doc, src.ctx)
+              : (mapped._type ?? doc._type) as string;
+            let id = mapped._id;
+            if (id === undefined || id === null) {
+              id = `${toType}:${crypto.randomUUID().replace(/-/g, "")}`;
+            }
+            const outDoc = { ...mapped, _id: id, _type: toType, _scope: scope };
+
+            const existing = await target.findOne(
+              { _id: id, _type: toType, _scope: scope } as Record<string, unknown>,
+            );
+            if (existing) {
+              const onConflict = operation.onConflict ?? "error";
+              if (onConflict === "error") {
+                throw new Error(
+                  `flow_to_scope: conflict on (${scope}, ${toType}, ${id})`,
+                );
+              }
+              if (onConflict === "skip") continue;
+              const merged = operation.merge
+                ? operation.merge(existing as Record<string, unknown>, outDoc)
+                : { ...existing, ...outDoc };
+              await target.replaceOne(
+                { _id: id } as Record<string, unknown>,
+                { ...merged, _id: id, _type: toType, _scope: scope } as Record<string, unknown>,
+              );
+            } else {
+              // deno-lint-ignore no-explicit-any
+              await target.insertOne(outDoc as any);
+            }
+          }
+
+          if (operation.sourceDisposition === "consume") {
+            if (src.ctx.instanceName) {
+              // A whole multi-model instance is consolidated away — drop it
+              // entirely, including the `_information`/`_migrations` bookkeeping
+              // (the read `where` only excludes those from the flow, not the drop).
+              await sourceColl.drop().catch(() => {});
+            } else if (src.where) {
+              await sourceColl.deleteMany(src.where as Record<string, unknown>);
+            } else {
+              await sourceColl.drop().catch(() => {});
+            }
+          }
+        }
+      },
+      reverse: async (_operation) => {
+        throw new Error("flow_to_scope is irreversible — cannot roll back");
+      },
+    },
     update_indexes: {
       apply: async (operation) => {
         if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
@@ -1086,29 +1224,93 @@ export function createMongodbApplier(
     },
 
     create_scoped_multicollection: {
-      apply: async (_operation) => {
-        throw new Error("create_scoped_multicollection: not implemented yet (task #13)");
+      apply: async (operation) => {
+        // Delegates to the runtime factory so validator + scoped indexes are
+        // applied identically to a runtime scopedMultiCollection() call.
+        await scopedMultiCollection(db, operation.collectionName, {
+          scope: operation.schema.scope,
+          // deno-lint-ignore no-explicit-any
+          types: operation.schema.types as any,
+        });
       },
-      reverse: async (_operation) => {
-        throw new Error("create_scoped_multicollection.reverse: not implemented yet (task #13)");
+      reverse: async (operation) => {
+        if (await collectionExists(operation.collectionName)) {
+          await db.collection(operation.collectionName).drop();
+        }
       },
     },
 
     seed_scoped_multicollection_type: {
-      apply: async (_operation) => {
-        throw new Error("seed_scoped_multicollection_type: not implemented yet (task #13)");
+      apply: async (operation) => {
+        const collection = db.collection(operation.collectionName);
+        const sig = `${operation.collectionName}:${operation.scope}:${operation.documentType}`;
+        const documents = operation.documents.map((doc: unknown, i) => {
+          const typedDoc = doc as Record<string, unknown>;
+          const _id = resolveSeedDocId(
+            typedDoc,
+            operation.schema._id,
+            operation.documentType,
+            migration.id,
+            sig,
+            i,
+          );
+          // Validate the user fields ; meta fields are added afterwards and
+          // enforced by the collection's own validator on insert.
+          const value = v.safeParse(v.object(operation.schema), { ...typedDoc, _id });
+          if (!value.success) {
+            throw new Error(`Document validation failed: ${JSON.stringify(value.issues)}`);
+          }
+          return {
+            ...(value.output as Record<string, unknown>),
+            _id,
+            _type: operation.documentType,
+            _scope: operation.scope,
+          };
+        });
+
+        for (let i = 0; i < documents.length; i += opts.batchSize) {
+          const batch = documents.slice(i, i + opts.batchSize);
+          // deno-lint-ignore no-explicit-any
+          await collection.insertMany(batch as any);
+        }
       },
-      reverse: async (_operation) => {
-        throw new Error("seed_scoped_multicollection_type.reverse: not implemented yet (task #13)");
+      reverse: async (operation) => {
+        const collection = db.collection(operation.collectionName);
+        const sig = `${operation.collectionName}:${operation.scope}:${operation.documentType}`;
+        const ids = operation.documents.map((doc: unknown, i) =>
+          resolveSeedDocId(doc as Record<string, unknown>, operation.schema._id, operation.documentType, migration.id, sig, i)
+        );
+        if (ids.length > 0) {
+          await collection.deleteMany({ _id: { $in: ids } } as Record<string, unknown>);
+        }
       },
     },
 
     transform_scoped_multicollection_type: {
-      apply: async (_operation) => {
-        throw new Error("transform_scoped_multicollection_type: not implemented yet (task #13)");
+      apply: async (operation) => {
+        const filter: Record<string, unknown> = { _type: operation.documentType };
+        if (operation.scopeFilter && operation.scopeFilter.length > 0) {
+          filter._scope = { $in: operation.scopeFilter };
+        }
+        await transformDocuments(
+          operation.collectionName,
+          filter,
+          operation.up as (doc: Record<string, unknown>) => Record<string, unknown>,
+        );
       },
-      reverse: async (_operation) => {
-        throw new Error("transform_scoped_multicollection_type.reverse: not implemented yet (task #13)");
+      reverse: async (operation) => {
+        if (operation.irreversible) {
+          throw new Error(`Operation is irreversible`);
+        }
+        const filter: Record<string, unknown> = { _type: operation.documentType };
+        if (operation.scopeFilter && operation.scopeFilter.length > 0) {
+          filter._scope = { $in: operation.scopeFilter };
+        }
+        await transformDocuments(
+          operation.collectionName,
+          filter,
+          operation.down as (doc: Record<string, unknown>) => Record<string, unknown>,
+        );
       },
     },
 

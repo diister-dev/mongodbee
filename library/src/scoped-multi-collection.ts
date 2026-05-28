@@ -12,7 +12,7 @@ import type * as m from "mongodb";
 import type { Db } from "./mongodb.ts";
 import { toMongoValidator } from "./validator.ts";
 import { dbId, newId } from "./ids.ts";
-import { sanitizeForMongoDB } from "./sanitizer.ts";
+import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
 import { getSessionContext } from "./session.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
 import { dirtyEquivalent } from "./utils/object.ts";
@@ -118,6 +118,28 @@ type OutputDoc<
   S extends AnySchema,
 > = v.InferOutput<StorageElementSchema<T, K, S>>;
 
+/** Union of every type's output shape — for cross-type (`*Any`) reads. */
+type AnyScopedOutput<
+  T extends ScopedMultiCollectionTypes,
+  S extends AnySchema,
+> = { [K in keyof T]: OutputDoc<T, K, S> }[keyof T];
+
+// `OmitScopedMeta` / `ScopedMetaField` live in the dependency-free
+// `./types.ts` (exported as `@diister/mongodbee/types`) so frontend code can
+// use them without pulling the server-only ODM graph. Re-exported here for
+// server-side convenience.
+export type { OmitScopedMeta, ScopedMetaField } from "./types.ts";
+
+/**
+ * Allow `removeField()` (a symbol) anywhere in an update document, mirroring
+ * `multiCollection.updateOne`. Recurses into nested objects so a field can be
+ * removed at any depth.
+ */
+type DeepWithRemovable<X> = X extends Record<string, unknown>
+  ? { [K in keyof X]: DeepWithRemovable<X[K]> | symbol }
+  : X;
+type WithRemovable<X> = { [K in keyof X]: DeepWithRemovable<X[K]> | symbol };
+
 // -------- Views ----------------------------------------------------------
 
 /**
@@ -158,6 +180,25 @@ export type ScopedView<
     options?: m.FindOptions,
   ): Promise<OutputDoc<T, K, S>[]>;
 
+  /**
+   * Find the first document matching a cross-type filter — no `_type`
+   * constraint is injected, but the bound scope IS. Symmetric to
+   * `multiCollection.findOneAny`. The caller may put `_type` in the filter
+   * to branch across document types (e.g. a polymorphic existence check).
+   */
+  findOneAny(
+    filter?: m.Filter<AnyScopedOutput<T, S>>,
+  ): Promise<AnyScopedOutput<T, S> | null>;
+
+  /**
+   * Find all documents matching a cross-type filter — no `_type` constraint
+   * injected, but scoped. Invalid docs are dropped (same posture as `find`).
+   */
+  findAny(
+    filter?: m.Filter<AnyScopedOutput<T, S>>,
+    options?: m.FindOptions,
+  ): Promise<AnyScopedOutput<T, S>[]>;
+
   countDocuments<K extends keyof T>(
     type: K,
     filter?: m.Filter<OutputDoc<T, K, S>>,
@@ -174,13 +215,13 @@ export type ScopedView<
   updateOne<K extends keyof T>(
     type: K,
     id: string,
-    doc: Partial<UserInputDoc<T, K>>,
+    doc: WithRemovable<Partial<UserInputDoc<T, K>>>,
   ): Promise<number>;
 
   updateMany(
     ops: {
       [K in keyof T]?: {
-        [id: string]: Partial<UserInputDoc<T, K>>;
+        [id: string]: WithRemovable<Partial<UserInputDoc<T, K>>>;
       };
     },
   ): Promise<number>;
@@ -491,11 +532,18 @@ export async function scopedMultiCollection<
 
       async insertOne(type, doc) {
         const typeName = type as string;
-        assertNoReservedFields(doc as Record<string, unknown>);
+        const record = doc as Record<string, unknown>;
+        assertNoReservedFields(record);
 
         const schema = insertSchemas[typeName];
         const parsed = v.parse(schema, {
-          ...(doc as Record<string, unknown>),
+          ...record,
+          // Auto-mint `_id` when the caller omits it, mirroring the
+          // multiCollection contract. The per-type `_id` schema is often a
+          // bare `refId(type)` (required, no default), so we cannot rely on a
+          // `dbId` default here — without this, inserting such a type would
+          // throw "Expected _id but received undefined".
+          _id: record._id ?? `${typeName}:${newId()}`,
           _scope: scopeId,
         });
 
@@ -516,9 +564,11 @@ export async function scopedMultiCollection<
         const schema = insertSchemas[typeName];
 
         const parsed = docs.map((d) => {
-          assertNoReservedFields(d as Record<string, unknown>);
+          const record = d as Record<string, unknown>;
+          assertNoReservedFields(record);
           return v.parse(schema, {
-            ...(d as Record<string, unknown>),
+            ...record,
+            _id: record._id ?? `${typeName}:${newId()}`,
             _scope: scopeId,
           });
         });
@@ -597,6 +647,38 @@ export async function scopedMultiCollection<
         return out as any;
       },
 
+      async findOneAny(filter) {
+        const session = sessionContext.getSession();
+        const conditions: Record<string, unknown>[] = [{ _scope: scopeId }];
+        if (filter) conditions.push(filter as Record<string, unknown>);
+        // deno-lint-ignore no-explicit-any
+        const raw = await collection.findOne({ $and: conditions } as any, {
+          session,
+        });
+        if (!raw) return null;
+        // deno-lint-ignore no-explicit-any
+        return v.parse(storageUnion, raw) as any;
+      },
+
+      async findAny(filter, options) {
+        const session = sessionContext.getSession();
+        const conditions: Record<string, unknown>[] = [{ _scope: scopeId }];
+        if (filter) conditions.push(filter as Record<string, unknown>);
+        const cursor = collection.find(
+          // deno-lint-ignore no-explicit-any
+          { $and: conditions } as any,
+          { session, ...options },
+        );
+        const raw = await cursor.toArray();
+        const out: unknown[] = [];
+        for (const item of raw) {
+          const parsed = v.safeParse(storageUnion, item);
+          if (parsed.success) out.push(parsed.output);
+        }
+        // deno-lint-ignore no-explicit-any
+        return out as any;
+      },
+
       countDocuments(type, filter, options) {
         const typeName = type as string;
         const session = sessionContext.getSession();
@@ -660,18 +742,12 @@ export async function scopedMultiCollection<
         const typeName = type as string;
         assertNoReservedFields(doc as Record<string, unknown>);
 
-        // We don't have dot-notation validation yet for scoped (see future
-        // tasks) ; for now sanitize and apply $set directly without validating
-        // partial shapes. Validation lands when we wire schema-navigator.
-        const sanitized = sanitizeForMongoDB(doc, {
-          undefinedBehavior: "remove",
-          deep: true,
-        // deno-lint-ignore no-explicit-any
-        }) as any;
-
-        if (Object.keys(sanitized as Record<string, unknown>).length === 0) {
-          return 0;
-        }
+        // Split out removeField() symbols → $unset, the rest → $set.
+        const { set, unset } = extractFieldsToRemove(
+          doc as Record<string, unknown>,
+        );
+        const updateOps = buildUpdateOps(set, unset);
+        if (Object.keys(updateOps).length === 0) return 0;
 
         return retryOnWriteConflict(async () => {
           const session = sessionContext.getSession();
@@ -681,7 +757,7 @@ export async function scopedMultiCollection<
             _scope: scopeId,
           // deno-lint-ignore no-explicit-any
           // deno-lint-ignore no-explicit-any
-          } as any, { $set: sanitized } as any, { session });
+          } as any, updateOps as any, { session });
           if (!result.acknowledged) throw new Error("Update failed");
           if (result.matchedCount === 0) {
             throw new Error(
@@ -701,14 +777,11 @@ export async function scopedMultiCollection<
             const partial = items[id];
             if (!partial) continue;
             assertNoReservedFields(partial as Record<string, unknown>);
-            const sanitized = sanitizeForMongoDB(partial, {
-              undefinedBehavior: "remove",
-              deep: true,
-            // deno-lint-ignore no-explicit-any
-            }) as any;
-            if (
-              Object.keys(sanitized as Record<string, unknown>).length === 0
-            ) continue;
+            const { set, unset } = extractFieldsToRemove(
+              partial as Record<string, unknown>,
+            );
+            const updateOps = buildUpdateOps(set, unset);
+            if (Object.keys(updateOps).length === 0) continue;
             bulkOps.push({
               updateOne: {
                 filter: {
@@ -717,7 +790,7 @@ export async function scopedMultiCollection<
                   _scope: scopeId,
                   // deno-lint-ignore no-explicit-any
                 } as any,
-                update: { $set: sanitized },
+                update: updateOps,
               },
             });
           }
@@ -1171,6 +1244,25 @@ function buildScopedStageBuilder<T extends ScopedMultiCollectionTypes>(
 }
 
 // -------- Internal helpers ----------------------------------------------
+
+/**
+ * Build a Mongo update document from a `{ set, unset }` split (as produced
+ * by {@link extractFieldsToRemove}). `set` values are sanitized ; `unset`
+ * keys become a `$unset`. Returns `{}` when there is nothing to do.
+ */
+function buildUpdateOps(
+  set: Record<string, unknown>,
+  unset: Record<string, unknown>,
+): Record<string, unknown> {
+  const sanitized = sanitizeForMongoDB(set, {
+    undefinedBehavior: "remove",
+    deep: true,
+  }) as Record<string, unknown>;
+  const ops: Record<string, unknown> = {};
+  if (Object.keys(sanitized).length > 0) ops.$set = sanitized;
+  if (Object.keys(unset).length > 0) ops.$unset = unset;
+  return ops;
+}
 
 function validateConfig<
   T extends ScopedMultiCollectionTypes,

@@ -22,6 +22,45 @@ Deno.test("scopedMultiCollection: creates the underlying MongoDB collection", as
   });
 });
 
+Deno.test("scopedMultiCollection: auto-mints _id for a refId-typed _id when omitted", async () => {
+  // A per-type `_id` declared as a bare `refId(type)` is required with no
+  // default — but inserts must still work without the caller supplying `_id`,
+  // matching the multiCollection contract (auto-mint `type:<ulid>`).
+  await withDatabase("smc-factory-autoid", async (db) => {
+    const catalog = await scopedMultiCollection(db, "catalog", {
+      scope: refId("exposition"),
+      types: {
+        security: { _id: refId("security"), token: v.string() },
+      },
+    });
+    const view = catalog.scope("exposition:abc123");
+
+    const insertedId = await view.insertOne("security", { token: "k1" });
+    assert(
+      String(insertedId).startsWith("security:"),
+      `expected minted id to start with "security:", got ${insertedId}`,
+    );
+
+    const docs = await view.find("security", {});
+    assertEquals(docs.length, 1);
+    assert(String(docs[0]._id).startsWith("security:"));
+
+    // insertMany too
+    await view.insertMany("security", [{ token: "k2" }, { token: "k3" }]);
+    assertEquals((await view.find("security", {})).length, 3);
+
+    // A caller-supplied `_id` is still honored at runtime. The DynId type
+    // treats a refId `_id` as auto-generated (so callers omit it); passing one
+    // explicitly — as the exposition `information` singleton does to pin
+    // `_id == expositionId` — goes through a cast, exactly like the app.
+    await (view as unknown as {
+      insertOne(t: string, d: Record<string, unknown>): Promise<string>;
+    }).insertOne("security", { _id: "security:custom", token: "k4" });
+    const custom = await view.findOne("security", { token: "k4" });
+    assertEquals(custom?._id, "security:custom");
+  });
+});
+
 Deno.test("scopedMultiCollection: applies a MongoDB JSON Schema validator", async () => {
   await withDatabase("smc-factory-validator", async (db) => {
     await scopedMultiCollection(db, "catalog", {

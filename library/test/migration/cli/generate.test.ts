@@ -25,27 +25,6 @@ import {
   withTempDir,
 } from "./shared.ts";
 
-/**
- * Helper to set up test configuration
- */
-async function setupTestConfig(tempDir: string) {
-  const config = `
-import { defineConfig } from "@diister/mongodbee/migration";
-
-export default defineConfig({
-  paths: {
-    migrationsDir: "./migrations"
-  },
-  mongodb: {
-    uri: "mongodb://localhost:27017",
-    database: "mongodbee_test"
-  }
-});
-  `;
-
-  await Deno.writeTextFile("mongodbee.config.ts", config.trim());
-}
-
 Deno.test("generate - creates first migration with no parent", async () => {
   await withTempDir(async (tempDir) => {
     // Setup

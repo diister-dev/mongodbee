@@ -402,7 +402,7 @@ Deno.test("Date fields: Insert and query with dates", async (t) => {
       endDate: tomorrow,
     });
 
-    const _userId = await collection.insertOne("user", {
+    await collection.insertOne("user", {
       name: "Alice",
       birthDate: birthDate,
       lastLogin: yesterday,
@@ -551,12 +551,12 @@ Deno.test("Date fields: Date edge cases", async (t) => {
     // Test with future date
     const futureDate = new Date("2030-12-31");
 
-    const _appointment1 = await collection.insertOne("appointment", {
+    await collection.insertOne("appointment", {
       title: "Historical Event",
       scheduledFor: oldDate,
     });
 
-    const _appointment2 = await collection.insertOne("appointment", {
+    await collection.insertOne("appointment", {
       title: "Future Meeting",
       scheduledFor: futureDate,
       reminderDate: new Date("2030-12-30"),

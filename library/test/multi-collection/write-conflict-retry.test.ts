@@ -65,8 +65,6 @@ Deno.test("Write Conflict Retry: Verify retry happens on actual conflicts", asyn
       lastUpdated: new Date().toISOString(),
     });
 
-    let retryCount = 0;
-
     // We can't easily force a write conflict, but we can verify the retry logic
     // is in place by checking that updates complete successfully
     const updatePromises: Promise<void>[] = [];

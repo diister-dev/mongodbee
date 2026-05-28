@@ -174,7 +174,7 @@ Deno.test("UpdateOne: Invalid id format test", async (t) => {
     const collection = await multiCollection(db, "test", testModel);
 
     // Insert test user
-    const userId = await collection.insertOne("user", {
+    await collection.insertOne("user", {
       name: "John",
       age: 30,
     });

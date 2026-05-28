@@ -63,7 +63,7 @@ Deno.test("Collection Write Conflict: Concurrent updates with retry", async (t) 
     });
 
     // Create multiple concurrent update promises
-    const updates = Array.from({ length: 5 }, (_, i) =>
+    const updates = Array.from({ length: 5 }, (_, _i) =>
       (async () => {
         const counter = await counters.getById(counterId);
 

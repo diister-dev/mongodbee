@@ -2,7 +2,7 @@ import * as v from "../src/schema.ts";
 import { assertEquals, assertExists } from "@std/assert";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
-import { MongoClient, ObjectId } from "mongodb";
+import { ObjectId } from "mongodb";
 import { closeAllWatchers } from "../src/change-stream.ts";
 
 Deno.test("Collection watcher events test", async (t) => {

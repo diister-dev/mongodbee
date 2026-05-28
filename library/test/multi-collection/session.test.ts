@@ -2,7 +2,6 @@ import * as v from "../../src/schema.ts";
 import { assertEquals, assertRejects } from "@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
-import { ulid } from "../../src/schema.ts";
 import assert from "node:assert";
 import { defineModel } from "../../src/multi-collection-model.ts";
 
@@ -271,7 +270,7 @@ Deno.test("MultiCollection Session: Read operations in transaction", async (t) =
       assertEquals((users[0] as any).email, "read@example.com");
 
       // Insert another user in the same transaction
-      const newUserId = await store.insertOne("user", {
+      await store.insertOne("user", {
         name: "Another User",
         email: "another@example.com",
         age: 45,

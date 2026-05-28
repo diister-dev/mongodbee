@@ -8,7 +8,7 @@
  * The chain-based comparison is the source of truth; the timestamp
  * version is unsound in the general case.
  */
-import { assert, assertEquals } from "@std/assert";
+import { assertEquals } from "@std/assert";
 import {
   isInstanceCreatedAfterMigration,
   shouldInstanceReceiveMigrationByChain,

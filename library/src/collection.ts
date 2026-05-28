@@ -1,6 +1,6 @@
 import * as v from "./schema.ts";
 import { toMongoValidator } from "./validator.ts";
-import { sanitizeForMongoDB, extractFieldsToRemove, REMOVE_FIELD } from "./sanitizer.ts";
+import { sanitizeForMongoDB, extractFieldsToRemove } from "./sanitizer.ts";
 import { EventEmitter } from "./events.ts";
 import { watchEvent } from "./change-stream.ts";
 import { getSessionContext } from "./session.ts";
@@ -82,7 +82,7 @@ type CollectionOptions = {
   schemaManagement?: "auto" | "managed" | "inherit";
 };
 
-type WithId<T> = T extends { _id: infer U } ? T
+type WithId<T> = T extends { _id: unknown } ? T
   : m.WithId<T> | { _id: string } & T;
 
 /**

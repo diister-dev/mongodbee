@@ -1,5 +1,5 @@
 import * as v from "../../src/schema.ts";
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { assertEquals } from "@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import { defineModel } from "../../src/multi-collection-model.ts";

@@ -1133,7 +1133,7 @@ export class SimulationValidator implements MigrationValidator {
     
     // Apply retention ratio to multi-models
     if (newState.multiModels) {
-      for (const [instanceName, instance] of Object.entries(newState.multiModels)) {
+      for (const [_instanceName, instance] of Object.entries(newState.multiModels)) {
         const originalCount = instance.content.length;
         const keepCount = Math.floor(originalCount * ratio);
 

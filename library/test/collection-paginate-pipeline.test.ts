@@ -2,7 +2,6 @@
  * Tests for paginate with pipeline support in simple collections (collection.ts)
  */
 
-import { afterEach, beforeEach, describe, it } from "jsr:@std/testing/bdd";
 import { expect } from "jsr:@std/expect";
 import * as v from "../src/schema.ts";
 import { collection } from "../src/collection.ts";

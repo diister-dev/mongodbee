@@ -14,9 +14,6 @@ import { getCurrentVersion } from "./utils/package-info.ts";
 import {
   calculateMigrationStateFromHistory,
 } from "./migration-history.ts";
-import { createLogger } from "../utils/logger.ts";
-
-const log = createLogger("migration");
 
 /**
  * Type of migration operation

@@ -3,7 +3,7 @@ import type * as v from "./schema.ts";
 type UnknownSchema = v.BaseSchema<any, any, any>;
 type UnknownValidation = v.BaseValidation<any, any, any>;
 
-function buildPipelineResult<T>(pipe: any) {
+function buildPipelineResult(pipe: any) {
   return pipe.filter((v: any) => v.kind == "validation" || v.type == "literal")
     .map(constructorToValidator)
     .filter(Boolean)

@@ -1,5 +1,5 @@
 import * as v from "../../src/schema.ts";
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects } from "@std/assert";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import { withIndex } from "@diister/mongodbee";
@@ -18,12 +18,12 @@ Deno.test("Ensure Schema are not recreated", async (t) => {
 
     const collection = await multiCollection(db, "test", model);
 
-    const userA = await collection.insertOne("user", {
+    await collection.insertOne("user", {
       name: "John",
       mail: "john@doe.d",
     });
 
-    const userB = await collection.insertOne("user", {
+    await collection.insertOne("user", {
       name: "Jane",
       mail: "jane@doe.d",
     });
@@ -52,7 +52,7 @@ Deno.test("Ensure Schema are updated if changed", async (t) => {
 
     const collection = await multiCollection(db, "test", model);
 
-    const userA = await collection.insertOne("user", {
+    await collection.insertOne("user", {
       name: "John",
       mail: "john@doe.d",
     });
@@ -79,7 +79,7 @@ Deno.test("Ensure Schema are updated if changed", async (t) => {
     assertEquals(users2[0].age, undefined);
 
     // New user should be insertable with age
-    const userB = await collection2.insertOne("user", {
+    await collection2.insertOne("user", {
       name: "Jane",
       mail: "jane@doe.d",
       age: 30,
@@ -104,7 +104,7 @@ Deno.test("Ensure indexes are not recreated if already exist", async (t) => {
 
     const collection = await multiCollection(db, "test", model, { schemaManagement: "auto" });
 
-    const userA = await collection.insertOne("user", {
+    await collection.insertOne("user", {
       name: "John",
       mail: "john@doe.d",
     });
@@ -134,7 +134,7 @@ Deno.test("Ensure indexes are not recreated if already exist", async (t) => {
       "E11000 duplicate key error collection",
     );
 
-    const userB = await collection2.insertOne("user", {
+    await collection2.insertOne("user", {
       name: "Jane",
       mail: "jane@doe.d",
     });
@@ -156,7 +156,7 @@ Deno.test("Ensure indexes are updated if changed", async (t) => {
     });
     const collection = await multiCollection(db, "test", model, { schemaManagement: "auto" });
 
-    const userA = await collection.insertOne("user", {
+    await collection.insertOne("user", {
       name: "John",
       mail: "john@doe.d",
     });
@@ -184,7 +184,7 @@ Deno.test("Ensure indexes are updated if changed", async (t) => {
     const collection2 = await multiCollection(db, "test", model2, { schemaManagement: "auto" });
 
     // Should be able to insert user with same name now
-    const userB = await collection2.insertOne("user", {
+    await collection2.insertOne("user", {
       name: "John",
       mail: "john3@doe.d",
     });

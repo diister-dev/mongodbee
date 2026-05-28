@@ -93,7 +93,7 @@ Deno.test("multiCollection - index is created with partialFilterExpression scope
       },
     };
 
-    const _mc = await multiCollection(
+    await multiCollection(
       db,
       "catalog",
       defineModel("catalog", { schema }),
@@ -231,7 +231,7 @@ Deno.test("applyMultiCollectionIndexes - merges user partialFilterExpression wit
       },
     };
 
-    const _mc = await multiCollection(
+    await multiCollection(
       db,
       "mailbox",
       defineModel("mailbox", { schema }),
@@ -259,7 +259,7 @@ Deno.test("applyMultiCollectionIndexes - bare type filter when no user filter", 
       },
     };
 
-    const _mc = await multiCollection(
+    await multiCollection(
       db,
       "mailbox_bare",
       defineModel("mailbox_bare", { schema }),
