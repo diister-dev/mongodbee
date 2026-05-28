@@ -34,6 +34,15 @@ export type IndexMetadata = {
    * `_type` scoping filter.
    */
   partialFilterExpression?: m.Document;
+  /**
+   * Scoped-multi-collection only : opt out of the default `_scope`
+   * scoping. When `true`, a `unique` index will enforce uniqueness across
+   * **every** scope (typical for slugs, public identifiers, etc.).
+   *
+   * Ignored by regular `collection` and `multiCollection` (they have no
+   * scope concept).
+   */
+  global?: boolean;
 };
 
 export type IndexDatabase = {
@@ -41,6 +50,12 @@ export type IndexDatabase = {
   collation?: m.CollationOptions;
   expireAfterSeconds?: number;
   partialFilterExpression?: m.Document;
+  /**
+   * Scoped-multi-collection sentinel. Ignored by `collection` and
+   * `multiCollection` ; consumed by `scopedMultiCollection` to opt out of
+   * `_scope` scoping for this index.
+   */
+  global?: boolean;
 };
 
 /**
@@ -94,6 +109,9 @@ export function withIndex<
   }
   if (options.partialFilterExpression) {
     indexDatabase.partialFilterExpression = options.partialFilterExpression;
+  }
+  if (options.global) {
+    indexDatabase.global = true;
   }
 
   return v.pipe(

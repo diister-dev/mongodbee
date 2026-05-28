@@ -611,6 +611,42 @@ function createMigrationBuilder(
       );
     },
 
+    createScopedMultiCollection(_name) {
+      throw new Error(
+        "createScopedMultiCollection: not implemented yet — wait for task #11",
+      );
+    },
+
+    scopedMultiCollection(_name) {
+      throw new Error(
+        "scopedMultiCollection: not implemented yet — wait for task #11",
+      );
+    },
+
+    flow(config) {
+      const sourceDisposition = config.source ?? "keep";
+      const irreversible = sourceDisposition === "consume";
+      const targetIdSchema =
+        options.schemas?.collections?.[config.into.collection]?._id;
+
+      state.operations.push({
+        type: "flow",
+        from: config.from,
+        into: config.into,
+        map: config.map,
+        sourceDisposition,
+        targetIdSchema,
+        irreversible,
+      });
+
+      // A move cannot be rolled back in régime A (no provenance log).
+      if (irreversible) {
+        state.mark({ type: "irreversible" });
+      }
+
+      return builder;
+    },
+
     updateIndexes(collectionName) {
       // Extract schema for this collection from options
       const collectionSchema = options.schemas?.collections?.[collectionName];
@@ -698,6 +734,39 @@ export function migrationBuilder(
 ): MigrationBuilder {
   const state = initState ?? createMigrationState();
   return createMigrationBuilder(state, options);
+}
+
+/**
+ * Returns the operations that cannot be reversed.
+ *
+ * An operation is irreversible if it carries an explicit `irreversible: true`
+ * flag, or if it is a destructive type-deletion (the deleted documents
+ * cannot be reconstructed on rollback).
+ *
+ * @param operations - The migration operations to scan
+ * @returns The subset that is irreversible
+ */
+export function getIrreversibleOperations(
+  operations: MigrationRule[],
+): MigrationRule[] {
+  return operations.filter((op) =>
+    ("irreversible" in op && op.irreversible === true) ||
+    op.type === "delete_multicollection_type" ||
+    op.type === "delete_multimodel_instances_type"
+  );
+}
+
+/**
+ * Returns the transform operations explicitly flagged `lossy` — they can be
+ * rolled back but the original data cannot be fully restored.
+ *
+ * @param operations - The migration operations to scan
+ * @returns The subset flagged lossy
+ */
+export function getLossyOperations(
+  operations: MigrationRule[],
+): MigrationRule[] {
+  return operations.filter((op) => "lossy" in op && op.lossy === true);
 }
 
 /**

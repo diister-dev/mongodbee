@@ -22,15 +22,39 @@ import {
   MULTI_COLLECTION_MIGRATIONS_TYPE,
   multiCollectionInstanceExists,
   recordMultiCollectionMigration,
-  shouldInstanceReceiveMigration,
+  shouldInstanceReceiveMigrationFromChain,
 } from "../multicollection-registry.ts";
-import { ObjectId } from "mongodb";
+import { flowTargetId, extractIdPrefix, resolveSeedId } from "../utils/seed-id.ts";
+import { getIrreversibleOperations } from "../builder.ts";
 
 /**
  * Generates a new unique ID using ULID
  */
 function newId() {
   return ulid().toLowerCase();
+}
+
+/**
+ * Resolve the `_id` of a seed document: honour an explicit `_id`, else
+ * derive a deterministic one (so apply and reverse compute the same id and
+ * rollback can delete exactly what was inserted).
+ */
+function resolveSeedDocId(
+  originalDoc: Record<string, unknown>,
+  schemaIdField: unknown,
+  fallbackPrefix: string,
+  migrationId: string,
+  opSignature: string,
+  docIndex: number,
+): string {
+  return resolveSeedId(
+    originalDoc,
+    schemaIdField,
+    fallbackPrefix,
+    migrationId,
+    opSignature,
+    docIndex,
+  );
 }
 
 /**
@@ -233,7 +257,13 @@ export function createMongodbApplier(
   }
 
   /**
-   * Helper to transform documents in batches
+   * Helper to transform documents in batches.
+   *
+   * Pagination is keyed on `_id` (sorted ascending, `_id > lastSeen`) rather
+   * than `skip`/`limit`. `skip` is unsafe on a dataset being mutated in place:
+   * documents shifting position can be skipped or processed twice. Because the
+   * transform uses `replaceOne` (the `_id` never changes), the `_id` cursor
+   * advances monotonically and each document is processed exactly once.
    */
   async function transformDocuments(
     collectionName: string,
@@ -241,12 +271,16 @@ export function createMongodbApplier(
     transformer: (doc: Record<string, unknown>) => Record<string, unknown>,
   ): Promise<void> {
     const collection = db.collection(collectionName);
-    let processedCount = 0;
+    let lastId: unknown = undefined;
 
     while (true) {
-      const documents = await collection.find(filter)
+      const pageFilter = lastId === undefined
+        ? filter
+        : { $and: [filter, { _id: { $gt: lastId } }] };
+
+      const documents = await collection.find(pageFilter as Record<string, unknown>)
+        .sort({ _id: 1 })
         .limit(opts.batchSize)
-        .skip(processedCount)
         .toArray();
 
       if (documents.length === 0) break;
@@ -277,7 +311,7 @@ export function createMongodbApplier(
         await collection.bulkWrite(bulkOps);
       }
 
-      processedCount += documents.length;
+      lastId = documents[documents.length - 1]._id;
     }
   }
 
@@ -558,13 +592,17 @@ export function createMongodbApplier(
         }
 
         const collection = db.collection(operation.collectionName);
-        const documents = operation.documents.map((doc: unknown) => {
+        const sig = operation.collectionName;
+        const documents = operation.documents.map((doc: unknown, i) => {
           const typedDoc = doc as Record<string, unknown>;
-          const value = v.safeParse(v.object(operation.schema), typedDoc);
+          // Resolve the deterministic _id BEFORE validation so schemas with a
+          // required _id (e.g. a bare refId without a default) still validate.
+          const _id = resolveSeedDocId(typedDoc, operation.schema._id, "", migration.id, sig, i);
+          const value = v.safeParse(v.object(operation.schema), { ...typedDoc, _id });
           if (!value.success) {
             throw new Error(`Document validation failed: ${JSON.stringify(value.issues)}`);
           }
-          return value.output;
+          return { ...(value.output as Record<string, unknown>), _id };
         });
 
         for (let i = 0; i < documents.length; i += opts.batchSize) {
@@ -579,19 +617,12 @@ export function createMongodbApplier(
         }
 
         const collection = db.collection(operation.collectionName);
-        const documentIds = operation.documents
-          .map((doc: unknown) => {
-            const typedDoc = doc as Record<string, unknown>;
-            return typedDoc._id;
-          })
-          .filter(id => id !== undefined && id !== null);
-
+        const sig = operation.collectionName;
+        const documentIds = operation.documents.map((doc: unknown, i) =>
+          resolveSeedDocId(doc as Record<string, unknown>, operation.schema._id, "", migration.id, sig, i)
+        );
         if (documentIds.length > 0) {
           await collection.deleteMany({ _id: { $in: documentIds } } as Record<string, unknown>);
-        } else {
-          console.warn(
-            `Warning: Cannot reverse seed for collection ${operation.collectionName} - no _id fields found`,
-          );
         }
       }
     },
@@ -603,20 +634,22 @@ export function createMongodbApplier(
         }
 
         const collection = db.collection(operation.collectionName);
-        const documents = operation.documents.map((doc: unknown) => {
+        const sig = `${operation.collectionName}:${operation.documentType}`;
+        const documents = operation.documents.map((doc: unknown, i) => {
           const typedDoc = doc as Record<string, unknown>;
+          const _id = resolveSeedDocId(typedDoc, operation.schema._id, operation.documentType, migration.id, sig, i);
           const value = v.safeParse(v.object({
             _type: v.literal(operation.documentType),
             ...operation.schema,
           }), {
-            _type: operation.documentType,
             ...typedDoc,
+            _id,
+            _type: operation.documentType,
           });
           if (!value.success) {
             throw new Error(`Document validation failed: ${JSON.stringify(value.issues)}`);
           }
-
-          return value.output;
+          return { ...(value.output as Record<string, unknown>), _id };
         });
 
         for (let i = 0; i < documents.length; i += opts.batchSize) {
@@ -631,19 +664,12 @@ export function createMongodbApplier(
         }
 
         const collection = db.collection(operation.collectionName);
-        const documentIds = operation.documents
-          .map((doc: unknown) => {
-            const typedDoc = doc as Record<string, unknown>;
-            return typedDoc._id;
-          })
-          .filter(id => id !== undefined && id !== null);
-
+        const sig = `${operation.collectionName}:${operation.documentType}`;
+        const documentIds = operation.documents.map((doc: unknown, i) =>
+          resolveSeedDocId(doc as Record<string, unknown>, operation.schema._id, operation.documentType, migration.id, sig, i)
+        );
         if (documentIds.length > 0) {
           await collection.deleteMany({ _id: { $in: documentIds } } as Record<string, unknown>);
-        } else {
-          console.warn(
-            `Warning: Cannot reverse seed for multi-collection ${operation.collectionName} - no _id fields found`,
-          );
         }
       }
     },
@@ -655,19 +681,22 @@ export function createMongodbApplier(
         }
 
         const collection = db.collection(operation.collectionName);
-        const documents = operation.documents.map((doc: unknown) => {
+        const sig = `${operation.collectionName}:${operation.modelType}:${operation.documentType}`;
+        const documents = operation.documents.map((doc: unknown, i) => {
           const typedDoc = doc as Record<string, unknown>;
+          const _id = resolveSeedDocId(typedDoc, operation.schema._id, operation.documentType, migration.id, sig, i);
           const value = v.safeParse(v.object({
             _type: v.literal(operation.documentType),
             ...operation.schema,
           }), {
-            _type: operation.documentType,
             ...typedDoc,
+            _id,
+            _type: operation.documentType,
           });
           if (!value.success) {
             throw new Error(`Document validation failed: ${JSON.stringify(value.issues)}`);
           }
-          return value.output;
+          return { ...(value.output as Record<string, unknown>), _id };
         });
 
         for (let i = 0; i < documents.length; i += opts.batchSize) {
@@ -682,19 +711,12 @@ export function createMongodbApplier(
         }
 
         const collection = db.collection(operation.collectionName);
-        const documentIds = operation.documents
-          .map((doc: unknown) => {
-            const typedDoc = doc as Record<string, unknown>;
-            return typedDoc._id;
-          })
-          .filter(id => id !== undefined && id !== null);
-
+        const sig = `${operation.collectionName}:${operation.modelType}:${operation.documentType}`;
+        const documentIds = operation.documents.map((doc: unknown, i) =>
+          resolveSeedDocId(doc as Record<string, unknown>, operation.schema._id, operation.documentType, migration.id, sig, i)
+        );
         if (documentIds.length > 0) {
           await collection.deleteMany({ _id: { $in: documentIds } } as Record<string, unknown>);
-        } else {
-          console.warn(
-            `Warning: Cannot reverse seed for multi-model instance ${operation.collectionName} - no _id fields found`,
-          );
         }
       }
     },
@@ -709,25 +731,27 @@ export function createMongodbApplier(
         }
 
         for (const collectionName of instances) {
-          // Check if this instance should receive this migration
-          if (opts.currentMigrationId) {
-            const shouldReceive = await shouldInstanceReceiveMigration(
-              db,
-              collectionName,
-              opts.currentMigrationId,
-            );
-            if (!shouldReceive) {
-              console.log(`Skipping instance ${collectionName} - already has this migration`);
-              continue;
-            }
+          // Check if this instance should receive this migration. Uses the
+          // chain-based comparison (walks `migration.parent` chain) — safe
+          // even when migration IDs from different generators coexist
+          // (legacy padded vs. timestamp+ULID).
+          const shouldReceive = await shouldInstanceReceiveMigrationFromChain(
+            db,
+            collectionName,
+            migration,
+          );
+          if (!shouldReceive) {
+            console.log(`Skipping instance ${collectionName} - already has this migration`);
+            continue;
           }
 
           const collection = db.collection(collectionName);
-          const documents = operation.documents.map((doc: unknown) => {
+          const sig = `${operation.modelType}:${operation.documentType}`;
+          const documents = operation.documents.map((doc: unknown, i) => {
             const typedDoc = doc as Record<string, unknown>;
             return {
-              _id: typedDoc._id || (operation.schema._id ? v.getDefault(operation.schema._id) : undefined) || `${operation.documentType}:${newId()}`,
               ...typedDoc,
+              _id: resolveSeedDocId(typedDoc, operation.schema._id, operation.documentType, migration.id, sig, i),
               _type: operation.documentType,
             };
           });
@@ -751,15 +775,12 @@ export function createMongodbApplier(
       reverse: async (operation) => {
         const instances = await discoverMultiCollectionInstances(db, operation.modelType);
 
+        const sig = `${operation.modelType}:${operation.documentType}`;
         for (const collectionName of instances) {
           const collection = db.collection(collectionName);
-          const documentIds = operation.documents
-            .map((doc: unknown) => {
-              const typedDoc = doc as Record<string, unknown>;
-              return typedDoc._id;
-            })
-            .filter(id => id !== undefined && id !== null);
-
+          const documentIds = operation.documents.map((doc: unknown, i) =>
+            resolveSeedDocId(doc as Record<string, unknown>, operation.schema._id, operation.documentType, migration.id, sig, i)
+          );
           if (documentIds.length > 0) {
             await collection.deleteMany({ _id: { $in: documentIds } } as Record<string, unknown>);
           }
@@ -861,17 +882,18 @@ export function createMongodbApplier(
         }
 
         for (const collectionName of instances) {
-          // Check if this instance should receive this migration
-          if (opts.currentMigrationId) {
-            const shouldReceive = await shouldInstanceReceiveMigration(
-              db,
-              collectionName,
-              opts.currentMigrationId,
-            );
-            if (!shouldReceive) {
-              console.log(`Skipping instance ${collectionName} - already has this migration`);
-              continue;
-            }
+          // Check if this instance should receive this migration. Uses the
+          // chain-based comparison (walks `migration.parent` chain) — safe
+          // even when migration IDs from different generators coexist
+          // (legacy padded vs. timestamp+ULID).
+          const shouldReceive = await shouldInstanceReceiveMigrationFromChain(
+            db,
+            collectionName,
+            migration,
+          );
+          if (!shouldReceive) {
+            console.log(`Skipping instance ${collectionName} - already has this migration`);
+            continue;
           }
 
           await transformDocuments(
@@ -921,6 +943,76 @@ export function createMongodbApplier(
       }
     },
 
+    flow: {
+      apply: async (operation) => {
+        const prefix = extractIdPrefix(operation.targetIdSchema, "");
+        const source = db.collection(operation.from.collection);
+        const target = db.collection(operation.into.collection);
+        const baseFilter = (operation.from.where ?? {}) as Record<string, unknown>;
+
+        // Batch by _id cursor (stable on a mutating set; see transformDocuments).
+        let lastId: unknown = undefined;
+        while (true) {
+          const pageFilter = lastId === undefined
+            ? baseFilter
+            : { $and: [baseFilter, { _id: { $gt: lastId } }] };
+          const docs = await source.find(pageFilter as Record<string, unknown>)
+            .sort({ _id: 1 })
+            .limit(opts.batchSize)
+            .toArray();
+          if (docs.length === 0) break;
+
+          const mapped = docs.map((doc) => {
+            const out = operation.map({ ...doc }) as Record<string, unknown>;
+            out._id = flowTargetId(
+              prefix,
+              migration.id,
+              operation.from.collection,
+              String(doc._id),
+            );
+            return out;
+          });
+          // deno-lint-ignore no-explicit-any
+          await target.insertMany(mapped as any);
+          lastId = docs[docs.length - 1]._id;
+        }
+
+        if (operation.sourceDisposition === "consume") {
+          await source.deleteMany(baseFilter as Record<string, unknown>);
+        }
+      },
+      reverse: async (operation) => {
+        if (operation.irreversible) {
+          throw new Error(
+            "Flow with source: 'consume' (move) is irreversible — cannot roll back",
+          );
+        }
+        const prefix = extractIdPrefix(operation.targetIdSchema, "");
+        const source = db.collection(operation.from.collection);
+        const target = db.collection(operation.into.collection);
+        const baseFilter = (operation.from.where ?? {}) as Record<string, unknown>;
+
+        // Copy reverse: recompute target ids from the still-present source and
+        // delete those copies, batched by _id cursor.
+        let lastId: unknown = undefined;
+        while (true) {
+          const pageFilter = lastId === undefined
+            ? baseFilter
+            : { $and: [baseFilter, { _id: { $gt: lastId } }] };
+          const docs = await source.find(pageFilter as Record<string, unknown>)
+            .sort({ _id: 1 })
+            .limit(opts.batchSize)
+            .toArray();
+          if (docs.length === 0) break;
+
+          const ids = docs.map((doc) =>
+            flowTargetId(prefix, migration.id, operation.from.collection, String(doc._id))
+          );
+          await target.deleteMany({ _id: { $in: ids } } as Record<string, unknown>);
+          lastId = docs[docs.length - 1]._id;
+        }
+      },
+    },
     update_indexes: {
       apply: async (operation) => {
         if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
@@ -993,6 +1085,33 @@ export function createMongodbApplier(
       }
     },
 
+    create_scoped_multicollection: {
+      apply: async (_operation) => {
+        throw new Error("create_scoped_multicollection: not implemented yet (task #13)");
+      },
+      reverse: async (_operation) => {
+        throw new Error("create_scoped_multicollection.reverse: not implemented yet (task #13)");
+      },
+    },
+
+    seed_scoped_multicollection_type: {
+      apply: async (_operation) => {
+        throw new Error("seed_scoped_multicollection_type: not implemented yet (task #13)");
+      },
+      reverse: async (_operation) => {
+        throw new Error("seed_scoped_multicollection_type.reverse: not implemented yet (task #13)");
+      },
+    },
+
+    transform_scoped_multicollection_type: {
+      apply: async (_operation) => {
+        throw new Error("transform_scoped_multicollection_type: not implemented yet (task #13)");
+      },
+      reverse: async (_operation) => {
+        throw new Error("transform_scoped_multicollection_type.reverse: not implemented yet (task #13)");
+      },
+    },
+
     rename_multimodel_instances_type: {
       apply: async (operation) => {
         const instances = await discoverMultiCollectionInstances(db, operation.modelType);
@@ -1004,52 +1123,15 @@ export function createMongodbApplier(
 
         for (const collectionName of instances) {
           const collection = db.collection(collectionName);
-          
-          // Find all documents with the old type name
           const oldTypePrefix = `${operation.oldTypeName}:`;
           const newTypePrefix = `${operation.newTypeName}:`;
-          
-          // Process documents in batches to avoid loading everything in memory
-          let processedCount = 0;
-          
-          while (true) {
-            const documents = await collection.find(
-              { _type: operation.oldTypeName } as Record<string, unknown>
-            )
-              .limit(opts.batchSize)
-              .skip(processedCount)
-              .toArray();
-            
-            if (documents.length === 0) break;
-            
-            for (const doc of documents) {
-              const oldId = doc._id as unknown as string;
-              let newId = oldId as unknown as string;
-              
-              // If _id is a string starting with "oldTypeName:", replace the prefix
-              if (typeof oldId === 'string' && oldId.startsWith(oldTypePrefix)) {
-                newId = newTypePrefix + oldId.slice(oldTypePrefix.length);
-              }
-              
-              // If _id changed, we need to delete the old document and insert with new _id
-              if (newId !== oldId) {
-                await collection.deleteOne({ _id: oldId as unknown as ObjectId });
-                await collection.insertOne({
-                  ...doc,
-                  _id: newId as unknown as ObjectId,
-                  _type: operation.newTypeName
-                });
-              } else {
-                // Just update _type if _id doesn't change
-                await collection.updateOne(
-                  { _id: oldId as unknown as ObjectId },
-                  { $set: { _type: operation.newTypeName } } as Record<string, unknown>
-                );
-              }
-            }
-            
-            processedCount += documents.length;
-          }
+          await renameTypeInPlace(
+            collection,
+            operation.oldTypeName,
+            operation.newTypeName,
+            oldTypePrefix,
+            newTypePrefix,
+          );
         }
       },
       reverse: async (operation) => {
@@ -1057,55 +1139,66 @@ export function createMongodbApplier(
 
         for (const collectionName of instances) {
           const collection = db.collection(collectionName);
-          
-          // Find all documents with the new type name
           const oldTypePrefix = `${operation.oldTypeName}:`;
           const newTypePrefix = `${operation.newTypeName}:`;
-          
-          // Process documents in batches to avoid loading everything in memory
-          let processedCount = 0;
-          
-          while (true) {
-            const documents = await collection.find(
-              { _type: operation.newTypeName } as Record<string, unknown>
-            )
-              .limit(opts.batchSize)
-              .skip(processedCount)
-              .toArray();
-            
-            if (documents.length === 0) break;
-            
-            for (const doc of documents) {
-              const currentId = doc._id as unknown as string;
-              let restoredId = currentId as unknown as string;
-              
-              // If _id is a string starting with "newTypeName:", replace the prefix back
-              if (typeof currentId === 'string' && currentId.startsWith(newTypePrefix)) {
-                restoredId = oldTypePrefix + currentId.slice(newTypePrefix.length);
-              }
-              
-              // If _id changed, we need to delete the current document and insert with restored _id
-              if (restoredId !== currentId) {
-                await collection.deleteOne({ _id: currentId as unknown as ObjectId });
-                await collection.insertOne({
-                  ...doc,
-                  _id: restoredId as unknown as ObjectId,
-                  _type: operation.oldTypeName
-                });
-              } else {
-                await collection.updateOne(
-                  { _id: currentId as unknown as ObjectId },
-                  { $set: { _type: operation.oldTypeName } } as Record<string, unknown>
-                );
-              }
-            }
-            
-            processedCount += documents.length;
-          }
+          // Reverse direction: newTypeName → oldTypeName
+          await renameTypeInPlace(
+            collection,
+            operation.newTypeName,
+            operation.oldTypeName,
+            newTypePrefix,
+            oldTypePrefix,
+          );
         }
       }
     },
   };
+
+  /**
+   * Rename every document of `fromType` to `toType` in a multi-model
+   * instance collection, rewriting the `_id` prefix when present.
+   *
+   * Iterates by repeatedly querying `{ _type: fromType }` and processing a
+   * batch — no `skip`. Each renamed document stops matching the query, so
+   * the loop drains the set without skipping or double-processing (the old
+   * `skip(processedCount)` approach silently lost documents because the
+   * matching set shrinks as we rename).
+   */
+  async function renameTypeInPlace(
+    // deno-lint-ignore no-explicit-any
+    collection: ReturnType<Db["collection"]> | any,
+    fromType: string,
+    toType: string,
+    fromPrefix: string,
+    toPrefix: string,
+  ): Promise<void> {
+    while (true) {
+      const documents = await collection.find(
+        { _type: fromType } as Record<string, unknown>,
+      ).limit(opts.batchSize).toArray();
+
+      if (documents.length === 0) break;
+
+      for (const doc of documents) {
+        const currentId = doc._id;
+        let nextId = currentId;
+        if (typeof currentId === "string" && currentId.startsWith(fromPrefix)) {
+          nextId = toPrefix + currentId.slice(fromPrefix.length);
+        }
+
+        if (nextId !== currentId) {
+          // _id is immutable in MongoDB → delete + re-insert with new id.
+          await collection.deleteOne({ _id: currentId } as Record<string, unknown>);
+          await collection.insertOne({ ...doc, _id: nextId, _type: toType });
+        } else {
+          await collection.updateOne(
+            { _id: currentId } as Record<string, unknown>,
+            { $set: { _type: toType } } as Record<string, unknown>,
+          );
+        }
+      }
+    }
+  }
 
   async function applyOperation(operation: MigrationRule): Promise<void> {
     const handler = migrations[operation.type]?.apply;
@@ -1145,6 +1238,20 @@ export function createMongodbApplier(
     operations: MigrationRule[],
     direction: 'up' | 'down',
   ): Promise<void> {
+    // Pre-scan: refuse to roll back if any operation is irreversible, BEFORE
+    // touching validators or data — otherwise we'd leave the database in a
+    // partially rolled-back state.
+    if (direction === "down") {
+      const irreversible = getIrreversibleOperations(operations);
+      if (irreversible.length > 0) {
+        throw new Error(
+          `Cannot roll back: migration contains ${irreversible.length} ` +
+            `irreversible operation(s) [${irreversible.map((o) => o.type).join(", ")}]. ` +
+            `Rollback aborted before any changes were made.`,
+        );
+      }
+    }
+
     // Determine target schemas based on direction
     const targetSchemas = direction === 'up'
       ? migration.schemas
@@ -1156,18 +1263,45 @@ export function createMongodbApplier(
     // - Down: new validators would reject documents transformed back to old schema
     await disableAllValidators(targetSchemas);
 
-    // STEP 2: Apply all operations without validation interference
-    for (const operation of operations) {
-      if (direction === 'up') {
-        await applyOperation(operation);
-      } else {
-        await reverseOperation(operation);
+    // STEP 2: Apply all operations without validation interference.
+    // Rollback undoes operations in LIFO order — reverse the list for 'down'
+    // so dependent operations (e.g. a seed) are undone before the
+    // create_collection they rely on.
+    //
+    // The whole apply/re-enable sequence is wrapped so validators are ALWAYS
+    // restored, even if an operation throws mid-migration. Leaving validators
+    // disabled is the worst outcome (silent acceptance of invalid documents);
+    // re-syncing in `finally` guarantees the collection regains its guard.
+    const ordered = direction === "down" ? [...operations].reverse() : operations;
+    let applyError: unknown;
+    try {
+      for (const operation of ordered) {
+        if (direction === 'up') {
+          await applyOperation(operation);
+        } else {
+          await reverseOperation(operation);
+        }
+      }
+    } catch (err) {
+      applyError = err;
+    } finally {
+      // STEP 3: Re-enable validators/indexes with the target schemas — even
+      // on failure. If re-sync itself fails, surface it loudly but don't
+      // mask the original error.
+      try {
+        await synchronizeValidatorsAndIndexes(targetSchemas);
+      } catch (syncErr) {
+        console.error(
+          "CRITICAL: failed to re-enable validators after migration. " +
+            "Collections may be left without validation until the next " +
+            "`migrate`/`check` run.",
+          syncErr,
+        );
+        if (!applyError) applyError = syncErr;
       }
     }
 
-    // STEP 3: Synchronize validators and indexes with target schemas
-    // Re-enables validators with the correct schema for the migration direction
-    await synchronizeValidatorsAndIndexes(targetSchemas);
+    if (applyError) throw applyError;
 
     // STEP 4: Record migration on ALL multi-model instances (even if not affected)
     // This ensures complete tracking of which migrations each instance has seen

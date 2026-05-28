@@ -151,9 +151,20 @@ export function migrationDefinition<Schema extends SchemasDefinition>(
     throw new Error("Migration name must be a non-empty string");
   }
 
-  // Validate schemas
-  if (!options.schemas || !options.schemas.collections) {
-    throw new Error("Migration must define at least collections schema");
+  // Validate schemas — must define at least one bucket. Any of the four
+  // (collections, multiCollections, multiModels, scopedMultiCollections)
+  // is acceptable to support fresh migrations that only target one shape.
+  if (
+    !options.schemas ||
+    (!options.schemas.collections &&
+      !options.schemas.multiCollections &&
+      !options.schemas.multiModels &&
+      !options.schemas.scopedMultiCollections)
+  ) {
+    throw new Error(
+      "Migration must define at least one collections schema bucket: " +
+        "collections, multiCollections, multiModels, or scopedMultiCollections",
+    );
   }
 
   // Validate migrate function
@@ -223,10 +234,15 @@ export function validateMigrationChain(migrations: MigrationDefinition[]): {
       }
     }
 
-    // Validate ID format (should be sequential)
-    if (!/^\d+$/.test(migration.id)) {
+    // Validate ID format. Migration IDs must be safe identifiers — letters,
+    // digits, underscore, dash, and `@` (the name separator). The actual
+    // ordering relies on **lexicographic** comparison, which the
+    // generator's `YYYY_MM_DD_HHMM_<ULID>[@name]` format respects. Numeric
+    // padded ids ("001", "002", …) also satisfy this and remain valid.
+    if (!/^[a-zA-Z0-9_@-]+$/.test(migration.id)) {
       errors.push(
-        `Migration ID ${migration.id} should be numeric for proper ordering`,
+        `Migration ID "${migration.id}" contains invalid characters. ` +
+          `Use only letters, digits, underscores, hyphens, and "@".`,
       );
     }
   }

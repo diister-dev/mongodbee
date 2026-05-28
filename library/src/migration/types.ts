@@ -46,6 +46,19 @@ export type CreateMultiModelInstanceRule = {
 };
 
 /**
+ * Rule for creating a new scoped multi-collection.
+ *
+ * Differs from `create_multicollection` by carrying an additional `scope`
+ * schema — the value validated against {@link ScopedMultiSchema.scope} on
+ * every `.scope()` call.
+ */
+export type CreateScopedMultiCollectionRule = {
+  type: "create_scoped_multicollection";
+  collectionName: string;
+  schema: ScopedMultiSchema;
+};
+
+/**
  * Rule for seeding a collection with initial data
  */
 export type SeedCollectionRule = {
@@ -58,6 +71,23 @@ export type SeedCollectionRule = {
 export type SeedMultiCollectionTypeRule = {
   type: "seed_multicollection_type";
   collectionName: string;
+  documentType: string;
+  documents: readonly unknown[];
+  schema: SchemaContent;
+}
+
+/**
+ * Rule for seeding a specific (scope, type) bucket of a scoped
+ * multi-collection.
+ *
+ * Each seed is bound to one explicit `scope` — there is no "default" or
+ * "global" scope here. To seed several scopes with the same data, emit
+ * one rule per scope.
+ */
+export type SeedScopedMultiCollectionTypeRule = {
+  type: "seed_scoped_multicollection_type";
+  collectionName: string;
+  scope: string;
   documentType: string;
   documents: readonly unknown[];
   schema: SchemaContent;
@@ -113,6 +143,33 @@ export type TransformMultiCollectionTypeRule<
   down: (doc: U) => T;
   schema: SchemaContent,
   parentSchema?: SchemaContent,
+  /** Marks this transformation as irreversible (cannot be rolled back) */
+  irreversible?: boolean;
+  /** Marks this transformation as lossy (rollback loses data) */
+  lossy?: boolean;
+};
+
+/**
+ * Rule for transforming every document of a given type inside a scoped
+ * multi-collection.
+ *
+ * By default the transform touches **every scope**. Restrict the rule to
+ * a subset with `scopeFilter` — useful when a migration only concerns a
+ * specific tenant cohort.
+ */
+export type TransformScopedMultiCollectionTypeRule<
+  T = Record<string, unknown>,
+  U = Record<string, unknown>,
+> = {
+  type: "transform_scoped_multicollection_type";
+  collectionName: string;
+  documentType: string;
+  up: (doc: T) => U;
+  down: (doc: U) => T;
+  schema: SchemaContent;
+  parentSchema?: SchemaContent;
+  /** Restrict the transform to a subset of scope values. Empty/absent = all scopes. */
+  scopeFilter?: readonly string[];
   /** Marks this transformation as irreversible (cannot be rolled back) */
   irreversible?: boolean;
   /** Marks this transformation as lossy (rollback loses data) */
@@ -223,6 +280,32 @@ export type RenameMultiModelInstancesTypeRule = {
 };
 
 /**
+ * Cross-collection document flow (régime A).
+ *
+ * Reads documents from a source collection (optionally filtered), maps them,
+ * and writes them into a target collection. The target `_id` is derived
+ * deterministically from the source `_id` so the operation is reversible
+ * without a provenance log:
+ *
+ * - `sourceDisposition: "keep"` (copy) — source is left intact ; rollback
+ *   recomputes the target ids from the still-present source and deletes the
+ *   copies. Fully reversible.
+ * - `sourceDisposition: "consume"` (move) — source documents are deleted ;
+ *   reversing would require provenance, so a move is marked `irreversible`.
+ */
+export type FlowRule = {
+  type: "flow";
+  from: { collection: string; where?: Record<string, unknown> };
+  into: { collection: string };
+  map: (doc: Record<string, unknown>) => Record<string, unknown>;
+  sourceDisposition: "keep" | "consume";
+  /** Target `_id` schema — used to derive the id prefix for generated ids. */
+  targetIdSchema?: unknown;
+  irreversible?: boolean;
+  lossy?: boolean;
+};
+
+/**
  * Union type representing all possible migration operations
  */
 export type MigrationRule =
@@ -230,22 +313,27 @@ export type MigrationRule =
   | CreateCollectionRule
   | CreateMultiCollectionRule
   | CreateMultiModelInstanceRule
+  | CreateScopedMultiCollectionRule
   // Seed
   | SeedCollectionRule
   | SeedMultiCollectionTypeRule
   | SeedMultiModelInstanceTypeRule
   | SeedMultiModelInstancesTypeRule
+  | SeedScopedMultiCollectionTypeRule
   // Transform
   | TransformCollectionRule
   | TransformMultiCollectionTypeRule
   | TransformMultiModelInstanceTypeRule
   | TransformMultiModelInstancesTypeRule
+  | TransformScopedMultiCollectionTypeRule
   // Delete type
   | DeleteMultiCollectionTypeRule
   | DeleteMultiModelInstancesTypeRule
   // Rename type
   | RenameMultiCollectionTypeRule
   | RenameMultiModelInstancesTypeRule
+  // Cross-collection
+  | FlowRule
   // Other
   | UpdateIndexesRule
   | MarkAsMultiModelTypeRule;
@@ -473,6 +561,51 @@ export interface MultiModelInstanceBuilder {
 }
 
 /**
+ * Builder interface for configuring a scoped multi-collection.
+ */
+export interface ScopedMultiCollectionBuilder {
+  /**
+   * Configures a specific document-type within the scoped multi-collection.
+   */
+  type(typeName: string): ScopedMultiCollectionTypeBuilder;
+
+  /**
+   * Finishes configuring this scoped multi-collection and returns to the
+   * main builder.
+   */
+  end(): MigrationBuilder;
+}
+
+/**
+ * Builder interface for configuring a specific type within a scoped
+ * multi-collection.
+ */
+export interface ScopedMultiCollectionTypeBuilder {
+  /**
+   * Seeds this type with documents bound to one explicit scope.
+   *
+   * @param scope - The scope value (e.g. `"exposition:abc123"`)
+   * @param documents - Documents to insert
+   */
+  seed(
+    scope: string,
+    documents: readonly unknown[],
+  ): ScopedMultiCollectionTypeBuilder;
+
+  /**
+   * Applies a transformation to every document of this type. By default
+   * the transform spans every scope ; pass `scopeFilter` to restrict the
+   * effect to a subset.
+   */
+  transform(
+    rule: TransformRule & { readonly scopeFilter?: readonly string[] },
+  ): ScopedMultiCollectionTypeBuilder;
+
+  /** Finishes configuring this type and returns to the scoped builder. */
+  end(): ScopedMultiCollectionBuilder;
+}
+
+/**
  * Main builder interface for defining migrations
  *
  * This interface provides the primary API for defining migration operations
@@ -539,6 +672,41 @@ export interface MigrationBuilder {
   ): MultiModelInstancesBuilder;
 
   /**
+   * Creates a new scoped multi-collection.
+   *
+   * @param name - Name of the scoped multi-collection
+   * @returns A builder to configure its types and seed scopes
+   */
+  createScopedMultiCollection(name: string): ScopedMultiCollectionBuilder;
+
+  /**
+   * Configures an existing scoped multi-collection (for transforms / seeds
+   * of subsequent migrations).
+   */
+  scopedMultiCollection(name: string): ScopedMultiCollectionBuilder;
+
+  /**
+   * Moves or copies documents from one collection to another.
+   *
+   * @example
+   * ```typescript
+   * migration.flow({
+   *   from: { collection: "users", where: { active: false } },
+   *   into: { collection: "archived_users" },
+   *   map: (doc) => ({ ...doc, archivedReason: "inactivity" }),
+   *   source: "keep", // copy (reversible) ; "consume" = move (irreversible)
+   * });
+   * ```
+   */
+  flow(config: {
+    from: { collection: string; where?: Record<string, unknown> };
+    into: { collection: string };
+    map: (doc: Record<string, unknown>) => Record<string, unknown>;
+    /** "keep" = copy (default, reversible) ; "consume" = move (irreversible). */
+    source?: "keep" | "consume";
+  }): MigrationBuilder;
+
+  /**
    * Updates indexes on an existing collection to match the schema
    * @param collectionName - The name of the collection
    * @returns The main migration builder for method chaining
@@ -571,6 +739,16 @@ export type SchemaContent = Record<string, v.BaseSchema<unknown, unknown, v.Base
 export type MultiSchema = Record<string, SchemaContent>;
 
 /**
+ * Schema shape for a scoped multi-collection inside migrations: a single
+ * `scope` Valibot schema validating scope values, plus the standard
+ * `types` map identical in shape to a {@link MultiSchema}.
+ */
+export type ScopedMultiSchema = {
+  scope: v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
+  types: MultiSchema;
+};
+
+/**
  * Schema definition for collections and multi-collections
  *
  * This type defines the structure expected for schema definitions
@@ -593,6 +771,12 @@ export type SchemasDefinition = {
   multiModels?: Record<
     string, // multi-collection model schema name
     MultiSchema
+  >;
+
+  /** Schema definitions for scoped multi-collections (one physical collection partitioned by a discriminator value). */
+  scopedMultiCollections?: Record<
+    string, // scoped multi-collection name
+    ScopedMultiSchema
   >;
 };
 
@@ -664,6 +848,13 @@ export type DatabaseState = {
 
   /** Multi-collections models and their contents (future feature) */
   multiModels: Record<string, StateCollectionContent & { modelType: string }>;
+
+  /**
+   * Scoped multi-collections — keyed by collection name. The flat `content`
+   * stores every document ; each doc carries `_scope` + `_type` so the
+   * applier and tests can filter naturally without an extra index layer.
+   */
+  scopedMultiCollections: Record<string, StateCollectionContent>;
 };
 
 
@@ -695,5 +886,6 @@ export function createEmptyDatabaseState(): SimulationDatabaseState {
     collections: {},
     multiCollections: {},
     multiModels: {},
+    scopedMultiCollections: {},
   };
 }

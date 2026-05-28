@@ -668,6 +668,67 @@ export async function shouldInstanceReceiveMigration(
     return false;
   }
 }
+
+/**
+ * Chain-based variant of {@link shouldInstanceReceiveMigration}.
+ *
+ * Looks up the instance's `fromMigrationId` in the registry, then walks
+ * `currentMigration`'s parent chain. Returns `true` iff the instance was
+ * created at or before `currentMigration` (i.e. the id is in current's
+ * ancestry).
+ *
+ * Prefer this over {@link shouldInstanceReceiveMigration} — the latter
+ * uses lexicographic ID comparison which is unsound when IDs from
+ * different generators (legacy padded vs. timestamp+ULID) coexist.
+ *
+ * Special cases :
+ * - `fromMigrationId === "unknown"` or `"current"` → assume legacy
+ *   instance, apply the migration (returns `true`).
+ *
+ * @param db - Database
+ * @param collectionName - Instance collection name
+ * @param currentMigration - The migration being applied
+ * @returns `true` if the instance should receive the migration
+ */
+export async function shouldInstanceReceiveMigrationFromChain(
+  db: Db,
+  collectionName: string,
+  currentMigration: MigrationDefinition,
+): Promise<boolean> {
+  try {
+    const session = getSessionFromDb(db);
+    const collection = db.collection(collectionName);
+    const migrations = await collection.findOne({
+      _type: MULTI_COLLECTION_MIGRATIONS_TYPE,
+    }, { session }) as MultiCollectionMigrations | null;
+
+    if (!migrations) {
+      // No migrations-metadata document on this instance — we can't establish
+      // its creation point, so we don't target it. (Matches the historical
+      // behaviour of shouldInstanceReceiveMigration.)
+      return false;
+    }
+
+    const fromId = migrations.fromMigrationId;
+    if (fromId === "unknown" || fromId === "current") {
+      // Legacy / unmarked instance — apply migration to be safe.
+      return true;
+    }
+
+    // Walk current migration's chain (current → parent → grand-parent → …).
+    // If we find `fromId` anywhere, the instance was created at or before
+    // current → should receive it. Otherwise the instance is on a different
+    // branch or in the future → skip.
+    let m: MigrationDefinition | null = currentMigration;
+    while (m !== null) {
+      if (m.id === fromId) return true;
+      m = m.parent;
+    }
+    return false;
+  } catch (_error) {
+    return false;
+  }
+}
 /**
  * Marks an existing collection as a multi-collection instance
  *

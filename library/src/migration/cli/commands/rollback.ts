@@ -18,7 +18,11 @@ import {
   markMigrationAsReverted,
 } from "../../state.ts";
 import { createMongodbApplier } from "../../appliers/mongodb.ts";
-import { migrationBuilder } from "../../builder.ts";
+import {
+  getIrreversibleOperations,
+  getLossyOperations,
+  migrationBuilder,
+} from "../../builder.ts";
 import { confirm } from "../utils/confirm.ts";
 
 export interface RollbackCommandOptions {
@@ -95,36 +99,41 @@ export async function rollbackCommand(
     const builder = migrationBuilder({ schemas: migrationToRollback.schemas });
     const state = migrationToRollback.migrate(builder);
 
-    if (state.hasProperty("irreversible")) {
-      console.log(red("⚠  This migration is marked as IRREVERSIBLE."));
-      console.log(red("   Rolling it back may lead to data loss."));
-      console.log();
+    // Compact "where" label for an operation, for human-readable listings.
+    const opLabel = (op: typeof state.operations[number]): string => {
+      const o = op as Record<string, unknown>;
+      const target = (o.collectionName ?? o.modelType ?? "") as string;
+      const docType = o.documentType ? `.${o.documentType as string}` : "";
+      return target ? `${op.type}: ${target}${docType}` : op.type;
+    };
 
-      if (!options.force) {
-        const confirmed = await confirm(
-          "Are you sure you want to rollback this migration?",
-        );
-
-        if (!confirmed) {
-          console.log(yellow("Rollback cancelled."));
-          return;
-        }
+    // Irreversible operations cannot be rolled back at all — refuse up-front
+    // (the applier would throw anyway, before mutating anything). `force`
+    // does not override this: there is no valid down() to run.
+    const irreversibleOps = getIrreversibleOperations(state.operations);
+    if (irreversibleOps.length > 0) {
+      console.log(red("✗  This migration is IRREVERSIBLE and cannot be rolled back."));
+      console.log(red("   Irreversible operation(s):"));
+      for (const op of irreversibleOps) {
+        console.log(red(`   - ${opLabel(op)}`));
       }
+      console.log();
+      console.log(
+        dim(
+          "To move forward instead, write a new migration that performs the " +
+            "inverse change explicitly.",
+        ),
+      );
+      return;
     }
 
-    // Check for lossy transformations
-    if (state.hasProperty("lossy")) {
-      const lossyTransforms = state.operations.filter((op) =>
-        (op.type === "transform_collection" || op.type === "transform_multicollection_type") &&
-        op.lossy
-      );
+    // Lossy transforms CAN be rolled back, but won't restore the exact
+    // original data — confirm before proceeding.
+    const lossyOps = getLossyOperations(state.operations);
+    if (lossyOps.length > 0) {
       console.log(yellow("⚠  This migration contains LOSSY transformations:"));
-      for (const op of lossyTransforms) {
-        if (op.type === "transform_collection") {
-          console.log(yellow(`   - Collection: ${op.collectionName}`));
-        } else if (op.type === "transform_multicollection_type") {
-          console.log(yellow(`   - Multi-collection: ${op.collectionName}.${op.documentType}`));
-        }
+      for (const op of lossyOps) {
+        console.log(yellow(`   - ${opLabel(op)}`));
       }
       console.log(yellow("   Rolling back will result in DATA LOSS."));
       console.log();
@@ -150,13 +159,13 @@ export async function rollbackCommand(
         currentMigrationId: migrationToRollback.id,
       });
 
-      // Reverse operations and synchronize with parent schemas
-      // This automatically handles:
+      // Reverse operations and synchronize with parent schemas.
+      // applyMigration('down') undoes operations in LIFO order internally,
+      // so we pass them in natural (forward) order. This handles:
       // - Collections
       // - Multi-collections
       // - Multi-model instances (with automatic history recording)
-      const reversedOps = [...state.operations].reverse();
-      await applier.applyMigration(reversedOps, 'down');
+      await applier.applyMigration(state.operations, 'down');
 
       // Mark as reverted in global history
       await markMigrationAsReverted(db, migrationToRollback.id);

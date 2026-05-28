@@ -1,8 +1,33 @@
-import { ulid } from "@std/ulid/ulid";
 import type { DatabaseState, MigrationDefinition, MigrationRule } from "../types.ts"
-import * as v from "valibot"
+import { flowTargetId, extractIdPrefix, resolveSeedId } from "../utils/seed-id.ts";
+import { getIrreversibleOperations } from "../builder.ts";
 
-export function createMemoryApplier(_migration: MigrationDefinition) {
+/** Simple equality matcher for in-memory `where` filters (exact match only). */
+function matchesWhere(
+  doc: Record<string, unknown>,
+  where?: Record<string, unknown>,
+): boolean {
+  if (!where) return true;
+  return Object.entries(where).every(([k, val]) => doc[k] === val);
+}
+
+export function createMemoryApplier(migration: MigrationDefinition) {
+  const migrationId = migration?.id ?? "unknown";
+
+  /**
+   * Resolve the `_id` for a seed document: honour an explicit `_id`,
+   * otherwise derive a deterministic one so apply/reverse agree.
+   */
+  function seedId(
+    doc: Record<string, unknown>,
+    schemaIdField: unknown,
+    fallbackPrefix: string,
+    opSignature: string,
+    docIndex: number,
+  ): string {
+    return resolveSeedId(doc, schemaIdField, fallbackPrefix, migrationId, opSignature, docIndex);
+  }
+
   const migrations: {
     [K in MigrationRule['type']]: {
       apply: (state: DatabaseState, operation: Extract<MigrationRule, { type: K }>) => DatabaseState | Promise<DatabaseState>,
@@ -69,11 +94,12 @@ export function createMemoryApplier(_migration: MigrationDefinition) {
         if(!collection) {
           throw new Error(`Collection ${operation.collectionName} does not exist`);
         }
-        collection.content.push(...operation.documents.map((doc: unknown) => {
+        const sig = operation.collectionName;
+        collection.content.push(...operation.documents.map((doc: unknown, i) => {
           const typedDoc = doc as Record<string, unknown>;
           return {
-            _id: typedDoc._id || (operation.schema._id ? v.getDefault(operation.schema._id) : undefined) || ulid(),
             ...typedDoc,
+            _id: seedId(typedDoc, operation.schema._id, "", sig, i),
           };
         }));
         return state;
@@ -83,11 +109,16 @@ export function createMemoryApplier(_migration: MigrationDefinition) {
         if(!collection) {
           throw new Error(`Collection ${operation.collectionName} does not exist`);
         }
-        // Reversal by filtering out seeded documents by _id
-        collection.content = collection.content.filter(doc => !operation.documents.some((odoc: unknown) => {
-          const typedDoc = odoc as Record<string, unknown>;
-          return typedDoc._id && typedDoc._id === doc._id;
-        }));
+        const sig = operation.collectionName;
+        // Recompute the exact ids that were inserted, then filter them out.
+        const seededIds = new Set(
+          operation.documents.map((doc: unknown, i) =>
+            seedId(doc as Record<string, unknown>, operation.schema._id, "", sig, i)
+          ),
+        );
+        collection.content = collection.content.filter(
+          (doc) => !seededIds.has(String(doc._id)),
+        );
         return state;
       }
     },
@@ -97,11 +128,12 @@ export function createMemoryApplier(_migration: MigrationDefinition) {
         if(!multiCollection) {
           throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
         }
-        multiCollection.content.push(...operation.documents.map((doc: unknown) => {
+        const sig = `${operation.collectionName}:${operation.documentType}`;
+        multiCollection.content.push(...operation.documents.map((doc: unknown, i) => {
           const typedDoc = doc as Record<string, unknown>;
           return {
-            _id: typedDoc._id || (operation.schema._id ? v.getDefault(operation.schema._id) : undefined) || `${operation.documentType}:${ulid()}`,
             ...typedDoc,
+            _id: seedId(typedDoc, operation.schema._id, operation.documentType, sig, i),
             _type: operation.documentType,
           };
         }));
@@ -112,11 +144,15 @@ export function createMemoryApplier(_migration: MigrationDefinition) {
         if(!multiCollection) {
           throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
         }
-        // Reversal by filtering out seeded documents by _id
-        multiCollection.content = multiCollection.content.filter(doc => !operation.documents.some((odoc: unknown) => {
-          const typedDoc = odoc as Record<string, unknown>;
-          return typedDoc._id && typedDoc._id === doc._id;
-        }));
+        const sig = `${operation.collectionName}:${operation.documentType}`;
+        const seededIds = new Set(
+          operation.documents.map((doc: unknown, i) =>
+            seedId(doc as Record<string, unknown>, operation.schema._id, operation.documentType, sig, i)
+          ),
+        );
+        multiCollection.content = multiCollection.content.filter(
+          (doc) => !seededIds.has(String(doc._id)),
+        );
         return state;
       }
     },
@@ -126,11 +162,12 @@ export function createMemoryApplier(_migration: MigrationDefinition) {
         if(!multiCollection) {
           throw new Error(`Multi-model instance ${operation.collectionName} does not exist`);
         }
-        multiCollection.content.push(...operation.documents.map((doc: unknown) => {
+        const sig = `${operation.collectionName}:${operation.modelType}:${operation.documentType}`;
+        multiCollection.content.push(...operation.documents.map((doc: unknown, i) => {
           const typedDoc = doc as Record<string, unknown>;
           return {
-            _id: typedDoc._id || (operation.schema._id ? v.getDefault(operation.schema._id) : undefined) || `${operation.documentType}:${ulid()}`,
             ...typedDoc,
+            _id: seedId(typedDoc, operation.schema._id, operation.documentType, sig, i),
             _type: operation.documentType,
           };
         }));
@@ -141,24 +178,29 @@ export function createMemoryApplier(_migration: MigrationDefinition) {
         if(!multiCollection) {
           throw new Error(`Multi-model instance ${operation.collectionName} does not exist`);
         }
-        // Reversal by filtering out seeded documents by _id
-        multiCollection.content = multiCollection.content.filter(doc => !operation.documents.some((odoc: unknown) => {
-          const typedDoc = odoc as Record<string, unknown>;
-          return typedDoc._id && typedDoc._id === doc._id;
-        }));
+        const sig = `${operation.collectionName}:${operation.modelType}:${operation.documentType}`;
+        const seededIds = new Set(
+          operation.documents.map((doc: unknown, i) =>
+            seedId(doc as Record<string, unknown>, operation.schema._id, operation.documentType, sig, i)
+          ),
+        );
+        multiCollection.content = multiCollection.content.filter(
+          (doc) => !seededIds.has(String(doc._id)),
+        );
         return state;
       }
     },
     seed_multimodel_instances_type: {
       apply: (state, operation) => {
         const modelType = operation.modelType;
+        const sig = `${operation.modelType}:${operation.documentType}`;
         for (const [_instanceName, instance] of Object.entries(state.multiModels)) {
           if (instance.modelType === modelType) {
-            instance.content.push(...operation.documents.map((doc: unknown) => {
+            instance.content.push(...operation.documents.map((doc: unknown, i) => {
               const typedDoc = doc as Record<string, unknown>;
               return {
-                _id: typedDoc._id || (operation.schema._id ? v.getDefault(operation.schema._id) : undefined) || `${operation.documentType}:${ulid()}`,
                 ...typedDoc,
+                _id: seedId(typedDoc, operation.schema._id, operation.documentType, sig, i),
                 _type: operation.documentType,
               };
             }));
@@ -168,13 +210,17 @@ export function createMemoryApplier(_migration: MigrationDefinition) {
       },
       reverse: (state, operation) => {
         const modelType = operation.modelType;
+        const sig = `${operation.modelType}:${operation.documentType}`;
+        const seededIds = new Set(
+          operation.documents.map((doc: unknown, i) =>
+            seedId(doc as Record<string, unknown>, operation.schema._id, operation.documentType, sig, i)
+          ),
+        );
         for (const [_instanceName, instance] of Object.entries(state.multiModels)) {
           if (instance.modelType === modelType) {
-            // Reversal by filtering out seeded documents by _id
-            instance.content = instance.content.filter(doc => !operation.documents.some((odoc: unknown) => {
-              const typedDoc = odoc as Record<string, unknown>;
-              return typedDoc._id && typedDoc._id === doc._id;
-            }));
+            instance.content = instance.content.filter(
+              (doc) => !seededIds.has(String(doc._id)),
+            );
           }
         }
         return state;
@@ -296,6 +342,66 @@ export function createMemoryApplier(_migration: MigrationDefinition) {
         return state;
       }
     },
+    flow: {
+      apply: (state, operation) => {
+        const src = state.collections[operation.from.collection];
+        if (!src) {
+          throw new Error(`Flow source collection ${operation.from.collection} does not exist`);
+        }
+        const tgt = state.collections[operation.into.collection];
+        if (!tgt) {
+          throw new Error(`Flow target collection ${operation.into.collection} does not exist`);
+        }
+
+        const prefix = extractIdPrefix(operation.targetIdSchema, "");
+        const matched = src.content.filter((doc) =>
+          matchesWhere(doc, operation.from.where)
+        );
+
+        for (const doc of matched) {
+          const mapped = operation.map({ ...doc }) as Record<string, unknown>;
+          mapped._id = flowTargetId(
+            prefix,
+            migrationId,
+            operation.from.collection,
+            String(doc._id),
+          );
+          tgt.content.push(mapped);
+        }
+
+        if (operation.sourceDisposition === "consume") {
+          src.content = src.content.filter(
+            (doc) => !matchesWhere(doc, operation.from.where),
+          );
+        }
+        return state;
+      },
+      reverse: (state, operation) => {
+        if (operation.irreversible) {
+          throw new Error(
+            "Flow with source: 'consume' (move) is irreversible — cannot roll back",
+          );
+        }
+        const src = state.collections[operation.from.collection];
+        const tgt = state.collections[operation.into.collection];
+        if (!src || !tgt) {
+          throw new Error(`Flow collections missing for reverse`);
+        }
+        // Copy reverse: recompute target ids from the still-present source.
+        const prefix = extractIdPrefix(operation.targetIdSchema, "");
+        const targetIds = new Set(
+          src.content
+            .filter((doc) => matchesWhere(doc, operation.from.where))
+            .map((doc) =>
+              flowTargetId(prefix, migrationId, operation.from.collection, String(doc._id))
+            ),
+        );
+        tgt.content = tgt.content.filter(
+          (doc) => !targetIds.has(String(doc._id)),
+        );
+        return state;
+      },
+    },
     update_indexes: {
       apply: (state) => {
         // Indexes are not modeled in this in-memory representation
@@ -370,6 +476,30 @@ export function createMemoryApplier(_migration: MigrationDefinition) {
         });
         return state;
       }
+    },
+    create_scoped_multicollection: {
+      apply: (_state, _operation) => {
+        throw new Error("create_scoped_multicollection: not implemented yet (task #12)");
+      },
+      reverse: (_state, _operation) => {
+        throw new Error("create_scoped_multicollection.reverse: not implemented yet (task #12)");
+      },
+    },
+    seed_scoped_multicollection_type: {
+      apply: (_state, _operation) => {
+        throw new Error("seed_scoped_multicollection_type: not implemented yet (task #12)");
+      },
+      reverse: (_state, _operation) => {
+        throw new Error("seed_scoped_multicollection_type.reverse: not implemented yet (task #12)");
+      },
+    },
+    transform_scoped_multicollection_type: {
+      apply: (_state, _operation) => {
+        throw new Error("transform_scoped_multicollection_type: not implemented yet (task #12)");
+      },
+      reverse: (_state, _operation) => {
+        throw new Error("transform_scoped_multicollection_type.reverse: not implemented yet (task #12)");
+      },
     },
     rename_multimodel_instances_type: {
       apply: (state, operation) => {
@@ -473,7 +603,24 @@ export function createMemoryApplier(_migration: MigrationDefinition) {
   ): Promise<DatabaseState> {
     let currentState = state;
 
-    for (const operation of operations) {
+    // Pre-scan: refuse to roll back if any operation is irreversible, BEFORE
+    // mutating anything — otherwise we'd leave a partial rollback behind.
+    if (direction === "down") {
+      const irreversible = getIrreversibleOperations(operations);
+      if (irreversible.length > 0) {
+        throw new Error(
+          `Cannot roll back: migration contains ${irreversible.length} ` +
+            `irreversible operation(s) [${irreversible.map((o) => o.type).join(", ")}]. ` +
+            `Rollback aborted before any changes were made.`,
+        );
+      }
+    }
+
+    // Rollback undoes operations in LIFO order — reverse the list for 'down'
+    // so e.g. a `seed` is undone before the `create_collection` it depends on.
+    const ordered = direction === "down" ? [...operations].reverse() : operations;
+
+    for (const operation of ordered) {
       if (direction === 'up') {
         currentState = await applyOperation(currentState, operation);
       } else {

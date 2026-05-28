@@ -129,6 +129,7 @@ export {
   recordMultiCollectionMigration,
   shouldInstanceReceiveMigration,
   shouldInstanceReceiveMigrationByChain,
+  shouldInstanceReceiveMigrationFromChain,
 } from "./multicollection-registry.ts";
 export type {
   MultiCollectionInfo,
