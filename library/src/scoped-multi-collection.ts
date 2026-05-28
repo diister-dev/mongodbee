@@ -23,7 +23,7 @@ import { mongoOperationQueue } from "./operation.ts";
 const log = createLogger("scoped-multi-collection");
 
 /** Reserved internal field names — cannot appear in user-defined type schemas. */
-const RESERVED_FIELDS = new Set(["_scope", "_type"]);
+const RESERVED_FIELDS: Set<string> = new Set(["_scope", "_type"]);
 
 // deno-lint-ignore no-explicit-any
 type AnyMessage = any;

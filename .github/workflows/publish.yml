@@ -17,4 +17,4 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Publish package
-        run: cd library && npx jsr publish --allow-slow-types
+        run: cd library && npx jsr publish
