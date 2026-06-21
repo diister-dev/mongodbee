@@ -28,6 +28,7 @@ import { validateMigrationsWithSimulation } from "../utils/validate-migrations.t
 import type { SimulationPowerLevel } from "../../validators/simulation.ts";
 import { migrationBuilder } from "../../builder.ts";
 import { confirm } from "../utils/confirm.ts";
+import { createProgressReporter } from "../utils/progress.ts";
 import {
   detectInstancesNeedingCatchUp,
   filterOperationsForModelType,
@@ -65,6 +66,11 @@ export interface MigrateCommandOptions {
    * Only validate the last N migrations
    */
   last?: number;
+  /**
+   * Render a live progress line during each migration's execution.
+   * Defaults to auto-detection (on when stdout is a TTY).
+   */
+  progress?: boolean;
 }
 
 /**
@@ -835,13 +841,25 @@ export async function migrateCommand(
 
         console.log(dim("  📝 Executing operations..."));
 
+        // Live progress for long-running operations (transform/flow/...). The
+        // applier emits onProgress events; the reporter draws an in-place line.
+        const progress = createProgressReporter({
+          enabled: options.progress ?? Deno.stdout.isTerminal(),
+        });
+
         // Create applier with migration context
         const migrationApplier = createMongodbApplier(db, migration, {
           currentMigrationId: migration.id,
+          onProgress: progress.onProgress,
         });
 
-        // Apply all operations and synchronize schemas
-        await migrationApplier.applyMigration(migrator.operations, "up");
+        // Apply all operations and synchronize schemas. `finally` closes the
+        // progress line so a success/error log starts on a clean row.
+        try {
+          await migrationApplier.applyMigration(migrator.operations, "up");
+        } finally {
+          progress.finish();
+        }
 
         const duration = Date.now() - startTime;
 

@@ -69,8 +69,11 @@ function resolveSeedDocId(
  * measure → optimize → re-measure loop.
  */
 export interface MigrationProgressEvent {
-  /** The operation type currently running, e.g. "flow_to_scope". */
-  operationType: MigrationRule["type"];
+  /**
+   * The operation type or migration phase currently running, e.g.
+   * "flow_to_scope", "seed_collection", or "validators+indexes".
+   */
+  operationType: string;
   /** Collection being written to / transformed (when meaningful). */
   collection?: string;
   /** Lifecycle phase of this operation's loop. */
@@ -133,13 +136,13 @@ export function createMongodbApplier(
    * `done`. `processed` + `elapsedMs` let a consumer compute throughput.
    */
   function makeReporter(
-    operationType: MigrationRule["type"],
+    operationType: string,
     collection: string | undefined,
     total: number | undefined,
   ): { add: (n: number) => void; done: () => void } {
     const start = performance.now();
     let processed = 0;
-    let lastEmit = 0;
+    let lastEmit = start;
     const emit = (phase: MigrationProgressEvent["phase"]) =>
       opts.onProgress({
         operationType,
@@ -153,8 +156,12 @@ export function createMongodbApplier(
     return {
       add(n) {
         processed += n;
-        if (processed - lastEmit >= opts.batchSize) {
-          lastEmit = processed;
+        // Throttle emits by TIME (~20/s) rather than by document count, so the
+        // signal works for both doc-batch loops (millions of items) and the
+        // per-instance sync loop (one item ≈ one collection).
+        const now = performance.now();
+        if (now - lastEmit >= 50) {
+          lastEmit = now;
           emit("progress");
         }
       },
@@ -162,6 +169,30 @@ export function createMongodbApplier(
         emit("done");
       },
     };
+  }
+
+  /**
+   * Insert seed documents in batches, emitting progress so a large seed isn't
+   * a silent wait. The total is known up front, so the line shows a bar + %.
+   */
+  async function insertSeedBatches(
+    collection: ReturnType<Db["collection"]>,
+    documents: unknown[],
+    operationType: string,
+    collectionName: string,
+  ): Promise<void> {
+    const reporter = makeReporter(
+      operationType,
+      collectionName,
+      documents.length,
+    );
+    for (let i = 0; i < documents.length; i += opts.batchSize) {
+      const batch = documents.slice(i, i + opts.batchSize);
+      // deno-lint-ignore no-explicit-any
+      await collection.insertMany(batch as any);
+      reporter.add(batch.length);
+    }
+    reporter.done();
   }
 
   /**
@@ -409,6 +440,11 @@ export function createMongodbApplier(
         // `discoverMultiCollectionInstances` only returns existing collections,
         // so the previous per-instance `collectionExists` guard was a redundant
         // listCollections round-trip — dropped.
+        const syncReporter = makeReporter(
+          "validators+indexes",
+          modelType,
+          instances.length,
+        );
         await forEachInstance(instances, async (instanceName) => {
           await db.command({
             collMod: instanceName,
@@ -419,7 +455,9 @@ export function createMongodbApplier(
             db.collection(instanceName),
             schemasPerType,
           );
+          syncReporter.add(1);
         });
+        syncReporter.done();
       }
     }
 
@@ -1032,11 +1070,12 @@ export function createMongodbApplier(
           return { ...(value.output as Record<string, unknown>), _id };
         });
 
-        for (let i = 0; i < documents.length; i += opts.batchSize) {
-          const batch = documents.slice(i, i + opts.batchSize);
-          // deno-lint-ignore no-explicit-any
-          await collection.insertMany(batch as any);
-        }
+        await insertSeedBatches(
+          collection,
+          documents,
+          operation.type,
+          operation.collectionName,
+        );
       },
       reverse: async (operation) => {
         if (
@@ -1110,11 +1149,12 @@ export function createMongodbApplier(
           return { ...(value.output as Record<string, unknown>), _id };
         });
 
-        for (let i = 0; i < documents.length; i += opts.batchSize) {
-          const batch = documents.slice(i, i + opts.batchSize);
-          // deno-lint-ignore no-explicit-any
-          await collection.insertMany(batch as any);
-        }
+        await insertSeedBatches(
+          collection,
+          documents,
+          operation.type,
+          operation.collectionName,
+        );
       },
       reverse: async (operation) => {
         if (
@@ -1189,11 +1229,12 @@ export function createMongodbApplier(
           return { ...(value.output as Record<string, unknown>), _id };
         });
 
-        for (let i = 0; i < documents.length; i += opts.batchSize) {
-          const batch = documents.slice(i, i + opts.batchSize);
-          // deno-lint-ignore no-explicit-any
-          await collection.insertMany(batch as any);
-        }
+        await insertSeedBatches(
+          collection,
+          documents,
+          operation.type,
+          operation.collectionName,
+        );
       },
       reverse: async (operation) => {
         if (
@@ -1275,11 +1316,12 @@ export function createMongodbApplier(
             };
           });
 
-          for (let i = 0; i < documents.length; i += opts.batchSize) {
-            const batch = documents.slice(i, i + opts.batchSize);
-            // deno-lint-ignore no-explicit-any
-            await collection.insertMany(batch as any);
-          }
+          await insertSeedBatches(
+            collection,
+            documents,
+            operation.type,
+            collectionName,
+          );
 
           // Record migration for this instance (only once per migration, even if multiple seed operations)
           if (opts.currentMigrationId) {
@@ -2000,11 +2042,12 @@ export function createMongodbApplier(
           };
         });
 
-        for (let i = 0; i < documents.length; i += opts.batchSize) {
-          const batch = documents.slice(i, i + opts.batchSize);
-          // deno-lint-ignore no-explicit-any
-          await collection.insertMany(batch as any);
-        }
+        await insertSeedBatches(
+          collection,
+          documents,
+          operation.type,
+          operation.collectionName,
+        );
       },
       reverse: async (operation) => {
         const collection = db.collection(operation.collectionName);
