@@ -649,6 +649,12 @@ export function isInstanceCreatedAfterMigration(
  * An instance should receive a migration if it was created BEFORE or AT that migration.
  * Instances created AFTER a migration don't need it (they already have that schema).
  *
+ * @deprecated Use {@link shouldInstanceReceiveMigrationFromChain} instead. This
+ * relies on {@link isInstanceCreatedAfterMigration}, which compares migration
+ * IDs lexicographically — unsound when IDs from different generators (legacy
+ * padded vs. timestamp+ULID) coexist. The chain-based variant walks the actual
+ * parent links and is correct in the general case.
+ *
  * @param db - Database instance
  * @param collectionName - Full name of the collection
  * @param migrationId - Migration ID to check

@@ -26,6 +26,7 @@ import {
 import { flowTargetId, extractIdPrefix, resolveSeedId } from "../utils/seed-id.ts";
 import { getIrreversibleOperations } from "../builder.ts";
 import { scopedMultiCollection } from "../../scoped-multi-collection.ts";
+import { getSessionContext } from "../../session.ts";
 
 /**
  * Resolve the `_id` of a seed document: honour an explicit `_id`, else
@@ -51,6 +52,27 @@ function resolveSeedDocId(
 }
 
 /**
+ * A single progress/measurement event emitted from a long-running migration
+ * loop. Doubles as a performance probe: `processed` + `elapsedMs` yield live
+ * throughput (docs/s) with no external profiler — the foundation for the
+ * measure → optimize → re-measure loop.
+ */
+export interface MigrationProgressEvent {
+  /** The operation type currently running, e.g. "flow_to_scope". */
+  operationType: MigrationRule["type"];
+  /** Collection being written to / transformed (when meaningful). */
+  collection?: string;
+  /** Lifecycle phase of this operation's loop. */
+  phase: "start" | "progress" | "done";
+  /** Documents (or instances) processed so far within this operation. */
+  processed: number;
+  /** Total expected count, when cheaply knowable; `undefined` otherwise. */
+  total?: number;
+  /** Wall-clock milliseconds since this operation's loop started. */
+  elapsedMs: number;
+}
+
+/**
  * Configuration options for the MongoDB applier
  */
 export interface MongodbApplierOptions {
@@ -60,12 +82,19 @@ export interface MongodbApplierOptions {
   batchSize?: number;
   /** Current migration ID being applied (for version tracking) */
   currentMigrationId?: string;
+  /**
+   * Optional hook invoked from long-running loops (transform, flow,
+   * flow_to_scope). Use it to render live progress AND to measure throughput.
+   * Defaults to a no-op, so it costs nothing when unused.
+   */
+  onProgress?: (event: MigrationProgressEvent) => void;
 }
 
 const DEFAULT_OPTIONS: Required<MongodbApplierOptions> = {
   strictValidation: true,
   batchSize: 1000,
   currentMigrationId: "unknown",
+  onProgress: () => {},
 };
 
 export function createMongodbApplier(
@@ -85,14 +114,113 @@ export function createMongodbApplier(
   const recordedInstances = new Set<string>();
 
   /**
+   * Build a progress reporter for one operation. Emits a `start` event now, a
+   * throttled `progress` event roughly every `batchSize` items, and a final
+   * `done`. `processed` + `elapsedMs` let a consumer compute throughput.
+   */
+  function makeReporter(
+    operationType: MigrationRule["type"],
+    collection: string | undefined,
+    total: number | undefined,
+  ): { add: (n: number) => void; done: () => void } {
+    const start = performance.now();
+    let processed = 0;
+    let lastEmit = 0;
+    const emit = (phase: MigrationProgressEvent["phase"]) =>
+      opts.onProgress({
+        operationType,
+        collection,
+        phase,
+        processed,
+        total,
+        elapsedMs: performance.now() - start,
+      });
+    emit("start");
+    return {
+      add(n) {
+        processed += n;
+        if (processed - lastEmit >= opts.batchSize) {
+          lastEmit = processed;
+          emit("progress");
+        }
+      },
+      done() {
+        emit("done");
+      },
+    };
+  }
+
+  /**
+   * Run `fn` over every instance with bounded concurrency. Falls back to fully
+   * sequential when a MongoDB session is active — sessions are NOT
+   * concurrency-safe, so a migration wrapped in `withSession()` stays correct.
+   * Errors propagate (the first rejection fails the whole batch). Used for the
+   * per-instance validator/index/record loops, which dominate the cost of a
+   * migration spanning many multi-model instances.
+   */
+  async function forEachInstance(
+    instances: string[],
+    fn: (instanceName: string) => Promise<void>,
+  ): Promise<void> {
+    const session = getSessionContext(db.client).getSession();
+    const concurrency = session ? 1 : Math.min(16, instances.length || 1);
+    let next = 0;
+    const worker = async () => {
+      while (next < instances.length) {
+        const i = next++;
+        await fn(instances[i]);
+      }
+    };
+    await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  }
+
+  /**
+   * Best-effort row count for a filter — instant `estimatedDocumentCount` for
+   * the whole-collection case, accurate `countDocuments` for a filtered set.
+   * Returns `undefined` (never throws) if counting fails: a missing
+   * denominator must not abort a migration.
+   */
+  async function countForProgress(
+    collectionName: string,
+    filter: Record<string, unknown>,
+  ): Promise<number | undefined> {
+    try {
+      const collection = db.collection(collectionName);
+      return Object.keys(filter).length === 0
+        ? await collection.estimatedDocumentCount()
+        : await collection.countDocuments(filter as Record<string, unknown>);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * Helper to check if a collection exists
    */
   async function collectionExists(collectionName: string): Promise<boolean> {
+    // Do NOT swallow errors here: listCollections already returns an empty
+    // array for a missing collection, so the only thing a catch could hide is a
+    // real fault (auth, connection, transient cluster error). Reporting that as
+    // "collection does not exist" silently skips validator/index re-sync and
+    // masks the true cause — let it propagate so the migration fails loudly.
+    const collections = await db.listCollections({ name: collectionName }).toArray();
+    return collections.length > 0;
+  }
+
+  /**
+   * Drops a collection, tolerating ONLY the "collection does not exist" case
+   * (so a `consume` re-run stays idempotent). Any other failure — auth denial,
+   * write conflict, transient cluster error — must propagate: silently
+   * swallowing it would report a green migration while leaving a consumed
+   * source collection behind with its data still intact.
+   */
+  async function dropToleratingMissing(collectionName: string): Promise<void> {
     try {
-      const collections = await db.listCollections({ name: collectionName }).toArray();
-      return collections.length > 0;
-    } catch {
-      return false;
+      await db.collection(collectionName).drop();
+    } catch (error) {
+      const e = error as { code?: number; codeName?: string };
+      if (e?.code === 26 || e?.codeName === "NamespaceNotFound") return;
+      throw error;
     }
   }
 
@@ -177,44 +305,44 @@ export function createMongodbApplier(
       }
     }
 
-    // Synchronize multi-models (WITH metadata)
+    // Synchronize multi-models (WITH metadata). The validator + per-type index
+    // schemas are IDENTICAL for every instance of a model type, so build them
+    // ONCE per type, then fan out across instances with bounded concurrency —
+    // this loop is the dominant cost of a migration over many instances.
     if (schemas.multiModels) {
       for (const [modelType, multiSchema] of Object.entries(schemas.multiModels)) {
-        // Discover all instances of this model type
         const instances = await discoverMultiCollectionInstances(db, modelType);
+        if (instances.length === 0) continue;
 
-        for (const instanceName of instances) {
-          if (await collectionExists(instanceName)) {
-            // Build union validator with metadata schemas
-            const typeSchemas = Object.entries(multiSchema).map(
-              ([typeName, typeSchema]) => v.object({
-                _type: v.literal(typeName),
-                ...(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>),
-              })
-            );
+        // Build union validator with metadata schemas (once per model type).
+        const typeSchemas = Object.entries(multiSchema).map(
+          ([typeName, typeSchema]) => v.object({
+            _type: v.literal(typeName),
+            ...(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>),
+          })
+        );
+        const allSchemas = [...typeSchemas, ...createMetadataSchemas()];
+        const unionSchema = allSchemas.length > 0
+          // deno-lint-ignore no-explicit-any
+          ? v.union(allSchemas as any)
+          : v.object({ _type: v.string() });
+        const validator = toMongoValidator(unionSchema);
+        const schemasPerType = Object.entries(multiSchema).reduce((acc, [typeName, typeSchema]) => {
+          acc[typeName] = v.object(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
+          return acc;
+        }, {} as Record<string, v.ObjectSchema<Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>, undefined>>);
 
-            const allSchemas = [...typeSchemas, ...createMetadataSchemas()];
-            const unionSchema = allSchemas.length > 0
-              // deno-lint-ignore no-explicit-any
-              ? v.union(allSchemas as any)
-              : v.object({ _type: v.string() });
-
-            const validator = toMongoValidator(unionSchema);
-            await db.command({
-              collMod: instanceName,
-              validator,
-              validationLevel: "strict",
-            });
-
-            // Synchronize indexes using shared applier
-            const collection = db.collection(instanceName);
-            const schemasPerType = Object.entries(multiSchema).reduce((acc, [typeName, typeSchema]) => {
-              acc[typeName] = v.object(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
-              return acc;
-            }, {} as Record<string, v.ObjectSchema<Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>, undefined>>);
-            await applyMultiCollectionIndexes(collection, schemasPerType);
-          }
-        }
+        // `discoverMultiCollectionInstances` only returns existing collections,
+        // so the previous per-instance `collectionExists` guard was a redundant
+        // listCollections round-trip — dropped.
+        await forEachInstance(instances, async (instanceName) => {
+          await db.command({
+            collMod: instanceName,
+            validator,
+            validationLevel: "strict",
+          });
+          await applyMultiCollectionIndexes(db.collection(instanceName), schemasPerType);
+        });
       }
     }
 
@@ -257,9 +385,7 @@ export function createMongodbApplier(
     if (schemas.multiModels) {
       for (const modelType of Object.keys(schemas.multiModels)) {
         const instances = await discoverMultiCollectionInstances(db, modelType);
-        for (const instanceName of instances) {
-          await disableValidator(instanceName);
-        }
+        await forEachInstance(instances, (instanceName) => disableValidator(instanceName));
       }
     }
 
@@ -284,8 +410,16 @@ export function createMongodbApplier(
     collectionName: string,
     filter: Record<string, unknown>,
     transformer: (doc: Record<string, unknown>) => Record<string, unknown>,
+    operationType?: MigrationRule["type"],
   ): Promise<void> {
     const collection = db.collection(collectionName);
+    const reporter = operationType
+      ? makeReporter(
+        operationType,
+        collectionName,
+        await countForProgress(collectionName, filter),
+      )
+      : undefined;
     let lastId: unknown = undefined;
 
     while (true) {
@@ -326,8 +460,10 @@ export function createMongodbApplier(
         await collection.bulkWrite(bulkOps);
       }
 
+      reporter?.add(documents.length);
       lastId = documents[documents.length - 1]._id;
     }
+    reporter?.done();
   }
 
   const migrations: {
@@ -462,6 +598,14 @@ export function createMongodbApplier(
     create_multimodel_instance: {
       apply: async (operation) => {
         const collExist = await collectionExists(operation.collectionName);
+        // Whether this is a *registered* instance (has the `_information`
+        // bookkeeping doc), not merely whether a collection of that name
+        // exists. A plain collection colliding with the instance name — or a
+        // crash between createCollection and the metadata insert on a
+        // non-transactional run — leaves collExist=true but registered=false.
+        const registered = collExist
+          ? await multiCollectionInstanceExists(db, operation.collectionName)
+          : false;
 
         // Create union validator for all types + metadata schemas
         const typeSchemas = Object.entries(operation.schema).map(
@@ -480,7 +624,7 @@ export function createMongodbApplier(
         const validator = toMongoValidator(unionSchema);
 
         if (collExist) {
-          if (opts.strictValidation) {
+          if (opts.strictValidation && registered) {
             console.warn(`Multi-model instance ${operation.collectionName} already exists, skipping creation.`);
           }
 
@@ -493,8 +637,17 @@ export function createMongodbApplier(
         } else {
           const collOptions = { validator };
           await db.createCollection(operation.collectionName, collOptions);
+        }
 
-          // Create metadata info document only for new collections
+        // Ensure the bookkeeping metadata exists whenever the instance is not
+        // yet registered — including the case where the collection pre-existed
+        // without metadata. The old behaviour gated this solely on
+        // collection-name existence, so a name collision (or a partial prior
+        // run) silently left the instance untracked: no `_information` doc,
+        // per-instance migration history never recorded, invisible to
+        // multiCollectionInstanceExists — yet the migration still reported
+        // success.
+        if (!registered) {
           await createMultiCollectionInfo(
             db,
             operation.collectionName,
@@ -845,7 +998,7 @@ export function createMongodbApplier(
         if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
           throw new Error(`Collection ${operation.collectionName} does not exist`);
         }
-        await transformDocuments(operation.collectionName, {}, operation.up as (doc: Record<string, unknown>) => Record<string, unknown>);
+        await transformDocuments(operation.collectionName, {}, operation.up as (doc: Record<string, unknown>) => Record<string, unknown>, operation.type);
       },
       reverse: async (operation) => {
         if (operation.irreversible) {
@@ -866,7 +1019,8 @@ export function createMongodbApplier(
         await transformDocuments(
           operation.collectionName,
           { _type: operation.documentType } as Record<string, unknown>,
-          operation.up as (doc: Record<string, unknown>) => Record<string, unknown>
+          operation.up as (doc: Record<string, unknown>) => Record<string, unknown>,
+          operation.type,
         );
       },
       reverse: async (operation) => {
@@ -892,7 +1046,8 @@ export function createMongodbApplier(
         await transformDocuments(
           operation.collectionName,
           { _type: operation.documentType } as Record<string, unknown>,
-          operation.up as (doc: Record<string, unknown>) => Record<string, unknown>
+          operation.up as (doc: Record<string, unknown>) => Record<string, unknown>,
+          operation.type,
         );
       },
       reverse: async (operation) => {
@@ -937,7 +1092,8 @@ export function createMongodbApplier(
           await transformDocuments(
             collectionName,
             { _type: operation.documentType } as Record<string, unknown>,
-            operation.up as (doc: Record<string, unknown>) => Record<string, unknown>
+            operation.up as (doc: Record<string, unknown>) => Record<string, unknown>,
+            operation.type,
           );
 
           // Record migration for this instance (only once per migration, even if multiple operations)
@@ -987,6 +1143,11 @@ export function createMongodbApplier(
         const source = db.collection(operation.from.collection);
         const target = db.collection(operation.into.collection);
         const baseFilter = (operation.from.where ?? {}) as Record<string, unknown>;
+        const reporter = makeReporter(
+          operation.type,
+          operation.into.collection,
+          await countForProgress(operation.from.collection, baseFilter),
+        );
 
         // Batch by _id cursor (stable on a mutating set; see transformDocuments).
         let lastId: unknown = undefined;
@@ -1012,8 +1173,10 @@ export function createMongodbApplier(
           });
           // deno-lint-ignore no-explicit-any
           await target.insertMany(mapped as any);
+          reporter.add(docs.length);
           lastId = docs[docs.length - 1]._id;
         }
+        reporter.done();
 
         if (operation.sourceDisposition === "consume") {
           await source.deleteMany(baseFilter as Record<string, unknown>);
@@ -1089,48 +1252,113 @@ export function createMongodbApplier(
           });
         }
 
+        const reporter = makeReporter(
+          operation.type,
+          operation.into.collection,
+          undefined,
+        );
+        const onConflict = operation.onConflict ?? "error";
+
         for (const src of sources) {
           // Never flow a collection into itself: the target is not a source
           // (guards against discovery returning the in-progress target, which
           // would re-read + re-insert and collide on `_id`).
           if (src.coll === operation.into.collection) continue;
           const sourceColl = db.collection(src.coll);
-          const cursor = sourceColl.find((src.where ?? {}) as Record<string, unknown>);
-          for await (const raw of cursor) {
-            const doc = raw as Record<string, unknown>;
-            const scope = operation.scope(doc, src.ctx);
-            const mapped = operation.map ? operation.map({ ...doc }, src.ctx) : { ...doc };
-            const toType = operation.toType
-              ? operation.toType(doc, src.ctx)
-              : (mapped._type ?? doc._type) as string;
-            let id = mapped._id;
-            if (id === undefined || id === null) {
-              id = `${toType}:${crypto.randomUUID().replace(/-/g, "")}`;
-            }
-            const outDoc = { ...mapped, _id: id, _type: toType, _scope: scope };
+          const baseWhere = (src.where ?? {}) as Record<string, unknown>;
 
-            const existing = await target.findOne(
-              { _id: id, _type: toType, _scope: scope } as Record<string, unknown>,
-            );
-            if (existing) {
-              const onConflict = operation.onConflict ?? "error";
-              if (onConflict === "error") {
-                throw new Error(
-                  `flow_to_scope: conflict on (${scope}, ${toType}, ${id})`,
-                );
+          // Batch by `_id` cursor. The source is consumed only AFTER the whole
+          // loop, never mutated mid-iteration, so the cursor is stable. Each
+          // page does ONE bulk existence read + ONE bulkWrite — replacing the
+          // findOne+write-per-document N+1 of the previous implementation.
+          let lastId: unknown = undefined;
+          while (true) {
+            const pageFilter = lastId === undefined
+              ? baseWhere
+              : { $and: [baseWhere, { _id: { $gt: lastId } }] };
+            const page = await sourceColl
+              .find(pageFilter as Record<string, unknown>)
+              .sort({ _id: 1 })
+              .limit(opts.batchSize)
+              .toArray();
+            if (page.length === 0) break;
+            lastId = page[page.length - 1]._id;
+
+            // Compute the target shape for every source doc up front.
+            const computed = page.map((raw) => {
+              const doc = raw as Record<string, unknown>;
+              const scope = operation.scope(doc, src.ctx);
+              const mapped = operation.map
+                ? operation.map({ ...doc }, src.ctx)
+                : { ...doc };
+              const toType = operation.toType
+                ? operation.toType(doc, src.ctx)
+                : (mapped._type ?? doc._type) as string;
+              let id = mapped._id;
+              if (id === undefined || id === null) {
+                id = `${toType}:${crypto.randomUUID().replace(/-/g, "")}`;
               }
-              if (onConflict === "skip") continue;
-              const merged = operation.merge
-                ? operation.merge(existing as Record<string, unknown>, outDoc)
-                : { ...existing, ...outDoc };
-              await target.replaceOne(
-                { _id: id } as Record<string, unknown>,
-                { ...merged, _id: id, _type: toType, _scope: scope } as Record<string, unknown>,
-              );
-            } else {
-              // deno-lint-ignore no-explicit-any
-              await target.insertOne(outDoc as any);
+              const outDoc = { ...mapped, _id: id, _type: toType, _scope: scope };
+              return { id: id as string, scope, toType, outDoc };
+            });
+
+            // One existence read for the whole page. `_id` is the primary key,
+            // so a match by `_id` already means a (scope, type, id) conflict —
+            // the extra `_type`/`_scope` of the old per-doc findOne were
+            // redundant given `_id` uniqueness.
+            const existingDocs = await target
+              .find({ _id: { $in: computed.map((c) => c.id) } } as Record<string, unknown>)
+              .toArray();
+            const existingMap = new Map<string, Record<string, unknown>>(
+              existingDocs.map((d) => [String(d._id), d as Record<string, unknown>]),
+            );
+
+            // Plan one write per id, collapsing duplicates WITHIN the page and
+            // resolving conflicts against already-persisted docs identically to
+            // the previous per-doc logic.
+            const planned = new Map<
+              string,
+              { type: "insert" | "replace"; doc: Record<string, unknown> }
+            >();
+            for (const c of computed) {
+              const prior = planned.get(c.id);
+              const base = prior ? prior.doc : existingMap.get(c.id);
+              if (base) {
+                if (onConflict === "error") {
+                  throw new Error(
+                    `flow_to_scope: conflict on (${c.scope}, ${c.toType}, ${c.id})`,
+                  );
+                }
+                if (onConflict === "skip") continue; // keep the first / existing
+                const merged = operation.merge
+                  ? operation.merge(base, c.outDoc)
+                  : { ...base, ...c.outDoc };
+                planned.set(c.id, {
+                  // Already in the DB → must replace; otherwise (within-page
+                  // merge of two new docs) it stays an insert.
+                  type: existingMap.has(c.id) ? "replace" : "insert",
+                  doc: { ...merged, _id: c.id, _type: c.toType, _scope: c.scope },
+                });
+              } else {
+                planned.set(c.id, { type: "insert", doc: c.outDoc });
+              }
             }
+
+            const bulkOps = [...planned.values()].map((entry) =>
+              entry.type === "insert"
+                ? { insertOne: { document: entry.doc } }
+                : {
+                  replaceOne: {
+                    filter: { _id: entry.doc._id } as Record<string, unknown>,
+                    replacement: entry.doc,
+                  },
+                }
+            );
+            if (bulkOps.length > 0) {
+              // deno-lint-ignore no-explicit-any
+              await target.bulkWrite(bulkOps as any);
+            }
+            reporter.add(page.length);
           }
 
           if (operation.sourceDisposition === "consume") {
@@ -1138,14 +1366,15 @@ export function createMongodbApplier(
               // A whole multi-model instance is consolidated away — drop it
               // entirely, including the `_information`/`_migrations` bookkeeping
               // (the read `where` only excludes those from the flow, not the drop).
-              await sourceColl.drop().catch(() => {});
+              await dropToleratingMissing(src.coll);
             } else if (src.where) {
               await sourceColl.deleteMany(src.where as Record<string, unknown>);
             } else {
-              await sourceColl.drop().catch(() => {});
+              await dropToleratingMissing(src.coll);
             }
           }
         }
+        reporter.done();
       },
       reverse: async (_operation) => {
         throw new Error("flow_to_scope is irreversible — cannot roll back");
@@ -1296,6 +1525,7 @@ export function createMongodbApplier(
           operation.collectionName,
           filter,
           operation.up as (doc: Record<string, unknown>) => Record<string, unknown>,
+          operation.type,
         );
       },
       reverse: async (operation) => {
@@ -1535,24 +1765,22 @@ export function createMongodbApplier(
 
     for (const modelType of modelTypes) {
       const instances = await discoverMultiCollectionInstances(db, modelType);
-      
-      for (const collectionName of instances) {
+
+      await forEachInstance(instances, async (collectionName) => {
         const instanceKey = `${collectionName}:${opts.currentMigrationId}:${operation}`;
-        
+
         // Skip if already recorded by operation handlers
-        if (recordedInstances.has(instanceKey)) {
-          continue;
-        }
+        if (recordedInstances.has(instanceKey)) return;
 
         await recordMultiCollectionMigration(
           db,
           collectionName,
           opts.currentMigrationId,
-          operation
+          operation,
         );
-        
+
         recordedInstances.add(instanceKey);
-      }
+      });
     }
 
     recordedInstances.add(recordedKey);

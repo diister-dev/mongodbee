@@ -96,7 +96,10 @@ export type { MigrationDefinitionOptions } from "./definition.ts";
 
 // Appliers
 export { createMongodbApplier } from "./appliers/mongodb.ts";
-export type { MongodbApplierOptions } from "./appliers/mongodb.ts";
+export type {
+  MigrationProgressEvent,
+  MongodbApplierOptions,
+} from "./appliers/mongodb.ts";
 
 // Configuration
 export * from "./config/mod.ts";

@@ -177,7 +177,7 @@ export type ScopedView<
   find<K extends keyof T>(
     type: K,
     filter?: m.Filter<OutputDoc<T, K, S>>,
-    options?: m.FindOptions,
+    options?: m.FindOptions & { validate?: boolean },
   ): Promise<OutputDoc<T, K, S>[]>;
 
   /**
@@ -196,7 +196,7 @@ export type ScopedView<
    */
   findAny(
     filter?: m.Filter<AnyScopedOutput<T, S>>,
-    options?: m.FindOptions,
+    options?: m.FindOptions & { validate?: boolean },
   ): Promise<AnyScopedOutput<T, S>[]>;
 
   countDocuments<K extends keyof T>(
@@ -320,7 +320,7 @@ export type ReadOnlyMultiScopeView<
   find<K extends keyof T>(
     type: K,
     filter?: m.Filter<OutputDoc<T, K, S>>,
-    options?: m.FindOptions,
+    options?: m.FindOptions & { validate?: boolean },
   ): Promise<OutputDoc<T, K, S>[]>;
 
   countDocuments<K extends keyof T>(
@@ -626,6 +626,7 @@ export async function scopedMultiCollection<
       async find(type, filter, options) {
         const typeName = type as string;
         const session = sessionContext.getSession();
+        const { validate = true, ...findOptions } = options ?? {};
         const conditions: Record<string, unknown>[] = [
           { _type: typeName },
           { _scope: scopeId },
@@ -635,9 +636,16 @@ export async function scopedMultiCollection<
         // deno-lint-ignore no-explicit-any
         const cursor = collection.find({ $and: conditions } as any, {
           session,
-          ...options,
+          ...findOptions,
         });
         const raw = await cursor.toArray();
+        // `validate: false` skips the per-document parse for trusted hot-path
+        // reads, returning the raw stored docs. Schema transforms are NOT
+        // applied in that mode — opt out only when you don't depend on them.
+        if (validate === false) {
+          // deno-lint-ignore no-explicit-any
+          return raw as any;
+        }
         const out: unknown[] = [];
         for (const item of raw) {
           const parsed = v.safeParse(storageSchemas[typeName], item);
@@ -662,14 +670,17 @@ export async function scopedMultiCollection<
 
       async findAny(filter, options) {
         const session = sessionContext.getSession();
+        const { validate = true, ...findOptions } = options ?? {};
         const conditions: Record<string, unknown>[] = [{ _scope: scopeId }];
         if (filter) conditions.push(filter as Record<string, unknown>);
         const cursor = collection.find(
           // deno-lint-ignore no-explicit-any
           { $and: conditions } as any,
-          { session, ...options },
+          { session, ...findOptions },
         );
         const raw = await cursor.toArray();
+        // deno-lint-ignore no-explicit-any
+        if (validate === false) return raw as any;
         const out: unknown[] = [];
         for (const item of raw) {
           const parsed = v.safeParse(storageUnion, item);
@@ -954,6 +965,7 @@ export async function scopedMultiCollection<
       async find(type, userFilter, options) {
         const typeName = type as string;
         const session = sessionContext.getSession();
+        const { validate = true, ...findOptions } = options ?? {};
         const conditions: Record<string, unknown>[] = [{ _type: typeName }];
         const sm = scopeMatch();
         if (sm) conditions.push(sm);
@@ -962,9 +974,11 @@ export async function scopedMultiCollection<
         const cursor = collection.find(
           // deno-lint-ignore no-explicit-any
           { $and: conditions } as any,
-          { session, ...options },
+          { session, ...findOptions },
         );
         const raw = await cursor.toArray();
+        // deno-lint-ignore no-explicit-any
+        if (validate === false) return raw as any;
         const out: unknown[] = [];
         for (const item of raw) {
           const parsed = v.safeParse(storageSchemas[typeName], item);

@@ -12,9 +12,9 @@ import type { MigrationDefinition, MigrationRule } from "./types.ts";
 import {
   discoverMultiCollectionInstances,
   getMultiCollectionMigrations,
-  getMultiModelAppliedMigrationIds,
   shouldInstanceReceiveMigrationByChain,
 } from "./multicollection-registry.ts";
+import { getAppliedMigrationIdsFromHistory } from "./migration-history.ts";
 import { migrationBuilder } from "./builder.ts";
 import { getAppliedMigrationIds } from "./state.ts";
 
@@ -97,10 +97,11 @@ export async function detectInstancesNeedingCatchUp(
         // Since migrations are now recorded on ALL instances (even if not affected),
         // we can simply compare the applied IDs with globally applied IDs
         
-        // Get only migrations with "applied" status (excludes reverted/failed)
-        const appliedIds = await getMultiModelAppliedMigrationIds(
-          db,
-          collectionName,
+        // Get only migrations with "applied" status (excludes reverted/failed).
+        // Reuse the `_migrations` doc already fetched above instead of issuing a
+        // second findOne for the same document (the old double-fetch).
+        const appliedIds = getAppliedMigrationIdsFromHistory(
+          migrationsDoc.appliedMigrations,
         );
         const appliedSet = new Set(appliedIds);
 

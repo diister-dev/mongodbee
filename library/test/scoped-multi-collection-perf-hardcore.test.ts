@@ -259,6 +259,16 @@ Deno.test({
         console.log(`note: scenario B (scopedColl) failed: ${reportB.failed}`);
       }
       console.log("");
+
+      // A benchmark whose system-under-test errored must FAIL the test, not
+      // report green with a "FAILED/SKIP" cell.
+      if (reportA.failed || reportB.failed) {
+        const which = [
+          reportA.failed ? `A: ${reportA.failed}` : null,
+          reportB.failed ? `B: ${reportB.failed}` : null,
+        ].filter(Boolean).join("; ");
+        throw new Error(`Perf run failed (${which})`);
+      }
     } finally {
       console.log(`Cleaning up: dropping ${dbName}`);
       try {

@@ -95,7 +95,11 @@ export async function validateMigrationsWithSimulation(
   // Track current state to propagate between migrations (O(n) instead of O(n²))
   let currentState: SimulationDatabaseState = createEmptyDatabaseState();
 
-  // Fast-forward through skipped migrations (just state propagation, minimal output)
+  // Fast-forward through skipped migrations. We still run the full simulation
+  // (it is needed to propagate state), so its verdict is authoritative: a
+  // broken migration outside the --last N window is still broken and must NOT
+  // be hidden behind a green "all valid" banner. Only the *reporting detail*
+  // is reduced for skipped migrations, never the correctness gate.
   if (skippedMigrations.length > 0) {
     console.log(dim(`  Skipping ${skippedMigrations.length} migration(s)...`));
     for (const migration of skippedMigrations) {
@@ -104,24 +108,45 @@ export async function validateMigrationsWithSimulation(
           migration,
           currentState,
         );
-        if (validationResult.success && validationResult.data?.stateAfterMigration) {
-          currentState = simulationValidator.prepareStateForNextMigration(
-            validationResult.data.stateAfterMigration as SimulationDatabaseState,
-            migration.schemas,
+        if (validationResult.success) {
+          if (validationResult.data?.stateAfterMigration) {
+            currentState = simulationValidator.prepareStateForNextMigration(
+              validationResult.data.stateAfterMigration as SimulationDatabaseState,
+              migration.schemas,
+            );
+          }
+          results.push({
+            migration,
+            valid: true,
+            errors: [],
+            warnings: ["Skipped (--last N mode)"],
+          });
+        } else {
+          allValid = false;
+          console.log(
+            red(`  ✗ ${migration.name} ${dim(`(${migration.id})`)} is invalid (in skipped --last N range)`),
           );
+          for (const error of validationResult.errors) {
+            console.log(red(`      ${error}`));
+          }
+          results.push({
+            migration,
+            valid: false,
+            errors: validationResult.errors,
+            warnings: validationResult.warnings,
+          });
         }
+      } catch (error) {
+        allValid = false;
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.log(
+          red(`  ✗ ${migration.name} ${dim(`(${migration.id})`)} validation error (in skipped --last N range): ${errorMessage}`),
+        );
         results.push({
           migration,
-          valid: true,
-          errors: [],
-          warnings: ["Skipped (--last N mode)"],
-        });
-      } catch {
-        results.push({
-          migration,
-          valid: true,
-          errors: [],
-          warnings: ["Skipped (--last N mode)"],
+          valid: false,
+          errors: [errorMessage],
+          warnings: [],
         });
       }
     }

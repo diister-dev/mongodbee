@@ -631,35 +631,58 @@ export async function checkMigrationStatus(
       ? allMigrations.slice(0, -lastN)
       : [];
 
-    // Fast-forward through skipped migrations (minimal validation, just state propagation)
+    // Fast-forward through skipped migrations. The full simulation still runs
+    // (needed to propagate state), so its verdict is authoritative: a broken
+    // migration outside the --last N window is still broken and must surface,
+    // not be hidden behind a green report. --last N only reduces the reporting
+    // detail for skipped migrations, never the correctness gate.
     for (const migration of skippedMigrations) {
       try {
         const validationResult = await simulationValidator.validateMigration(
           migration,
           currentState,
         );
-        if (validationResult.success && validationResult.data?.stateAfterMigration) {
-          currentState = simulationValidator.prepareStateForNextMigration(
-            validationResult.data.stateAfterMigration as SimulationDatabaseState,
-            migration.schemas,
+        if (validationResult.success) {
+          if (validationResult.data?.stateAfterMigration) {
+            currentState = simulationValidator.prepareStateForNextMigration(
+              validationResult.data.stateAfterMigration as SimulationDatabaseState,
+              migration.schemas,
+            );
+          }
+          migrationsInfo.push({
+            id: migration.id,
+            name: migration.name,
+            isValid: true,
+            errors: [],
+            warnings: ["Skipped (--last N mode)"],
+          });
+        } else {
+          allValid = false;
+          errors.push(
+            `Migration "${migration.name}" (${migration.id}) validation failed (in skipped --last N range): ${
+              validationResult.errors.join(", ")
+            }`,
           );
+          migrationsInfo.push({
+            id: migration.id,
+            name: migration.name,
+            isValid: false,
+            errors: validationResult.errors,
+            warnings: validationResult.warnings,
+          });
         }
-        // Add skipped migrations as valid (not fully validated but passed fast-forward)
+      } catch (error) {
+        allValid = false;
+        const message = error instanceof Error ? error.message : String(error);
+        errors.push(
+          `Migration "${migration.name}" (${migration.id}) simulation error (in skipped --last N range): ${message}`,
+        );
         migrationsInfo.push({
           id: migration.id,
           name: migration.name,
-          isValid: true,
-          errors: [],
-          warnings: ["Skipped (--last N mode)"],
-        });
-      } catch {
-        // If fast-forward fails, still continue but mark as not validated
-        migrationsInfo.push({
-          id: migration.id,
-          name: migration.name,
-          isValid: true,
-          errors: [],
-          warnings: ["Skipped (--last N mode, fast-forward failed)"],
+          isValid: false,
+          errors: [message],
+          warnings: [],
         });
       }
     }
