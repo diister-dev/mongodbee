@@ -414,7 +414,8 @@ export function createMigrationSummary(migration: MigrationDefinition): {
     parentId: migration.parent?.id ?? null,
     ancestorCount: ancestors.length,
     collectionCount: Object.keys(migration.schemas.collections ?? {}).length,
-    multiCollectionCount: Object.keys(migration.schemas.multiModels ?? {}).length,
-    multiModelCount: Object.keys(migration.schemas.multiModels ?? {}).length
+    multiCollectionCount:
+      Object.keys(migration.schemas.multiModels ?? {}).length,
+    multiModelCount: Object.keys(migration.schemas.multiModels ?? {}).length,
   };
 }

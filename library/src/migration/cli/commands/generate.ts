@@ -8,7 +8,7 @@
 
 import process from "node:process";
 import * as fs from "node:fs/promises";
-import { readdirSync, existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { green, red } from "@std/fmt/colors";
 import * as path from "@std/path";
 import { generateMigrationId } from "../../definition.ts";

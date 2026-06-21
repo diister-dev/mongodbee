@@ -3,7 +3,7 @@ import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import * as v from "../../src/schema.ts";
 import { defineModel } from "../../src/multi-collection-model.ts";
-import { ObjectId } from "mongodb";
+import type { ObjectId } from "mongodb";
 
 /**
  * Tests for paginate with pipeline (lookup) support
@@ -68,24 +68,34 @@ Deno.test("Paginate with lookup: Basic lookup to same collection", async (t) => 
     const results = await mc.paginate("registration", {}, {
       limit: 10,
       pipeline: (stage) => [
-        stage.lookup("collaborator", "registeredBy", "_id", "collaboratorDetails"),
+        stage.lookup(
+          "collaborator",
+          "registeredBy",
+          "_id",
+          "collaboratorDetails",
+        ),
       ],
       format: (doc) => ({
         event: doc.eventName,
         status: doc.status,
         // deno-lint-ignore no-explicit-any
-        registeredByName: (doc as any).collaboratorDetails?.[0]?.name || "Unknown",
+        registeredByName: (doc as any).collaboratorDetails?.[0]?.name ||
+          "Unknown",
       }),
     });
 
     assertEquals(results.data.length, 3);
     assertEquals(results.total, 3);
-    
+
     // Check that lookups worked
-    const aliceEvents = results.data.filter(r => r.registeredByName === "Alice Admin");
+    const aliceEvents = results.data.filter((r) =>
+      r.registeredByName === "Alice Admin"
+    );
     assertEquals(aliceEvents.length, 2);
-    
-    const bobEvents = results.data.filter(r => r.registeredByName === "Bob Manager");
+
+    const bobEvents = results.data.filter((r) =>
+      r.registeredByName === "Bob Manager"
+    );
     assertEquals(bobEvents.length, 1);
   });
 });
@@ -134,11 +144,15 @@ Deno.test("Paginate with lookup: Polymorphic lookup (collaborator OR visitor)", 
         const anyDoc = doc as any;
         const collaborator = anyDoc.collaboratorDocs?.[0];
         const visitor = anyDoc.visitorDocs?.[0];
-        
+
         return {
           event: doc.eventName,
           status: doc.status,
-          registeredByType: collaborator ? "collaborator" : visitor ? "visitor" : "unknown",
+          registeredByType: collaborator
+            ? "collaborator"
+            : visitor
+            ? "visitor"
+            : "unknown",
           registeredByName: collaborator?.name || visitor?.name || "Unknown",
           registeredByEmail: collaborator?.email || visitor?.email || null,
         };
@@ -146,15 +160,19 @@ Deno.test("Paginate with lookup: Polymorphic lookup (collaborator OR visitor)", 
     });
 
     assertEquals(results.data.length, 2);
-    
+
     // Find registration by collaborator
-    const collabReg = results.data.find(r => r.registeredByType === "collaborator");
+    const collabReg = results.data.find((r) =>
+      r.registeredByType === "collaborator"
+    );
     assertExists(collabReg);
     assertEquals(collabReg.registeredByName, "Alice Admin");
     assertEquals(collabReg.event, "Conference 2024");
-    
+
     // Find registration by visitor
-    const visitorReg = results.data.find(r => r.registeredByType === "visitor");
+    const visitorReg = results.data.find((r) =>
+      r.registeredByType === "visitor"
+    );
     assertExists(visitorReg);
     assertEquals(visitorReg.registeredByName, "John Guest");
     assertEquals(visitorReg.event, "Workshop AI");
@@ -202,7 +220,7 @@ Deno.test("Paginate with anyLookup: Polymorphic lookup without type constraint",
         // deno-lint-ignore no-explicit-any
         const anyDoc = doc as any;
         const registrant = anyDoc.registrant?.[0];
-        
+
         return {
           event: doc.eventName,
           status: doc.status,
@@ -215,15 +233,19 @@ Deno.test("Paginate with anyLookup: Polymorphic lookup without type constraint",
     });
 
     assertEquals(results.data.length, 2);
-    
+
     // Find registration by collaborator
-    const collabReg = results.data.find(r => r.registeredByType === "collaborator");
+    const collabReg = results.data.find((r) =>
+      r.registeredByType === "collaborator"
+    );
     assertExists(collabReg);
     assertEquals(collabReg.registeredByName, "Alice Admin");
     assertEquals(collabReg.event, "Conference 2024");
-    
+
     // Find registration by visitor
-    const visitorReg = results.data.find(r => r.registeredByType === "visitor");
+    const visitorReg = results.data.find((r) =>
+      r.registeredByType === "visitor"
+    );
     assertExists(visitorReg);
     assertEquals(visitorReg.registeredByName, "John Guest");
     assertEquals(visitorReg.event, "Workshop AI");
@@ -254,11 +276,11 @@ Deno.test("Paginate with lookup: Using addFields for computed values", async (t)
       pipeline: (stage) => [
         // Add computed field - check if registeredBy exists and is not null/empty
         stage.addFields({
-          hasRegistrant: { 
+          hasRegistrant: {
             $and: [
               { $ne: ["$registeredBy", null] },
-              { $ne: [{ $ifNull: ["$registeredBy", ""] }, ""] }
-            ]
+              { $ne: [{ $ifNull: ["$registeredBy", ""] }, ""] },
+            ],
           },
           statusUpper: { $toUpper: "$status" },
         }),
@@ -278,15 +300,15 @@ Deno.test("Paginate with lookup: Using addFields for computed values", async (t)
     });
 
     assertEquals(results.data.length, 3);
-    
+
     // Check computed fields
-    const eventA = results.data.find(r => r.event === "Event A");
+    const eventA = results.data.find((r) => r.event === "Event A");
     assertExists(eventA);
     assertEquals(eventA.status, "CONFIRMED");
     assertEquals(eventA.hasRegistrant, true);
     assertEquals(eventA.registrantName, "Alice Admin");
-    
-    const eventC = results.data.find(r => r.event === "Event C");
+
+    const eventC = results.data.find((r) => r.event === "Event C");
     assertExists(eventC);
     assertEquals(eventC.status, "DRAFT");
     assertEquals(eventC.hasRegistrant, false);
@@ -333,9 +355,9 @@ Deno.test("Paginate with lookup: Combined with MongoDB filter", async (t) => {
 
     assertEquals(results.data.length, 2);
     assertEquals(results.total, 2); // Total should only count confirmed
-    
+
     // Both confirmed events should be returned
-    const events = results.data.map(r => r.event).sort();
+    const events = results.data.map((r) => r.event).sort();
     assertEquals(events, ["Event 1", "Event 3"]);
   });
 });
@@ -400,8 +422,8 @@ Deno.test("Paginate with lookup: With cursor pagination (afterId)", async (t) =>
     assertEquals(page2.position, 3);
 
     // Verify no overlap between pages
-    const page1Ids = new Set(page1.data.map(r => r.id));
-    const page2Ids = new Set(page2.data.map(r => r.id));
+    const page1Ids = new Set(page1.data.map((r) => r.id));
+    const page2Ids = new Set(page2.data.map((r) => r.id));
     for (const id of page2Ids) {
       assertEquals(page1Ids.has(id), false, "Pages should not overlap");
     }
@@ -431,7 +453,11 @@ Deno.test("Paginate with lookup: Combined with prepare/filter/format pipeline", 
 
     // Create registrations
     await mc.insertMany("registration", [
-      { eventName: "Important Event", registeredBy: admin, status: "confirmed" },
+      {
+        eventName: "Important Event",
+        registeredBy: admin,
+        status: "confirmed",
+      },
       { eventName: "Regular Event", registeredBy: user, status: "confirmed" },
       { eventName: "Another Event", registeredBy: admin, status: "confirmed" },
     ]);
@@ -466,7 +492,7 @@ Deno.test("Paginate with lookup: Combined with prepare/filter/format pipeline", 
 
     // Should only return registrations by admin
     assertEquals(results.data.length, 2);
-    
+
     for (const reg of results.data) {
       assertEquals(reg.registrantRole, "admin");
       assertEquals(reg.registrantName, "Alice Admin");
@@ -519,15 +545,15 @@ Deno.test("Paginate with lookup: Lookup with nested pipeline filter", async (t) 
     });
 
     assertEquals(results.data.length, 2);
-    
+
     // Event 1 should have admin registrant
-    const event1 = results.data.find(r => r.event === "Event 1");
+    const event1 = results.data.find((r) => r.event === "Event 1");
     assertExists(event1);
     assertEquals(event1.adminRegistrant, "Alice Admin");
     assertEquals(event1.hasAdminRegistrant, true);
-    
+
     // Event 2 should NOT have admin registrant (Bob is user)
-    const event2 = results.data.find(r => r.event === "Event 2");
+    const event2 = results.data.find((r) => r.event === "Event 2");
     assertExists(event2);
     assertEquals(event2.adminRegistrant, null);
     assertEquals(event2.hasAdminRegistrant, false);
@@ -555,7 +581,7 @@ Deno.test("Paginate without pipeline: Backwards compatibility", async (t) => {
 
     assertEquals(results.data.length, 2);
     assertEquals(results.total, 2);
-    
+
     for (const reg of results.data) {
       assertEquals(reg.status, "confirmed");
     }
@@ -615,8 +641,18 @@ Deno.test("Paginate with externalLookup: Join with external collection", async (
     // Create an external collection for "events" (not part of multi-collection)
     const eventsCollection = db.collection("external_events");
     await eventsCollection.insertMany([
-      { _id: "evt1" as unknown as ObjectId, title: "Tech Conference 2024", location: "Paris", capacity: 500 },
-      { _id: "evt2" as unknown as ObjectId, title: "AI Workshop", location: "London", capacity: 50 },
+      {
+        _id: "evt1" as unknown as ObjectId,
+        title: "Tech Conference 2024",
+        location: "Paris",
+        capacity: 500,
+      },
+      {
+        _id: "evt2" as unknown as ObjectId,
+        title: "AI Workshop",
+        location: "London",
+        capacity: 50,
+      },
     ]);
 
     // Create registrations that reference external events
@@ -635,7 +671,12 @@ Deno.test("Paginate with externalLookup: Join with external collection", async (
     const results = await mc.paginate("registration", {}, {
       limit: 10,
       pipeline: (stage) => [
-        stage.externalLookup("external_events", "eventName", "_id", "eventDetails"),
+        stage.externalLookup(
+          "external_events",
+          "eventName",
+          "_id",
+          "eventDetails",
+        ),
       ],
       format: (doc) => {
         // deno-lint-ignore no-explicit-any
@@ -652,14 +693,14 @@ Deno.test("Paginate with externalLookup: Join with external collection", async (
     });
 
     assertEquals(results.data.length, 2);
-    
-    const conf = results.data.find(r => r.eventId === "evt1");
+
+    const conf = results.data.find((r) => r.eventId === "evt1");
     assertExists(conf);
     assertEquals(conf.eventTitle, "Tech Conference 2024");
     assertEquals(conf.eventLocation, "Paris");
     assertEquals(conf.eventCapacity, 500);
-    
-    const workshop = results.data.find(r => r.eventId === "evt2");
+
+    const workshop = results.data.find((r) => r.eventId === "evt2");
     assertExists(workshop);
     assertEquals(workshop.eventTitle, "AI Workshop");
     assertEquals(workshop.eventLocation, "London");
@@ -669,7 +710,11 @@ Deno.test("Paginate with externalLookup: Join with external collection", async (
 Deno.test("Paginate with externalLookup: Join with another multi-collection", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create first multi-collection for registrations
-    const registrations = await multiCollection(db, "registrations", registrationModel);
+    const registrations = await multiCollection(
+      db,
+      "registrations",
+      registrationModel,
+    );
 
     // Create second multi-collection for a different domain
     const venueModel = defineModel("venue", {
@@ -734,14 +779,14 @@ Deno.test("Paginate with externalLookup: Join with another multi-collection", as
     });
 
     assertEquals(results.data.length, 2);
-    
-    const conf = results.data.find(r => r.event === "Conference");
+
+    const conf = results.data.find((r) => r.event === "Conference");
     assertExists(conf);
     assertEquals(conf.venueName, "Convention Center");
     assertEquals(conf.venueCity, "Paris");
     assertEquals(conf.venueType, "venue");
-    
-    const workshop = results.data.find(r => r.event === "Workshop");
+
+    const workshop = results.data.find((r) => r.event === "Workshop");
     assertExists(workshop);
     assertEquals(workshop.venueName, "Tech Hub");
     assertEquals(workshop.venueCity, "London");

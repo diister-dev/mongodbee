@@ -70,8 +70,14 @@ Deno.test("checkMigrationStatus --last N: broken migration in skipped range is r
   try {
     const migrationsDir = path.join(dir, "migrations");
     await Deno.mkdir(migrationsDir);
-    await Deno.writeTextFile(path.join(migrationsDir, BROKEN_FILE), brokenContent);
-    await Deno.writeTextFile(path.join(migrationsDir, VALID_FILE), validContent);
+    await Deno.writeTextFile(
+      path.join(migrationsDir, BROKEN_FILE),
+      brokenContent,
+    );
+    await Deno.writeTextFile(
+      path.join(migrationsDir, VALID_FILE),
+      validContent,
+    );
     const schemaPath = path.join(dir, "schemas.ts");
     await Deno.writeTextFile(schemaPath, schemaContent);
 
@@ -89,7 +95,10 @@ Deno.test("checkMigrationStatus --last N: broken migration in skipped range is r
 
     // The skipped-but-broken migration's own entry must be invalid.
     const brokenInfo = status.migrations?.find((m) => m.name === "broken");
-    assert(brokenInfo, "broken migration should appear in verbose migration info");
+    assert(
+      brokenInfo,
+      "broken migration should appear in verbose migration info",
+    );
     assertEquals(brokenInfo!.isValid, false);
 
     // Its failure must be surfaced at the top level (visible without verbose),

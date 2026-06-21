@@ -43,12 +43,16 @@ Deno.test("Collection Write Conflict: Sequential updates should work", async (t)
             value: counter.value + 1,
             lastUpdated: new Date().toISOString(),
           },
-        }
+        },
       );
     }
 
     const finalCounter = await counters.getById(counterId);
-    assertEquals(finalCounter.value, 10, "All sequential updates should succeed");
+    assertEquals(
+      finalCounter.value,
+      10,
+      "All sequential updates should succeed",
+    );
   });
 });
 
@@ -77,10 +81,9 @@ Deno.test("Collection Write Conflict: Concurrent updates with retry", async (t) 
               value: counter.value + 1,
               lastUpdated: new Date().toISOString(),
             },
-          }
+          },
         );
-      })()
-    );
+      })());
 
     // Execute all updates concurrently
     await Promise.all(updates);
@@ -109,7 +112,7 @@ Deno.test("Collection Write Conflict: Rapid fire updates", async (t) => {
 
         await products.updateOne(
           { _id: productId },
-          { $set: { stock: newStock } }
+          { $set: { stock: newStock } },
         );
       })()
     );
@@ -121,7 +124,7 @@ Deno.test("Collection Write Conflict: Rapid fire updates", async (t) => {
     console.log(`Rapid fire final stock: ${finalProduct.stock}`);
     assert(
       [75, 80, 85, 90, 95].includes(finalProduct.stock),
-      "Final stock should be one of the updated values"
+      "Final stock should be one of the updated values",
     );
   });
 });
@@ -140,7 +143,7 @@ Deno.test("Collection Write Conflict: UpdateMany with retry", async (t) => {
     // Update all products at once
     const result = await products.updateMany(
       { _id: { $in: productIds } } as any,
-      { $inc: { stock: -1 } }
+      { $inc: { stock: -1 } },
     );
 
     assertEquals(result.modifiedCount, 3, "All products should be updated");
@@ -173,7 +176,7 @@ Deno.test("Collection Write Conflict: Simple sequential updates never fail", asy
     for (let i = 0; i < 20; i++) {
       await products.updateOne(
         { _id: productId },
-        { $set: { stock: 100 - i - 1 } }
+        { $set: { stock: 100 - i - 1 } },
       );
     }
 
@@ -204,13 +207,13 @@ Deno.test("Collection Write Conflict: WithSession protects grouped operations", 
       // Decrement stock
       await products.updateOne(
         { _id: productId },
-        { $inc: { stock: -1 } }
+        { $inc: { stock: -1 } },
       );
 
       // Increment counter
       await counters.updateOne(
         { _id: counterId },
-        { $inc: { value: 1 } }
+        { $inc: { value: 1 } },
       );
     });
 
@@ -246,7 +249,7 @@ Deno.test("Collection Write Conflict: Mixed operations don't interfere", async (
               value: counter.value + 1,
               lastUpdated: new Date().toISOString(),
             },
-          }
+          },
         );
       });
     }

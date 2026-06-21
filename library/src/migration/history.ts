@@ -11,9 +11,7 @@
 import type { Collection } from "mongodb";
 import type { Db } from "../mongodb.ts";
 import { getCurrentVersion } from "./utils/package-info.ts";
-import {
-  calculateMigrationStateFromHistory,
-} from "./migration-history.ts";
+import { calculateMigrationStateFromHistory } from "./migration-history.ts";
 
 /**
  * Type of migration operation

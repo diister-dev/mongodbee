@@ -68,7 +68,9 @@ Deno.test({
     console.log(`Database name (for manual cleanup if interrupted):`);
     console.log(`  ${dbName}`);
     console.log(
-      `Collections: ${LEGACY_COLLECTION_PREFIX}{0..${SCOPES - 1}} | ${SCOPED_COLLECTION_NAME}`,
+      `Collections: ${LEGACY_COLLECTION_PREFIX}{0..${
+        SCOPES - 1
+      }} | ${SCOPED_COLLECTION_NAME}`,
     );
     console.log("=".repeat(78));
     console.log("");
@@ -114,7 +116,9 @@ Deno.test({
           if ((i + 1) % 500 === 0) {
             const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
             console.log(
-              `    progress: created ${i + 1}/${SCOPES} collections (${elapsed}s elapsed)`,
+              `    progress: created ${
+                i + 1
+              }/${SCOPES} collections (${elapsed}s elapsed)`,
             );
           }
         }
@@ -132,13 +136,17 @@ Deno.test({
           if ((i + 1) % 500 === 0) {
             const elapsed = ((performance.now() - tIns) / 1000).toFixed(1);
             console.log(
-              `    progress: inserted ${i + 1}/${SCOPES} scopes (${elapsed}s elapsed)`,
+              `    progress: inserted ${
+                i + 1
+              }/${SCOPES} scopes (${elapsed}s elapsed)`,
             );
           }
         }
         reportA.insertMs = performance.now() - tIns;
         console.log(
-          `  ✓ insert ${SCOPES * DOCS_PER_SCOPE} docs: ${fmt(reportA.insertMs)}`,
+          `  ✓ insert ${SCOPES * DOCS_PER_SCOPE} docs: ${
+            fmt(reportA.insertMs)
+          }`,
         );
 
         // Query sample
@@ -172,11 +180,13 @@ Deno.test({
       console.log(`>>> Scenario B: 1 scopedMultiCollection`);
 
       try {
-        const setup = await measure("setup 1 scopedMultiCollection", () =>
-          scopedMultiCollection(db, SCOPED_COLLECTION_NAME, {
-            scope: refId("exposition"),
-            types: typesShape,
-          })
+        const setup = await measure(
+          "setup 1 scopedMultiCollection",
+          () =>
+            scopedMultiCollection(db, SCOPED_COLLECTION_NAME, {
+              scope: refId("exposition"),
+              types: typesShape,
+            }),
         );
         reportB.setupMs = setup.ms;
 
@@ -191,13 +201,17 @@ Deno.test({
           if ((i + 1) % 500 === 0) {
             const elapsed = ((performance.now() - tIns) / 1000).toFixed(1);
             console.log(
-              `    progress: inserted ${i + 1}/${SCOPES} scopes (${elapsed}s elapsed)`,
+              `    progress: inserted ${
+                i + 1
+              }/${SCOPES} scopes (${elapsed}s elapsed)`,
             );
           }
         }
         reportB.insertMs = performance.now() - tIns;
         console.log(
-          `  ✓ insert ${SCOPES * DOCS_PER_SCOPE} docs: ${fmt(reportB.insertMs)}`,
+          `  ✓ insert ${SCOPES * DOCS_PER_SCOPE} docs: ${
+            fmt(reportB.insertMs)
+          }`,
         );
 
         const tQ = performance.now();
@@ -221,14 +235,18 @@ Deno.test({
       // -------- Report --------
       console.log("");
       console.log("=".repeat(78));
-      console.log(`HARDCORE REPORT — ${SCOPES} scopes × ${DOCS_PER_SCOPE} docs`);
+      console.log(
+        `HARDCORE REPORT — ${SCOPES} scopes × ${DOCS_PER_SCOPE} docs`,
+      );
       console.log("=".repeat(78));
       console.log(
         `                                  multiColl ×${SCOPES}  |  scopedColl ×1`,
       );
       console.log("-".repeat(78));
       const row = (label: string, a: string, b: string) => {
-        console.log(`  ${label.padEnd(28)} ${a.padStart(17)}  |  ${b.padStart(15)}`);
+        console.log(
+          `  ${label.padEnd(28)} ${a.padStart(17)}  |  ${b.padStart(15)}`,
+        );
       };
       row(
         "setup",
@@ -253,7 +271,9 @@ Deno.test({
       console.log("=".repeat(78));
 
       if (reportA.failed) {
-        console.log(`note: scenario A (multiCollection) failed: ${reportA.failed}`);
+        console.log(
+          `note: scenario A (multiCollection) failed: ${reportA.failed}`,
+        );
       }
       if (reportB.failed) {
         console.log(`note: scenario B (scopedColl) failed: ${reportB.failed}`);

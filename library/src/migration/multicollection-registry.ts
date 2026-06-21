@@ -12,8 +12,8 @@ import { getCurrentVersion } from "./utils/package-info.ts";
 import * as v from "valibot";
 import {
   calculateMigrationStateFromHistory,
-  groupOperationsByMigrationId,
   getAppliedMigrationIdsFromHistory,
+  groupOperationsByMigrationId,
 } from "./migration-history.ts";
 import { isMigrationAncestor } from "./definition.ts";
 import type { MigrationDefinition } from "./types.ts";
@@ -51,23 +51,29 @@ const metadataSchema: readonly [
     readonly _type: v.LiteralSchema<"_migrations", undefined>;
     readonly fromMigrationId: v.StringSchema<undefined>;
     readonly mongodbeeVersion: v.StringSchema<undefined>;
-    readonly appliedMigrations: v.ArraySchema<v.ObjectSchema<{
-      readonly id: v.StringSchema<undefined>;
-      readonly operation: v.UnionSchema<[
-        v.LiteralSchema<"applied", undefined>,
-        v.LiteralSchema<"reverted", undefined>,
-        v.LiteralSchema<"failed", undefined>
-      ], undefined>;
-      readonly appliedAt: v.DateSchema<undefined>;
-      readonly duration: v.OptionalSchema<v.NumberSchema<undefined>, undefined>;
-      readonly error: v.OptionalSchema<v.StringSchema<undefined>, undefined>;
-      readonly status: v.UnionSchema<[
-        v.LiteralSchema<"success", undefined>,
-        v.LiteralSchema<"failure", undefined>
-      ], undefined>;
-      readonly mongodbeeVersion: v.StringSchema<undefined>;
-    }, undefined>, undefined>;
-  }, undefined>
+    readonly appliedMigrations: v.ArraySchema<
+      v.ObjectSchema<{
+        readonly id: v.StringSchema<undefined>;
+        readonly operation: v.UnionSchema<[
+          v.LiteralSchema<"applied", undefined>,
+          v.LiteralSchema<"reverted", undefined>,
+          v.LiteralSchema<"failed", undefined>,
+        ], undefined>;
+        readonly appliedAt: v.DateSchema<undefined>;
+        readonly duration: v.OptionalSchema<
+          v.NumberSchema<undefined>,
+          undefined
+        >;
+        readonly error: v.OptionalSchema<v.StringSchema<undefined>, undefined>;
+        readonly status: v.UnionSchema<[
+          v.LiteralSchema<"success", undefined>,
+          v.LiteralSchema<"failure", undefined>,
+        ], undefined>;
+        readonly mongodbeeVersion: v.StringSchema<undefined>;
+      }, undefined>,
+      undefined
+    >;
+  }, undefined>,
 ] = [
   v.object({
     _id: v.literal(MULTI_COLLECTION_INFO_TYPE),
@@ -105,7 +111,7 @@ const metadataSchema: readonly [
  *
  * @returns Array of valibot object schemas for metadata documents
  */
-export function createMetadataSchemas() : typeof metadataSchema {
+export function createMetadataSchemas(): typeof metadataSchema {
   return [
     v.object({
       _id: v.literal(MULTI_COLLECTION_INFO_TYPE),
@@ -151,7 +157,10 @@ export type MultiCollectionInfo = {
 /**
  * Type of migration operation for multi-collection instances
  */
-export type MultiModelMigrationOperationType = "applied" | "reverted" | "failed";
+export type MultiModelMigrationOperationType =
+  | "applied"
+  | "reverted"
+  | "failed";
 
 /**
  * Status of operation execution for multi-collection instances
@@ -164,22 +173,22 @@ export type MultiModelOperationStatus = "success" | "failure";
 export type MultiModelMigrationOperation = {
   /** ID of the migration */
   id: string;
-  
+
   /** Type of operation performed */
   operation: MultiModelMigrationOperationType;
-  
+
   /** When the operation was executed */
   appliedAt: Date;
-  
+
   /** Duration of operation in milliseconds */
   duration?: number;
-  
+
   /** Error message if operation failed */
   error?: string;
-  
+
   /** Status of the operation */
   status: MultiModelOperationStatus;
-  
+
   /** Version of MongoDBee that executed this operation */
   mongodbeeVersion: string;
 };
@@ -287,7 +296,9 @@ export async function createMultiCollectionInfo(
   collectionType: string,
   migrationId: string = "unknown",
 ): Promise<void> {
-  log.debug(`createMultiCollectionInfo(${collectionName}, type=${collectionType}, migration=${migrationId})`);
+  log.debug(
+    `createMultiCollectionInfo(${collectionName}, type=${collectionType}, migration=${migrationId})`,
+  );
   const session = getSessionFromDb(db);
   const collection = db.collection(collectionName);
   const mongodbeeVersion = getCurrentVersion();
@@ -299,7 +310,9 @@ export async function createMultiCollectionInfo(
     createdAt: new Date(),
   };
 
-  log.debug(`createMultiCollectionInfo(${collectionName}): insertOne _information`);
+  log.debug(
+    `createMultiCollectionInfo(${collectionName}): insertOne _information`,
+  );
   await collection.insertOne(info as Record<string, unknown>, { session });
 
   // Also create the migrations tracking document with initial migration
@@ -319,8 +332,12 @@ export async function createMultiCollectionInfo(
     appliedMigrations: [initialOperation],
   };
 
-  log.debug(`createMultiCollectionInfo(${collectionName}): insertOne _migrations`);
-  await collection.insertOne(migrations as Record<string, unknown>, { session });
+  log.debug(
+    `createMultiCollectionInfo(${collectionName}): insertOne _migrations`,
+  );
+  await collection.insertOne(migrations as Record<string, unknown>, {
+    session,
+  });
   log.debug(`createMultiCollectionInfo(${collectionName}): done`);
 }
 
@@ -422,7 +439,7 @@ export async function getMultiModelMigrationHistory(
   migrationId: string,
 ): Promise<MultiModelMigrationOperation[]> {
   const migrations = await getMultiCollectionMigrations(db, collectionName);
-  
+
   if (!migrations) {
     return [];
   }
@@ -442,12 +459,14 @@ export async function getMultiModelMigrationHistory(
 export async function getMultiModelCurrentState(
   db: Db,
   collectionName: string,
-): Promise<Map<string, {
-  status: "pending" | "applied" | "failed" | "reverted";
-  lastOperation?: MultiModelMigrationOperation;
-}>> {
+): Promise<
+  Map<string, {
+    status: "pending" | "applied" | "failed" | "reverted";
+    lastOperation?: MultiModelMigrationOperation;
+  }>
+> {
   const migrations = await getMultiCollectionMigrations(db, collectionName);
-  
+
   if (!migrations) {
     return new Map();
   }
@@ -470,7 +489,7 @@ export async function getMultiModelAppliedMigrationIds(
   collectionName: string,
 ): Promise<string[]> {
   const migrations = await getMultiCollectionMigrations(db, collectionName);
-  
+
   if (!migrations) {
     return [];
   }
@@ -545,10 +564,15 @@ export async function multiCollectionInstanceExists(
     const info = await collection.findOne({
       _type: MULTI_COLLECTION_INFO_TYPE,
     }, { session }) as MultiCollectionInfo | null;
-    log.debug(`multiCollectionInstanceExists(${collectionName}): ${info !== null}`);
+    log.debug(
+      `multiCollectionInstanceExists(${collectionName}): ${info !== null}`,
+    );
     return info !== null;
   } catch (error) {
-    log.warn(`multiCollectionInstanceExists(${collectionName}) threw, treating as false:`, error);
+    log.warn(
+      `multiCollectionInstanceExists(${collectionName}) threw, treating as false:`,
+      error,
+    );
     return false;
   }
 }

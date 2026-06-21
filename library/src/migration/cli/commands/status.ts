@@ -49,7 +49,9 @@ export interface StatusCommandOptions {
 function parseSimulationMode(mode?: string): SimulationPowerLevel {
   if (!mode) return "normal";
   const normalized = mode.toLowerCase();
-  if (normalized === "quick" || normalized === "normal" || normalized === "hard") {
+  if (
+    normalized === "quick" || normalized === "normal" || normalized === "hard"
+  ) {
     return normalized;
   }
   console.log(yellow(`⚠ Unknown mode "${mode}", using "normal" instead`));
@@ -92,13 +94,13 @@ export async function statusCommand(
 
     // Load migrations from filesystem
     const migrationsWithFiles = await loadAllMigrations(migrationsDir);
-    
+
     if (migrationsWithFiles.length === 0) {
       console.log(yellow("⚠ No migrations found"));
       console.log();
       return;
     }
-    
+
     const allMigrations = buildMigrationChain(migrationsWithFiles);
 
     console.log(dim(`Found ${allMigrations.length} migration(s)`));
@@ -170,7 +172,10 @@ export async function statusCommand(
     );
 
     // Analyze migrations for properties (irreversible/lossy) if verbose mode
-    const migrationProperties = new Map<string, { irreversible: boolean; lossy: boolean }>();
+    const migrationProperties = new Map<
+      string,
+      { irreversible: boolean; lossy: boolean }
+    >();
     if (options.verbose) {
       for (const migration of allMigrations) {
         const builder = migrationBuilder({
@@ -178,7 +183,7 @@ export async function statusCommand(
           parentSchemas: migration.parent?.schemas,
         });
         const state = migration.migrate(builder);
-        
+
         migrationProperties.set(migration.id, {
           irreversible: state.hasProperty("irreversible"),
           lossy: state.hasProperty("lossy"),
@@ -188,15 +193,23 @@ export async function statusCommand(
 
     // Header
     const headerLine = options.verbose
-      ? `  ${"ID".padEnd(maxIdLength)}  ${"Name".padEnd(maxNameLength)}  Status      Applied             Properties`
-      : `  ${"ID".padEnd(maxIdLength)}  ${"Name".padEnd(maxNameLength)}  Status      Applied`;
-    
+      ? `  ${"ID".padEnd(maxIdLength)}  ${
+        "Name".padEnd(maxNameLength)
+      }  Status      Applied             Properties`
+      : `  ${"ID".padEnd(maxIdLength)}  ${
+        "Name".padEnd(maxNameLength)
+      }  Status      Applied`;
+
     console.log(gray(headerLine));
-    
+
     const separatorLine = options.verbose
-      ? `  ${"─".repeat(maxIdLength)}  ${"─".repeat(maxNameLength)}  ${"─".repeat(10)}  ${"─".repeat(20)}  ${"─".repeat(20)}`
-      : `  ${"─".repeat(maxIdLength)}  ${"─".repeat(maxNameLength)}  ${"─".repeat(10)}  ${"─".repeat(20)}`;
-    
+      ? `  ${"─".repeat(maxIdLength)}  ${"─".repeat(maxNameLength)}  ${
+        "─".repeat(10)
+      }  ${"─".repeat(20)}  ${"─".repeat(20)}`
+      : `  ${"─".repeat(maxIdLength)}  ${"─".repeat(maxNameLength)}  ${
+        "─".repeat(10)
+      }  ${"─".repeat(20)}`;
+
     console.log(gray(separatorLine));
 
     // Rows
@@ -235,7 +248,9 @@ export async function statusCommand(
           const tags: string[] = [];
           if (props.irreversible) tags.push(red("irreversible"));
           if (props.lossy) tags.push(yellow("lossy"));
-          propertiesDisplay = tags.length > 0 ? `  ${tags.join(", ")}` : "  " + dim("-");
+          propertiesDisplay = tags.length > 0
+            ? `  ${tags.join(", ")}`
+            : "  " + dim("-");
         } else {
           propertiesDisplay = "  " + dim("-");
         }
@@ -268,7 +283,9 @@ export async function statusCommand(
     console.log();
 
     if (pendingCount > 0) {
-      console.log(dim("  Run `mongodbee migrate` to apply pending migrations."));
+      console.log(
+        dim("  Run `mongodbee migrate` to apply pending migrations."),
+      );
     } else {
       console.log(green("  ✓ Database is up to date!"));
     }
@@ -278,31 +295,42 @@ export async function statusCommand(
     console.log(bold("Multi-Model Instances:"));
     console.log();
 
-    const catchUpSummary = await detectInstancesNeedingCatchUp(db, allMigrations);
+    const catchUpSummary = await detectInstancesNeedingCatchUp(
+      db,
+      allMigrations,
+    );
 
     if (catchUpSummary.totalInstances === 0) {
       console.log(green("  ✓ All multi-model instances are up to date"));
     } else {
-      console.log(yellow(`  ⚠ ${catchUpSummary.totalInstances} instance(s) need catch-up`));
+      console.log(
+        yellow(
+          `  ⚠ ${catchUpSummary.totalInstances} instance(s) need catch-up`,
+        ),
+      );
       console.log();
 
       // Display details by model type
       for (const [modelType, instances] of catchUpSummary.instancesByModel) {
         console.log(yellow(`  Model type: ${bold(modelType)}`));
-        
+
         for (const instance of instances) {
           const statusIcon = instance.isOrphaned ? red("⚠ ") : yellow("⚡");
-          const statusText = instance.isOrphaned 
-            ? red("orphaned") 
+          const statusText = instance.isOrphaned
+            ? red("orphaned")
             : yellow("behind");
-          
+
           console.log(`    ${statusIcon} ${bold(instance.collectionName)}`);
-          console.log(dim(`       Status: ${statusText} - Missing ${instance.missingMigrationIds.length} migration(s)`));
-          
+          console.log(
+            dim(
+              `       Status: ${statusText} - Missing ${instance.missingMigrationIds.length} migration(s)`,
+            ),
+          );
+
           if (options.verbose && instance.missingMigrationIds.length > 0) {
             console.log(dim(`       Missing IDs:`));
             for (const missingId of instance.missingMigrationIds.slice(0, 3)) {
-              const migration = allMigrations.find(m => m.id === missingId);
+              const migration = allMigrations.find((m) => m.id === missingId);
               if (migration) {
                 console.log(dim(`         • ${migration.name} (${missingId})`));
               } else {
@@ -310,16 +338,30 @@ export async function statusCommand(
               }
             }
             if (instance.missingMigrationIds.length > 3) {
-              console.log(dim(`         ... and ${instance.missingMigrationIds.length - 3} more`));
+              console.log(
+                dim(
+                  `         ... and ${
+                    instance.missingMigrationIds.length - 3
+                  } more`,
+                ),
+              );
             }
           }
         }
         console.log();
       }
 
-      console.log(dim(`  Total catch-up operations needed: ${catchUpSummary.totalMissingMigrations}`));
+      console.log(
+        dim(
+          `  Total catch-up operations needed: ${catchUpSummary.totalMissingMigrations}`,
+        ),
+      );
       console.log();
-      console.log(dim("  Run `mongodbee migrate --auto-sync` to catch up these instances."));
+      console.log(
+        dim(
+          "  Run `mongodbee migrate --auto-sync` to catch up these instances.",
+        ),
+      );
     }
 
     // Show detailed history if requested

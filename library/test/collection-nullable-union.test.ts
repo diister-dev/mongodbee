@@ -203,8 +203,16 @@ Deno.test("Collection: Union - switch between variants", async (t) => {
     const entitySchema = {
       name: v.string(),
       data: v.union([
-        v.object({ type: v.literal("typeA"), a: v.string(), commonField: v.string() }),
-        v.object({ type: v.literal("typeB"), b: v.number(), commonField: v.string() }),
+        v.object({
+          type: v.literal("typeA"),
+          a: v.string(),
+          commonField: v.string(),
+        }),
+        v.object({
+          type: v.literal("typeB"),
+          b: v.number(),
+          commonField: v.string(),
+        }),
       ]),
     };
 
@@ -219,7 +227,9 @@ Deno.test("Collection: Union - switch between variants", async (t) => {
       },
     });
 
-    const initialEntity = await entities.findOne({ _id: new ObjectId(entityId) });
+    const initialEntity = await entities.findOne({
+      _id: new ObjectId(entityId),
+    });
     assert(initialEntity !== null);
     assertEquals(initialEntity.data.type, "typeA");
     assertEquals((initialEntity.data as { a: string }).a, "hello");
@@ -238,7 +248,9 @@ Deno.test("Collection: Union - switch between variants", async (t) => {
       },
     );
 
-    const updatedEntity = await entities.findOne({ _id: new ObjectId(entityId) });
+    const updatedEntity = await entities.findOne({
+      _id: new ObjectId(entityId),
+    });
     assert(updatedEntity !== null);
     assertEquals(updatedEntity.data.type, "typeB");
     assertEquals((updatedEntity.data as { b: number }).b, 42);
@@ -264,7 +276,9 @@ Deno.test("Collection: Nullable union - null to variant", async (t) => {
       data: null,
     });
 
-    const initialEntity = await entities.findOne({ _id: new ObjectId(entityId) });
+    const initialEntity = await entities.findOne({
+      _id: new ObjectId(entityId),
+    });
     assert(initialEntity !== null);
     assertEquals(initialEntity.data, null);
 
@@ -281,7 +295,9 @@ Deno.test("Collection: Nullable union - null to variant", async (t) => {
       },
     );
 
-    const updatedEntity = await entities.findOne({ _id: new ObjectId(entityId) });
+    const updatedEntity = await entities.findOne({
+      _id: new ObjectId(entityId),
+    });
     assert(updatedEntity !== null);
     assert(updatedEntity.data !== null);
     assertEquals(updatedEntity.data?.type, "typeA");
@@ -338,14 +354,25 @@ Deno.test("Collection: Union with different structures - complete replacement", 
       },
     );
 
-    const updatedPayment = await payments.findOne({ _id: new ObjectId(paymentId) });
+    const updatedPayment = await payments.findOne({
+      _id: new ObjectId(paymentId),
+    });
     assert(updatedPayment !== null);
     assertEquals(updatedPayment.method.type, "bank_transfer");
-    assertEquals((updatedPayment.method as { iban: string }).iban, "FR7630001007941234567890185");
+    assertEquals(
+      (updatedPayment.method as { iban: string }).iban,
+      "FR7630001007941234567890185",
+    );
 
     // Card fields should NOT exist
-    assertEquals((updatedPayment.method as { cardNumber?: string }).cardNumber, undefined);
-    assertEquals((updatedPayment.method as { expiry?: string }).expiry, undefined);
+    assertEquals(
+      (updatedPayment.method as { cardNumber?: string }).cardNumber,
+      undefined,
+    );
+    assertEquals(
+      (updatedPayment.method as { expiry?: string }).expiry,
+      undefined,
+    );
     assertEquals((updatedPayment.method as { cvv?: string }).cvv, undefined);
   });
 });

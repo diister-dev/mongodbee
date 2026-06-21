@@ -6,8 +6,15 @@
 
 import { blue, bold, dim, green, red, yellow } from "@std/fmt/colors";
 import type { MigrationDefinition } from "../../types.ts";
-import { createEmptyDatabaseState, type SimulationDatabaseState } from "../../types.ts";
-import { createSimulationValidator, type SimulationPowerLevel, type SimulationValidatorOptions } from "../../validators/simulation.ts";
+import {
+  createEmptyDatabaseState,
+  type SimulationDatabaseState,
+} from "../../types.ts";
+import {
+  createSimulationValidator,
+  type SimulationPowerLevel,
+  type SimulationValidatorOptions,
+} from "../../validators/simulation.ts";
 
 export interface MigrationValidationResult {
   migration: MigrationDefinition;
@@ -47,7 +54,7 @@ export interface ValidateMigrationsOptions {
 
 /**
  * Validates all migrations with simulation
- * 
+ *
  * Uses state propagation with configurable retention ratio to avoid O(n²) complexity.
  * By default, keeps 50% of the previous state and generates 50% fresh mock data
  * to balance performance with edge case coverage.
@@ -72,10 +79,20 @@ export async function validateMigrationsWithSimulation(
     ? migrations.slice(0, -lastN)
     : [];
 
-  const modeLabel = powerLevel === "quick" ? "quick" : powerLevel === "hard" ? "hard" : "normal";
-  const lastNLabel = lastN && lastN > 0 ? ` (last ${Math.min(lastN, migrations.length)})` : "";
+  const modeLabel = powerLevel === "quick"
+    ? "quick"
+    : powerLevel === "hard"
+    ? "hard"
+    : "normal";
+  const lastNLabel = lastN && lastN > 0
+    ? ` (last ${Math.min(lastN, migrations.length)})`
+    : "";
 
-  console.log(bold(`🧪 Validating migrations with simulation [${modeLabel}]${lastNLabel}...`));
+  console.log(
+    bold(
+      `🧪 Validating migrations with simulation [${modeLabel}]${lastNLabel}...`,
+    ),
+  );
   console.log();
 
   const stateRetentionRatio = options.stateRetentionRatio ?? 0.5;
@@ -111,7 +128,8 @@ export async function validateMigrationsWithSimulation(
         if (validationResult.success) {
           if (validationResult.data?.stateAfterMigration) {
             currentState = simulationValidator.prepareStateForNextMigration(
-              validationResult.data.stateAfterMigration as SimulationDatabaseState,
+              validationResult.data
+                .stateAfterMigration as SimulationDatabaseState,
               migration.schemas,
             );
           }
@@ -124,7 +142,11 @@ export async function validateMigrationsWithSimulation(
         } else {
           allValid = false;
           console.log(
-            red(`  ✗ ${migration.name} ${dim(`(${migration.id})`)} is invalid (in skipped --last N range)`),
+            red(
+              `  ✗ ${migration.name} ${
+                dim(`(${migration.id})`)
+              } is invalid (in skipped --last N range)`,
+            ),
           );
           for (const error of validationResult.errors) {
             console.log(red(`      ${error}`));
@@ -138,9 +160,15 @@ export async function validateMigrationsWithSimulation(
         }
       } catch (error) {
         allValid = false;
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage = error instanceof Error
+          ? error.message
+          : String(error);
         console.log(
-          red(`  ✗ ${migration.name} ${dim(`(${migration.id})`)} validation error (in skipped --last N range): ${errorMessage}`),
+          red(
+            `  ✗ ${migration.name} ${
+              dim(`(${migration.id})`)
+            } validation error (in skipped --last N range): ${errorMessage}`,
+          ),
         );
         results.push({
           migration,
@@ -178,9 +206,9 @@ export async function validateMigrationsWithSimulation(
 
         console.log(
           green(
-            `    ✓ Valid (${operationCount} operation${operationCount !== 1 ? "s" : ""}, ${
-              isReversible ? "reversible" : "irreversible"
-            })`,
+            `    ✓ Valid (${operationCount} operation${
+              operationCount !== 1 ? "s" : ""
+            }, ${isReversible ? "reversible" : "irreversible"})`,
           ),
         );
 
@@ -189,11 +217,12 @@ export async function validateMigrationsWithSimulation(
             console.log(yellow(`      ⚠ ${warning}`));
           }
         }
-        
+
         // Update state for next migration: apply retention ratio (keep X%, generate fresh X%)
         if (validationResult.data?.stateAfterMigration) {
           currentState = simulationValidator.prepareStateForNextMigration(
-            validationResult.data.stateAfterMigration as SimulationDatabaseState,
+            validationResult.data
+              .stateAfterMigration as SimulationDatabaseState,
             migration.schemas,
           );
         }
@@ -245,7 +274,9 @@ export async function validateMigrationsWithSimulation(
 
   if (!allValid) {
     console.log(
-      red(bold("✗ Some migrations have errors. Please fix them before applying.")),
+      red(
+        bold("✗ Some migrations have errors. Please fix them before applying."),
+      ),
     );
     throw new Error("Migration validation failed");
   }

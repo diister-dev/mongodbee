@@ -146,7 +146,9 @@ export type PartialUpdate<T> = T & { [PARTIAL_UPDATE]: true };
  * collection.updateOne(filter, { $set: { settings: partial({ theme: "dark" }) } })
  * // Result: settings.theme = "dark" (other fields preserved)
  */
-export function partial<T extends Record<string, unknown>>(obj: T): PartialUpdate<T> {
+export function partial<T extends Record<string, unknown>>(
+  obj: T,
+): PartialUpdate<T> {
   return Object.assign(obj, { [PARTIAL_UPDATE]: true as const });
 }
 
@@ -168,7 +170,10 @@ export function isPartialUpdate(value: unknown): boolean {
  * @param prefix - Internal prefix for building dot notation paths
  * @returns Object with 'set' and 'unset' fields
  */
-export function extractFieldsToRemove(obj: Record<string, unknown>, prefix = ""): {
+export function extractFieldsToRemove(
+  obj: Record<string, unknown>,
+  prefix = "",
+): {
   set: Record<string, unknown>;
   unset: Record<string, 1>;
 } {

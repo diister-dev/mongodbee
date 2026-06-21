@@ -12,7 +12,10 @@
 import { assert, assertEquals } from "@std/assert";
 import { withDatabase } from "../+shared.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
-import { migrationBuilder, getIrreversibleOperations } from "../../src/migration/builder.ts";
+import {
+  getIrreversibleOperations,
+  migrationBuilder,
+} from "../../src/migration/builder.ts";
 import { createMemoryApplier } from "../../src/migration/appliers/memory.ts";
 import { createMongodbApplier } from "../../src/migration/appliers/mongodb.ts";
 import { createEmptyDatabaseState } from "../../src/migration/types.ts";
@@ -56,14 +59,24 @@ function seed() {
   const state = createEmptyDatabaseState();
   state.collections["+expositions"] = {
     content: [
-      { _id: "exposition:A", name: "Expo A", createdBy: "user:1", modules: ["badges"] },
+      {
+        _id: "exposition:A",
+        name: "Expo A",
+        createdBy: "user:1",
+        modules: ["badges"],
+      },
       { _id: "exposition:B", name: "Expo B", createdBy: "user:2" },
     ],
   };
   state.multiModels["exposition:A"] = {
     modelType: "exposition",
     content: [
-      { _id: "information:0", _type: "information", description: "desc A", events: [] },
+      {
+        _id: "information:0",
+        _type: "information",
+        description: "desc A",
+        events: [],
+      },
       { _id: "participant:p1", _type: "participant", name: "Alice" },
       { _id: "system:0", _type: "system", version: "1.0" },
     ],
@@ -71,7 +84,12 @@ function seed() {
   state.multiModels["exposition:B"] = {
     modelType: "exposition",
     content: [
-      { _id: "information:0", _type: "information", description: "desc B", events: [] },
+      {
+        _id: "information:0",
+        _type: "information",
+        description: "desc B",
+        events: [],
+      },
       { _id: "participant:p2", _type: "participant", name: "Bob" },
       { _id: "system:0", _type: "system", version: "1.0" },
     ],
@@ -115,7 +133,10 @@ Deno.test("flowToScope: consolidates roots + instances, merges singleton, consum
   // scope B symmetric
   const scopeB = scoped.filter((d) => d._scope === "exposition:B");
   assertEquals(scopeB.filter((d) => d._type === "information").length, 1);
-  assertEquals(scopeB.find((d) => d._type === "information")!.description, "desc B");
+  assertEquals(
+    scopeB.find((d) => d._type === "information")!.description,
+    "desc B",
+  );
   assert(scopeB.some((d) => d._type === "participant" && d.name === "Bob"));
 
   // total: 2 scopes × (1 info + 1 participant + 1 system) = 6
@@ -142,7 +163,11 @@ Deno.test("flowToScope: onConflict 'error' throws on duplicate target id", async
         source: "keep",
       }).compile(),
   });
-  const ops = m.migrate(migrationBuilder({ schemas: { collections: { src: { _id: v.string() } } } })).operations;
+  const ops = m.migrate(
+    migrationBuilder({
+      schemas: { collections: { src: { _id: v.string() } } },
+    }),
+  ).operations;
 
   let threw = false;
   try {
@@ -164,7 +189,9 @@ Deno.test("mongodb flowToScope: collection → scoped, merge + consume on a real
       { _id: "exposition:B", note: "note B" },
     ] as never);
 
-    const S = { collections: { roots: { _id: v.string() }, details: { _id: v.string() } } };
+    const S = {
+      collections: { roots: { _id: v.string() }, details: { _id: v.string() } },
+    };
     const m = migrationDefinition("001", "consolidate", {
       parent: null,
       schemas: S,
@@ -188,7 +215,8 @@ Deno.test("mongodb flowToScope: collection → scoped, merge + consume on a real
           .compile(),
     });
     const ops = m.migrate(migrationBuilder({ schemas: S })).operations;
-    await createMongodbApplier(db, m, { currentMigrationId: m.id }).applyMigration(ops, "up");
+    await createMongodbApplier(db, m, { currentMigrationId: m.id })
+      .applyMigration(ops, "up");
 
     assertEquals(await db.collection("roots").countDocuments(), 0);
     assertEquals(await db.collection("details").countDocuments(), 0);

@@ -195,7 +195,11 @@ function flattenSchema(schema: any): Record<string, any> {
     if (Array.isArray(value)) {
       for (const [index, subValue] of value.entries()) {
         if (typeof subValue === "object" && subValue !== null) {
-          for (const [subKey, subSubValue] of Object.entries(flattenSchema(subValue))) {
+          for (
+            const [subKey, subSubValue] of Object.entries(
+              flattenSchema(subValue),
+            )
+          ) {
             // Skip ~standard in nested paths
             if (subKey.includes(".~standard") || subKey === "~standard") {
               continue;
@@ -349,12 +353,16 @@ export function validateLastMigrationMatchesProjectSchema(
 
       if (missingInMigration.size > 0) {
         errors.push(
-          `Collections missing in last migration: ${[...missingInMigration].sort().join(", ")}`,
+          `Collections missing in last migration: ${
+            [...missingInMigration].sort().join(", ")
+          }`,
         );
       }
       if (extraInMigration.size > 0) {
         errors.push(
-          `Extra collections detected in last migration: ${[...extraInMigration].sort().join(", ")}`,
+          `Extra collections detected in last migration: ${
+            [...extraInMigration].sort().join(", ")
+          }`,
         );
       }
 
@@ -370,7 +378,9 @@ export function validateLastMigrationMatchesProjectSchema(
             const diffs = diffSchemas(simple1, simple2);
 
             errors.push(
-              `Collection "${name}" schema differs:\n${formatSchemaDifferences(diffs)}`,
+              `Collection "${name}" schema differs:\n${
+                formatSchemaDifferences(diffs)
+              }`,
             );
           }
         }
@@ -380,7 +390,8 @@ export function validateLastMigrationMatchesProjectSchema(
 
   // Check multiCollections if they exist
   {
-    const migrationMultiCollections = lastMigration.schemas.multiCollections || {};
+    const migrationMultiCollections = lastMigration.schemas.multiCollections ||
+      {};
     const projectMultiCollections = projectSchema.multiCollections || {};
 
     if (!schemasEqual(migrationMultiCollections, projectMultiCollections)) {
@@ -392,12 +403,16 @@ export function validateLastMigrationMatchesProjectSchema(
 
       if (missingInMigration.size > 0) {
         errors.push(
-          `Multi-collections missing in last migration: ${[...missingInMigration].sort().join(", ")}`,
+          `Multi-collections missing in last migration: ${
+            [...missingInMigration].sort().join(", ")
+          }`,
         );
       }
       if (extraInMigration.size > 0) {
         errors.push(
-          `Extra multi-collections in last migration not in project schema: ${[...extraInMigration].sort().join(", ")}`,
+          `Extra multi-collections in last migration not in project schema: ${
+            [...extraInMigration].sort().join(", ")
+          }`,
         );
       }
 
@@ -410,36 +425,52 @@ export function validateLastMigrationMatchesProjectSchema(
           const migrationTypesSet = new Set(Object.keys(migrationSchema));
           const projectTypesSet = new Set(Object.keys(projectSchema));
 
-          const missingTypesInMigration = projectTypesSet.difference(migrationTypesSet);
-          const extraTypesInMigration = migrationTypesSet.difference(projectTypesSet);
+          const missingTypesInMigration = projectTypesSet.difference(
+            migrationTypesSet,
+          );
+          const extraTypesInMigration = migrationTypesSet.difference(
+            projectTypesSet,
+          );
 
           if (missingTypesInMigration.size > 0) {
             errors.push(
-              `Multi-collection "${name}" is missing types in last migration: ${[...missingTypesInMigration].sort().join(", ")}`,
+              `Multi-collection "${name}" is missing types in last migration: ${
+                [...missingTypesInMigration].sort().join(", ")
+              }`,
             );
           }
 
           if (extraTypesInMigration.size > 0) {
             errors.push(
-              `Multi-collection "${name}" has extra types in last migration not in project schema: ${[...extraTypesInMigration].sort().join(", ")}`,
+              `Multi-collection "${name}" has extra types in last migration not in project schema: ${
+                [...extraTypesInMigration].sort().join(", ")
+              }`,
             );
           }
 
-          if (missingTypesInMigration.size > 0 || extraTypesInMigration.size > 0) {
+          if (
+            missingTypesInMigration.size > 0 || extraTypesInMigration.size > 0
+          ) {
             // Skip further type comparison if types differ
             continue;
           }
 
-          const commonTypes = [...projectTypesSet.intersection(migrationTypesSet)];
-          for(const typeName of commonTypes) {
+          const commonTypes = [
+            ...projectTypesSet.intersection(migrationTypesSet),
+          ];
+          for (const typeName of commonTypes) {
             const migrationTypeSchema = migrationSchema[typeName];
             const projectTypeSchema = projectSchema[typeName];
             if (!schemasEqual(migrationTypeSchema, projectTypeSchema)) {
-              const simple1 = flattenSchema(simplifySchema(migrationTypeSchema));
+              const simple1 = flattenSchema(
+                simplifySchema(migrationTypeSchema),
+              );
               const simple2 = flattenSchema(simplifySchema(projectTypeSchema));
               const diffs = diffSchemas(simple1, simple2);
               errors.push(
-                `Multi-collection "${name}" type "${typeName}" schema differs:\n${formatSchemaDifferences(diffs)}`,
+                `Multi-collection "${name}" type "${typeName}" schema differs:\n${
+                  formatSchemaDifferences(diffs)
+                }`,
               );
             }
           }
@@ -461,12 +492,16 @@ export function validateLastMigrationMatchesProjectSchema(
 
       if (missingInMigration.size > 0) {
         errors.push(
-          `Multi-models missing in last migration: ${[...missingInMigration].sort().join(", ")}`,
+          `Multi-models missing in last migration: ${
+            [...missingInMigration].sort().join(", ")
+          }`,
         );
       }
       if (extraInMigration.size > 0) {
         errors.push(
-          `Extra multi-models in last migration not in project schema: ${[...extraInMigration].sort().join(", ")}`,
+          `Extra multi-models in last migration not in project schema: ${
+            [...extraInMigration].sort().join(", ")
+          }`,
         );
       }
 
@@ -479,35 +514,51 @@ export function validateLastMigrationMatchesProjectSchema(
           const migrationTypesSet = new Set(Object.keys(migrationSchema));
           const projectTypesSet = new Set(Object.keys(projectSchema));
 
-          const missingTypesInMigration = projectTypesSet.difference(migrationTypesSet);
-          const extraTypesInMigration = migrationTypesSet.difference(projectTypesSet);
+          const missingTypesInMigration = projectTypesSet.difference(
+            migrationTypesSet,
+          );
+          const extraTypesInMigration = migrationTypesSet.difference(
+            projectTypesSet,
+          );
 
           if (missingTypesInMigration.size > 0) {
             errors.push(
-              `Multi-model "${name}" is missing types in last migration: ${[...missingTypesInMigration].sort().join(", ")}`,
+              `Multi-model "${name}" is missing types in last migration: ${
+                [...missingTypesInMigration].sort().join(", ")
+              }`,
             );
           }
           if (extraTypesInMigration.size > 0) {
             errors.push(
-              `Multi-model "${name}" has extra types in last migration not in project schema: ${[...extraTypesInMigration].sort().join(", ")}`,
+              `Multi-model "${name}" has extra types in last migration not in project schema: ${
+                [...extraTypesInMigration].sort().join(", ")
+              }`,
             );
           }
 
-          if (missingTypesInMigration.size > 0 || extraTypesInMigration.size > 0) {
+          if (
+            missingTypesInMigration.size > 0 || extraTypesInMigration.size > 0
+          ) {
             // Skip further type comparison if types differ
             continue;
           }
 
-          const commonTypes = [...projectTypesSet.intersection(migrationTypesSet)];
-          for(const typeName of commonTypes) {
+          const commonTypes = [
+            ...projectTypesSet.intersection(migrationTypesSet),
+          ];
+          for (const typeName of commonTypes) {
             const migrationTypeSchema = migrationSchema[typeName];
             const projectTypeSchema = projectSchema[typeName];
             if (!schemasEqual(migrationTypeSchema, projectTypeSchema)) {
-              const simple1 = flattenSchema(simplifySchema(migrationTypeSchema));
+              const simple1 = flattenSchema(
+                simplifySchema(migrationTypeSchema),
+              );
               const simple2 = flattenSchema(simplifySchema(projectTypeSchema));
               const diffs = diffSchemas(simple1, simple2);
               errors.push(
-                `Multi-model "${name}" type "${typeName}" schema differs:\n${formatSchemaDifferences(diffs)}`,
+                `Multi-model "${name}" type "${typeName}" schema differs:\n${
+                  formatSchemaDifferences(diffs)
+                }`,
               );
             }
           }
@@ -558,9 +609,12 @@ export async function validateMigrationChainWithProjectSchema(
   }
 
   // Check if project schema is empty
-  const hasCollections = Object.keys(projectSchema.collections ?? {}).length > 0;
-  const hasMultiCollections = Object.keys(projectSchema.multiCollections || {}).length > 0;
-  const hasMultiModels = Object.keys(projectSchema.multiModels || {}).length > 0;
+  const hasCollections =
+    Object.keys(projectSchema.collections ?? {}).length > 0;
+  const hasMultiCollections =
+    Object.keys(projectSchema.multiCollections || {}).length > 0;
+  const hasMultiModels =
+    Object.keys(projectSchema.multiModels || {}).length > 0;
 
   if (!hasCollections && !hasMultiModels && !hasMultiCollections) {
     warnings.push("Project schema is empty. Define your schemas in schemas.ts");

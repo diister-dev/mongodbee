@@ -24,7 +24,8 @@ import {
 import * as v from "../../src/schema.ts";
 
 const INSTANCE = "events:legacy";
-const MIGRATION_ID = "2025_01_01_0000_AAAAAAAAAAAAAAAAAAAAAAAAAA@create_instance";
+const MIGRATION_ID =
+  "2025_01_01_0000_AAAAAAAAAAAAAAAAAAAAAAAAAA@create_instance";
 
 const S = {
   collections: {},
@@ -59,7 +60,8 @@ Deno.test("create_multimodel_instance: a pre-existing un-registered collection s
 
     const m = createInstanceMigration();
     const ops = m.migrate(migrationBuilder({ schemas: S })).operations;
-    await createMongodbApplier(db, m, { currentMigrationId: m.id }).applyMigration(ops, "up");
+    await createMongodbApplier(db, m, { currentMigrationId: m.id })
+      .applyMigration(ops, "up");
 
     // The instance must now be registered (the `_information` doc was written).
     assertEquals(
@@ -74,7 +76,9 @@ Deno.test("create_multimodel_instance: a pre-existing un-registered collection s
     ) as { appliedMigrations?: Array<{ id: string }> } | null;
     assert(migrationsDoc, "_migrations bookkeeping doc should exist");
     assert(
-      (migrationsDoc!.appliedMigrations ?? []).some((x) => x.id === MIGRATION_ID),
+      (migrationsDoc!.appliedMigrations ?? []).some((x) =>
+        x.id === MIGRATION_ID
+      ),
       "the creating migration should be recorded in the instance history",
     );
   });
@@ -84,7 +88,8 @@ Deno.test("create_multimodel_instance: fresh creation still registers (no regres
   await withDatabase("create-mmi-fresh", async (db) => {
     const m = createInstanceMigration();
     const ops = m.migrate(migrationBuilder({ schemas: S })).operations;
-    await createMongodbApplier(db, m, { currentMigrationId: m.id }).applyMigration(ops, "up");
+    await createMongodbApplier(db, m, { currentMigrationId: m.id })
+      .applyMigration(ops, "up");
 
     assertEquals(await multiCollectionInstanceExists(db, INSTANCE), true);
   });

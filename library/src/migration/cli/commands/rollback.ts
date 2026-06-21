@@ -112,7 +112,9 @@ export async function rollbackCommand(
     // does not override this: there is no valid down() to run.
     const irreversibleOps = getIrreversibleOperations(state.operations);
     if (irreversibleOps.length > 0) {
-      console.log(red("✗  This migration is IRREVERSIBLE and cannot be rolled back."));
+      console.log(
+        red("✗  This migration is IRREVERSIBLE and cannot be rolled back."),
+      );
       console.log(red("   Irreversible operation(s):"));
       for (const op of irreversibleOps) {
         console.log(red(`   - ${opLabel(op)}`));
@@ -165,7 +167,7 @@ export async function rollbackCommand(
       // - Collections
       // - Multi-collections
       // - Multi-model instances (with automatic history recording)
-      await applier.applyMigration(state.operations, 'down');
+      await applier.applyMigration(state.operations, "down");
 
       // Mark as reverted in global history
       await markMigrationAsReverted(db, migrationToRollback.id);

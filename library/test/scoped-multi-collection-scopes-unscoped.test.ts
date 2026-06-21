@@ -8,7 +8,10 @@ const EXPO_A = "exposition:expoaaaaa01";
 const EXPO_B = "exposition:expobbbbb02";
 const EXPO_C = "exposition:expoccccc03";
 
-async function seed(db: Parameters<Parameters<typeof withDatabase>[1]>[0], opts?: { allowUnscoped?: boolean }) {
+async function seed(
+  db: Parameters<Parameters<typeof withDatabase>[1]>[0],
+  opts?: { allowUnscoped?: boolean },
+) {
   const catalog = await scopedMultiCollection(db, "catalog", {
     scope: refId("exposition"),
     types: {

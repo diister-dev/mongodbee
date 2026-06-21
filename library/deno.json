@@ -3,6 +3,7 @@
   "version": "0.23.0-beta.2",
   "license": "MIT",
   "imports": {
+    "@std/expect": "jsr:@std/expect@^1.0.19",
     "@std/ulid": "jsr:@std/ulid@1.0.0",
     "@std/cli": "jsr:@std/cli@1.0.29",
     "@std/fmt": "jsr:@std/fmt@1.0.10",
@@ -29,8 +30,18 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true
   },
+  "fmt": {
+    "exclude": ["**/*.md"]
+  },
+  "lint": {
+    "rules": {
+      "exclude": ["no-explicit-any", "require-await"]
+    }
+  },
   "tasks": {
     "check": "deno check mod.ts schema.ts session.ts src/ids.ts src/indexes.ts src/schema-navigator.ts src/types.ts src/migration/mod.ts src/migration/cli/mod.ts src/migration/cli/bin.ts",
+    "lint": "deno lint",
+    "fmt:check": "deno fmt --check",
     "test": "deno test -A --parallel --quiet",
     "test:leaks": "deno test -A --parallel --quiet --trace-leaks",
     "migrate": "deno run --allow-read --allow-write --allow-net --allow-env src/migration/cli/bin.ts",

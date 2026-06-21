@@ -13,10 +13,7 @@ import { MongoClient } from "../../../mongodb.ts";
 import * as path from "@std/path";
 
 import { loadConfig } from "../../config/loader.ts";
-import {
-  buildMigrationChain,
-  loadAllMigrations,
-} from "../../discovery.ts";
+import { buildMigrationChain, loadAllMigrations } from "../../discovery.ts";
 import { getAppliedMigrationIds } from "../../state.ts";
 import { createMongodbApplier } from "../../appliers/mongodb.ts";
 
@@ -188,7 +185,9 @@ export async function syncCommand(
     console.log(green(bold("✓ Synchronization complete!")));
     console.log();
     console.log(
-      dim("All schemas and indexes are now up to date with the latest migration."),
+      dim(
+        "All schemas and indexes are now up to date with the latest migration.",
+      ),
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

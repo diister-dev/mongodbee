@@ -5,6 +5,7 @@
  */
 
 import * as readline from "node:readline";
+import process from "node:process";
 import { dim, yellow } from "@std/fmt/colors";
 
 /**

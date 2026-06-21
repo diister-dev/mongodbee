@@ -16,7 +16,10 @@ import {
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import * as v from "../../src/schema.ts";
 
-function makeMigration(id: string, parent: ReturnType<typeof migrationDefinition> | null) {
+function makeMigration(
+  id: string,
+  parent: ReturnType<typeof migrationDefinition> | null,
+) {
   return migrationDefinition(id, `m-${id}`, {
     parent,
     schemas: { collections: { foo: { _id: v.string() } } },

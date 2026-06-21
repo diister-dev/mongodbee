@@ -346,7 +346,10 @@ Deno.test("Database drop and recreate test", async (t) => {
     // Drop the entire database
     await db.dropDatabase();
 
-    users = await collection(db, "users", userSchema, { enableWatching: true, schemaManagement: "auto" });
+    users = await collection(db, "users", userSchema, {
+      enableWatching: true,
+      schemaManagement: "auto",
+    });
 
     // Register event listeners again
     users.on("insert", () => {

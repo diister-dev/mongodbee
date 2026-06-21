@@ -96,7 +96,7 @@ export async function detectInstancesNeedingCatchUp(
         // Instance has migrations - check which ones are missing
         // Since migrations are now recorded on ALL instances (even if not affected),
         // we can simply compare the applied IDs with globally applied IDs
-        
+
         // Get only migrations with "applied" status (excludes reverted/failed).
         // Reuse the `_migrations` doc already fetched above instead of issuing a
         // second findOne for the same document (the old double-fetch).
@@ -107,7 +107,7 @@ export async function detectInstancesNeedingCatchUp(
 
         // Find the migration when this instance was created
         const instanceCreationMigration = allMigrations.find(
-          (m) => m.id === migrationsDoc.fromMigrationId
+          (m) => m.id === migrationsDoc.fromMigrationId,
         );
 
         missingMigrationIds = allMigrations
@@ -118,15 +118,15 @@ export async function detectInstancesNeedingCatchUp(
             if (!instanceCreationMigration) {
               console.warn(
                 `Could not find creation migration ${migrationsDoc.fromMigrationId} for instance ${collectionName}. ` +
-                `This instance may need manual review.`
+                  `This instance may need manual review.`,
               );
               return true;
             }
-            
+
             // Instance should receive migrations that happened at or after its creation
             return shouldInstanceReceiveMigrationByChain(
               instanceCreationMigration,
-              m
+              m,
             );
           })
           .filter((m) => !appliedSet.has(m.id))
@@ -201,15 +201,15 @@ function hasMigrationForModelType(
 
   // Having the schema is not enough - we need to check if there are actual operations
   // Generate operations by executing the migration
-  const builder = migrationBuilder({ 
+  const builder = migrationBuilder({
     schemas: migration.schemas,
     parentSchemas: migration.parent?.schemas,
   });
   const state = migration.migrate(builder);
-  
+
   // Filter operations for this model type
   const relevantOps = filterOperationsForModelType(state.operations, modelType);
-  
+
   // Only return true if there are actual operations
   return relevantOps.length > 0;
 }

@@ -19,7 +19,10 @@ Deno.test("auto-index: { _scope: 1, _type: 1 } is created at init", async () => 
     const found = idx.find((i) =>
       i.key && i.key._scope === 1 && i.key._type === 1
     );
-    assert(found, `expected {_scope:1,_type:1} index, got ${JSON.stringify(idx)}`);
+    assert(
+      found,
+      `expected {_scope:1,_type:1} index, got ${JSON.stringify(idx)}`,
+    );
   });
 });
 

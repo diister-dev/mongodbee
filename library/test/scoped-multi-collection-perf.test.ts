@@ -14,7 +14,7 @@ import * as v from "../src/schema.ts";
 import { refId } from "../src/ids.ts";
 import { withIndex } from "../src/indexes.ts";
 
-const SCOPES = 30;       // distinct expositions
+const SCOPES = 30; // distinct expositions
 const DOCS_PER_SCOPE = 50;
 const QUERY_ITERATIONS = 5;
 
@@ -59,7 +59,9 @@ Deno.test({
       const setupA = await measure(
         `setup ${SCOPES} multiCollections`,
         async () => {
-          const collections: Array<Awaited<ReturnType<typeof multiCollection>>> = [];
+          const collections: Array<
+            Awaited<ReturnType<typeof multiCollection>>
+          > = [];
           for (let i = 0; i < SCOPES; i++) {
             collections.push(
               // deno-lint-ignore no-explicit-any
@@ -140,28 +142,44 @@ Deno.test({
       const totalDocs = SCOPES * DOCS_PER_SCOPE;
       console.log("");
       console.log("=".repeat(72));
-      console.log(`PERF: ${SCOPES} scopes × ${DOCS_PER_SCOPE} docs = ${totalDocs} docs total`);
+      console.log(
+        `PERF: ${SCOPES} scopes × ${DOCS_PER_SCOPE} docs = ${totalDocs} docs total`,
+      );
       console.log("=".repeat(72));
-      console.log("                                            multiColl  | scopedColl");
+      console.log(
+        "                                            multiColl  | scopedColl",
+      );
       console.log("-".repeat(72));
       console.log(
-        `setup                                       ${fmt(setupA.ms)}  | ${fmt(setupB.ms)}`,
+        `setup                                       ${fmt(setupA.ms)}  | ${
+          fmt(setupB.ms)
+        }`,
       );
       console.log(
-        `insert ${totalDocs} docs                            ${fmt(insertA.ms)}  | ${fmt(insertB.ms)}`,
+        `insert ${totalDocs} docs                            ${
+          fmt(insertA.ms)
+        }  | ${fmt(insertB.ms)}`,
       );
       console.log(
-        `query 1 scope × ${QUERY_ITERATIONS} iterations              ${fmt(queryA.ms)}  | ${fmt(queryB.ms)}`,
+        `query 1 scope × ${QUERY_ITERATIONS} iterations              ${
+          fmt(queryA.ms)
+        }  | ${fmt(queryB.ms)}`,
       );
       console.log(
-        `indexes total                              ${String(totalIndexesA).padStart(8)}   |   ${String(indexesB.length).padStart(6)}`,
+        `indexes total                              ${
+          String(totalIndexesA).padStart(8)
+        }   |   ${String(indexesB.length).padStart(6)}`,
       );
       console.log("=".repeat(72));
       console.log(
-        `setup ratio:  scopedColl is ${(setupA.ms / setupB.ms).toFixed(1)}× faster`,
+        `setup ratio:  scopedColl is ${
+          (setupA.ms / setupB.ms).toFixed(1)
+        }× faster`,
       );
       console.log(
-        `index count : scopedColl uses ${(totalIndexesA / indexesB.length).toFixed(1)}× fewer indexes`,
+        `index count : scopedColl uses ${
+          (totalIndexesA / indexesB.length).toFixed(1)
+        }× fewer indexes`,
       );
       console.log("");
     });

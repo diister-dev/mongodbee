@@ -22,7 +22,11 @@ import * as v from "../../src/schema.ts";
 
 const SCHEMAS = {
   collections: {
-    users: { _id: v.string(), name: v.string(), secret: v.optional(v.string()) },
+    users: {
+      _id: v.string(),
+      name: v.string(),
+      secret: v.optional(v.string()),
+    },
   },
 };
 
@@ -41,7 +45,10 @@ function buildOps() {
         .end()
         .compile(),
   });
-  return { m, ops: m.migrate(migrationBuilder({ schemas: SCHEMAS })).operations };
+  return {
+    m,
+    ops: m.migrate(migrationBuilder({ schemas: SCHEMAS })).operations,
+  };
 }
 
 Deno.test("getIrreversibleOperations / getLossyOperations detect flagged ops", () => {

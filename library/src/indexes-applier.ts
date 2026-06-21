@@ -55,7 +55,7 @@ export interface ApplyIndexesOptions {
 export async function applyCollectionIndexes(
   collection: m.Collection<any>,
   schema: v.ObjectSchema<any, any>,
-  options: ApplyIndexesOptions = {}
+  options: ApplyIndexesOptions = {},
 ): Promise<void> {
   const currentIndexes = await collection.indexes();
   const indexes = extractIndexes(schema);
@@ -76,7 +76,7 @@ export async function applyCollectionIndexes(
 
   // Get all possible field paths from the current schema to detect potential mongodbee indexes
   const allSchemaPaths = new Set<string>();
-  function collectPaths(obj: Object, prefix = "") {
+  function collectPaths(obj: Record<string, unknown>, prefix = "") {
     for (const [key, value] of Object.entries(obj)) {
       const fullPath = prefix ? `${prefix}.${key}` : key;
       const sanitizedPath = sanitizePathName(fullPath);
@@ -149,22 +149,23 @@ export async function applyCollectionIndexes(
   // Drop indexes
   if (indexesToDrop.length > 0) {
     const dropPromises = indexesToDrop.map((indexName) => {
-      const dropFn = () => collection.dropIndex(indexName).catch((err: unknown) => {
-        // tolerate race / already dropped
-        if (
-          err instanceof m.MongoServerError &&
-          err.codeName === "IndexNotFound"
-        ) {
-          // ignore
-          return;
-        }
-        const maybe = err as { code?: number };
-        if (maybe.code === 27) {
-          // legacy IndexNotFound code
-          return;
-        }
-        throw err;
-      });
+      const dropFn = () =>
+        collection.dropIndex(indexName).catch((err: unknown) => {
+          // tolerate race / already dropped
+          if (
+            err instanceof m.MongoServerError &&
+            err.codeName === "IndexNotFound"
+          ) {
+            // ignore
+            return;
+          }
+          const maybe = err as { code?: number };
+          if (maybe.code === 27) {
+            // legacy IndexNotFound code
+            return;
+          }
+          throw err;
+        });
 
       return options.queue ? options.queue.add(dropFn) : dropFn();
     });
@@ -175,10 +176,11 @@ export async function applyCollectionIndexes(
   // Create indexes
   if (indexesToCreate.length > 0) {
     const createPromises = indexesToCreate.map((indexSpec) => {
-      const createFn = () => collection.createIndex(
-        indexSpec.key,
-        indexSpec.options,
-      );
+      const createFn = () =>
+        collection.createIndex(
+          indexSpec.key,
+          indexSpec.options,
+        );
 
       return options.queue ? options.queue.add(createFn) : createFn();
     });
@@ -248,23 +250,28 @@ export async function applyCollectionIndexes(
 export async function applyScopedMultiCollectionIndexes(
   collection: m.Collection<any>,
   schemasPerType: Record<string, v.ObjectSchema<any, any>>,
-  options: ApplyIndexesOptions = {}
+  options: ApplyIndexesOptions = {},
 ): Promise<void> {
   const collName = collection.collectionName;
-  log.debug(`applyScopedMultiCollectionIndexes(${collName}): list current indexes`);
+  log.debug(
+    `applyScopedMultiCollectionIndexes(${collName}): list current indexes`,
+  );
   const currentIndexes = await collection.indexes();
 
   // Always-on base index : {_scope: 1, _type: 1}.
   const baseIndexName = "_scope_1__type_1";
   const hasBaseIndex = currentIndexes.some(
-    (i) => i.name === baseIndexName ||
-      (i.key?._scope === 1 && i.key?._type === 1 && Object.keys(i.key).length === 2),
+    (i) =>
+      i.name === baseIndexName ||
+      (i.key?._scope === 1 && i.key?._type === 1 &&
+        Object.keys(i.key).length === 2),
   );
   if (!hasBaseIndex) {
-    const createFn = () => collection.createIndex(
-      { _scope: 1, _type: 1 },
-      { name: baseIndexName },
-    );
+    const createFn = () =>
+      collection.createIndex(
+        { _scope: 1, _type: 1 },
+        { name: baseIndexName },
+      );
     if (options.queue) await options.queue.add(createFn);
     else await createFn();
   }
@@ -287,7 +294,9 @@ export async function applyScopedMultiCollectionIndexes(
   for (const { typeName, indexes } of declaredPerType) {
     for (const idx of indexes) {
       const isGlobal = idx.metadata.global === true;
-      const prefix = isGlobal ? `__type_${typeName}` : `_scope__type_${typeName}`;
+      const prefix = isGlobal
+        ? `__type_${typeName}`
+        : `_scope__type_${typeName}`;
       expectedNames.add(`${prefix}_${sanitizePathName(idx.path)}`);
     }
   }
@@ -367,14 +376,17 @@ export async function applyScopedMultiCollectionIndexes(
 
   if (indexesToDrop.length > 0) {
     const dropPromises = indexesToDrop.map((name) => {
-      const dropFn = () => collection.dropIndex(name).catch((e) => {
-        if (e instanceof m.MongoServerError && e.codeName === "IndexNotFound") {
-          return;
-        }
-        const maybe = e as { code?: number };
-        if (maybe.code === 27) return;
-        throw e;
-      });
+      const dropFn = () =>
+        collection.dropIndex(name).catch((e) => {
+          if (
+            e instanceof m.MongoServerError && e.codeName === "IndexNotFound"
+          ) {
+            return;
+          }
+          const maybe = e as { code?: number };
+          if (maybe.code === 27) return;
+          throw e;
+        });
       return options.queue ? options.queue.add(dropFn) : dropFn();
     });
     await Promise.all(dropPromises);
@@ -392,12 +404,14 @@ export async function applyScopedMultiCollectionIndexes(
 export async function applyMultiCollectionIndexes(
   collection: m.Collection<any>,
   schemasPerType: Record<string, v.ObjectSchema<any, any>>,
-  options: ApplyIndexesOptions = {}
+  options: ApplyIndexesOptions = {},
 ): Promise<void> {
   const collName = collection.collectionName;
   log.debug(`applyMultiCollectionIndexes(${collName}): list current indexes`);
   const currentIndexes = await collection.indexes();
-  log.debug(`applyMultiCollectionIndexes(${collName}): found ${currentIndexes.length} existing indexes`);
+  log.debug(
+    `applyMultiCollectionIndexes(${collName}): found ${currentIndexes.length} existing indexes`,
+  );
 
   // Ensure _type index exists - this is critical for multi-collection performance
   // All queries filter by _type, and partial indexes depend on efficient _type filtering
@@ -406,10 +420,11 @@ export async function applyMultiCollectionIndexes(
 
   if (!hasTypeIndex) {
     log.debug(`applyMultiCollectionIndexes(${collName}): create _type index`);
-    const createFn = () => collection.createIndex(
-      { _type: 1 },
-      { name: typeIndexName }
-    );
+    const createFn = () =>
+      collection.createIndex(
+        { _type: 1 },
+        { name: typeIndexName },
+      );
 
     if (options.queue) {
       await options.queue.add(createFn);
@@ -420,23 +435,25 @@ export async function applyMultiCollectionIndexes(
   }
 
   // Extract indexes for all types
-  const allIndexes = Object.entries(schemasPerType).map(([type, typeSchema]) => {
-    // Wrap the type schema to include _type field
-    const schemaWithType = {
-      _type: { type: "literal" } as any, // Simplified for extraction
-      ...(typeSchema as any).entries,
-    };
-    const wrappedSchema = {
-      ...typeSchema,
-      entries: schemaWithType
-    } as v.ObjectSchema<any, any>;
+  const allIndexes = Object.entries(schemasPerType).map(
+    ([type, typeSchema]) => {
+      // Wrap the type schema to include _type field
+      const schemaWithType = {
+        _type: { type: "literal" } as any, // Simplified for extraction
+        ...(typeSchema as any).entries,
+      };
+      const wrappedSchema = {
+        ...typeSchema,
+        entries: schemaWithType,
+      } as v.ObjectSchema<any, any>;
 
-    const indexes = extractIndexes(wrappedSchema);
-    return {
-      type,
-      indexes,
-    };
-  });
+      const indexes = extractIndexes(wrappedSchema);
+      return {
+        type,
+        indexes,
+      };
+    },
+  );
 
   // Collect all indexes that need to be created or recreated
   const indexesToCreate: Array<{
@@ -476,9 +493,8 @@ export async function applyMultiCollectionIndexes(
       const keySpec = { [index.path]: 1 };
       const indexName = sanitizePathName(`${type}_${index.path}`);
 
-      const existingIndex = currentIndexes.find((i) =>
-        i.name === indexName
-      ) || currentIndexes.find((i) => keyEqual(i.key || {}, keySpec));
+      const existingIndex = currentIndexes.find((i) => i.name === indexName) ||
+        currentIndexes.find((i) => keyEqual(i.key || {}, keySpec));
 
       // partialFilterExpression is needed to scope unique constraints by type
       // e.g., two different types can have the same value on a unique field.
@@ -530,23 +546,28 @@ export async function applyMultiCollectionIndexes(
 
   // Drop indexes
   if (indexesToDrop.length > 0) {
-    log.debug(`applyMultiCollectionIndexes(${collName}): dropping ${indexesToDrop.length} indexes: ${indexesToDrop.join(", ")}`);
+    log.debug(
+      `applyMultiCollectionIndexes(${collName}): dropping ${indexesToDrop.length} indexes: ${
+        indexesToDrop.join(", ")
+      }`,
+    );
     const dropPromises = indexesToDrop.map((indexName) => {
-      const dropFn = () => collection.dropIndex(indexName).catch((e) => {
-        // tolerate index already dropped
-        if (
-          e instanceof m.MongoServerError && e.codeName === "IndexNotFound"
-        ) {
-          // already gone, continue
-          return;
-        }
-        const maybe = e as { code?: number };
-        if (maybe.code === 27) {
-          // legacy code
-          return;
-        }
-        throw e;
-      });
+      const dropFn = () =>
+        collection.dropIndex(indexName).catch((e) => {
+          // tolerate index already dropped
+          if (
+            e instanceof m.MongoServerError && e.codeName === "IndexNotFound"
+          ) {
+            // already gone, continue
+            return;
+          }
+          const maybe = e as { code?: number };
+          if (maybe.code === 27) {
+            // legacy code
+            return;
+          }
+          throw e;
+        });
 
       return options.queue ? options.queue.add(dropFn) : dropFn();
     });
@@ -562,10 +583,11 @@ export async function applyMultiCollectionIndexes(
       indexesToCreate.map((i) => i.options.name).join(", "),
     );
     const createPromises = indexesToCreate.map((indexSpec) => {
-      const createFn = () => collection.createIndex(
-        indexSpec.key,
-        indexSpec.options,
-      );
+      const createFn = () =>
+        collection.createIndex(
+          indexSpec.key,
+          indexSpec.options,
+        );
 
       return options.queue ? options.queue.add(createFn) : createFn();
     });

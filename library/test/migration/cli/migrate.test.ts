@@ -204,11 +204,14 @@ Deno.test("migrate - handles migrations with actual operations", async () => {
       assert(content !== null);
 
       content = `import * as v from "valibot";\n` + content;
-      content = content.replace(`collections: {`, `collections: {
+      content = content.replace(
+        `collections: {`,
+        `collections: {
         users: {
           name: v.string(),
         }
-      `);
+      `,
+      );
       // Add a createCollection operation
       content = content.replace(
         "migrate(migration) {",
@@ -302,7 +305,11 @@ Deno.test("migrate - uses custom config path when provided", async () => {
       await generateCommand({ name: "test", cwd: tempDir });
 
       // Apply with custom config path
-      await migrateCommand({ configPath: "./custom.config.ts", cwd: tempDir, force: true });
+      await migrateCommand({
+        configPath: "./custom.config.ts",
+        cwd: tempDir,
+        force: true,
+      });
 
       // Check migration was applied
       const appliedIds = await getAppliedMigrationIds(db);

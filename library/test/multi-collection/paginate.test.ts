@@ -494,8 +494,11 @@ Deno.test("Multi-collection paginate with custom sort and afterId", async (t) =>
     // Verify no overlap between pages
     const firstPageIds = new Set(firstPage.data.map((item) => item._id));
     for (const item of secondPage.data) {
-      assertEquals(firstPageIds.has(item._id), false,
-        "Second page should not contain items from first page");
+      assertEquals(
+        firstPageIds.has(item._id),
+        false,
+        "Second page should not contain items from first page",
+      );
     }
   });
 });
@@ -550,8 +553,8 @@ Deno.test("Multi-collection paginate with custom sort and beforeId", async (t) =
 
     // With beforeId, items are returned in the SAME order as forward pagination
     assertEquals(beforePage.data[0].score, 100); // VeryHigh
-    assertEquals(beforePage.data[1].score, 90);  // High
-    assertEquals(beforePage.data[2].score, 70);  // MediumHigh (closest to anchor)
+    assertEquals(beforePage.data[1].score, 90); // High
+    assertEquals(beforePage.data[2].score, 70); // MediumHigh (closest to anchor)
   });
 });
 
@@ -626,7 +629,10 @@ Deno.test("Multi-collection paginate with _id descending sort", async (t) => {
 
     // Insert 10 products
     for (let i = 1; i <= 10; i++) {
-      await catalog.insertOne("product", { name: `Product ${i}`, value: i * 10 });
+      await catalog.insertOne("product", {
+        name: `Product ${i}`,
+        value: i * 10,
+      });
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
 
@@ -665,8 +671,11 @@ Deno.test("Multi-collection paginate with _id descending sort", async (t) => {
 
     // Verify no duplicates
     for (const item of secondPage.data) {
-      assertEquals(firstPageIds.has(item._id), false,
-        `Duplicate found: ${item.name} appears in both pages`);
+      assertEquals(
+        firstPageIds.has(item._id),
+        false,
+        `Duplicate found: ${item.name} appears in both pages`,
+      );
     }
 
     // Third page
@@ -685,10 +694,16 @@ Deno.test("Multi-collection paginate with _id descending sort", async (t) => {
     // Verify no duplicates with previous pages
     const secondPageIds = new Set(secondPage.data.map((item) => item._id));
     for (const item of thirdPage.data) {
-      assertEquals(firstPageIds.has(item._id), false,
-        `Duplicate found: ${item.name} appears in first page`);
-      assertEquals(secondPageIds.has(item._id), false,
-        `Duplicate found: ${item.name} appears in second page`);
+      assertEquals(
+        firstPageIds.has(item._id),
+        false,
+        `Duplicate found: ${item.name} appears in first page`,
+      );
+      assertEquals(
+        secondPageIds.has(item._id),
+        false,
+        `Duplicate found: ${item.name} appears in second page`,
+      );
     }
   });
 });
@@ -708,7 +723,10 @@ Deno.test("Multi-collection paginate with duplicate sort values", async (t) => {
 
     // Insert products where all have the same category (duplicate sort values)
     for (let i = 1; i <= 6; i++) {
-      await catalog.insertOne("product", { name: `Product ${i}`, category: "same" });
+      await catalog.insertOne("product", {
+        name: `Product ${i}`,
+        category: "same",
+      });
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
 
@@ -736,16 +754,22 @@ Deno.test("Multi-collection paginate with duplicate sort values", async (t) => {
     // Verify no overlap between pages
     const secondPageNames = secondPage.data.map((item) => item.name);
     for (const name of secondPageNames) {
-      assertEquals(firstPageNames.includes(name), false,
-        `Product "${name}" appears in both pages - duplicate detected`);
+      assertEquals(
+        firstPageNames.includes(name),
+        false,
+        `Product "${name}" appears in both pages - duplicate detected`,
+      );
     }
 
     // Verify all 6 items are covered
     const allNames = [...firstPageNames, ...secondPageNames];
     assertEquals(allNames.length, 6);
     for (let i = 1; i <= 6; i++) {
-      assertEquals(allNames.includes(`Product ${i}`), true,
-        `Product ${i} is missing from pagination results`);
+      assertEquals(
+        allNames.includes(`Product ${i}`),
+        true,
+        `Product ${i} is missing from pagination results`,
+      );
     }
   });
 });
@@ -800,8 +824,13 @@ Deno.test("Multi-collection paginate with duplicate sort values and beforeId", a
     const expectedNames = allItems.data.slice(0, 3).map((item) => item.name);
 
     for (let i = 0; i < 3; i++) {
-      assertEquals(beforeNames[i], expectedNames[i],
-        `Position ${i}: expected "${expectedNames[i]}" but got "${beforeNames[i]}"`);
+      assertEquals(
+        beforeNames[i],
+        expectedNames[i],
+        `Position ${i}: expected "${expectedNames[i]}" but got "${
+          beforeNames[i]
+        }"`,
+      );
     }
   });
 });
@@ -821,7 +850,10 @@ Deno.test("Multi-collection paginate with _id descending sort and beforeId", asy
 
     // Insert 10 products
     for (let i = 1; i <= 10; i++) {
-      await catalog.insertOne("product", { name: `Product ${i}`, value: i * 10 });
+      await catalog.insertOne("product", {
+        name: `Product ${i}`,
+        value: i * 10,
+      });
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
 
@@ -867,7 +899,10 @@ Deno.test("Multi-collection paginate accumulation with _id descending - no dupli
 
     // Insert 25 products
     for (let i = 1; i <= 25; i++) {
-      await catalog.insertOne("product", { name: `Product ${i}`, value: i * 10 });
+      await catalog.insertOne("product", {
+        name: `Product ${i}`,
+        value: i * 10,
+      });
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
 
@@ -941,7 +976,11 @@ Deno.test("Multi-collection paginate accumulation with _id descending - no dupli
     }
 
     // Verify we got all 25 items with no duplicates
-    assertEquals(allCollectedIds.length, 25, `Expected 25 items but got ${allCollectedIds.length}`);
+    assertEquals(
+      allCollectedIds.length,
+      25,
+      `Expected 25 items but got ${allCollectedIds.length}`,
+    );
 
     // Verify order is correct (descending)
     assertEquals(allCollectedNames[0], "Product 25");
@@ -949,7 +988,11 @@ Deno.test("Multi-collection paginate accumulation with _id descending - no dupli
 
     // Verify no duplicates using Set
     const uniqueIds = new Set(allCollectedIds);
-    assertEquals(uniqueIds.size, 25, "There are duplicate IDs in the accumulated results");
+    assertEquals(
+      uniqueIds.size,
+      25,
+      "There are duplicate IDs in the accumulated results",
+    );
   });
 });
 
@@ -1014,7 +1057,11 @@ Deno.test("Multi-collection paginate with nested field sort", async (t) => {
     // Verify no duplicates between pages
     const page1Ids = new Set(page1.data.map((item) => item._id));
     for (const item of page2.data) {
-      assertEquals(page1Ids.has(item._id), false, `Duplicate found: ${item.data.email}`);
+      assertEquals(
+        page1Ids.has(item._id),
+        false,
+        `Duplicate found: ${item.data.email}`,
+      );
     }
   });
 });
@@ -1080,7 +1127,11 @@ Deno.test("Multi-collection paginate with nested field sort descending", async (
     // Verify no duplicates between pages
     const page1Ids = new Set(page1.data.map((item) => item._id));
     for (const item of page2.data) {
-      assertEquals(page1Ids.has(item._id), false, `Duplicate found: ${item.data.email}`);
+      assertEquals(
+        page1Ids.has(item._id),
+        false,
+        `Duplicate found: ${item.data.email}`,
+      );
     }
   });
 });

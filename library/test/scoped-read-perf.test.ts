@@ -72,7 +72,9 @@ Deno.test({
         await view.insertMany("artwork", docs.slice(i, i + 1000));
       }
       console.log(
-        `  seeded ${DOCS} docs in ${((performance.now() - tSeed) / 1000).toFixed(1)}s`,
+        `  seeded ${DOCS} docs in ${
+          ((performance.now() - tSeed) / 1000).toFixed(1)
+        }s`,
       );
 
       const rawColl = db.collection("readbench");
@@ -83,7 +85,9 @@ Deno.test({
       // A — validated (current default)
       const tA = performance.now();
       let lastLenA = 0;
-      for (let k = 0; k < ITERS; k++) lastLenA = (await view.find("artwork", {})).length;
+      for (let k = 0; k < ITERS; k++) {
+        lastLenA = (await view.find("artwork", {})).length;
+      }
       const msA = performance.now() - tA;
 
       // B — raw driver read (no parse) — the floor
@@ -111,16 +115,31 @@ Deno.test({
       const tD = performance.now();
       let lastLenD = 0;
       for (let k = 0; k < ITERS; k++) {
-        lastLenD = (await view.findProject("artwork", ["title", "year"])).length;
+        lastLenD =
+          (await view.findProject("artwork", ["title", "year"])).length;
       }
       const msD = performance.now() - tD;
 
       const totalA = lastLenA * ITERS;
       console.log("-".repeat(72));
-      console.log(`  A validated        : ${fmt(msA, totalA)}  (${lastLenA} docs/read)`);
-      console.log(`  B raw floor        : ${fmt(msB, lastLenB * ITERS)}  (${lastLenB} docs/read)`);
-      console.log(`  C validate:false   : ${fmt(msC, lastLenC * ITERS)}  (${lastLenC} docs/read)`);
-      console.log(`  D projected(2/6)   : ${fmt(msD, lastLenD * ITERS)}  (${lastLenD} docs/read)`);
+      console.log(
+        `  A validated        : ${fmt(msA, totalA)}  (${lastLenA} docs/read)`,
+      );
+      console.log(
+        `  B raw floor        : ${
+          fmt(msB, lastLenB * ITERS)
+        }  (${lastLenB} docs/read)`,
+      );
+      console.log(
+        `  C validate:false   : ${
+          fmt(msC, lastLenC * ITERS)
+        }  (${lastLenC} docs/read)`,
+      );
+      console.log(
+        `  D projected(2/6)   : ${
+          fmt(msD, lastLenD * ITERS)
+        }  (${lastLenD} docs/read)`,
+      );
       console.log(`  validation overhead (A vs B): ${(msA / msB).toFixed(2)}×`);
       console.log(`  projection speedup  (A vs D): ${(msA / msD).toFixed(2)}×`);
       console.log("=".repeat(72));

@@ -194,7 +194,9 @@ Deno.test("updateMany: Remove fields with removeField()", async (t) => {
     assertEquals(updatedCount, 3);
 
     // Verify Product A
-    const productA = await collection.findOne("product", { _id: productIds[0] });
+    const productA = await collection.findOne("product", {
+      _id: productIds[0],
+    });
     assert(productA !== null);
     assertEquals(productA.name, "Product A");
     assertEquals(productA.price, 150);
@@ -203,7 +205,9 @@ Deno.test("updateMany: Remove fields with removeField()", async (t) => {
     assertEquals(productA.tags, ["tag1", "tag2"]); // Unchanged
 
     // Verify Product B
-    const productB = await collection.findOne("product", { _id: productIds[1] });
+    const productB = await collection.findOne("product", {
+      _id: productIds[1],
+    });
     assert(productB !== null);
     assertEquals(productB.name, "Product B");
     assertEquals(productB.price, 200); // Unchanged
@@ -212,7 +216,9 @@ Deno.test("updateMany: Remove fields with removeField()", async (t) => {
     assertEquals(productB.tags, undefined); // Removed
 
     // Verify Product C
-    const productC = await collection.findOne("product", { _id: productIds[2] });
+    const productC = await collection.findOne("product", {
+      _id: productIds[2],
+    });
     assert(productC !== null);
     assertEquals(productC.name, "Product C Updated");
     assertEquals(productC.price, 300); // Unchanged

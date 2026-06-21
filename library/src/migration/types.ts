@@ -15,13 +15,13 @@ import type * as v from "../schema.ts";
  */
 export type MigrationProperty =
   | {
-      /** Indicates that this migration cannot be reversed */
-      type: "irreversible";
-    }
+    /** Indicates that this migration cannot be reversed */
+    type: "irreversible";
+  }
   | {
-      /** Indicates that this migration has lossy transformations */
-      type: "lossy";
-    };
+    /** Indicates that this migration has lossy transformations */
+    type: "lossy";
+  };
 
 /**
  * Rule for creating a new collection
@@ -36,7 +36,7 @@ export type CreateMultiCollectionRule = {
   type: "create_multicollection";
   collectionName: string;
   schema: MultiSchema;
-}
+};
 
 export type CreateMultiModelInstanceRule = {
   type: "create_multimodel_instance";
@@ -74,7 +74,7 @@ export type SeedMultiCollectionTypeRule = {
   documentType: string;
   documents: readonly unknown[];
   schema: SchemaContent;
-}
+};
 
 /**
  * Rule for seeding a specific (scope, type) bucket of a scoped
@@ -91,7 +91,7 @@ export type SeedScopedMultiCollectionTypeRule = {
   documentType: string;
   documents: readonly unknown[];
   schema: SchemaContent;
-}
+};
 
 export type SeedMultiModelInstanceTypeRule = {
   type: "seed_multimodel_instance_type";
@@ -141,8 +141,8 @@ export type TransformMultiCollectionTypeRule<
   documentType: string;
   up: (doc: T) => U;
   down: (doc: U) => T;
-  schema: SchemaContent,
-  parentSchema?: SchemaContent,
+  schema: SchemaContent;
+  parentSchema?: SchemaContent;
   /** Marks this transformation as irreversible (cannot be rolled back) */
   irreversible?: boolean;
   /** Marks this transformation as lossy (rollback loses data) */
@@ -186,8 +186,8 @@ export type TransformMultiModelInstanceTypeRule<
   documentType: string;
   up: (doc: T) => U;
   down: (doc: U) => T;
-  schema: SchemaContent,
-  parentSchema?: SchemaContent,
+  schema: SchemaContent;
+  parentSchema?: SchemaContent;
   /** Marks this transformation as irreversible (cannot be rolled back) */
   irreversible?: boolean;
   /** Marks this transformation as lossy (rollback loses data) */
@@ -203,8 +203,8 @@ export type TransformMultiModelInstancesTypeRule<
   documentType: string;
   up: (doc: T) => U;
   down: (doc: U) => T;
-  schema: SchemaContent,
-  parentSchema?: SchemaContent,
+  schema: SchemaContent;
+  parentSchema?: SchemaContent;
   /** Marks this transformation as irreversible (cannot be rolled back) */
   irreversible?: boolean;
   /** Marks this transformation as lossy (rollback loses data) */
@@ -319,7 +319,11 @@ export type FlowToScopeContext = {
 export type FlowToScopeSource =
   | { kind: "collection"; name: string; where?: Record<string, unknown> }
   | { kind: "multiModelInstances"; model: string }
-  | { kind: "multiCollectionType"; collectionName: string; documentType: string };
+  | {
+    kind: "multiCollectionType";
+    collectionName: string;
+    documentType: string;
+  };
 
 /**
  * Route documents from a source (a plain collection, every instance of a
@@ -548,7 +552,7 @@ export interface MultiModelInstanceTypeBuilder {
    * @returns The type builder for method chaining
    */
   seed(documents: readonly unknown[]): MultiModelInstanceTypeBuilder;
-  
+
   /**
    * Applies a transformation to all documents of this type in this instance
    * @param rule - The transformation rule with up/down functions
@@ -608,7 +612,10 @@ export interface MultiModelInstancesBuilder {
    * @param newTypeName - The new name for the type
    * @returns The instances builder for method chaining
    */
-  renameType(oldTypeName: string, newTypeName: string): MultiModelInstancesBuilder;
+  renameType(
+    oldTypeName: string,
+    newTypeName: string,
+  ): MultiModelInstancesBuilder;
 
   /**
    * Finishes configuring this model type and returns to the main builder
@@ -851,7 +858,10 @@ export interface MigrationBuilder {
   compile(): MigrationState;
 }
 
-export type SchemaContent = Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>;
+export type SchemaContent = Record<
+  string,
+  v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+>;
 export type MultiSchema = Record<string, SchemaContent>;
 
 /**
@@ -972,7 +982,6 @@ export type DatabaseState = {
    */
   scopedMultiCollections: Record<string, StateCollectionContent>;
 };
-
 
 /**
  * Extended database state with operation history tracking

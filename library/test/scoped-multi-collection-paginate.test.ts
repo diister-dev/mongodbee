@@ -68,9 +68,13 @@ Deno.test("paginate: page 1 exposes position=0 + total (the verrou)", async () =
     const catalog = await makeCatalog(db);
     await seedParticipants(catalog, EXPO_A, 58);
 
-    const page = await catalog.scope(EXPO_A).paginate("participant", undefined, {
-      limit: 25,
-    });
+    const page = await catalog.scope(EXPO_A).paginate(
+      "participant",
+      undefined,
+      {
+        limit: 25,
+      },
+    );
 
     assertEquals(page.total, 58);
     assertEquals(page.position, 0, "page 1 position must be 0, not undefined");
@@ -194,11 +198,15 @@ Deno.test("paginate: filter(doc) shrinks the page, position/total untouched", as
     const catalog = await makeCatalog(db);
     await seedParticipants(catalog, EXPO_A, 30);
 
-    const page = await catalog.scope(EXPO_A).paginate("participant", undefined, {
-      limit: 25,
-      // deno-lint-ignore no-explicit-any
-      filter: (doc: any) => doc.vip === true,
-    });
+    const page = await catalog.scope(EXPO_A).paginate(
+      "participant",
+      undefined,
+      {
+        limit: 25,
+        // deno-lint-ignore no-explicit-any
+        filter: (doc: any) => doc.vip === true,
+      },
+    );
 
     assertEquals(page.total, 30, "total reflects the DB query, not the filter");
     assertEquals(page.position, 0);

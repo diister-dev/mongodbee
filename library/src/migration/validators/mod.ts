@@ -56,10 +56,10 @@ export {
   createSimulationValidator,
   DEFAULT_SIMULATION_VALIDATOR_OPTIONS,
   getMockGenerationConfig,
-  SimulationValidator,
+  type MigrationValidator,
   type SimulationPowerLevel,
+  SimulationValidator,
   type SimulationValidatorOptions,
   validateMigrationWithSimulation,
   type ValidationResult,
-  type MigrationValidator,
 } from "./simulation.ts";

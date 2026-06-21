@@ -28,27 +28,38 @@ import * as v from "../../../src/schema.ts";
 // A self-contained INVALID migration: declares `x` as a required number but
 // seeds a document whose `x` is a string → simulation reports success:false.
 function brokenMigration() {
-  return migrationDefinition("2025_01_01_0000_AAAAAAAAAAAAAAAAAAAAAAAAAA@broken", "broken", {
-    parent: null,
-    schemas: { collections: { a: { _id: v.string(), x: v.number() } }, multiModels: {} },
-    migrate(m) {
-      m.createCollection("a");
-      m.collection("a").seed([{ _id: "1", x: "not-a-number" }] as never);
-      return m.compile();
+  return migrationDefinition(
+    "2025_01_01_0000_AAAAAAAAAAAAAAAAAAAAAAAAAA@broken",
+    "broken",
+    {
+      parent: null,
+      schemas: {
+        collections: { a: { _id: v.string(), x: v.number() } },
+        multiModels: {},
+      },
+      migrate(m) {
+        m.createCollection("a");
+        m.collection("a").seed([{ _id: "1", x: "not-a-number" }] as never);
+        return m.compile();
+      },
     },
-  });
+  );
 }
 
 // A trivially valid migration on its OWN collection (independent of `a`).
 function validMigration() {
-  return migrationDefinition("2025_01_02_0000_BBBBBBBBBBBBBBBBBBBBBBBBBB@valid", "valid", {
-    parent: null,
-    schemas: { collections: { b: { _id: v.string() } }, multiModels: {} },
-    migrate(m) {
-      m.createCollection("b");
-      return m.compile();
+  return migrationDefinition(
+    "2025_01_02_0000_BBBBBBBBBBBBBBBBBBBBBBBBBB@valid",
+    "valid",
+    {
+      parent: null,
+      schemas: { collections: { b: { _id: v.string() } }, multiModels: {} },
+      migrate(m) {
+        m.createCollection("b");
+        return m.compile();
+      },
     },
-  });
+  );
 }
 
 Deno.test("validate --last N: a broken migration in the SKIPPED range is not hidden as valid", async () => {
@@ -64,22 +75,33 @@ Deno.test("validate --last N: a broken migration in the SKIPPED range is not hid
 });
 
 Deno.test("validate --last N: a fully valid chain still passes (no false negative)", async () => {
-  const m1 = migrationDefinition("2025_01_01_0000_CCCCCCCCCCCCCCCCCCCCCCCCCC@ok_root", "ok_root", {
-    parent: null,
-    schemas: { collections: { a: { _id: v.string() } }, multiModels: {} },
-    migrate(m) {
-      m.createCollection("a");
-      return m.compile();
+  const m1 = migrationDefinition(
+    "2025_01_01_0000_CCCCCCCCCCCCCCCCCCCCCCCCCC@ok_root",
+    "ok_root",
+    {
+      parent: null,
+      schemas: { collections: { a: { _id: v.string() } }, multiModels: {} },
+      migrate(m) {
+        m.createCollection("a");
+        return m.compile();
+      },
     },
-  });
-  const m2 = migrationDefinition("2025_01_02_0000_DDDDDDDDDDDDDDDDDDDDDDDDDD@ok_child", "ok_child", {
-    parent: m1,
-    schemas: { collections: { a: { _id: v.string() }, b: { _id: v.string() } }, multiModels: {} },
-    migrate(m) {
-      m.createCollection("b");
-      return m.compile();
+  );
+  const m2 = migrationDefinition(
+    "2025_01_02_0000_DDDDDDDDDDDDDDDDDDDDDDDDDD@ok_child",
+    "ok_child",
+    {
+      parent: m1,
+      schemas: {
+        collections: { a: { _id: v.string() }, b: { _id: v.string() } },
+        multiModels: {},
+      },
+      migrate(m) {
+        m.createCollection("b");
+        return m.compile();
+      },
     },
-  });
+  );
   // Should resolve without throwing.
   await validateMigrationsWithSimulation([m1, m2], { lastN: 1 });
 });

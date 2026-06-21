@@ -8,7 +8,9 @@ import { dbId, refId } from "../src/ids.ts";
 const EXPO_A = "exposition:expoaaaaa01";
 const EXPO_B = "exposition:expobbbbb02";
 
-async function makeCatalog(db: Parameters<Parameters<typeof withDatabase>[1]>[0]) {
+async function makeCatalog(
+  db: Parameters<Parameters<typeof withDatabase>[1]>[0],
+) {
   return await scopedMultiCollection(db, "catalog", {
     scope: refId("exposition"),
     types: {

@@ -7,7 +7,9 @@ import { refId } from "../src/ids.ts";
 const EXPO_A = "exposition:expoaaaaa01";
 const EXPO_B = "exposition:expobbbbb02";
 
-async function makeCatalog(db: Parameters<Parameters<typeof withDatabase>[1]>[0]) {
+async function makeCatalog(
+  db: Parameters<Parameters<typeof withDatabase>[1]>[0],
+) {
   return await scopedMultiCollection(db, "catalog", {
     scope: refId("exposition"),
     types: {
@@ -167,10 +169,18 @@ Deno.test("paginate: cross-scope isolation — totals reflect scope", async () =
     const expoB = catalog.scope(EXPO_B);
 
     for (let i = 0; i < 3; i++) {
-      await expoA.insertOne("artwork", { title: `a${i}`, year: i, artistId: "x" });
+      await expoA.insertOne("artwork", {
+        title: `a${i}`,
+        year: i,
+        artistId: "x",
+      });
     }
     for (let i = 0; i < 5; i++) {
-      await expoB.insertOne("artwork", { title: `b${i}`, year: i, artistId: "x" });
+      await expoB.insertOne("artwork", {
+        title: `b${i}`,
+        year: i,
+        artistId: "x",
+      });
     }
 
     const pageA = await expoA.paginate("artwork", {}, { limit: 100 });

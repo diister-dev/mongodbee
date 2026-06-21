@@ -11,10 +11,7 @@ import { blue, bold, dim, green, red, yellow } from "@std/fmt/colors";
 import * as path from "@std/path";
 
 import { loadConfig } from "../../config/loader.ts";
-import {
-  buildMigrationChain,
-  loadAllMigrations,
-} from "../../discovery.ts";
+import { buildMigrationChain, loadAllMigrations } from "../../discovery.ts";
 import { validateMigrationChainWithProjectSchema } from "../../schema-validation.ts";
 import { validateMigrationsWithSimulation } from "../utils/validate-migrations.ts";
 import type { SimulationPowerLevel } from "../../validators/simulation.ts";
@@ -42,7 +39,9 @@ export interface CheckCommandOptions {
 function parseSimulationMode(mode?: string): SimulationPowerLevel {
   if (!mode) return "normal";
   const normalized = mode.toLowerCase();
-  if (normalized === "quick" || normalized === "normal" || normalized === "hard") {
+  if (
+    normalized === "quick" || normalized === "normal" || normalized === "hard"
+  ) {
     return normalized;
   }
   console.log(yellow(`⚠ Unknown mode "${mode}", using "normal" instead`));
@@ -86,7 +85,7 @@ export async function checkCommand(
 
   // Discover and load migrations
   const migrationsWithFiles = await loadAllMigrations(migrationsDir);
-  
+
   if (migrationsWithFiles.length === 0) {
     console.log(yellow("⚠ No migrations found"));
     return;

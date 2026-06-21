@@ -7,7 +7,9 @@ import { refId } from "../src/ids.ts";
 const EXPO_A = "exposition:expoaaaaa01";
 const EXPO_B = "exposition:expobbbbb02";
 
-async function makeCatalog(db: Parameters<Parameters<typeof withDatabase>[1]>[0]) {
+async function makeCatalog(
+  db: Parameters<Parameters<typeof withDatabase>[1]>[0],
+) {
   return await scopedMultiCollection(db, "catalog", {
     scope: refId("exposition"),
     types: {
@@ -71,14 +73,22 @@ Deno.test(".scope(id).insertOne rejects docs containing _scope or _type", async 
 
     await assertRejects(
       // deno-lint-ignore no-explicit-any
-      () => expo.insertOne("artwork", { _scope: EXPO_B, title: "x", year: 1 } as any),
+      () =>
+        expo.insertOne(
+          "artwork",
+          { _scope: EXPO_B, title: "x", year: 1 } as any,
+        ),
       Error,
       "_scope",
     );
 
     await assertRejects(
       // deno-lint-ignore no-explicit-any
-      () => expo.insertOne("artwork", { _type: "artist", title: "x", year: 1 } as any),
+      () =>
+        expo.insertOne(
+          "artwork",
+          { _type: "artist", title: "x", year: 1 } as any,
+        ),
       Error,
       "_type",
     );
@@ -182,7 +192,9 @@ Deno.test(".scope(id).updateOne is scope-checked", async () => {
     assertEquals(after.title, "new");
 
     // Updating from another scope should fail
-    await assertRejects(() => expoB.updateOne("artwork", id, { title: "hack" }));
+    await assertRejects(() =>
+      expoB.updateOne("artwork", id, { title: "hack" })
+    );
   });
 });
 

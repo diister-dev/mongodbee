@@ -13,7 +13,11 @@ Deno.test("findProject returns only the listed fields + meta, omits the rest", a
     const catalog = await scopedMultiCollection(db, "catalog", {
       scope: refId("exposition"),
       types: {
-        artwork: { title: v.string(), year: v.number(), description: v.string() },
+        artwork: {
+          title: v.string(),
+          year: v.number(),
+          description: v.string(),
+        },
       },
       allowUnscoped: true,
     });
@@ -52,7 +56,10 @@ Deno.test("findProject honours the filter and works on the multi-scope view", as
       { title: "A1", year: 1 },
       { title: "A2", year: 9 },
     ]);
-    await catalog.scope("exposition:b").insertOne("artwork", { title: "B1", year: 9 });
+    await catalog.scope("exposition:b").insertOne("artwork", {
+      title: "B1",
+      year: 9,
+    });
 
     // filter narrows within the projected read
     const filtered = await catalog.scope("exposition:a").findProject(
@@ -67,6 +74,8 @@ Deno.test("findProject honours the filter and works on the multi-scope view", as
     const across = await catalog.scopes(["exposition:a", "exposition:b"])
       .findProject("artwork", ["title"], { year: 9 });
     assertEquals(across.map((d) => d.title).sort(), ["A2", "B1"]);
-    for (const d of across) assertEquals((d as Record<string, unknown>).year, undefined);
+    for (const d of across) {
+      assertEquals((d as Record<string, unknown>).year, undefined);
+    }
   });
 });

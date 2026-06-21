@@ -203,7 +203,9 @@ export function keyEqual(
  * Normalize collation options for comparison by extracting only significant fields.
  * MongoDB adds many default fields (version, caseLevel, etc.) that we should ignore.
  */
-function normalizeCollation(collation: unknown): Record<string, unknown> | undefined {
+function normalizeCollation(
+  collation: unknown,
+): Record<string, unknown> | undefined {
   if (!collation || typeof collation !== "object") return undefined;
 
   const obj = collation as Record<string, unknown>;
@@ -247,7 +249,9 @@ export function normalizeIndexOptions(
       : undefined;
   return {
     unique: hasUnique,
-    collation: collationVal ? JSON.stringify(normalizeCollation(collationVal)) : undefined,
+    collation: collationVal
+      ? JSON.stringify(normalizeCollation(collationVal))
+      : undefined,
     partialFilterExpression: pfeVal ? JSON.stringify(pfeVal) : undefined,
     expireAfterSeconds: typeof ttlVal === "number" ? ttlVal : undefined,
   };

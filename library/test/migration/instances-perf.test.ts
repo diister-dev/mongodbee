@@ -53,15 +53,18 @@ Deno.test({
       const CHUNK = 50;
       for (let i = 0; i < INSTANCES; i += CHUNK) {
         await Promise.all(
-          Array.from({ length: Math.min(CHUNK, INSTANCES - i) }, async (_, j) => {
-            const coll = `thing:${i + j}`;
-            await createMultiCollectionInfo(db, coll, "thing", "000");
-            // deno-lint-ignore no-explicit-any
-            await db.collection(coll).insertMany([
-              { _id: "item:0", _type: "item", val: 0 },
-              { _id: "item:1", _type: "item", val: 1 },
-            ] as any);
-          }),
+          Array.from(
+            { length: Math.min(CHUNK, INSTANCES - i) },
+            async (_, j) => {
+              const coll = `thing:${i + j}`;
+              await createMultiCollectionInfo(db, coll, "thing", "000");
+              // deno-lint-ignore no-explicit-any
+              await db.collection(coll).insertMany([
+                { _id: "item:0", _type: "item", val: 0 },
+                { _id: "item:1", _type: "item", val: 1 },
+              ] as any);
+            },
+          ),
         );
       }
       console.log(

@@ -122,7 +122,11 @@ Deno.test("memory applier: seed IDs are deterministic across replays", async () 
 
   const ids1 = s1.collections.users.content.map((d) => d._id).sort();
   const ids2 = s2.collections.users.content.map((d) => d._id).sort();
-  assertEquals(ids1, ids2, "same migration applied twice should produce the same _ids");
+  assertEquals(
+    ids1,
+    ids2,
+    "same migration applied twice should produce the same _ids",
+  );
 });
 
 Deno.test("mongodb applier: bare refId _id schema (no default) gets a valid prefixed id", async () => {
@@ -150,7 +154,8 @@ Deno.test("mongodb applier: bare refId _id schema (no default) gets a valid pref
     });
 
     const applier = createMongodbApplier(db, m, { currentMigrationId: m.id });
-    const ops = m.migrate(migrationBuilder({ schemas: REFID_SCHEMAS })).operations;
+    const ops =
+      m.migrate(migrationBuilder({ schemas: REFID_SCHEMAS })).operations;
 
     // Would throw on insert if the generated id were ":abc" (fails ^member:)
     await applier.applyMigration(ops, "up");

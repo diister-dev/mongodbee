@@ -136,7 +136,16 @@ function showVersion(): void {
  */
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2), {
-    boolean: ["version", "dry-run", "force", "auto-sync", "verbose", "help", "check-indexes", "validate"],
+    boolean: [
+      "version",
+      "dry-run",
+      "force",
+      "auto-sync",
+      "verbose",
+      "help",
+      "check-indexes",
+      "validate",
+    ],
     string: ["config", "env", "name", "mode"],
     alias: {
       v: "version",
@@ -181,7 +190,8 @@ async function main(): Promise<void> {
 }
 
 // Run main function if this is the main module
-const isMain = import.meta.url === `file://${process.argv[1]?.replace(/\\/g, "/")}` ||
+const isMain =
+  import.meta.url === `file://${process.argv[1]?.replace(/\\/g, "/")}` ||
   (import.meta as any).main === true;
 
 if (isMain) {

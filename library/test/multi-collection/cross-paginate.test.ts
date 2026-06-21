@@ -467,7 +467,10 @@ Deno.test("Cross-pagination: single type array behaves like single key", async (
 
     // Insert products
     for (let i = 1; i <= 5; i++) {
-      await catalog.insertOne("product", { name: `Product ${i}`, price: i * 10 });
+      await catalog.insertOne("product", {
+        name: `Product ${i}`,
+        price: i * 10,
+      });
     }
 
     // Insert categories
@@ -529,7 +532,9 @@ Deno.test("Cross-pagination: accumulation across 5+ pages with no duplicates", a
 
       for (const item of result.data) {
         if (allCollectedIds.includes(item._id)) {
-          throw new Error(`DUPLICATE on page ${page}: ${item.name} (${item._id})`);
+          throw new Error(
+            `DUPLICATE on page ${page}: ${item.name} (${item._id})`,
+          );
         }
         allCollectedIds.push(item._id);
       }
@@ -636,7 +641,10 @@ Deno.test("Cross-pagination: backward compatibility - single key still works", a
 
     // Insert products
     for (let i = 1; i <= 5; i++) {
-      await catalog.insertOne("product", { name: `Product ${i}`, price: i * 10 });
+      await catalog.insertOne("product", {
+        name: `Product ${i}`,
+        price: i * 10,
+      });
     }
 
     // Insert categories
@@ -685,10 +693,14 @@ Deno.test("Cross-pagination: naturalIdSort sorts by ULID (creation time) across 
 
     // Without naturalIdSort: sorted by full _id (type prefix first)
     // collaborator:xxx < visitor:xxx alphabetically
-    const withoutNatural = await people.paginate(["collaborator", "visitor"], {}, {
-      limit: 10,
-      sort: { _id: 1 },
-    });
+    const withoutNatural = await people.paginate(
+      ["collaborator", "visitor"],
+      {},
+      {
+        limit: 10,
+        sort: { _id: 1 },
+      },
+    );
 
     // With naturalIdSort: sorted by ULID part only (chronological order)
     const withNatural = await people.paginate(["collaborator", "visitor"], {}, {
@@ -712,8 +724,11 @@ Deno.test("Cross-pagination: naturalIdSort sorts by ULID (creation time) across 
     // All collaborators should come before all visitors
     const firstVisitorIdx = typesWithout.indexOf("visitor");
     const lastCollabIdx = typesWithout.lastIndexOf("collaborator");
-    assertEquals(lastCollabIdx < firstVisitorIdx, true,
-      "Without naturalIdSort, collaborators should come before visitors");
+    assertEquals(
+      lastCollabIdx < firstVisitorIdx,
+      true,
+      "Without naturalIdSort, collaborators should come before visitors",
+    );
   });
 });
 
@@ -887,7 +902,7 @@ Deno.test("Cross-pagination: naturalIdSort with three types", async (t) => {
     const result = await people.paginate(
       ["admin", "collaborator", "visitor"],
       {},
-      { limit: 10, naturalIdSort: true }
+      { limit: 10, naturalIdSort: true },
     );
 
     // Should be chronological: A1, C1, V1, A2, C2, V2

@@ -1,5 +1,5 @@
 import * as v from "valibot";
-import { FlatType } from "../types/flat.ts";
+import type { FlatType } from "../types/flat.ts";
 
 /**
  * Represents an element of a key path that can be either a string or a predicate function
@@ -233,11 +233,16 @@ export type DotNotationSchemaInput<T extends v.BaseSchema<any, any, any>> =
  * getNestedValue(doc, "data.missing"); // undefined
  * ```
  */
-export function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
-  const parts = path.split('.');
+export function getNestedValue(
+  obj: Record<string, unknown>,
+  path: string,
+): unknown {
+  const parts = path.split(".");
   let current: unknown = obj;
   for (const part of parts) {
-    if (current === null || current === undefined || typeof current !== 'object') {
+    if (
+      current === null || current === undefined || typeof current !== "object"
+    ) {
       return undefined;
     }
     current = (current as Record<string, unknown>)[part];

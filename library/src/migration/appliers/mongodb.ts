@@ -9,13 +9,20 @@
  */
 
 import type { Db } from "../../mongodb.ts";
-import type { MigrationDefinition, MigrationRule, SchemasDefinition } from "../types.ts";
+import type {
+  MigrationDefinition,
+  MigrationRule,
+  SchemasDefinition,
+} from "../types.ts";
 import * as v from "valibot";
 import { toMongoValidator } from "../../validator.ts";
-import { applyCollectionIndexes, applyMultiCollectionIndexes } from "../../indexes-applier.ts";
 import {
-  createMultiCollectionInfo,
+  applyCollectionIndexes,
+  applyMultiCollectionIndexes,
+} from "../../indexes-applier.ts";
+import {
   createMetadataSchemas,
+  createMultiCollectionInfo,
   discoverMultiCollectionInstances,
   MULTI_COLLECTION_INFO_TYPE,
   MULTI_COLLECTION_MIGRATIONS_TYPE,
@@ -23,7 +30,11 @@ import {
   recordMultiCollectionMigration,
   shouldInstanceReceiveMigrationFromChain,
 } from "../multicollection-registry.ts";
-import { flowTargetId, extractIdPrefix, resolveSeedId } from "../utils/seed-id.ts";
+import {
+  extractIdPrefix,
+  flowTargetId,
+  resolveSeedId,
+} from "../utils/seed-id.ts";
 import { getIrreversibleOperations } from "../builder.ts";
 import { scopedMultiCollection } from "../../scoped-multi-collection.ts";
 import { getSessionContext } from "../../session.ts";
@@ -104,7 +115,10 @@ export function createMongodbApplier(
 ): {
   applyOperation: (operation: MigrationRule) => Promise<void>;
   reverseOperation: (operation: MigrationRule) => Promise<void>;
-  applyMigration: (operations: MigrationRule[], direction: 'up' | 'down') => Promise<void>;
+  applyMigration: (
+    operations: MigrationRule[],
+    direction: "up" | "down",
+  ) => Promise<void>;
   setCurrentMigrationId: (migrationId: string) => void;
 } {
   const opts = { ...DEFAULT_OPTIONS, ...options };
@@ -203,7 +217,8 @@ export function createMongodbApplier(
     // real fault (auth, connection, transient cluster error). Reporting that as
     // "collection does not exist" silently skips validator/index re-sync and
     // masks the true cause — let it propagate so the migration fails loudly.
-    const collections = await db.listCollections({ name: collectionName }).toArray();
+    const collections = await db.listCollections({ name: collectionName })
+      .toArray();
     return collections.length > 0;
   }
 
@@ -237,7 +252,10 @@ export function createMongodbApplier(
         });
       } catch (error) {
         // Tolerate errors (collection might not have validators)
-        console.warn(`Could not disable validator for ${collectionName}:`, error);
+        console.warn(
+          `Could not disable validator for ${collectionName}:`,
+          error,
+        );
       }
     }
   }
@@ -246,13 +264,22 @@ export function createMongodbApplier(
    * Synchronizes validators and indexes for all collections, multi-collections, and multi-models
    * based on the target schemas
    */
-  async function synchronizeValidatorsAndIndexes(schemas: SchemasDefinition): Promise<void> {
+  async function synchronizeValidatorsAndIndexes(
+    schemas: SchemasDefinition,
+  ): Promise<void> {
     // Synchronize simple collections
     if (schemas.collections) {
-      for (const [collectionName, schema] of Object.entries(schemas.collections)) {
+      for (
+        const [collectionName, schema] of Object.entries(schemas.collections)
+      ) {
         if (await collectionExists(collectionName)) {
           // Update validator
-          const collectionSchema = v.object(schema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
+          const collectionSchema = v.object(
+            schema as Record<
+              string,
+              v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+            >,
+          );
           const validator = toMongoValidator(collectionSchema);
           await db.command({
             collMod: collectionName,
@@ -269,14 +296,22 @@ export function createMongodbApplier(
 
     // Synchronize multi-collections (WITH metadata)
     if (schemas.multiCollections) {
-      for (const [collectionName, multiSchema] of Object.entries(schemas.multiCollections)) {
+      for (
+        const [collectionName, multiSchema] of Object.entries(
+          schemas.multiCollections,
+        )
+      ) {
         if (await collectionExists(collectionName)) {
           // Build union validator with metadata schemas
           const typeSchemas = Object.entries(multiSchema).map(
-            ([typeName, typeSchema]) => v.object({
-              _type: v.literal(typeName),
-              ...(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>),
-            })
+            ([typeName, typeSchema]) =>
+              v.object({
+                _type: v.literal(typeName),
+                ...(typeSchema as Record<
+                  string,
+                  v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+                >),
+              }),
           );
 
           // Include metadata schemas so _information and _migrations documents can be inserted
@@ -296,8 +331,24 @@ export function createMongodbApplier(
 
           // Synchronize indexes using shared applier
           const collection = db.collection(collectionName);
-          const schemasPerType = Object.entries(multiSchema).reduce<Record<string, v.ObjectSchema<Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>, undefined>>>((acc, [typeName, typeSchema]) => {
-            acc[typeName] = v.object(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
+          const schemasPerType = Object.entries(multiSchema).reduce<
+            Record<
+              string,
+              v.ObjectSchema<
+                Record<
+                  string,
+                  v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+                >,
+                undefined
+              >
+            >
+          >((acc, [typeName, typeSchema]) => {
+            acc[typeName] = v.object(
+              typeSchema as Record<
+                string,
+                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+              >,
+            );
             return acc;
           }, {});
           await applyMultiCollectionIndexes(collection, schemasPerType);
@@ -310,16 +361,22 @@ export function createMongodbApplier(
     // ONCE per type, then fan out across instances with bounded concurrency —
     // this loop is the dominant cost of a migration over many instances.
     if (schemas.multiModels) {
-      for (const [modelType, multiSchema] of Object.entries(schemas.multiModels)) {
+      for (
+        const [modelType, multiSchema] of Object.entries(schemas.multiModels)
+      ) {
         const instances = await discoverMultiCollectionInstances(db, modelType);
         if (instances.length === 0) continue;
 
         // Build union validator with metadata schemas (once per model type).
         const typeSchemas = Object.entries(multiSchema).map(
-          ([typeName, typeSchema]) => v.object({
-            _type: v.literal(typeName),
-            ...(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>),
-          })
+          ([typeName, typeSchema]) =>
+            v.object({
+              _type: v.literal(typeName),
+              ...(typeSchema as Record<
+                string,
+                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+              >),
+            }),
         );
         const allSchemas = [...typeSchemas, ...createMetadataSchemas()];
         const unionSchema = allSchemas.length > 0
@@ -327,10 +384,27 @@ export function createMongodbApplier(
           ? v.union(allSchemas as any)
           : v.object({ _type: v.string() });
         const validator = toMongoValidator(unionSchema);
-        const schemasPerType = Object.entries(multiSchema).reduce((acc, [typeName, typeSchema]) => {
-          acc[typeName] = v.object(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
-          return acc;
-        }, {} as Record<string, v.ObjectSchema<Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>, undefined>>);
+        const schemasPerType = Object.entries(multiSchema).reduce(
+          (acc, [typeName, typeSchema]) => {
+            acc[typeName] = v.object(
+              typeSchema as Record<
+                string,
+                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+              >,
+            );
+            return acc;
+          },
+          {} as Record<
+            string,
+            v.ObjectSchema<
+              Record<
+                string,
+                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+              >,
+              undefined
+            >
+          >,
+        );
 
         // `discoverMultiCollectionInstances` only returns existing collections,
         // so the previous per-instance `collectionExists` guard was a redundant
@@ -341,7 +415,10 @@ export function createMongodbApplier(
             validator,
             validationLevel: "strict",
           });
-          await applyMultiCollectionIndexes(db.collection(instanceName), schemasPerType);
+          await applyMultiCollectionIndexes(
+            db.collection(instanceName),
+            schemasPerType,
+          );
         });
       }
     }
@@ -350,7 +427,11 @@ export function createMongodbApplier(
     // so validator + scoped indexes match exactly what scopedMultiCollection()
     // would apply.
     if (schemas.scopedMultiCollections) {
-      for (const [collectionName, scopedSchema] of Object.entries(schemas.scopedMultiCollections)) {
+      for (
+        const [collectionName, scopedSchema] of Object.entries(
+          schemas.scopedMultiCollections,
+        )
+      ) {
         if (await collectionExists(collectionName)) {
           await scopedMultiCollection(db, collectionName, {
             scope: scopedSchema.scope,
@@ -366,7 +447,9 @@ export function createMongodbApplier(
    * Disables all validators for collections in the target schemas
    * Used before rollback to prevent validation errors
    */
-  async function disableAllValidators(schemas: SchemasDefinition): Promise<void> {
+  async function disableAllValidators(
+    schemas: SchemasDefinition,
+  ): Promise<void> {
     // Disable validators for simple collections
     if (schemas.collections) {
       for (const collectionName of Object.keys(schemas.collections)) {
@@ -385,13 +468,18 @@ export function createMongodbApplier(
     if (schemas.multiModels) {
       for (const modelType of Object.keys(schemas.multiModels)) {
         const instances = await discoverMultiCollectionInstances(db, modelType);
-        await forEachInstance(instances, (instanceName) => disableValidator(instanceName));
+        await forEachInstance(
+          instances,
+          (instanceName) => disableValidator(instanceName),
+        );
       }
     }
 
     // Disable validators for scoped multi-collections
     if (schemas.scopedMultiCollections) {
-      for (const collectionName of Object.keys(schemas.scopedMultiCollections)) {
+      for (
+        const collectionName of Object.keys(schemas.scopedMultiCollections)
+      ) {
         await disableValidator(collectionName);
       }
     }
@@ -427,14 +515,16 @@ export function createMongodbApplier(
         ? filter
         : { $and: [filter, { _id: { $gt: lastId } }] };
 
-      const documents = await collection.find(pageFilter as Record<string, unknown>)
+      const documents = await collection.find(
+        pageFilter as Record<string, unknown>,
+      )
         .sort({ _id: 1 })
         .limit(opts.batchSize)
         .toArray();
 
       if (documents.length === 0) break;
 
-      const bulkOps = documents.map(doc => {
+      const bulkOps = documents.map((doc) => {
         try {
           const transformed = transformer(doc);
           return {
@@ -451,10 +541,13 @@ export function createMongodbApplier(
               }`,
             );
           }
-          console.warn(`Skipping document ${doc._id} due to transform error:`, error);
+          console.warn(
+            `Skipping document ${doc._id} due to transform error:`,
+            error,
+          );
           return null;
         }
-      }).filter(op => op !== null);
+      }).filter((op) => op !== null);
 
       if (bulkOps.length > 0) {
         await collection.bulkWrite(bulkOps);
@@ -467,10 +560,12 @@ export function createMongodbApplier(
   }
 
   const migrations: {
-    [K in MigrationRule['type']]: {
-      apply: (operation: Extract<MigrationRule, { type: K }>) => Promise<void>,
-      reverse: (operation: Extract<MigrationRule, { type: K }>) => Promise<void>,
-    }
+    [K in MigrationRule["type"]]: {
+      apply: (operation: Extract<MigrationRule, { type: K }>) => Promise<void>;
+      reverse: (
+        operation: Extract<MigrationRule, { type: K }>,
+      ) => Promise<void>;
+    };
   } = {
     create_collection: {
       apply: async (operation) => {
@@ -478,20 +573,32 @@ export function createMongodbApplier(
 
         const collOptions: Record<string, unknown> = {};
         if (operation.schema) {
-          const wrappedSchema = v.object(operation.schema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
+          const wrappedSchema = v.object(
+            operation.schema as Record<
+              string,
+              v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+            >,
+          );
           collOptions.validator = toMongoValidator(wrappedSchema);
         }
 
-        if(collExist) {
+        if (collExist) {
           if (opts.strictValidation) {
             // throw new Error(`Collection ${operation.collectionName} already exists`);
-            console.warn(`Collection ${operation.collectionName} already exists, skipping creation.`);
+            console.warn(
+              `Collection ${operation.collectionName} already exists, skipping creation.`,
+            );
           }
 
           // If collection exists, still apply indexes && update validator if schema provided
           if (operation.schema) {
             const collection = db.collection(operation.collectionName);
-            const collectionSchema = v.object(operation.schema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
+            const collectionSchema = v.object(
+              operation.schema as Record<
+                string,
+                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+              >,
+            );
             await applyCollectionIndexes(collection, collectionSchema);
 
             await db.command({
@@ -506,23 +613,35 @@ export function createMongodbApplier(
 
         if (operation.schema) {
           const collection = db.collection(operation.collectionName);
-          const collectionSchema = v.object(operation.schema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
+          const collectionSchema = v.object(
+            operation.schema as Record<
+              string,
+              v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+            >,
+          );
           await applyCollectionIndexes(collection, collectionSchema);
         }
       },
       reverse: async (operation) => {
-        if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
-          throw new Error(`Collection ${operation.collectionName} does not exist`);
+        if (
+          opts.strictValidation &&
+          !await collectionExists(operation.collectionName)
+        ) {
+          throw new Error(
+            `Collection ${operation.collectionName} does not exist`,
+          );
         }
         await db.collection(operation.collectionName).drop();
-      }
+      },
     },
 
     rename_collection: {
       apply: async (operation) => {
         if (!await collectionExists(operation.from)) {
           if (opts.strictValidation) {
-            throw new Error(`Cannot rename: collection ${operation.from} does not exist`);
+            throw new Error(
+              `Cannot rename: collection ${operation.from} does not exist`,
+            );
           }
           return;
         }
@@ -533,12 +652,14 @@ export function createMongodbApplier(
       reverse: async (operation) => {
         if (!await collectionExists(operation.to)) {
           if (opts.strictValidation) {
-            throw new Error(`Cannot rename back: collection ${operation.to} does not exist`);
+            throw new Error(
+              `Cannot rename back: collection ${operation.to} does not exist`,
+            );
           }
           return;
         }
         await db.renameCollection(operation.to, operation.from);
-      }
+      },
     },
 
     create_multicollection: {
@@ -547,10 +668,14 @@ export function createMongodbApplier(
 
         // Create union validator for all types (including metadata schemas)
         const typeSchemas = Object.entries(operation.schema).map(
-          ([typeName, typeSchema]) => v.object({
-            _type: v.literal(typeName),
-            ...(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>),
-          })
+          ([typeName, typeSchema]) =>
+            v.object({
+              _type: v.literal(typeName),
+              ...(typeSchema as Record<
+                string,
+                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+              >),
+            }),
         );
 
         // Include metadata schemas so _information and _migrations documents can be inserted
@@ -565,7 +690,9 @@ export function createMongodbApplier(
 
         if (collExist) {
           if (opts.strictValidation) {
-            console.warn(`Multi-collection ${operation.collectionName} already exists, skipping creation.`);
+            console.warn(
+              `Multi-collection ${operation.collectionName} already exists, skipping creation.`,
+            );
           }
 
           // If collection exists, still apply indexes && update validator
@@ -581,18 +708,40 @@ export function createMongodbApplier(
 
         // Apply indexes using shared applier
         const collection = db.collection(operation.collectionName);
-        const schemasPerType = Object.entries(operation.schema).reduce((acc, [typeName, typeSchema]) => {
-          acc[typeName] = v.object(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
-          return acc;
-        }, {} as Record<string, v.ObjectSchema<Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>, undefined>>);
+        const schemasPerType = Object.entries(operation.schema).reduce(
+          (acc, [typeName, typeSchema]) => {
+            acc[typeName] = v.object(
+              typeSchema as Record<
+                string,
+                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+              >,
+            );
+            return acc;
+          },
+          {} as Record<
+            string,
+            v.ObjectSchema<
+              Record<
+                string,
+                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+              >,
+              undefined
+            >
+          >,
+        );
         await applyMultiCollectionIndexes(collection, schemasPerType);
       },
       reverse: async (operation) => {
-        if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
-          throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
+        if (
+          opts.strictValidation &&
+          !await collectionExists(operation.collectionName)
+        ) {
+          throw new Error(
+            `Multi-collection ${operation.collectionName} does not exist`,
+          );
         }
         await db.collection(operation.collectionName).drop();
-      }
+      },
     },
 
     create_multimodel_instance: {
@@ -609,10 +758,14 @@ export function createMongodbApplier(
 
         // Create union validator for all types + metadata schemas
         const typeSchemas = Object.entries(operation.schema).map(
-          ([typeName, typeSchema]) => v.object({
-            _type: v.literal(typeName),
-            ...(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>),
-          })
+          ([typeName, typeSchema]) =>
+            v.object({
+              _type: v.literal(typeName),
+              ...(typeSchema as Record<
+                string,
+                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+              >),
+            }),
         );
 
         const allSchemas = [...typeSchemas, ...createMetadataSchemas()];
@@ -625,7 +778,9 @@ export function createMongodbApplier(
 
         if (collExist) {
           if (opts.strictValidation && registered) {
-            console.warn(`Multi-model instance ${operation.collectionName} already exists, skipping creation.`);
+            console.warn(
+              `Multi-model instance ${operation.collectionName} already exists, skipping creation.`,
+            );
           }
 
           // If collection exists, still apply indexes && update validator
@@ -658,53 +813,92 @@ export function createMongodbApplier(
           // Mark this migration as already recorded for this instance
           // createMultiCollectionInfo already added it to the appliedMigrations array
           if (opts.currentMigrationId) {
-            const recordKey = `${operation.collectionName}:${opts.currentMigrationId}:applied`;
+            const recordKey =
+              `${operation.collectionName}:${opts.currentMigrationId}:applied`;
             recordedInstances.add(recordKey);
           }
         }
 
         // Apply indexes using shared applier
         const multiCollection = db.collection(operation.collectionName);
-        const schemasPerType = Object.entries(operation.schema).reduce((acc, [typeName, typeSchema]) => {
-          acc[typeName] = v.object(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
-          return acc;
-        }, {} as Record<string, v.ObjectSchema<Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>, undefined>>);
+        const schemasPerType = Object.entries(operation.schema).reduce(
+          (acc, [typeName, typeSchema]) => {
+            acc[typeName] = v.object(
+              typeSchema as Record<
+                string,
+                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+              >,
+            );
+            return acc;
+          },
+          {} as Record<
+            string,
+            v.ObjectSchema<
+              Record<
+                string,
+                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+              >,
+              undefined
+            >
+          >,
+        );
         await applyMultiCollectionIndexes(multiCollection, schemasPerType);
       },
       reverse: async (operation) => {
-        if (opts.strictValidation && !await multiCollectionInstanceExists(db, operation.collectionName)) {
-          throw new Error(`Multi-model instance ${operation.collectionName} does not exist`);
+        if (
+          opts.strictValidation &&
+          !await multiCollectionInstanceExists(db, operation.collectionName)
+        ) {
+          throw new Error(
+            `Multi-model instance ${operation.collectionName} does not exist`,
+          );
         }
         await db.collection(operation.collectionName).drop();
-      }
+      },
     },
 
     mark_as_multimodel: {
       apply: async (operation) => {
         const collection = db.collection(operation.collectionName);
 
-        if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
+        if (
+          opts.strictValidation &&
+          !await collectionExists(operation.collectionName)
+        ) {
           // throw new Error(`Collection ${operation.collectionName} does not exist`);
-          console.warn(`Collection ${operation.collectionName} does not exist, creating it first.`);
+          console.warn(
+            `Collection ${operation.collectionName} does not exist, creating it first.`,
+          );
         }
 
-        const existing = await collection.findOne({ _type: MULTI_COLLECTION_INFO_TYPE });
+        const existing = await collection.findOne({
+          _type: MULTI_COLLECTION_INFO_TYPE,
+        });
         if (existing) {
-          throw new Error(`Collection ${operation.collectionName} is already marked as multi-model`);
+          throw new Error(
+            `Collection ${operation.collectionName} is already marked as multi-model`,
+          );
         }
 
         // Get the schema for this model type from the migration schemas
-        const modelSchema = migration.schemas.multiModels?.[operation.modelType];
+        const modelSchema = migration.schemas.multiModels
+          ?.[operation.modelType];
         if (!modelSchema) {
-          throw new Error(`Model type ${operation.modelType} not found in migration schemas`);
+          throw new Error(
+            `Model type ${operation.modelType} not found in migration schemas`,
+          );
         }
 
         // Update validator to include metadata schemas BEFORE inserting _information document
         const typeSchemas = Object.entries(modelSchema).map(
-          ([typeName, typeSchema]) => v.object({
-            _type: v.literal(typeName),
-            ...(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>),
-          })
+          ([typeName, typeSchema]) =>
+            v.object({
+              _type: v.literal(typeName),
+              ...(typeSchema as Record<
+                string,
+                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+              >),
+            }),
         );
 
         const allSchemas = [...typeSchemas, ...createMetadataSchemas()];
@@ -730,34 +924,59 @@ export function createMongodbApplier(
         // Mark this migration as already recorded for this instance
         // createMultiCollectionInfo already added it to the appliedMigrations array
         if (opts.currentMigrationId) {
-          const recordKey = `${operation.collectionName}:${opts.currentMigrationId}:applied`;
+          const recordKey =
+            `${operation.collectionName}:${opts.currentMigrationId}:applied`;
           recordedInstances.add(recordKey);
         }
 
         // Apply indexes using shared applier (critical for multi-model tracking)
         const modelCollection = db.collection(operation.collectionName);
-        const schemasPerType = Object.entries(modelSchema).reduce((acc, [typeName, typeSchema]) => {
-          acc[typeName] = v.object(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
-          return acc;
-        }, {} as Record<string, v.ObjectSchema<Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>, undefined>>);
+        const schemasPerType = Object.entries(modelSchema).reduce(
+          (acc, [typeName, typeSchema]) => {
+            acc[typeName] = v.object(
+              typeSchema as Record<
+                string,
+                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+              >,
+            );
+            return acc;
+          },
+          {} as Record<
+            string,
+            v.ObjectSchema<
+              Record<
+                string,
+                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+              >,
+              undefined
+            >
+          >,
+        );
         await applyMultiCollectionIndexes(modelCollection, schemasPerType);
       },
       reverse: async (operation) => {
         const collection = db.collection(operation.collectionName);
         await collection.deleteMany({
-          _type: { $in: [MULTI_COLLECTION_INFO_TYPE, MULTI_COLLECTION_MIGRATIONS_TYPE] },
+          _type: {
+            $in: [MULTI_COLLECTION_INFO_TYPE, MULTI_COLLECTION_MIGRATIONS_TYPE],
+          },
         });
 
         // Restore validator WITHOUT metadata schemas (back to plain multi-collection)
         // Get schema from the model type definition in current migration
-        const modelSchema = migration.schemas.multiModels?.[operation.modelType];
+        const modelSchema = migration.schemas.multiModels
+          ?.[operation.modelType];
 
         if (modelSchema) {
           const typeSchemas = Object.entries(modelSchema).map(
-            ([typeName, typeSchema]) => v.object({
-              _type: v.literal(typeName),
-              ...(typeSchema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>),
-            })
+            ([typeName, typeSchema]) =>
+              v.object({
+                _type: v.literal(typeName),
+                ...(typeSchema as Record<
+                  string,
+                  v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+                >),
+              }),
           );
 
           // NO metadata schemas - just type schemas
@@ -773,13 +992,18 @@ export function createMongodbApplier(
             validationLevel: "strict",
           });
         }
-      }
+      },
     },
 
     seed_collection: {
       apply: async (operation) => {
-        if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
-          throw new Error(`Collection ${operation.collectionName} does not exist`);
+        if (
+          opts.strictValidation &&
+          !await collectionExists(operation.collectionName)
+        ) {
+          throw new Error(
+            `Collection ${operation.collectionName} does not exist`,
+          );
         }
 
         const collection = db.collection(operation.collectionName);
@@ -788,10 +1012,22 @@ export function createMongodbApplier(
           const typedDoc = doc as Record<string, unknown>;
           // Resolve the deterministic _id BEFORE validation so schemas with a
           // required _id (e.g. a bare refId without a default) still validate.
-          const _id = resolveSeedDocId(typedDoc, operation.schema._id, "", migration.id, sig, i);
-          const value = v.safeParse(v.object(operation.schema), { ...typedDoc, _id });
+          const _id = resolveSeedDocId(
+            typedDoc,
+            operation.schema._id,
+            "",
+            migration.id,
+            sig,
+            i,
+          );
+          const value = v.safeParse(v.object(operation.schema), {
+            ...typedDoc,
+            _id,
+          });
           if (!value.success) {
-            throw new Error(`Document validation failed: ${JSON.stringify(value.issues)}`);
+            throw new Error(
+              `Document validation failed: ${JSON.stringify(value.issues)}`,
+            );
           }
           return { ...(value.output as Record<string, unknown>), _id };
         });
@@ -803,42 +1039,73 @@ export function createMongodbApplier(
         }
       },
       reverse: async (operation) => {
-        if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
-          throw new Error(`Collection ${operation.collectionName} does not exist`);
+        if (
+          opts.strictValidation &&
+          !await collectionExists(operation.collectionName)
+        ) {
+          throw new Error(
+            `Collection ${operation.collectionName} does not exist`,
+          );
         }
 
         const collection = db.collection(operation.collectionName);
         const sig = operation.collectionName;
         const documentIds = operation.documents.map((doc: unknown, i) =>
-          resolveSeedDocId(doc as Record<string, unknown>, operation.schema._id, "", migration.id, sig, i)
+          resolveSeedDocId(
+            doc as Record<string, unknown>,
+            operation.schema._id,
+            "",
+            migration.id,
+            sig,
+            i,
+          )
         );
         if (documentIds.length > 0) {
-          await collection.deleteMany({ _id: { $in: documentIds } } as Record<string, unknown>);
+          await collection.deleteMany(
+            { _id: { $in: documentIds } } as Record<string, unknown>,
+          );
         }
-      }
+      },
     },
 
     seed_multicollection_type: {
       apply: async (operation) => {
-        if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
-          throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
+        if (
+          opts.strictValidation &&
+          !await collectionExists(operation.collectionName)
+        ) {
+          throw new Error(
+            `Multi-collection ${operation.collectionName} does not exist`,
+          );
         }
 
         const collection = db.collection(operation.collectionName);
         const sig = `${operation.collectionName}:${operation.documentType}`;
         const documents = operation.documents.map((doc: unknown, i) => {
           const typedDoc = doc as Record<string, unknown>;
-          const _id = resolveSeedDocId(typedDoc, operation.schema._id, operation.documentType, migration.id, sig, i);
-          const value = v.safeParse(v.object({
-            _type: v.literal(operation.documentType),
-            ...operation.schema,
-          }), {
-            ...typedDoc,
-            _id,
-            _type: operation.documentType,
-          });
+          const _id = resolveSeedDocId(
+            typedDoc,
+            operation.schema._id,
+            operation.documentType,
+            migration.id,
+            sig,
+            i,
+          );
+          const value = v.safeParse(
+            v.object({
+              _type: v.literal(operation.documentType),
+              ...operation.schema,
+            }),
+            {
+              ...typedDoc,
+              _id,
+              _type: operation.documentType,
+            },
+          );
           if (!value.success) {
-            throw new Error(`Document validation failed: ${JSON.stringify(value.issues)}`);
+            throw new Error(
+              `Document validation failed: ${JSON.stringify(value.issues)}`,
+            );
           }
           return { ...(value.output as Record<string, unknown>), _id };
         });
@@ -850,42 +1117,74 @@ export function createMongodbApplier(
         }
       },
       reverse: async (operation) => {
-        if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
-          throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
+        if (
+          opts.strictValidation &&
+          !await collectionExists(operation.collectionName)
+        ) {
+          throw new Error(
+            `Multi-collection ${operation.collectionName} does not exist`,
+          );
         }
 
         const collection = db.collection(operation.collectionName);
         const sig = `${operation.collectionName}:${operation.documentType}`;
         const documentIds = operation.documents.map((doc: unknown, i) =>
-          resolveSeedDocId(doc as Record<string, unknown>, operation.schema._id, operation.documentType, migration.id, sig, i)
+          resolveSeedDocId(
+            doc as Record<string, unknown>,
+            operation.schema._id,
+            operation.documentType,
+            migration.id,
+            sig,
+            i,
+          )
         );
         if (documentIds.length > 0) {
-          await collection.deleteMany({ _id: { $in: documentIds } } as Record<string, unknown>);
+          await collection.deleteMany(
+            { _id: { $in: documentIds } } as Record<string, unknown>,
+          );
         }
-      }
+      },
     },
 
     seed_multimodel_instance_type: {
       apply: async (operation) => {
-        if (opts.strictValidation && !await multiCollectionInstanceExists(db, operation.collectionName)) {
-          throw new Error(`Multi-model instance ${operation.collectionName} does not exist`);
+        if (
+          opts.strictValidation &&
+          !await multiCollectionInstanceExists(db, operation.collectionName)
+        ) {
+          throw new Error(
+            `Multi-model instance ${operation.collectionName} does not exist`,
+          );
         }
 
         const collection = db.collection(operation.collectionName);
-        const sig = `${operation.collectionName}:${operation.modelType}:${operation.documentType}`;
+        const sig =
+          `${operation.collectionName}:${operation.modelType}:${operation.documentType}`;
         const documents = operation.documents.map((doc: unknown, i) => {
           const typedDoc = doc as Record<string, unknown>;
-          const _id = resolveSeedDocId(typedDoc, operation.schema._id, operation.documentType, migration.id, sig, i);
-          const value = v.safeParse(v.object({
-            _type: v.literal(operation.documentType),
-            ...operation.schema,
-          }), {
-            ...typedDoc,
-            _id,
-            _type: operation.documentType,
-          });
+          const _id = resolveSeedDocId(
+            typedDoc,
+            operation.schema._id,
+            operation.documentType,
+            migration.id,
+            sig,
+            i,
+          );
+          const value = v.safeParse(
+            v.object({
+              _type: v.literal(operation.documentType),
+              ...operation.schema,
+            }),
+            {
+              ...typedDoc,
+              _id,
+              _type: operation.documentType,
+            },
+          );
           if (!value.success) {
-            throw new Error(`Document validation failed: ${JSON.stringify(value.issues)}`);
+            throw new Error(
+              `Document validation failed: ${JSON.stringify(value.issues)}`,
+            );
           }
           return { ...(value.output as Record<string, unknown>), _id };
         });
@@ -897,27 +1196,47 @@ export function createMongodbApplier(
         }
       },
       reverse: async (operation) => {
-        if (opts.strictValidation && !await multiCollectionInstanceExists(db, operation.collectionName)) {
-          throw new Error(`Multi-model instance ${operation.collectionName} does not exist`);
+        if (
+          opts.strictValidation &&
+          !await multiCollectionInstanceExists(db, operation.collectionName)
+        ) {
+          throw new Error(
+            `Multi-model instance ${operation.collectionName} does not exist`,
+          );
         }
 
         const collection = db.collection(operation.collectionName);
-        const sig = `${operation.collectionName}:${operation.modelType}:${operation.documentType}`;
+        const sig =
+          `${operation.collectionName}:${operation.modelType}:${operation.documentType}`;
         const documentIds = operation.documents.map((doc: unknown, i) =>
-          resolveSeedDocId(doc as Record<string, unknown>, operation.schema._id, operation.documentType, migration.id, sig, i)
+          resolveSeedDocId(
+            doc as Record<string, unknown>,
+            operation.schema._id,
+            operation.documentType,
+            migration.id,
+            sig,
+            i,
+          )
         );
         if (documentIds.length > 0) {
-          await collection.deleteMany({ _id: { $in: documentIds } } as Record<string, unknown>);
+          await collection.deleteMany(
+            { _id: { $in: documentIds } } as Record<string, unknown>,
+          );
         }
-      }
+      },
     },
 
     seed_multimodel_instances_type: {
       apply: async (operation) => {
-        const instances = await discoverMultiCollectionInstances(db, operation.modelType);
-        
+        const instances = await discoverMultiCollectionInstances(
+          db,
+          operation.modelType,
+        );
+
         if (instances.length === 0) {
-          console.warn(`No instances found for model type ${operation.modelType}`);
+          console.warn(
+            `No instances found for model type ${operation.modelType}`,
+          );
           return;
         }
 
@@ -932,7 +1251,9 @@ export function createMongodbApplier(
             migration,
           );
           if (!shouldReceive) {
-            console.log(`Skipping instance ${collectionName} - already has this migration`);
+            console.log(
+              `Skipping instance ${collectionName} - already has this migration`,
+            );
             continue;
           }
 
@@ -942,7 +1263,14 @@ export function createMongodbApplier(
             const typedDoc = doc as Record<string, unknown>;
             return {
               ...typedDoc,
-              _id: resolveSeedDocId(typedDoc, operation.schema._id, operation.documentType, migration.id, sig, i),
+              _id: resolveSeedDocId(
+                typedDoc,
+                operation.schema._id,
+                operation.documentType,
+                migration.id,
+                sig,
+                i,
+              ),
               _type: operation.documentType,
             };
           });
@@ -957,69 +1285,116 @@ export function createMongodbApplier(
           if (opts.currentMigrationId) {
             const recordKey = `${collectionName}:${opts.currentMigrationId}`;
             if (!recordedInstances.has(recordKey)) {
-              await recordMultiCollectionMigration(db, collectionName, opts.currentMigrationId);
-              recordedInstances.add(recordKey);
-            }
-          }
-        }
-      },
-      reverse: async (operation) => {
-        const instances = await discoverMultiCollectionInstances(db, operation.modelType);
-
-        const sig = `${operation.modelType}:${operation.documentType}`;
-        for (const collectionName of instances) {
-          const collection = db.collection(collectionName);
-          const documentIds = operation.documents.map((doc: unknown, i) =>
-            resolveSeedDocId(doc as Record<string, unknown>, operation.schema._id, operation.documentType, migration.id, sig, i)
-          );
-          if (documentIds.length > 0) {
-            await collection.deleteMany({ _id: { $in: documentIds } } as Record<string, unknown>);
-          }
-
-          // Record rollback for this instance (only once per migration, even if multiple seed operations)
-          if (opts.currentMigrationId) {
-            const recordKey = `${collectionName}:${opts.currentMigrationId}:reverted`;
-            if (!recordedInstances.has(recordKey)) {
               await recordMultiCollectionMigration(
                 db,
                 collectionName,
                 opts.currentMigrationId,
-                "reverted"
               );
               recordedInstances.add(recordKey);
             }
           }
         }
-      }
+      },
+      reverse: async (operation) => {
+        const instances = await discoverMultiCollectionInstances(
+          db,
+          operation.modelType,
+        );
+
+        const sig = `${operation.modelType}:${operation.documentType}`;
+        for (const collectionName of instances) {
+          const collection = db.collection(collectionName);
+          const documentIds = operation.documents.map((doc: unknown, i) =>
+            resolveSeedDocId(
+              doc as Record<string, unknown>,
+              operation.schema._id,
+              operation.documentType,
+              migration.id,
+              sig,
+              i,
+            )
+          );
+          if (documentIds.length > 0) {
+            await collection.deleteMany(
+              { _id: { $in: documentIds } } as Record<string, unknown>,
+            );
+          }
+
+          // Record rollback for this instance (only once per migration, even if multiple seed operations)
+          if (opts.currentMigrationId) {
+            const recordKey =
+              `${collectionName}:${opts.currentMigrationId}:reverted`;
+            if (!recordedInstances.has(recordKey)) {
+              await recordMultiCollectionMigration(
+                db,
+                collectionName,
+                opts.currentMigrationId,
+                "reverted",
+              );
+              recordedInstances.add(recordKey);
+            }
+          }
+        }
+      },
     },
 
     transform_collection: {
       apply: async (operation) => {
-        if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
-          throw new Error(`Collection ${operation.collectionName} does not exist`);
+        if (
+          opts.strictValidation &&
+          !await collectionExists(operation.collectionName)
+        ) {
+          throw new Error(
+            `Collection ${operation.collectionName} does not exist`,
+          );
         }
-        await transformDocuments(operation.collectionName, {}, operation.up as (doc: Record<string, unknown>) => Record<string, unknown>, operation.type);
+        await transformDocuments(
+          operation.collectionName,
+          {},
+          operation.up as (
+            doc: Record<string, unknown>,
+          ) => Record<string, unknown>,
+          operation.type,
+        );
       },
       reverse: async (operation) => {
         if (operation.irreversible) {
           throw new Error(`Operation is irreversible`);
         }
-        if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
-          throw new Error(`Collection ${operation.collectionName} does not exist`);
+        if (
+          opts.strictValidation &&
+          !await collectionExists(operation.collectionName)
+        ) {
+          throw new Error(
+            `Collection ${operation.collectionName} does not exist`,
+          );
         }
-        await transformDocuments(operation.collectionName, {}, operation.down as (doc: Record<string, unknown>) => Record<string, unknown>);
-      }
+        await transformDocuments(
+          operation.collectionName,
+          {},
+          operation.down as (
+            doc: Record<string, unknown>,
+          ) => Record<string, unknown>,
+        );
+      },
     },
 
     transform_multicollection_type: {
       apply: async (operation) => {
-        if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
-          throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
+        if (
+          opts.strictValidation &&
+          !await collectionExists(operation.collectionName)
+        ) {
+          throw new Error(
+            `Multi-collection ${operation.collectionName} does not exist`,
+          );
         }
         await transformDocuments(
           operation.collectionName,
           { _type: operation.documentType } as Record<string, unknown>,
-          operation.up as (doc: Record<string, unknown>) => Record<string, unknown>,
+          operation.up as (
+            doc: Record<string, unknown>,
+          ) => Record<string, unknown>,
           operation.type,
         );
       },
@@ -1027,26 +1402,40 @@ export function createMongodbApplier(
         if (operation.irreversible) {
           throw new Error(`Operation is irreversible`);
         }
-        if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
-          throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
+        if (
+          opts.strictValidation &&
+          !await collectionExists(operation.collectionName)
+        ) {
+          throw new Error(
+            `Multi-collection ${operation.collectionName} does not exist`,
+          );
         }
         await transformDocuments(
           operation.collectionName,
           { _type: operation.documentType } as Record<string, unknown>,
-          operation.down as (doc: Record<string, unknown>) => Record<string, unknown>
+          operation.down as (
+            doc: Record<string, unknown>,
+          ) => Record<string, unknown>,
         );
-      }
+      },
     },
 
     transform_multimodel_instance_type: {
       apply: async (operation) => {
-        if (opts.strictValidation && !await multiCollectionInstanceExists(db, operation.collectionName)) {
-          throw new Error(`Multi-model instance ${operation.collectionName} does not exist`);
+        if (
+          opts.strictValidation &&
+          !await multiCollectionInstanceExists(db, operation.collectionName)
+        ) {
+          throw new Error(
+            `Multi-model instance ${operation.collectionName} does not exist`,
+          );
         }
         await transformDocuments(
           operation.collectionName,
           { _type: operation.documentType } as Record<string, unknown>,
-          operation.up as (doc: Record<string, unknown>) => Record<string, unknown>,
+          operation.up as (
+            doc: Record<string, unknown>,
+          ) => Record<string, unknown>,
           operation.type,
         );
       },
@@ -1054,23 +1443,35 @@ export function createMongodbApplier(
         if (operation.irreversible) {
           throw new Error(`Operation is irreversible`);
         }
-        if (opts.strictValidation && !await multiCollectionInstanceExists(db, operation.collectionName)) {
-          throw new Error(`Multi-model instance ${operation.collectionName} does not exist`);
+        if (
+          opts.strictValidation &&
+          !await multiCollectionInstanceExists(db, operation.collectionName)
+        ) {
+          throw new Error(
+            `Multi-model instance ${operation.collectionName} does not exist`,
+          );
         }
         await transformDocuments(
           operation.collectionName,
           { _type: operation.documentType } as Record<string, unknown>,
-          operation.down as (doc: Record<string, unknown>) => Record<string, unknown>
+          operation.down as (
+            doc: Record<string, unknown>,
+          ) => Record<string, unknown>,
         );
-      }
+      },
     },
 
     transform_multimodel_instances_type: {
       apply: async (operation) => {
-        const instances = await discoverMultiCollectionInstances(db, operation.modelType);
-        
+        const instances = await discoverMultiCollectionInstances(
+          db,
+          operation.modelType,
+        );
+
         if (instances.length === 0) {
-          console.warn(`No instances found for model type ${operation.modelType}`);
+          console.warn(
+            `No instances found for model type ${operation.modelType}`,
+          );
           return;
         }
 
@@ -1085,14 +1486,18 @@ export function createMongodbApplier(
             migration,
           );
           if (!shouldReceive) {
-            console.log(`Skipping instance ${collectionName} - already has this migration`);
+            console.log(
+              `Skipping instance ${collectionName} - already has this migration`,
+            );
             continue;
           }
 
           await transformDocuments(
             collectionName,
             { _type: operation.documentType } as Record<string, unknown>,
-            operation.up as (doc: Record<string, unknown>) => Record<string, unknown>,
+            operation.up as (
+              doc: Record<string, unknown>,
+            ) => Record<string, unknown>,
             operation.type,
           );
 
@@ -1100,7 +1505,11 @@ export function createMongodbApplier(
           if (opts.currentMigrationId) {
             const recordKey = `${collectionName}:${opts.currentMigrationId}`;
             if (!recordedInstances.has(recordKey)) {
-              await recordMultiCollectionMigration(db, collectionName, opts.currentMigrationId);
+              await recordMultiCollectionMigration(
+                db,
+                collectionName,
+                opts.currentMigrationId,
+              );
               recordedInstances.add(recordKey);
             }
           }
@@ -1111,30 +1520,36 @@ export function createMongodbApplier(
           throw new Error(`Operation is irreversible`);
         }
 
-        const instances = await discoverMultiCollectionInstances(db, operation.modelType);
+        const instances = await discoverMultiCollectionInstances(
+          db,
+          operation.modelType,
+        );
 
         for (const collectionName of instances) {
           await transformDocuments(
             collectionName,
             { _type: operation.documentType } as Record<string, unknown>,
-            operation.down as (doc: Record<string, unknown>) => Record<string, unknown>
+            operation.down as (
+              doc: Record<string, unknown>,
+            ) => Record<string, unknown>,
           );
 
           // Record rollback for this instance (only once per migration, even if multiple operations)
           if (opts.currentMigrationId) {
-            const recordKey = `${collectionName}:${opts.currentMigrationId}:reverted`;
+            const recordKey =
+              `${collectionName}:${opts.currentMigrationId}:reverted`;
             if (!recordedInstances.has(recordKey)) {
               await recordMultiCollectionMigration(
                 db,
                 collectionName,
                 opts.currentMigrationId,
-                "reverted"
+                "reverted",
               );
               recordedInstances.add(recordKey);
             }
           }
         }
-      }
+      },
     },
 
     flow: {
@@ -1142,7 +1557,10 @@ export function createMongodbApplier(
         const prefix = extractIdPrefix(operation.targetIdSchema, "");
         const source = db.collection(operation.from.collection);
         const target = db.collection(operation.into.collection);
-        const baseFilter = (operation.from.where ?? {}) as Record<string, unknown>;
+        const baseFilter = (operation.from.where ?? {}) as Record<
+          string,
+          unknown
+        >;
         const reporter = makeReporter(
           operation.type,
           operation.into.collection,
@@ -1191,7 +1609,10 @@ export function createMongodbApplier(
         const prefix = extractIdPrefix(operation.targetIdSchema, "");
         const source = db.collection(operation.from.collection);
         const target = db.collection(operation.into.collection);
-        const baseFilter = (operation.from.where ?? {}) as Record<string, unknown>;
+        const baseFilter = (operation.from.where ?? {}) as Record<
+          string,
+          unknown
+        >;
 
         // Copy reverse: recompute target ids from the still-present source and
         // delete those copies, batched by _id cursor.
@@ -1207,9 +1628,16 @@ export function createMongodbApplier(
           if (docs.length === 0) break;
 
           const ids = docs.map((doc) =>
-            flowTargetId(prefix, migration.id, operation.from.collection, String(doc._id))
+            flowTargetId(
+              prefix,
+              migration.id,
+              operation.from.collection,
+              String(doc._id),
+            )
           );
-          await target.deleteMany({ _id: { $in: ids } } as Record<string, unknown>);
+          await target.deleteMany(
+            { _id: { $in: ids } } as Record<string, unknown>,
+          );
           lastId = docs[docs.length - 1]._id;
         }
       },
@@ -1222,13 +1650,24 @@ export function createMongodbApplier(
         // Resolve the concrete source collections + the context for each.
         const sources: {
           coll: string;
-          ctx: { sourceCollection?: string; instanceName?: string; documentType?: string };
+          ctx: {
+            sourceCollection?: string;
+            instanceName?: string;
+            documentType?: string;
+          };
           where?: Record<string, unknown>;
         }[] = [];
         if (from.kind === "collection") {
-          sources.push({ coll: from.name, ctx: { sourceCollection: from.name }, where: from.where });
+          sources.push({
+            coll: from.name,
+            ctx: { sourceCollection: from.name },
+            where: from.where,
+          });
         } else if (from.kind === "multiModelInstances") {
-          const instances = await discoverMultiCollectionInstances(db, from.model);
+          const instances = await discoverMultiCollectionInstances(
+            db,
+            from.model,
+          );
           for (const inst of instances) {
             sources.push({
               coll: inst,
@@ -1239,7 +1678,10 @@ export function createMongodbApplier(
               // instances when flowed into one scoped collection.
               where: {
                 _type: {
-                  $nin: [MULTI_COLLECTION_INFO_TYPE, MULTI_COLLECTION_MIGRATIONS_TYPE],
+                  $nin: [
+                    MULTI_COLLECTION_INFO_TYPE,
+                    MULTI_COLLECTION_MIGRATIONS_TYPE,
+                  ],
                 },
               },
             });
@@ -1298,7 +1740,12 @@ export function createMongodbApplier(
               if (id === undefined || id === null) {
                 id = `${toType}:${crypto.randomUUID().replace(/-/g, "")}`;
               }
-              const outDoc = { ...mapped, _id: id, _type: toType, _scope: scope };
+              const outDoc = {
+                ...mapped,
+                _id: id,
+                _type: toType,
+                _scope: scope,
+              };
               return { id: id as string, scope, toType, outDoc };
             });
 
@@ -1307,10 +1754,17 @@ export function createMongodbApplier(
             // the extra `_type`/`_scope` of the old per-doc findOne were
             // redundant given `_id` uniqueness.
             const existingDocs = await target
-              .find({ _id: { $in: computed.map((c) => c.id) } } as Record<string, unknown>)
+              .find(
+                { _id: { $in: computed.map((c) => c.id) } } as Record<
+                  string,
+                  unknown
+                >,
+              )
               .toArray();
             const existingMap = new Map<string, Record<string, unknown>>(
-              existingDocs.map((d) => [String(d._id), d as Record<string, unknown>]),
+              existingDocs.map((
+                d,
+              ) => [String(d._id), d as Record<string, unknown>]),
             );
 
             // Plan one write per id, collapsing duplicates WITHIN the page and
@@ -1337,7 +1791,12 @@ export function createMongodbApplier(
                   // Already in the DB → must replace; otherwise (within-page
                   // merge of two new docs) it stays an insert.
                   type: existingMap.has(c.id) ? "replace" : "insert",
-                  doc: { ...merged, _id: c.id, _type: c.toType, _scope: c.scope },
+                  doc: {
+                    ...merged,
+                    _id: c.id,
+                    _type: c.toType,
+                    _scope: c.scope,
+                  },
                 });
               } else {
                 planned.set(c.id, { type: "insert", doc: c.outDoc });
@@ -1382,74 +1841,112 @@ export function createMongodbApplier(
     },
     update_indexes: {
       apply: async (operation) => {
-        if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
-          throw new Error(`Collection ${operation.collectionName} does not exist`);
+        if (
+          opts.strictValidation &&
+          !await collectionExists(operation.collectionName)
+        ) {
+          throw new Error(
+            `Collection ${operation.collectionName} does not exist`,
+          );
         }
         const collection = db.collection(operation.collectionName);
-        const collectionSchema = v.object(operation.schema as Record<string, v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>>);
+        const collectionSchema = v.object(
+          operation.schema as Record<
+            string,
+            v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+          >,
+        );
         await applyCollectionIndexes(collection, collectionSchema);
       },
       reverse: (_operation) => {
         // Index updates are idempotent, no reversal needed
         return Promise.resolve();
-      }
+      },
     },
 
     delete_multicollection_type: {
       apply: async (operation) => {
-        if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
-          throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
+        if (
+          opts.strictValidation &&
+          !await collectionExists(operation.collectionName)
+        ) {
+          throw new Error(
+            `Multi-collection ${operation.collectionName} does not exist`,
+          );
         }
         const collection = db.collection(operation.collectionName);
-        await collection.deleteMany({ _type: operation.documentType } as Record<string, unknown>);
+        await collection.deleteMany(
+          { _type: operation.documentType } as Record<string, unknown>,
+        );
       },
       reverse: async (_operation) => {
         // Cannot restore deleted documents - this is irreversible
-        throw new Error(`Cannot reverse delete_multicollection_type: operation is irreversible`);
-      }
+        throw new Error(
+          `Cannot reverse delete_multicollection_type: operation is irreversible`,
+        );
+      },
     },
 
     delete_multimodel_instances_type: {
       apply: async (operation) => {
-        const instances = await discoverMultiCollectionInstances(db, operation.modelType);
+        const instances = await discoverMultiCollectionInstances(
+          db,
+          operation.modelType,
+        );
 
         if (instances.length === 0) {
-          console.warn(`No instances found for model type ${operation.modelType}`);
+          console.warn(
+            `No instances found for model type ${operation.modelType}`,
+          );
           return;
         }
 
         for (const collectionName of instances) {
           const collection = db.collection(collectionName);
-          await collection.deleteMany({ _type: operation.documentType } as Record<string, unknown>);
+          await collection.deleteMany(
+            { _type: operation.documentType } as Record<string, unknown>,
+          );
         }
       },
       reverse: async (_operation) => {
         // Cannot restore deleted documents - this is irreversible
-        throw new Error(`Cannot reverse delete_multimodel_instances_type: operation is irreversible`);
-      }
+        throw new Error(
+          `Cannot reverse delete_multimodel_instances_type: operation is irreversible`,
+        );
+      },
     },
 
     rename_multicollection_type: {
       apply: async (operation) => {
-        if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
-          throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
+        if (
+          opts.strictValidation &&
+          !await collectionExists(operation.collectionName)
+        ) {
+          throw new Error(
+            `Multi-collection ${operation.collectionName} does not exist`,
+          );
         }
         const collection = db.collection(operation.collectionName);
         await collection.updateMany(
           { _type: operation.oldTypeName } as Record<string, unknown>,
-          { $set: { _type: operation.newTypeName } } as Record<string, unknown>
+          { $set: { _type: operation.newTypeName } } as Record<string, unknown>,
         );
       },
       reverse: async (operation) => {
-        if (opts.strictValidation && !await collectionExists(operation.collectionName)) {
-          throw new Error(`Multi-collection ${operation.collectionName} does not exist`);
+        if (
+          opts.strictValidation &&
+          !await collectionExists(operation.collectionName)
+        ) {
+          throw new Error(
+            `Multi-collection ${operation.collectionName} does not exist`,
+          );
         }
         const collection = db.collection(operation.collectionName);
         await collection.updateMany(
           { _type: operation.newTypeName } as Record<string, unknown>,
-          { $set: { _type: operation.oldTypeName } } as Record<string, unknown>
+          { $set: { _type: operation.oldTypeName } } as Record<string, unknown>,
         );
-      }
+      },
     },
 
     create_scoped_multicollection: {
@@ -1472,7 +1969,8 @@ export function createMongodbApplier(
     seed_scoped_multicollection_type: {
       apply: async (operation) => {
         const collection = db.collection(operation.collectionName);
-        const sig = `${operation.collectionName}:${operation.scope}:${operation.documentType}`;
+        const sig =
+          `${operation.collectionName}:${operation.scope}:${operation.documentType}`;
         const documents = operation.documents.map((doc: unknown, i) => {
           const typedDoc = doc as Record<string, unknown>;
           const _id = resolveSeedDocId(
@@ -1485,9 +1983,14 @@ export function createMongodbApplier(
           );
           // Validate the user fields ; meta fields are added afterwards and
           // enforced by the collection's own validator on insert.
-          const value = v.safeParse(v.object(operation.schema), { ...typedDoc, _id });
+          const value = v.safeParse(v.object(operation.schema), {
+            ...typedDoc,
+            _id,
+          });
           if (!value.success) {
-            throw new Error(`Document validation failed: ${JSON.stringify(value.issues)}`);
+            throw new Error(
+              `Document validation failed: ${JSON.stringify(value.issues)}`,
+            );
           }
           return {
             ...(value.output as Record<string, unknown>),
@@ -1505,26 +2008,40 @@ export function createMongodbApplier(
       },
       reverse: async (operation) => {
         const collection = db.collection(operation.collectionName);
-        const sig = `${operation.collectionName}:${operation.scope}:${operation.documentType}`;
+        const sig =
+          `${operation.collectionName}:${operation.scope}:${operation.documentType}`;
         const ids = operation.documents.map((doc: unknown, i) =>
-          resolveSeedDocId(doc as Record<string, unknown>, operation.schema._id, operation.documentType, migration.id, sig, i)
+          resolveSeedDocId(
+            doc as Record<string, unknown>,
+            operation.schema._id,
+            operation.documentType,
+            migration.id,
+            sig,
+            i,
+          )
         );
         if (ids.length > 0) {
-          await collection.deleteMany({ _id: { $in: ids } } as Record<string, unknown>);
+          await collection.deleteMany(
+            { _id: { $in: ids } } as Record<string, unknown>,
+          );
         }
       },
     },
 
     transform_scoped_multicollection_type: {
       apply: async (operation) => {
-        const filter: Record<string, unknown> = { _type: operation.documentType };
+        const filter: Record<string, unknown> = {
+          _type: operation.documentType,
+        };
         if (operation.scopeFilter && operation.scopeFilter.length > 0) {
           filter._scope = { $in: operation.scopeFilter };
         }
         await transformDocuments(
           operation.collectionName,
           filter,
-          operation.up as (doc: Record<string, unknown>) => Record<string, unknown>,
+          operation.up as (
+            doc: Record<string, unknown>,
+          ) => Record<string, unknown>,
           operation.type,
         );
       },
@@ -1532,24 +2049,33 @@ export function createMongodbApplier(
         if (operation.irreversible) {
           throw new Error(`Operation is irreversible`);
         }
-        const filter: Record<string, unknown> = { _type: operation.documentType };
+        const filter: Record<string, unknown> = {
+          _type: operation.documentType,
+        };
         if (operation.scopeFilter && operation.scopeFilter.length > 0) {
           filter._scope = { $in: operation.scopeFilter };
         }
         await transformDocuments(
           operation.collectionName,
           filter,
-          operation.down as (doc: Record<string, unknown>) => Record<string, unknown>,
+          operation.down as (
+            doc: Record<string, unknown>,
+          ) => Record<string, unknown>,
         );
       },
     },
 
     rename_multimodel_instances_type: {
       apply: async (operation) => {
-        const instances = await discoverMultiCollectionInstances(db, operation.modelType);
+        const instances = await discoverMultiCollectionInstances(
+          db,
+          operation.modelType,
+        );
 
         if (instances.length === 0) {
-          console.warn(`No instances found for model type ${operation.modelType}`);
+          console.warn(
+            `No instances found for model type ${operation.modelType}`,
+          );
           return;
         }
 
@@ -1567,7 +2093,10 @@ export function createMongodbApplier(
         }
       },
       reverse: async (operation) => {
-        const instances = await discoverMultiCollectionInstances(db, operation.modelType);
+        const instances = await discoverMultiCollectionInstances(
+          db,
+          operation.modelType,
+        );
 
         for (const collectionName of instances) {
           const collection = db.collection(collectionName);
@@ -1582,7 +2111,7 @@ export function createMongodbApplier(
             oldTypePrefix,
           );
         }
-      }
+      },
     },
   };
 
@@ -1620,7 +2149,9 @@ export function createMongodbApplier(
 
         if (nextId !== currentId) {
           // _id is immutable in MongoDB → delete + re-insert with new id.
-          await collection.deleteOne({ _id: currentId } as Record<string, unknown>);
+          await collection.deleteOne(
+            { _id: currentId } as Record<string, unknown>,
+          );
           await collection.insertOne({ ...doc, _id: nextId, _type: toType });
         } else {
           await collection.updateOne(
@@ -1645,7 +2176,9 @@ export function createMongodbApplier(
   async function reverseOperation(operation: MigrationRule): Promise<void> {
     const handler = migrations[operation.type]?.reverse;
     if (!handler) {
-      throw new Error(`No reverse handler for operation type: ${operation.type}`);
+      throw new Error(
+        `No reverse handler for operation type: ${operation.type}`,
+      );
     }
     // Type assertion is safe here because we're dispatching to the correct handler
     // deno-lint-ignore no-explicit-any
@@ -1654,21 +2187,21 @@ export function createMongodbApplier(
 
   /**
    * Applies a complete migration (all operations + schema synchronization)
-   * 
+   *
    * This is the recommended way to apply migrations as it ensures validators
    * and indexes are synchronized after all operations are executed.
-   * 
+   *
    * Strategy:
    * 1. Disable ALL validators before starting (prevents validation errors during transforms)
    * 2. Apply all operations without validation interference
    * 3. Re-enable and synchronize validators with target schemas
-   * 
+   *
    * @param operations - Array of migration operations to apply
    * @param direction - 'up' for forward migration, 'down' for rollback
    */
   async function applyMigration(
     operations: MigrationRule[],
-    direction: 'up' | 'down',
+    direction: "up" | "down",
   ): Promise<void> {
     // Pre-scan: refuse to roll back if any operation is irreversible, BEFORE
     // touching validators or data — otherwise we'd leave the database in a
@@ -1678,14 +2211,16 @@ export function createMongodbApplier(
       if (irreversible.length > 0) {
         throw new Error(
           `Cannot roll back: migration contains ${irreversible.length} ` +
-            `irreversible operation(s) [${irreversible.map((o) => o.type).join(", ")}]. ` +
+            `irreversible operation(s) [${
+              irreversible.map((o) => o.type).join(", ")
+            }]. ` +
             `Rollback aborted before any changes were made.`,
         );
       }
     }
 
     // Determine target schemas based on direction
-    const targetSchemas = direction === 'up'
+    const targetSchemas = direction === "up"
       ? migration.schemas
       : (migration.parent?.schemas || migration.schemas);
 
@@ -1704,11 +2239,13 @@ export function createMongodbApplier(
     // restored, even if an operation throws mid-migration. Leaving validators
     // disabled is the worst outcome (silent acceptance of invalid documents);
     // re-syncing in `finally` guarantees the collection regains its guard.
-    const ordered = direction === "down" ? [...operations].reverse() : operations;
+    const ordered = direction === "down"
+      ? [...operations].reverse()
+      : operations;
     let applyError: unknown;
     try {
       for (const operation of ordered) {
-        if (direction === 'up') {
+        if (direction === "up") {
           await applyOperation(operation);
         } else {
           await reverseOperation(operation);
@@ -1739,7 +2276,7 @@ export function createMongodbApplier(
     // This ensures complete tracking of which migrations each instance has seen
     if (opts.currentMigrationId && targetSchemas.multiModels) {
       await recordMigrationOnAllMultiModelInstances(
-        direction === 'up' ? 'applied' : 'reverted'
+        direction === "up" ? "applied" : "reverted",
       );
     }
   }
@@ -1750,7 +2287,7 @@ export function createMongodbApplier(
    * even if they weren't directly affected by it
    */
   async function recordMigrationOnAllMultiModelInstances(
-    operation: 'applied' | 'reverted'
+    operation: "applied" | "reverted",
   ): Promise<void> {
     if (!opts.currentMigrationId) return;
     if (!migration.schemas.multiModels) return;
@@ -1767,7 +2304,8 @@ export function createMongodbApplier(
       const instances = await discoverMultiCollectionInstances(db, modelType);
 
       await forEachInstance(instances, async (collectionName) => {
-        const instanceKey = `${collectionName}:${opts.currentMigrationId}:${operation}`;
+        const instanceKey =
+          `${collectionName}:${opts.currentMigrationId}:${operation}`;
 
         // Skip if already recorded by operation handlers
         if (recordedInstances.has(instanceKey)) return;

@@ -86,7 +86,11 @@ Deno.test("paginate custom sort ASC: walk reproduces MongoDB's sorted order, onc
     const truth = await groundTruth(view, { seat: 1 });
 
     assertEquals(walked.length, 47, "every doc returned exactly once");
-    assertEquals(new Set(walked).size, 47, "no duplicates across page boundaries");
+    assertEquals(
+      new Set(walked).size,
+      47,
+      "no duplicates across page boundaries",
+    );
     assertEquals(
       walked,
       truth,
@@ -128,7 +132,11 @@ Deno.test("paginate custom sort: position + total are correct under a custom sor
       sort: { seat: 1 },
       afterId: p1.data[p1.data.length - 1]._id as string,
     });
-    assertEquals(p2.position, 10, "position advances correctly under custom sort");
+    assertEquals(
+      p2.position,
+      10,
+      "position advances correctly under custom sort",
+    );
     assertEquals(p2.data.length, 10);
   });
 });
@@ -149,7 +157,10 @@ Deno.test("paginate custom sort + pipeline: walk == Mongo order over JOIN surviv
       );
     }
     for (let i = 0; i < 40; i += 3) {
-      await view.insertOne("membership", { participantId: ids[i], org: "org:x" });
+      await view.insertOne("membership", {
+        participantId: ids[i],
+        org: "org:x",
+      });
     }
 
     // INNER-JOIN filter: keep participants with >=1 membership, sorted by seat.

@@ -12,7 +12,10 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { withDatabase } from "../+shared.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
-import { migrationBuilder, getIrreversibleOperations } from "../../src/migration/builder.ts";
+import {
+  getIrreversibleOperations,
+  migrationBuilder,
+} from "../../src/migration/builder.ts";
 import { createMemoryApplier } from "../../src/migration/appliers/memory.ts";
 import { createMongodbApplier } from "../../src/migration/appliers/mongodb.ts";
 import { createEmptyDatabaseState } from "../../src/migration/types.ts";
@@ -126,7 +129,8 @@ Deno.test("memory flow COPY: target ids are deterministic across replays", async
     return s;
   };
   const m = copyMigration("keep");
-  const ops = () => m.migrate(migrationBuilder({ schemas: SCHEMAS })).operations;
+  const ops = () =>
+    m.migrate(migrationBuilder({ schemas: SCHEMAS })).operations;
 
   const s1 = seed();
   const s2 = seed();

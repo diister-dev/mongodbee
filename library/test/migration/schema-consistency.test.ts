@@ -32,7 +32,9 @@ Deno.test("schema consistency: declared-but-not-created collection is flagged", 
   assertEquals(result.success, false);
   assert(
     result.errors.some((e) => e.includes("users") && e.includes("not created")),
-    `expected a "declared but not created" error, got: ${result.errors.join(" | ")}`,
+    `expected a "declared but not created" error, got: ${
+      result.errors.join(" | ")
+    }`,
   );
 });
 

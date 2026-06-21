@@ -39,7 +39,9 @@ Deno.test("generateMigrationId output is accepted by validateMigrationChain", ()
     assertEquals(
       result.errors,
       [],
-      `validateMigrationChain rejected a generated id (${id}): ${result.errors.join(", ")}`,
+      `validateMigrationChain rejected a generated id (${id}): ${
+        result.errors.join(", ")
+      }`,
     );
     assert(result.valid, `result.valid should be true for ${id}`);
   }

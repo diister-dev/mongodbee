@@ -100,7 +100,10 @@ type InsertElementSchema<
 > = v.ObjectSchema<
   & {
     _id: DynId<T[K]["_id"]>;
-    _type: v.OptionalSchema<v.LiteralSchema<K & string, AnyMessage>, () => K & string>;
+    _type: v.OptionalSchema<
+      v.LiteralSchema<K & string, AnyMessage>,
+      () => K & string
+    >;
     _scope: S;
   }
   & T[K],
@@ -245,7 +248,7 @@ export type ScopedView<
 
   aggregate(
     stageBuilder: (stage: ScopedStageBuilder<T>) => AggregationStage[],
-  // deno-lint-ignore no-explicit-any
+    // deno-lint-ignore no-explicit-any
   ): Promise<any[]>;
 
   paginate<K extends keyof T, EN = OutputDoc<T, K, S>, R = EN>(
@@ -375,7 +378,7 @@ export type ReadOnlyMultiScopeView<
 
   aggregate(
     stageBuilder: (stage: ScopedStageBuilder<T>) => AggregationStage[],
-  // deno-lint-ignore no-explicit-any
+    // deno-lint-ignore no-explicit-any
   ): Promise<any[]>;
 };
 
@@ -638,7 +641,7 @@ export async function scopedMultiCollection<
           _id: id,
           _type: typeName,
           _scope: scopeId,
-        // deno-lint-ignore no-explicit-any
+          // deno-lint-ignore no-explicit-any
         } as any, { session });
         if (!raw) {
           throw new Error(
@@ -779,7 +782,7 @@ export async function scopedMultiCollection<
           _id: id,
           _type: typeName,
           _scope: scopeId,
-        // deno-lint-ignore no-explicit-any
+          // deno-lint-ignore no-explicit-any
         } as any, { session });
         if (!result.acknowledged) throw new Error("Delete failed");
         if (result.deletedCount === 0) {
@@ -797,7 +800,7 @@ export async function scopedMultiCollection<
           _id: { $in: ids },
           _type: typeName,
           _scope: scopeId,
-        // deno-lint-ignore no-explicit-any
+          // deno-lint-ignore no-explicit-any
         } as any, { session });
         if (!result.acknowledged) throw new Error("Delete failed");
         return result.deletedCount;
@@ -810,7 +813,7 @@ export async function scopedMultiCollection<
           ...(filter as Record<string, unknown>),
           _type: typeName,
           _scope: scopeId,
-        // deno-lint-ignore no-explicit-any
+          // deno-lint-ignore no-explicit-any
         } as any, { session });
         if (!result.acknowledged) throw new Error("Delete failed");
         return result.deletedCount;
@@ -829,13 +832,17 @@ export async function scopedMultiCollection<
 
         return retryOnWriteConflict(async () => {
           const session = sessionContext.getSession();
-          const result = await collection.updateOne({
-            _id: id,
-            _type: typeName,
-            _scope: scopeId,
-          // deno-lint-ignore no-explicit-any
-          // deno-lint-ignore no-explicit-any
-          } as any, updateOps as any, { session });
+          const result = await collection.updateOne(
+            {
+              _id: id,
+              _type: typeName,
+              _scope: scopeId,
+              // deno-lint-ignore no-explicit-any
+              // deno-lint-ignore no-explicit-any
+            } as any,
+            updateOps as any,
+            { session },
+          );
           if (!result.acknowledged) throw new Error("Update failed");
           if (result.matchedCount === 0) {
             throw new Error(
@@ -1128,7 +1135,9 @@ export async function scopedMultiCollection<
               : validatedDoc;
             const keep = (await customFilter?.(enriched as never)) ?? true;
             if (!keep) continue;
-            const finalDoc = format ? await format(enriched as never) : enriched;
+            const finalDoc = format
+              ? await format(enriched as never)
+              : enriched;
             data.push(finalDoc);
             limit--;
           }

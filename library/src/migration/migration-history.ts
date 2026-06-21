@@ -89,7 +89,7 @@ export function calculateMigrationStateFromHistory<
  *   { id: "migration-1", operation: "reverted", status: "success", ... },
  *   { id: "migration-2", operation: "applied", status: "success", ... },
  * ];
- * 
+ *
  * const states = groupOperationsByMigrationId(ops);
  * // Map {
  * //   "migration-1" => { status: "reverted", lastOperation: {...} },
@@ -152,7 +152,7 @@ export function groupOperationsByMigrationId<T extends BaseMigrationOperation>(
  *   { id: "migration-2", operation: "applied", status: "success", ... },
  *   { id: "migration-2", operation: "reverted", status: "success", ... },
  * ];
- * 
+ *
  * const applied = getAppliedMigrationIdsFromHistory(ops);
  * // ["migration-1"]  // migration-2 is excluded because it was reverted
  * ```

@@ -29,7 +29,11 @@ Deno.test("renameCollection: plain rename is reversible (memory up + down)", asy
     migrate: (b) => b.renameCollection("a", "b").compile(),
   });
   const ops = m.migrate(migrationBuilder({ schemas: S })).operations;
-  assertEquals(getIrreversibleOperations(ops).length, 0, "plain rename is reversible");
+  assertEquals(
+    getIrreversibleOperations(ops).length,
+    0,
+    "plain rename is reversible",
+  );
 
   const applier = createMemoryApplier(m);
   await applier.applyMigration(state, ops, "up");
@@ -45,7 +49,8 @@ Deno.test("renameCollection: dropTarget flags the op lossy", () => {
   const m = migrationDefinition("001", "rn", {
     parent: null,
     schemas: S,
-    migrate: (b) => b.renameCollection("a", "b", { dropTarget: true }).compile(),
+    migrate: (b) =>
+      b.renameCollection("a", "b", { dropTarget: true }).compile(),
   });
   const ops = m.migrate(migrationBuilder({ schemas: S })).operations;
   assertEquals(getLossyOperations(ops).length, 1);
@@ -65,7 +70,8 @@ Deno.test("renameCollection: temp scoped collection → final name (memory)", as
   const m = migrationDefinition("001", "swap", {
     parent: null,
     schemas: S,
-    migrate: (b) => b.renameCollection("+expositions__v2", "+expositions").compile(),
+    migrate: (b) =>
+      b.renameCollection("+expositions__v2", "+expositions").compile(),
   });
   const ops = m.migrate(migrationBuilder({ schemas: S })).operations;
   await createMemoryApplier(m).applyMigration(state, ops, "up");

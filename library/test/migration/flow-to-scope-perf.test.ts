@@ -50,7 +50,9 @@ Deno.test({
     console.log("");
     console.log("=".repeat(72));
     console.log(`MIGRATION PERF — flow_to_scope`);
-    console.log(`  docs=${DOCS.toLocaleString()} scopes=${SCOPES} batch=${BATCH_SIZE}`);
+    console.log(
+      `  docs=${DOCS.toLocaleString()} scopes=${SCOPES} batch=${BATCH_SIZE}`,
+    );
     console.log(`  db (manual cleanup if interrupted): ${dbName}`);
     console.log("=".repeat(72));
 
@@ -76,7 +78,9 @@ Deno.test({
       }
       const seedMs = performance.now() - tSeed;
       console.log(
-        `  seeded ${DOCS.toLocaleString()} docs in ${(seedMs / 1000).toFixed(1)}s`,
+        `  seeded ${DOCS.toLocaleString()} docs in ${
+          (seedMs / 1000).toFixed(1)
+        }s`,
       );
 
       // -- build the consolidation migration ------------------------------
@@ -135,8 +139,12 @@ Deno.test({
       console.log("=".repeat(72));
       console.log("");
 
-      if (remaining !== 0) throw new Error(`source not fully consumed: ${remaining}`);
-      if (moved !== DOCS) throw new Error(`expected ${DOCS} moved, got ${moved}`);
+      if (remaining !== 0) {
+        throw new Error(`source not fully consumed: ${remaining}`);
+      }
+      if (moved !== DOCS) {
+        throw new Error(`expected ${DOCS} moved, got ${moved}`);
+      }
     } finally {
       console.log(`Cleaning up: dropping ${dbName}`);
       await db.dropDatabase();

@@ -55,7 +55,8 @@ const debugSpec = readEnv("MONGODBEE_DEBUG");
 // If MONGODBEE_DEBUG is set, default level is "debug" (the whole point is to see
 // debug logs); otherwise default to "info" so warn/error still surface.
 const defaultLevel: Level = debugSpec ? "debug" : "info";
-const levelSpec = (readEnv("MONGODBEE_LOG_LEVEL") || defaultLevel).toLowerCase() as Level;
+const levelSpec = (readEnv("MONGODBEE_LOG_LEVEL") || defaultLevel)
+  .toLowerCase() as Level;
 const minLevel = LEVEL_ORDER[levelSpec] ?? LEVEL_ORDER[defaultLevel];
 
 const includePatterns: string[] = [];
@@ -116,7 +117,8 @@ function emit(level: Level, namespace: string, args: unknown[]): void {
   const now = Date.now();
   const delta = formatDelta(namespace, now);
   const message = args.map(formatArg).join(" ");
-  const line = `[mongodbee:${namespace}] ${level.toUpperCase()} ${message} (${delta})`;
+  const line =
+    `[mongodbee:${namespace}] ${level.toUpperCase()} ${message} (${delta})`;
   console.log(line);
 }
 

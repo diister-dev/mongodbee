@@ -21,18 +21,22 @@ import * as v from "../../src/schema.ts";
 const S = { collections: { roots: { _id: v.string() } } };
 
 function consumeMigration() {
-  return migrationDefinition("2025_01_01_0000_AAAAAAAAAAAAAAAAAAAAAAAAAA@consume", "consume", {
-    parent: null,
-    schemas: S,
-    migrate: (b) =>
-      b.flowToScope({
-        from: { kind: "collection", name: "roots" },
-        into: { collection: "scoped" },
-        toType: () => "info",
-        scope: (d) => d._id as string,
-        source: "consume",
-      }).compile(),
-  });
+  return migrationDefinition(
+    "2025_01_01_0000_AAAAAAAAAAAAAAAAAAAAAAAAAA@consume",
+    "consume",
+    {
+      parent: null,
+      schemas: S,
+      migrate: (b) =>
+        b.flowToScope({
+          from: { kind: "collection", name: "roots" },
+          into: { collection: "scoped" },
+          toType: () => "info",
+          scope: (d) => d._id as string,
+          source: "consume",
+        }).compile(),
+    },
+  );
 }
 
 /**
@@ -46,7 +50,11 @@ function dbWithDropFailure(realDb: Db, targetName: string, error: unknown): Db {
       if (prop === "collection") {
         // deno-lint-ignore no-explicit-any
         return (name: string, ...args: any[]) => {
-          const coll = (target.collection as (n: string, ...a: unknown[]) => unknown)(name, ...args);
+          const coll =
+            (target.collection as (n: string, ...a: unknown[]) => unknown)(
+              name,
+              ...args,
+            );
           if (name !== targetName) return coll;
           return new Proxy(coll as object, {
             get(ct, cprop) {
@@ -81,7 +89,9 @@ Deno.test("mongodb flowToScope consume: a real drop() failure fails the migratio
     const wrapped = dbWithDropFailure(db, "roots", dropError);
 
     await assertRejects(
-      () => createMongodbApplier(wrapped, m, { currentMigrationId: m.id }).applyMigration(ops, "up"),
+      () =>
+        createMongodbApplier(wrapped, m, { currentMigrationId: m.id })
+          .applyMigration(ops, "up"),
       Error,
       "simulated drop failure",
     );
@@ -109,10 +119,14 @@ Deno.test("mongodb flowToScope consume: NamespaceNotFound on drop is tolerated (
 
     // Should NOT throw: a missing source collection means it was already
     // consumed; the consolidation goal still holds.
-    await createMongodbApplier(wrapped, m, { currentMigrationId: m.id }).applyMigration(ops, "up");
+    await createMongodbApplier(wrapped, m, { currentMigrationId: m.id })
+      .applyMigration(ops, "up");
 
     // The flow still happened: docs landed in the scoped target.
     const scoped = await db.collection("scoped").find({} as never).toArray();
-    assert(scoped.length >= 1, "documents should have been flowed into the scoped collection");
+    assert(
+      scoped.length >= 1,
+      "documents should have been flowed into the scoped collection",
+    );
   });
 });

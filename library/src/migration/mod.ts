@@ -48,13 +48,13 @@
 
 // Core types and interfaces
 export type {
+  CollectionBuilder as MigrationCollectionBuilder,
   CreateCollectionRule,
   // Database state
   DatabaseState,
   // Applier interfaces
   MigrationApplier,
   MigrationBuilder,
-  CollectionBuilder as MigrationCollectionBuilder,
   // Migration definitions
   MigrationDefinition,
   MigrationProperty,
@@ -148,10 +148,7 @@ export {
   filterOperationsForModelType,
   getMigrationsForCatchUp,
 } from "./catch-up.ts";
-export type {
-  CatchUpSummary,
-  InstanceCatchUpInfo,
-} from "./catch-up.ts";
+export type { CatchUpSummary, InstanceCatchUpInfo } from "./catch-up.ts";
 
 // Generic event sourcing utilities
 export {
@@ -163,10 +160,10 @@ export type { BaseMigrationOperation } from "./migration-history.ts";
 
 // Migration ID utilities
 export {
-  extractMigrationTimestamp,
   compareMigrationTimestamps,
-  isMigrationBefore,
+  extractMigrationTimestamp,
   isMigrationAfter,
+  isMigrationBefore,
 } from "./utils/migration-id.ts";
 
 // Status checking utilities

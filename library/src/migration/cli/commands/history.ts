@@ -44,7 +44,7 @@ export async function historyCommand(
     const connectionUri = config.database?.connection?.uri ||
       "mongodb://localhost:27017";
     const dbName = config.database?.name || "myapp";
-    
+
     console.log(dim(`Database: ${dbName}`));
     console.log();
 
