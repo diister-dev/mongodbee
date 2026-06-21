@@ -14,6 +14,7 @@ import { toMongoValidator } from "./validator.ts";
 import { dbId, newId } from "./ids.ts";
 import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
 import { getSessionContext } from "./session.ts";
+import { getNestedValue } from "./dot-notation.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
 import { dirtyEquivalent } from "./utils/object.ts";
 import { createLogger } from "./utils/logger.ts";
@@ -247,17 +248,32 @@ export type ScopedView<
   // deno-lint-ignore no-explicit-any
   ): Promise<any[]>;
 
-  paginate<K extends keyof T>(
+  paginate<K extends keyof T, EN = OutputDoc<T, K, S>, R = EN>(
     type: K,
     filter?: m.Filter<OutputDoc<T, K, S>>,
     options?: {
       limit?: number;
       afterId?: string;
+      beforeId?: string;
       sort?: m.Sort | m.SortDirection;
+      /** Scope-safe pipeline stages run server-side before pagination (lookups, addFields, …). */
+      pipeline?: (stage: ScopedStageBuilder<T>) => AggregationStage[];
+      prepare?: (doc: OutputDoc<T, K, S>) => Promise<EN> | EN;
+      filter?: (doc: EN) => Promise<boolean> | boolean;
+      format?: (doc: EN) => Promise<R> | R;
+      /** Skip the countDocuments call(s); `total` and `position` come back undefined. */
+      skipTotal?: boolean;
+      /** Fetch one extra row to set `hasMore` cheaply; the extra row is dropped. */
+      peek?: boolean;
     },
   ): Promise<{
-    total: number;
-    data: OutputDoc<T, K, S>[];
+    /** Total docs matching the (scoped) query — omitted when `skipTotal`. */
+    total?: number;
+    /** 0-based count of docs before this page's first row — omitted when `skipTotal`. */
+    position?: number;
+    data: R[];
+    /** Present only when `peek` was requested. */
+    hasMore?: boolean;
   }>;
 };
 
@@ -885,10 +901,20 @@ export async function scopedMultiCollection<
 
       async paginate(type, filter, options) {
         const typeName = type as string;
-        const limit = options?.limit ?? 100;
+        const { skipTotal = false, peek = false } = options || {};
+        const requestedLimit = options?.limit ?? 100;
+        let limit = peek ? requestedLimit + 1 : requestedLimit;
         const afterId = options?.afterId;
+        const beforeId = options?.beforeId;
+        const prepare = options?.prepare;
+        const customFilter = options?.filter;
+        const format = options?.format;
+        const pipelineBuilder = options?.pipeline;
         const sortInput = options?.sort ?? { _id: 1 };
+        const session = sessionContext.getSession();
 
+        // Normalize sort + always add an `_id` tie-breaker so duplicate sort
+        // values keep a stable (cursor-safe) order.
         const sortObj: Record<string, 1 | -1> =
           typeof sortInput === "object" && !Array.isArray(sortInput)
             ? { ...(sortInput as Record<string, 1 | -1>) }
@@ -899,21 +925,54 @@ export async function scopedMultiCollection<
                 : -1,
             };
         if (!("_id" in sortObj)) sortObj._id = 1;
+        let sort: Record<string, 1 | -1> = { ...sortObj };
 
-        const session = sessionContext.getSession();
-
+        // Scope + type are non-bypassable; the user filter narrows further.
         const baseQuery: Record<string, unknown>[] = [
           { _scope: scopeId },
           { _type: typeName },
         ];
         if (filter) baseQuery.push(filter as Record<string, unknown>);
 
-        const total = await collection.countDocuments(
-          // deno-lint-ignore no-explicit-any
-          { $and: baseQuery } as any,
-          { session },
-        );
+        // Build a cursor filter from an anchor doc. Single-field `_id` sort
+        // uses a simple comparison; a compound sort emits the lexicographic
+        // `$or` ladder. The anchor is fetched WITHIN the bound scope, so a
+        // cross-scope id can never seed a cursor.
+        const buildCursorFilter = async (
+          anchorId: string,
+          direction: "after" | "before",
+        ): Promise<Record<string, unknown> | null> => {
+          const anchor = await collection.findOne(
+            // deno-lint-ignore no-explicit-any
+            { _id: anchorId, _scope: scopeId, _type: typeName } as any,
+            { session },
+          );
+          if (!anchor) return null;
+          const anchorDoc = anchor as Record<string, unknown>;
+          const sortFields = Object.keys(sortObj);
+          const isForward = direction === "after";
+          if (sortFields.length === 1 && sortFields[0] === "_id") {
+            const op = (sortObj._id === 1) === isForward ? "$gt" : "$lt";
+            return { _id: { [op]: anchorId } };
+          }
+          const conditions: Record<string, unknown>[] = [];
+          for (let i = 0; i < sortFields.length; i++) {
+            const f = sortFields[i];
+            const dir = sortObj[f];
+            const condition: Record<string, unknown> = {};
+            for (let j = 0; j < i; j++) {
+              const prev = sortFields[j];
+              condition[prev] = getNestedValue(anchorDoc, prev);
+            }
+            const op = (dir === 1) === isForward ? "$gt" : "$lt";
+            condition[f] = { [op]: getNestedValue(anchorDoc, f) };
+            conditions.push(condition);
+          }
+          return { $or: conditions };
+        };
 
+        // Resolve the (mutually exclusive) cursor. Backward paging walks the
+        // reversed sort and re-reverses the page below.
         let cursorFilter: Record<string, unknown> | null = null;
         if (afterId) {
           if (!afterId.startsWith(`${typeName}:`)) {
@@ -921,34 +980,91 @@ export async function scopedMultiCollection<
               `paginate: invalid afterId format — expected "${typeName}:..." prefix`,
             );
           }
-          const anchor = await collection.findOne(
-            // deno-lint-ignore no-explicit-any
-            { _id: afterId, _scope: scopeId, _type: typeName } as any,
-            { session },
-          );
-          if (anchor) {
-            const sortFields = Object.keys(sortObj);
-            if (
-              sortFields.length === 1 && sortFields[0] === "_id"
-            ) {
-              const op = sortObj._id === 1 ? "$gt" : "$lt";
-              cursorFilter = { _id: { [op]: afterId } };
-            } else {
-              const conditions: Record<string, unknown>[] = [];
-              for (let i = 0; i < sortFields.length; i++) {
-                const f = sortFields[i];
-                const condition: Record<string, unknown> = {};
-                for (let j = 0; j < i; j++) {
-                  const prev = sortFields[j];
-                  condition[prev] = (anchor as Record<string, unknown>)[prev];
-                }
-                const op = sortObj[f] === 1 ? "$gt" : "$lt";
-                condition[f] = {
-                  [op]: (anchor as Record<string, unknown>)[f],
-                };
-                conditions.push(condition);
+          cursorFilter = await buildCursorFilter(afterId, "after");
+        } else if (beforeId) {
+          if (!beforeId.startsWith(`${typeName}:`)) {
+            throw new Error(
+              `paginate: invalid beforeId format — expected "${typeName}:..." prefix`,
+            );
+          }
+          cursorFilter = await buildCursorFilter(beforeId, "before");
+          const reversed: Record<string, 1 | -1> = {};
+          for (const [f, d] of Object.entries(sortObj)) {
+            reversed[f] = (d === 1 ? -1 : 1) as 1 | -1;
+          }
+          sort = reversed;
+        }
+
+        // User pipeline (scope-aware builder). Used for BOTH the count and the
+        // data fetch so `total` reflects docs that survive the WHOLE pipeline
+        // (e.g. a $lookup-based JOIN filter), not just the base scope+type
+        // match.
+        const stageBuilder = buildScopedStageBuilder<T>(collectionName, {
+          kind: "single",
+          id: scopeId,
+        });
+        const userPipeline = pipelineBuilder
+          ? pipelineBuilder(stageBuilder)
+          : [];
+
+        // total + position. `position` is the 0-based count of docs preceding
+        // the current page's first row (0 on the first page). `-1` marks the
+        // backward path, where the absolute position is resolved post-fetch.
+        let total: number | undefined;
+        let position: number | undefined;
+        if (!skipTotal) {
+          if (userPipeline.length > 0) {
+            const countPipeline: AggregationStage[] = [
+              { $match: { $and: baseQuery } },
+              ...userPipeline,
+              { $count: "total" },
+            ];
+            const totalResult = await collection
+              .aggregate(countPipeline, { session })
+              .toArray();
+            total = (totalResult[0]?.total as number | undefined) ?? 0;
+            if (afterId) {
+              if (cursorFilter) {
+                const afterPipeline: AggregationStage[] = [
+                  { $match: { $and: [...baseQuery, cursorFilter] } },
+                  ...userPipeline,
+                  { $count: "total" },
+                ];
+                const afterResult = await collection
+                  .aggregate(afterPipeline, { session })
+                  .toArray();
+                const afterCount =
+                  (afterResult[0]?.total as number | undefined) ?? 0;
+                position = total - afterCount;
+              } else {
+                position = 1;
               }
-              cursorFilter = { $or: conditions };
+            } else if (beforeId) {
+              position = -1;
+            } else {
+              position = 0;
+            }
+          } else {
+            total = await collection.countDocuments(
+              // deno-lint-ignore no-explicit-any
+              { $and: baseQuery } as any,
+              { session },
+            );
+            if (afterId) {
+              if (cursorFilter) {
+                const afterCount = await collection.countDocuments(
+                  // deno-lint-ignore no-explicit-any
+                  { $and: [...baseQuery, cursorFilter] } as any,
+                  { session },
+                );
+                position = total - afterCount;
+              } else {
+                position = 1;
+              }
+            } else if (beforeId) {
+              position = -1;
+            } else {
+              position = 0;
             }
           }
         }
@@ -957,21 +1073,105 @@ export async function scopedMultiCollection<
           ? { $and: [...baseQuery, cursorFilter] }
           : { $and: baseQuery };
 
-        const docs = await collection
-          // deno-lint-ignore no-explicit-any
-          .find(finalQuery as any, { session })
-          .sort(sortObj as m.Sort)
-          .limit(limit)
-          .toArray();
-
-        const data: unknown[] = [];
-        for (const d of docs) {
-          const parsed = v.safeParse(storageSchemas[typeName], d);
-          if (parsed.success) data.push(parsed.output);
-        }
+        // Find-path server cap: bound the query at `limit` UNLESS a `filter(doc)`
+        // callback is set — a rejecting filter can shrink the page, so we keep
+        // the cursor open past `limit` and stop in JS instead. With no filter the
+        // cap makes it a bounded top-`limit` query (index-friendly). The pipeline
+        // path never server-caps (see below) — it relies on the JS limit.
+        const serverCap = customFilter ? undefined : limit;
 
         // deno-lint-ignore no-explicit-any
-        return { total, data: data as any };
+        let cursor: m.FindCursor<any> | m.AggregationCursor<any>;
+        if (userPipeline.length > 0) {
+          // `$sort` goes BEFORE the user pipeline so it can ride an index, and
+          // so the expensive pipeline stages ($lookup, …) run LAZILY — only for
+          // the ~`limit` docs the JS loop consumes before it closes the cursor,
+          // not for the whole cursor-filtered set. No server-side `$limit` here:
+          // a filtering pipeline can shrink the page, so `limit` is enforced
+          // JS-side (which is also what lets the cursor close early). This
+          // mirrors collection.paginate / multiCollection.paginate.
+          const dataPipeline: AggregationStage[] = [
+            { $match: finalQuery },
+            { $sort: sort },
+            ...userPipeline,
+          ];
+          // deno-lint-ignore no-explicit-any
+          cursor = collection.aggregate(dataPipeline as any, { session });
+        } else {
+          // deno-lint-ignore no-explicit-any
+          const findCursor = collection.find(finalQuery as any, { session })
+            .sort(sort as m.Sort);
+          cursor = serverCap !== undefined
+            ? findCursor.limit(serverCap)
+            : findCursor;
+        }
+
+        // Stream rows: the `limit` is applied in JS so a rejecting
+        // `filter(doc)` can shrink the page below `limit` while the cursor
+        // keeps yielding more candidates. `hardLimit` bounds a pathological
+        // filter that rejects everything.
+        let hardLimit = 10_000;
+        const data: unknown[] = [];
+        try {
+          while (hardLimit-- > 0 && limit > 0) {
+            const doc = await cursor.next();
+            if (!doc) break;
+            const parsed = v.safeParse(storageSchemas[typeName], doc);
+            if (!parsed.success) continue;
+            // Preserve pipeline-added fields ($lookup results) alongside the
+            // validated document (parse strips unknown keys).
+            const validatedDoc = pipelineBuilder
+              ? { ...doc, ...parsed.output }
+              : parsed.output;
+            const enriched = prepare
+              ? await prepare(validatedDoc as never)
+              : validatedDoc;
+            const keep = (await customFilter?.(enriched as never)) ?? true;
+            if (!keep) continue;
+            const finalDoc = format ? await format(enriched as never) : enriched;
+            data.push(finalDoc);
+            limit--;
+          }
+        } finally {
+          await cursor.close();
+        }
+
+        // peek: the extra row signals "more after this page" without a count.
+        let hasMore: boolean | undefined;
+        if (peek) {
+          if (data.length > requestedLimit) {
+            hasMore = true;
+            data.pop();
+          } else {
+            hasMore = false;
+          }
+        }
+
+        // Backward page came back in reversed order — restore forward order and
+        // resolve the absolute position now that the page length is known.
+        if (beforeId) {
+          data.reverse();
+          if (!skipTotal) {
+            if (cursorFilter) {
+              const beforeCount = await collection.countDocuments(
+                // deno-lint-ignore no-explicit-any
+                { $and: [...baseQuery, cursorFilter] } as any,
+                { session },
+              );
+              position = Math.max(0, beforeCount - data.length);
+            } else {
+              position = 0;
+            }
+          }
+        }
+
+        return {
+          total,
+          position,
+          // deno-lint-ignore no-explicit-any
+          data: data as any,
+          ...(peek ? { hasMore } : {}),
+        };
       },
     };
   }
