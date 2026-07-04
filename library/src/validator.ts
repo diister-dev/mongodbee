@@ -47,7 +47,13 @@ function constructorToValidator(
 
   if (kind == "schema") {
     switch (type) {
-      case "object": {
+      // Loose/strict objects share the object translation: MongoDB's
+      // $jsonSchema allows additional properties by DEFAULT, which is exactly
+      // valibot's looseObject semantics (known entries validated, unknown
+      // keys pass through). strictObject adds additionalProperties: false.
+      case "object":
+      case "loose_object":
+      case "strict_object": {
         const s = schema as v.ObjectSchema<any, any>;
 
         // Required fields
@@ -101,10 +107,12 @@ function constructorToValidator(
           }
         }
 
+        const strict = type === "strict_object" ? { additionalProperties: false } : {};
         if (required.length == 0) {
           return {
             bsonType: "object",
             properties,
+            ...strict,
           };
         }
 
@@ -112,6 +120,7 @@ function constructorToValidator(
           bsonType: "object",
           required,
           properties,
+          ...strict,
         };
       }
       // DEPRECATED: Use object instead

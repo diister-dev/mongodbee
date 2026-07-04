@@ -107,7 +107,11 @@ export function extractSchemaPaths(
   while (toProcess.length > 0) {
     const { key, value } = toProcess.pop()!;
 
-    if (value.type === "object") {
+    if (
+      value.type === "object" || value.type === "loose_object" ||
+      value.type === "strict_object"
+    ) {
+      // loose/strict objects expose the same .entries shape as object.
       const objectValue = value as v.ObjectSchema<any, any>;
       for (const k in objectValue.entries) {
         const v = objectValue.entries[k as keyof typeof objectValue];

@@ -204,7 +204,10 @@ export class SchemaNavigator {
     }
 
     switch (type) {
-      case "object": {
+      // loose/strict objects expose the same .entries shape as object.
+      case "object":
+      case "loose_object":
+      case "strict_object": {
         this.navigateObjectSchema(
           schema as v.ObjectSchema<
             v.ObjectEntries,
