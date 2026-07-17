@@ -362,6 +362,42 @@ export class SimulationValidator implements MigrationValidator {
           }
         }
 
+        // Validate that NEW scoped multi-collections (not from parent) are actually created
+        if (definition.schemas.scopedMultiCollections) {
+          const declaredScoped = Object.keys(
+            definition.schemas.scopedMultiCollections ?? {},
+          );
+          const parentScoped = Object.keys(
+            definition.parent?.schemas.scopedMultiCollections ?? {},
+          );
+          const createdScoped = Object.keys(
+            stateAfterMigration.scopedMultiCollections ?? {},
+          );
+
+          const declaredScopedName = new Set(declaredScoped);
+          const parentScopedName = new Set(parentScoped);
+          const createdScopedName = new Set(createdScoped);
+          // New scoped multi-collections are those declared in this migration but not present in parent
+          const newScopedFromParent = declaredScopedName.difference(
+            parentScopedName,
+          );
+          // Check that all NEW scoped multi-collections are created in migrate()
+          const missingScoped = newScopedFromParent.difference(
+            createdScopedName,
+          );
+
+          if (missingScoped.size > 0) {
+            for (const collName of missingScoped) {
+              errors.push(
+                `Scoped multi-collection "${collName}" is declared in schema but not created in migrate()`,
+              );
+            }
+            errors.push(
+              " 💡 Tip: Did you forget to call .createScopedMultiCollection() in your migration?",
+            );
+          }
+        }
+
         // Warn about NEW declared multi-collections (they are models, not required to be instantiated)
         if (definition.schemas.multiModels) {
           const declaredMultiModels = Object.keys(
@@ -825,6 +861,148 @@ export class SimulationValidator implements MigrationValidator {
   }
 
   /**
+   * Validates scoped multi-collection documents against their schemas
+   *
+   * Mirrors {@link validateMultiCollectionSchemaChanges} for the
+   * `scopedMultiCollections` bucket: every simulated document must match its
+   * declared type schema, carry a known `_type`, and carry a `_scope` value
+   * that validates against the scoped collection's `scope` schema. The
+   * rollback pass revalidates documents against the parent schemas.
+   *
+   * @private
+   */
+  private async validateScopedMultiCollectionSchemaChanges(
+    definition: MigrationDefinition,
+    applier: ReturnType<typeof createMemoryApplier>,
+    stateBefore: SimulationDatabaseState,
+    stateAfter: SimulationDatabaseState,
+    operations: MigrationRule[],
+  ): Promise<{
+    errors: string[];
+    issues: { type: string; message: string }[];
+  }> {
+    const errors: string[] = [];
+    const issues: { type: string; message: string }[] = [];
+    const currentSchema = definition.schemas.scopedMultiCollections || {};
+    const parentSchema = definition.parent?.schemas.scopedMultiCollections ||
+      {};
+
+    // Validate current state scoped multi-collections against their schemas
+    for (
+      const [scopedName, currentScopedSchema] of Object.entries(currentSchema)
+    ) {
+      const currentCollState = stateAfter.scopedMultiCollections?.[scopedName];
+      // Never created in state: the creation check already reports it.
+      if (!currentCollState) continue;
+      const allCollTypes = Object.keys(currentScopedSchema.types);
+      for (const element of currentCollState.content) {
+        const elementType = element._type as string;
+        if (!allCollTypes.includes(elementType)) {
+          errors.push(
+            `Document in scoped multi-collection "${scopedName}" has unknown type "${elementType}"`,
+          );
+          continue;
+        }
+
+        const scopeValid = v.safeParse(
+          currentScopedSchema.scope,
+          element._scope,
+        );
+        if (!scopeValid.success) {
+          errors.push(
+            `Document in scoped multi-collection "${scopedName}" type "${elementType}" has invalid _scope:\n-> ${
+              scopeValid.issues.map((issue) => issue.message).join("\n-> ")
+            }`,
+          );
+        }
+
+        const schema = currentScopedSchema.types[elementType];
+        const valid = v.safeParse(
+          v.object({
+            ...schema,
+            _type: v.literal(elementType),
+          }),
+          element,
+        );
+
+        if (!valid.success) {
+          errors.push(
+            `Document in scoped multi-collection "${scopedName}" type "${elementType}" does not match schema:\n-> ${
+              valid.issues.map((issue) => {
+                return `(${v.getDotPath(issue)}) ${issue.message}`;
+              }).join("\n-> ")
+            }`,
+          );
+        }
+      }
+    }
+
+    let stateBeforeRollback = stateAfter;
+    // Apply reverse operations to get back to pre-migration state
+    for (let i = operations.length - 1; i >= 0; i--) {
+      const operation = operations[i];
+      try {
+        stateBeforeRollback = await applier.reverseOperation(
+          stateBeforeRollback,
+          operation,
+        );
+      } catch {
+        // Ignore errors during reverse application
+      }
+    }
+    const stateAfterRollback = stateBeforeRollback;
+
+    // Check each scoped multi-collection for schema changes
+    for (
+      const [scopedName, parentScopedSchema] of Object.entries(parentSchema)
+    ) {
+      // New scoped multi-collection, no validation needed
+      if (!parentScopedSchema) continue;
+      for (
+        const [docIndex, doc]
+          of ((stateAfterRollback.scopedMultiCollections || {})[scopedName]
+            ?.content || []).entries()
+      ) {
+        const docType = doc._type as string;
+        const parentTypeSchema = parentScopedSchema.types[docType];
+        if (!parentTypeSchema) continue; // Type was added, no validation needed
+        const valid = v.safeParse(
+          v.object({
+            ...parentTypeSchema,
+            _type: v.literal(docType),
+          }),
+          doc,
+        );
+        if (!valid.success) {
+          errors.push(
+            `The scoped multi-collection "${scopedName}" type "${docType}" not valid after rollback.\n-> ${
+              valid.issues.map((issue) => {
+                return `(${v.getDotPath(issue)}) ${issue.message}`;
+              }).join("\n-> ")
+            }`,
+          );
+        }
+        const docBefore =
+          (stateBefore.scopedMultiCollections || {})[scopedName]?.content
+            ?.[docIndex];
+        const equal = dirtyEquivalent(docBefore, doc);
+        if (!equal) {
+          issues.push({
+            type: "rollback_document_mismatch",
+            message:
+              `Document in scoped multi-collection "${scopedName}" type "${docType}" different after rollback.`,
+          });
+        }
+      }
+    }
+
+    return {
+      errors,
+      issues,
+    };
+  }
+
+  /**
    * Validates that schema changes for multi-collections have corresponding transformations
    *
    * @private
@@ -871,10 +1049,21 @@ export class SimulationValidator implements MigrationValidator {
       operations,
     );
 
+    // Validate scoped multi-collection schema changes
+    const scopedChangeResult = await this
+      .validateScopedMultiCollectionSchemaChanges(
+        definition,
+        applier,
+        structuredClone(stateBefore),
+        structuredClone(stateAfter),
+        operations,
+      );
+
     errors.push(
       ...[...new Set(collectionChangeResult.errors)],
       ...[...new Set(multiCollectionChangeResult.errors)],
       ...[...new Set(multiModelsChangeResult.errors)],
+      ...[...new Set(scopedChangeResult.errors)],
     );
 
     return errors;
@@ -912,6 +1101,31 @@ export class SimulationValidator implements MigrationValidator {
       "/!\\ Generated mock data did not validate against schema, using simple mock instead",
     );
     return mockData;
+  }
+
+  /**
+   * Generates a mock scope value from a scoped multi-collection's `scope` schema
+   *
+   * Unlike {@link generateMockDocument}, the scope schema is a bare Valibot
+   * schema (not a record of fields), so it is fed to the mock generator as-is.
+   *
+   * @private
+   */
+  private generateMockScopeValue(
+    schema: v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>,
+  ): unknown {
+    // deno-lint-ignore no-explicit-any
+    const generator = createMockGenerator(schema as any);
+    const mockValue = generator.generate();
+
+    const validation = v.safeParse(schema, mockValue);
+    if (validation.success) {
+      return validation.output;
+    }
+    console.warn(
+      "/!\\ Generated mock scope value did not validate against the scope schema, using raw mock instead",
+    );
+    return mockValue;
   }
 
   /**
@@ -1026,6 +1240,62 @@ export class SimulationValidator implements MigrationValidator {
               schema[typeName] as Record<string, unknown>,
             );
             collection.content.push({ ...mockDoc, _type: typeName });
+          }
+        } catch (_error) {
+          break;
+        }
+      }
+    }
+
+    return currentState;
+  }
+
+  /**
+   * Supplements scoped multi-collections with mock data
+   *
+   * Each generated batch shares a mock `_scope` value generated from the
+   * scoped collection's `scope` schema, so simulated documents exercise the
+   * same envelope (`_type` + `_scope`) the appliers produce.
+   *
+   * @private
+   */
+  private populateScopedMultiCollectionsMock(
+    state: SimulationDatabaseState,
+    scopedMultiCollections: NonNullable<
+      SchemasDefinition["scopedMultiCollections"]
+    >,
+  ): SimulationDatabaseState {
+    const currentState = state;
+
+    for (
+      const [collectionName, scopedSchema] of Object.entries(
+        scopedMultiCollections,
+      )
+    ) {
+      if (!currentState.scopedMultiCollections?.[collectionName]) {
+        currentState.scopedMultiCollections[collectionName] = { content: [] };
+      }
+      const collection = currentState.scopedMultiCollections?.[collectionName];
+      if (!collection) continue;
+
+      const docCount = Math.floor(
+        Math.random() *
+          (this.mockConfig.DOCS_PER_COLLECTION_MAX -
+            this.mockConfig.DOCS_PER_COLLECTION_MIN + 1),
+      ) + this.mockConfig.DOCS_PER_COLLECTION_MIN;
+
+      for (let i = 0; i < docCount; i++) {
+        try {
+          const scopeValue = this.generateMockScopeValue(scopedSchema.scope);
+          for (const typeName of Object.keys(scopedSchema.types)) {
+            const mockDoc = this.generateMockDocument(
+              scopedSchema.types[typeName] as Record<string, unknown>,
+            );
+            collection.content.push({
+              ...mockDoc,
+              _type: typeName,
+              _scope: scopeValue,
+            });
           }
         } catch (_error) {
           break;
@@ -1179,6 +1449,13 @@ export class SimulationValidator implements MigrationValidator {
       );
     }
 
+    if (parent.schemas.scopedMultiCollections) {
+      currentState = this.populateScopedMultiCollectionsMock(
+        currentState,
+        parent.schemas.scopedMultiCollections,
+      );
+    }
+
     return currentState;
   }
 
@@ -1266,6 +1543,47 @@ export class SimulationValidator implements MigrationValidator {
               } catch (_error) {
                 break;
               }
+            }
+          }
+        }
+      }
+    }
+
+    // Apply retention ratio to scoped multi-collections
+    if (newState.scopedMultiCollections) {
+      for (
+        const [collectionName, collection] of Object.entries(
+          newState.scopedMultiCollections,
+        )
+      ) {
+        const originalCount = collection.content.length;
+        const keepCount = Math.floor(originalCount * ratio);
+
+        collection.content = collection.content.slice(0, keepCount);
+
+        const scopedSchema = schemas.scopedMultiCollections?.[collectionName];
+        if (scopedSchema) {
+          const newDocsCount = originalCount - keepCount;
+          const typeNames = Object.keys(scopedSchema.types);
+          const docsPerType = Math.ceil(newDocsCount / typeNames.length);
+
+          for (let i = 0; i < docsPerType; i++) {
+            try {
+              const scopeValue = this.generateMockScopeValue(
+                scopedSchema.scope,
+              );
+              for (const typeName of typeNames) {
+                const mockDoc = this.generateMockDocument(
+                  scopedSchema.types[typeName] as Record<string, unknown>,
+                );
+                collection.content.push({
+                  ...mockDoc,
+                  _type: typeName,
+                  _scope: scopeValue,
+                });
+              }
+            } catch (_error) {
+              break;
             }
           }
         }
@@ -1374,6 +1692,30 @@ export class SimulationValidator implements MigrationValidator {
     ) {
       newState.multiModels = newState.multiModels || {};
       this.populateMultiCollectionsModelMock(newState, schemas.multiModels);
+    }
+
+    // Create mock data for scoped multi-collections declared in the schema
+    // but absent or empty in the propagated state, so the next migration's
+    // validation has scoped documents to test against. Non-empty scoped
+    // collections are left untouched (retention already handled above).
+    if (schemas.scopedMultiCollections) {
+      newState.scopedMultiCollections = newState.scopedMultiCollections || {};
+      const emptyScoped: NonNullable<
+        SchemasDefinition["scopedMultiCollections"]
+      > = {};
+      for (
+        const [collectionName, scopedSchema] of Object.entries(
+          schemas.scopedMultiCollections,
+        )
+      ) {
+        const existing = newState.scopedMultiCollections[collectionName];
+        if (!existing || existing.content.length === 0) {
+          emptyScoped[collectionName] = scopedSchema;
+        }
+      }
+      if (Object.keys(emptyScoped).length > 0) {
+        this.populateScopedMultiCollectionsMock(newState, emptyScoped);
+      }
     }
 
     return newState;

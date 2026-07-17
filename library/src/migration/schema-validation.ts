@@ -8,6 +8,7 @@
  */
 
 import * as path from "@std/path";
+import { INDEX_SYMBOL } from "../indexes.ts";
 import type { MigrationDefinition, SchemasDefinition } from "./types.ts";
 import { pathToFileUrl } from "./utils/platform.ts";
 
@@ -141,8 +142,19 @@ export function simplifySchema(schema: any): any {
     return schema;
   }
 
-  // Skip schemas marked for cleanup
+  // Skip schemas marked for cleanup — EXCEPT index metadata (withIndex):
+  // it drives real MongoDB indexes (unique, TTL, collation, partial filters),
+  // so it is structural and must survive simplification to participate in
+  // snapshot comparisons. Other metadata (title, description, i18n) stays noise.
   if (CLEANUP_KINDS.includes(schema.kind)) {
+    const indexMetadata = schema.metadata?.[INDEX_SYMBOL];
+    if (indexMetadata !== undefined) {
+      return {
+        kind: schema.kind,
+        type: schema.type,
+        metadata: { [INDEX_SYMBOL]: indexMetadata },
+      };
+    }
     return undefined;
   }
 
@@ -181,6 +193,14 @@ function flattenSchema(schema: any): Record<string, any> {
 
   if (!schema || typeof schema !== "object") {
     return result;
+  }
+
+  // Symbol-keyed index metadata (withIndex) is invisible to Object.keys and
+  // JSON.stringify — surface it under a stable string key so schema diffs
+  // can see index changes (unique/TTL/collation/partialFilter/global).
+  const indexMetadata = (schema as Record<PropertyKey, any>)[INDEX_SYMBOL];
+  if (indexMetadata !== undefined) {
+    result["@index"] = indexMetadata;
   }
 
   const keys = Object.keys(schema);
@@ -567,6 +587,109 @@ export function validateLastMigrationMatchesProjectSchema(
     }
   }
 
+  // Check scopedMultiCollections if they exist
+  {
+    const migrationScoped = lastMigration.schemas.scopedMultiCollections || {};
+    const projectScoped = projectSchema.scopedMultiCollections || {};
+
+    if (!schemasEqual(migrationScoped, projectScoped)) {
+      const migrationNameSet = new Set(Object.keys(migrationScoped));
+      const projectNameSet = new Set(Object.keys(projectScoped));
+
+      const missingInMigration = projectNameSet.difference(migrationNameSet);
+      const extraInMigration = migrationNameSet.difference(projectNameSet);
+
+      if (missingInMigration.size > 0) {
+        errors.push(
+          `Scoped multi-collections missing in last migration: ${
+            [...missingInMigration].sort().join(", ")
+          }`,
+        );
+      }
+      if (extraInMigration.size > 0) {
+        errors.push(
+          `Extra scoped multi-collections in last migration not in project schema: ${
+            [...extraInMigration].sort().join(", ")
+          }`,
+        );
+      }
+
+      if (missingInMigration.size === 0 && extraInMigration.size === 0) {
+        // Same scoped-collection names but different scope/type schemas
+        for (const name of migrationNameSet) {
+          const migrationEntry = migrationScoped[name];
+          const projectEntry = projectScoped[name];
+
+          if (!schemasEqual(migrationEntry.scope, projectEntry.scope)) {
+            const simple1 = flattenSchema(simplifySchema(migrationEntry.scope));
+            const simple2 = flattenSchema(simplifySchema(projectEntry.scope));
+            const diffs = diffSchemas(simple1, simple2);
+            errors.push(
+              `Scoped multi-collection "${name}" scope schema differs:\n${
+                formatSchemaDifferences(diffs)
+              }`,
+            );
+          }
+
+          const migrationTypes = migrationEntry.types || {};
+          const projectTypes = projectEntry.types || {};
+
+          const migrationTypesSet = new Set(Object.keys(migrationTypes));
+          const projectTypesSet = new Set(Object.keys(projectTypes));
+
+          const missingTypesInMigration = projectTypesSet.difference(
+            migrationTypesSet,
+          );
+          const extraTypesInMigration = migrationTypesSet.difference(
+            projectTypesSet,
+          );
+
+          if (missingTypesInMigration.size > 0) {
+            errors.push(
+              `Scoped multi-collection "${name}" is missing types in last migration: ${
+                [...missingTypesInMigration].sort().join(", ")
+              }`,
+            );
+          }
+          if (extraTypesInMigration.size > 0) {
+            errors.push(
+              `Scoped multi-collection "${name}" has extra types in last migration not in project schema: ${
+                [...extraTypesInMigration].sort().join(", ")
+              }`,
+            );
+          }
+
+          if (
+            missingTypesInMigration.size > 0 || extraTypesInMigration.size > 0
+          ) {
+            // Skip further type comparison if types differ
+            continue;
+          }
+
+          const commonTypes = [
+            ...projectTypesSet.intersection(migrationTypesSet),
+          ];
+          for (const typeName of commonTypes) {
+            const migrationTypeSchema = migrationTypes[typeName];
+            const projectTypeSchema = projectTypes[typeName];
+            if (!schemasEqual(migrationTypeSchema, projectTypeSchema)) {
+              const simple1 = flattenSchema(
+                simplifySchema(migrationTypeSchema),
+              );
+              const simple2 = flattenSchema(simplifySchema(projectTypeSchema));
+              const diffs = diffSchemas(simple1, simple2);
+              errors.push(
+                `Scoped multi-collection "${name}" type "${typeName}" schema differs:\n${
+                  formatSchemaDifferences(diffs)
+                }`,
+              );
+            }
+          }
+        }
+      }
+    }
+  }
+
   return {
     valid: errors.length === 0,
     errors,
@@ -615,8 +738,13 @@ export async function validateMigrationChainWithProjectSchema(
     Object.keys(projectSchema.multiCollections || {}).length > 0;
   const hasMultiModels =
     Object.keys(projectSchema.multiModels || {}).length > 0;
+  const hasScopedMultiCollections =
+    Object.keys(projectSchema.scopedMultiCollections || {}).length > 0;
 
-  if (!hasCollections && !hasMultiModels && !hasMultiCollections) {
+  if (
+    !hasCollections && !hasMultiModels && !hasMultiCollections &&
+    !hasScopedMultiCollections
+  ) {
     warnings.push("Project schema is empty. Define your schemas in schemas.ts");
   }
 

@@ -444,6 +444,23 @@ function constructorToValidator(
           maximum: s.requirement,
         };
       }
+      case "gt_value": {
+        // MongoDB $jsonSchema follows JSON Schema draft-4, where
+        // exclusiveMinimum is a BOOLEAN modifier of `minimum` (not a number).
+        const s = schema as v.GtValueAction<any, any, any>;
+        return {
+          minimum: s.requirement,
+          exclusiveMinimum: true,
+        };
+      }
+      case "lt_value": {
+        // Draft-4: exclusiveMaximum is a boolean modifier of `maximum`.
+        const s = schema as v.LtValueAction<any, any, any>;
+        return {
+          maximum: s.requirement,
+          exclusiveMaximum: true,
+        };
+      }
       case "min_length": {
         const s = schema as v.MinLengthAction<any, any, any>;
         return {
