@@ -10,6 +10,15 @@ import { applyCollectionIndexes } from "./indexes-applier.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
 import { isSchemaManaged } from "./runtime-config.ts";
 import { getNestedValue } from "./dot-notation.ts";
+import {
+  createOperationTracer,
+  filterKeys,
+  type OpContext,
+  registerClientTelemetry,
+  TELEMETRY_ATTRIBUTES as TA,
+  type TelemetryOptions,
+  updateOperators,
+} from "./telemetry.ts";
 import type { Db } from "./mongodb.ts";
 import type * as m from "mongodb";
 
@@ -82,6 +91,8 @@ type CollectionOptions = {
    * - "inherit": Use global runtime config (default)
    */
   schemaManagement?: "auto" | "managed" | "inherit";
+  /** Opt-in OpenTelemetry tracing for this collection's operations. */
+  telemetry?: TelemetryOptions;
 };
 
 type WithId<T> = T extends { _id: unknown } ? T
@@ -514,6 +525,13 @@ export async function collection<
   const collection = db.collection<TInput>(collectionName, opts);
   await init();
 
+  const tele = createOperationTracer(opts.telemetry, {
+    dbName: db.databaseName,
+    collectionName,
+    getSession: () => sessionContext.getSession(),
+  });
+  registerClientTelemetry(db.client, opts.telemetry);
+
   return {
     // Raw collection
     collection,
@@ -555,89 +573,122 @@ export async function collection<
     },
     // Document creation operations with validation
     async insertOne(doc, options?) {
-      const validatedDoc = v.parse(schema, doc) as m.OptionalUnlessRequiredId<
-        TInput
-      >;
+      const run = async () => {
+        const validatedDoc = v.parse(schema, doc) as m.OptionalUnlessRequiredId<
+          TInput
+        >;
 
-      // Apply sanitization based on configuration
-      const safeDoc = sanitizeForMongoDB(validatedDoc, {
-        undefinedBehavior: opts.undefinedBehavior || "remove",
-        deep: true,
-      }) as unknown as m.OptionalUnlessRequiredId<TInput>;
-
-      const session = sessionContext.getSession();
-      const inserted = await collection.insertOne(safeDoc, {
-        session,
-        ...options,
-      });
-      if (!inserted.acknowledged) {
-        throw new Error("Insert failed");
-      }
-      return inserted.insertedId as WithId<TOutput>["_id"];
-    },
-    async insertMany(docs, options?) {
-      const validatedDocs = docs.map((doc) => v.parse(schema, doc));
-
-      // Apply sanitization based on configuration
-      const safeDocs = validatedDocs.map((doc) =>
-        sanitizeForMongoDB(doc, {
+        // Apply sanitization based on configuration
+        const safeDoc = sanitizeForMongoDB(validatedDoc, {
           undefinedBehavior: opts.undefinedBehavior || "remove",
           deep: true,
-        }) as unknown as m.OptionalUnlessRequiredId<TInput>
-      );
+        }) as unknown as m.OptionalUnlessRequiredId<TInput>;
 
-      const session = sessionContext.getSession();
-      const inserted = await collection.insertMany(safeDocs, {
-        session,
-        ...options,
-      });
-      if (!inserted.acknowledged) {
-        throw new Error("Insert failed");
-      }
-      return inserted;
+        const session = sessionContext.getSession();
+        const inserted = await collection.insertOne(safeDoc, {
+          session,
+          ...options,
+        });
+        if (!inserted.acknowledged) {
+          throw new Error("Insert failed");
+        }
+        return inserted.insertedId as WithId<TOutput>["_id"];
+      };
+      if (!tele) return run();
+      return tele.withOp("insertOne", undefined, run);
+    },
+    async insertMany(docs, options?) {
+      const run = async () => {
+        const validatedDocs = docs.map((doc) => v.parse(schema, doc));
+
+        // Apply sanitization based on configuration
+        const safeDocs = validatedDocs.map((doc) =>
+          sanitizeForMongoDB(doc, {
+            undefinedBehavior: opts.undefinedBehavior || "remove",
+            deep: true,
+          }) as unknown as m.OptionalUnlessRequiredId<TInput>
+        );
+
+        const session = sessionContext.getSession();
+        const inserted = await collection.insertMany(safeDocs, {
+          session,
+          ...options,
+        });
+        if (!inserted.acknowledged) {
+          throw new Error("Insert failed");
+        }
+        return inserted;
+      };
+      if (!tele) return run();
+      return tele.withOp(
+        "insertMany",
+        { [TA.BATCH_SIZE]: docs.length },
+        run,
+        (r) => ({ [TA.INSERTED_COUNT]: r.insertedCount }),
+      );
     },
 
     // Document read operations with validation
     async findOne(filter, options?) {
-      const session = sessionContext.getSession();
-      const result = await collection.findOne({
-        ...validator, // Prevent returning invalid documents
-        ...filter as unknown as m.Filter<TInput>,
-      }, { session, ...options });
+      const run = async () => {
+        const session = sessionContext.getSession();
+        const result = await collection.findOne({
+          ...validator, // Prevent returning invalid documents
+          ...filter as unknown as m.Filter<TInput>,
+        }, { session, ...options });
 
-      if (!result) {
-        return null;
-      }
+        if (!result) {
+          return null;
+        }
 
-      const validation = v.safeParse(schema, result);
-      if (validation.success) {
-        return validation.output as WithId<TOutput>;
-      }
+        const validation = v.safeParse(schema, result);
+        if (validation.success) {
+          return validation.output as WithId<TOutput>;
+        }
 
-      throw {
-        message: "Validation error",
-        errors: validation,
-        result,
+        throw {
+          message: "Validation error",
+          errors: validation,
+          result,
+        };
       };
+      if (!tele) return run();
+      return tele.withOp(
+        "findOne",
+        { [TA.FILTER_KEYS]: filterKeys(filter) },
+        run,
+        (r) => ({ [TA.RETURNED_ROWS]: r ? 1 : 0 }),
+      );
     },
     async getById(id) {
-      const session = sessionContext.getSession();
-      const result = await collection.findOne({ _id: id } as any, { session });
+      const run = async () => {
+        const session = sessionContext.getSession();
+        const result = await collection.findOne({ _id: id } as any, {
+          session,
+        });
 
-      if (!result) {
-        throw new Error("No element found");
-      }
+        if (!result) {
+          throw new Error("No element found");
+        }
 
-      const validation = v.safeParse(schema, result);
-      if (validation.success) {
-        return validation.output as WithId<TOutput>;
-      }
+        const validation = v.safeParse(schema, result);
+        if (validation.success) {
+          return validation.output as WithId<TOutput>;
+        }
 
-      throw {
-        message: "Validation error",
-        errors: validation,
-        result,
+        throw {
+          message: "Validation error",
+          errors: validation,
+          result,
+        };
       };
+      if (!tele) return run();
+      return tele.withOp(
+        "getById",
+        { [TA.FILTER_KEYS]: "_id" },
+        run,
+        () => ({ [TA.RETURNED_ROWS]: 1 }),
+      );
     },
     find(
       filter: m.Filter<TInput>,
@@ -668,6 +719,12 @@ export async function collection<
 
         return output;
       };
+
+      if (tele) {
+        cursor.toArray = tele.wrapToArray("find", {
+          [TA.FILTER_KEYS]: filterKeys(filter),
+        }, cursor.toArray.bind(cursor));
+      }
 
       return cursor as unknown as m.AbstractCursor<TOutput>;
     },
@@ -705,6 +762,12 @@ export async function collection<
         return output;
       };
 
+      if (tele) {
+        cursor.toArray = tele.wrapToArray("findInvalid", {
+          [TA.FILTER_KEYS]: filterKeys(filter),
+        }, cursor.toArray.bind(cursor));
+      }
+
       return cursor as unknown as m.AbstractCursor<TOutput>;
     },
     async paginate<E = WithId<TOutput>, R = E>(
@@ -727,537 +790,656 @@ export async function collection<
       data: R[];
       hasMore?: boolean;
     }> {
-      const { skipTotal = false, peek = false } = options || {};
-      const requestedLimit = options?.limit ?? 100;
-      let limit = peek ? requestedLimit + 1 : requestedLimit;
-      let {
-        afterId,
-        beforeId,
-        sort,
-        prepare,
-        filter: customFilter,
-        format,
-        pipeline: pipelineBuilder,
-      } = options || {};
-      const session = sessionContext.getSession();
-      const baseQuery: m.Filter<TInput> = { ...filter };
-      let query: m.Filter<TInput> = { ...filter };
+      const run = async () => {
+        const { skipTotal = false, peek = false } = options || {};
+        const requestedLimit = options?.limit ?? 100;
+        let limit = peek ? requestedLimit + 1 : requestedLimit;
+        let {
+          afterId,
+          beforeId,
+          sort,
+          prepare,
+          filter: customFilter,
+          format,
+          pipeline: pipelineBuilder,
+        } = options || {};
+        const session = sessionContext.getSession();
+        const baseQuery: m.Filter<TInput> = { ...filter };
+        let query: m.Filter<TInput> = { ...filter };
 
-      // Normalize sort to object format
-      sort = sort || { _id: 1 };
-      const sortObj: Record<string, 1 | -1> =
-        typeof sort === "object" && !Array.isArray(sort)
-          ? { ...sort as Record<string, 1 | -1> }
-          : {
-            _id: sort === 1 || sort === "asc" || sort === "ascending" ? 1 : -1,
-          };
+        // Normalize sort to object format
+        sort = sort || { _id: 1 };
+        const sortObj: Record<string, 1 | -1> =
+          typeof sort === "object" && !Array.isArray(sort)
+            ? { ...sort as Record<string, 1 | -1> }
+            : {
+              _id: sort === 1 || sort === "asc" || sort === "ascending"
+                ? 1
+                : -1,
+            };
 
-      // Always add _id as tie-breaker if not already in sort (ensures stable ordering for duplicate values)
-      if (!("_id" in sortObj)) {
-        sortObj._id = 1;
-      }
-      // Update sort to include _id tie-breaker
-      sort = sortObj;
-
-      // Helper to build cursor-based pagination filter
-      const buildCursorFilter = async (
-        anchorId: string | m.ObjectId,
-        direction: "after" | "before",
-      ) => {
-        // Fetch the anchor document to get its sort field values
-        const anchorDoc = await collection.findOne(
-          { _id: anchorId } as m.Filter<TInput>,
-          { session },
-        );
-        if (!anchorDoc) return null;
-
-        const sortFields = Object.keys(sortObj);
-
-        // If sorting only by _id, use simple comparison
-        if (sortFields.length === 1 && sortFields[0] === "_id") {
-          const op = direction === "after"
-            ? (sortObj._id === 1 ? "$gt" : "$lt")
-            : (sortObj._id === 1 ? "$lt" : "$gt");
-          return { _id: { [op]: anchorId } };
+        // Always add _id as tie-breaker if not already in sort (ensures stable ordering for duplicate values)
+        if (!("_id" in sortObj)) {
+          sortObj._id = 1;
         }
+        // Update sort to include _id tie-breaker
+        sort = sortObj;
 
-        // Build compound cursor filter for custom sort
-        // For afterId with sort { field: 1 }, we want documents where:
-        // (field > anchorValue) OR (field == anchorValue AND _id > anchorId)
-        const conditions: Record<string, unknown>[] = [];
-
-        for (let i = 0; i < sortFields.length; i++) {
-          const field = sortFields[i];
-          const sortDir = sortObj[field];
-          const anchorValue = getNestedValue(
-            anchorDoc as Record<string, unknown>,
-            field,
+        // Helper to build cursor-based pagination filter
+        const buildCursorFilter = async (
+          anchorId: string | m.ObjectId,
+          direction: "after" | "before",
+        ) => {
+          // Fetch the anchor document to get its sort field values
+          const anchorDoc = await collection.findOne(
+            { _id: anchorId } as m.Filter<TInput>,
+            { session },
           );
+          if (!anchorDoc) return null;
 
-          // Build condition for this level
-          const condition: Record<string, unknown> = {};
+          const sortFields = Object.keys(sortObj);
 
-          // All previous fields must be equal
-          for (let j = 0; j < i; j++) {
-            const prevField = sortFields[j];
-            condition[prevField] = getNestedValue(
-              anchorDoc as Record<string, unknown>,
-              prevField,
-            );
+          // If sorting only by _id, use simple comparison
+          if (sortFields.length === 1 && sortFields[0] === "_id") {
+            const op = direction === "after"
+              ? (sortObj._id === 1 ? "$gt" : "$lt")
+              : (sortObj._id === 1 ? "$lt" : "$gt");
+            return { _id: { [op]: anchorId } };
           }
 
-          // Current field uses comparison based on sort direction and pagination direction
-          const isForward = direction === "after";
-          const op = (sortDir === 1) === isForward ? "$gt" : "$lt";
-          condition[field] = { [op]: anchorValue };
+          // Build compound cursor filter for custom sort
+          // For afterId with sort { field: 1 }, we want documents where:
+          // (field > anchorValue) OR (field == anchorValue AND _id > anchorId)
+          const conditions: Record<string, unknown>[] = [];
 
-          conditions.push(condition);
+          for (let i = 0; i < sortFields.length; i++) {
+            const field = sortFields[i];
+            const sortDir = sortObj[field];
+            const anchorValue = getNestedValue(
+              anchorDoc as Record<string, unknown>,
+              field,
+            );
+
+            // Build condition for this level
+            const condition: Record<string, unknown> = {};
+
+            // All previous fields must be equal
+            for (let j = 0; j < i; j++) {
+              const prevField = sortFields[j];
+              condition[prevField] = getNestedValue(
+                anchorDoc as Record<string, unknown>,
+                prevField,
+              );
+            }
+
+            // Current field uses comparison based on sort direction and pagination direction
+            const isForward = direction === "after";
+            const op = (sortDir === 1) === isForward ? "$gt" : "$lt";
+            condition[field] = { [op]: anchorValue };
+
+            conditions.push(condition);
+          }
+
+          return { $or: conditions };
+        };
+
+        // Add pagination filters
+        if (afterId) {
+          const cursorFilter = await buildCursorFilter(afterId, "after");
+          if (cursorFilter) {
+            query = { ...query, ...cursorFilter } as m.Filter<TInput>;
+          }
+        } else if (beforeId) {
+          const cursorFilter = await buildCursorFilter(beforeId, "before");
+          if (cursorFilter) {
+            query = { ...query, ...cursorFilter } as m.Filter<TInput>;
+          }
+          // Reverse the sort for beforeId to get items in reverse order
+          const reversedSort: Record<string, 1 | -1> = {};
+          for (const [field, dir] of Object.entries(sortObj)) {
+            reversedSort[field] = (dir === 1 ? -1 : 1) as 1 | -1;
+          }
+          sort = reversedSort;
         }
 
-        return { $or: conditions };
-      };
-
-      // Add pagination filters
-      if (afterId) {
-        const cursorFilter = await buildCursorFilter(afterId, "after");
-        if (cursorFilter) {
-          query = { ...query, ...cursorFilter } as m.Filter<TInput>;
-        }
-      } else if (beforeId) {
-        const cursorFilter = await buildCursorFilter(beforeId, "before");
-        if (cursorFilter) {
-          query = { ...query, ...cursorFilter } as m.Filter<TInput>;
-        }
-        // Reverse the sort for beforeId to get items in reverse order
-        const reversedSort: Record<string, 1 | -1> = {};
-        for (const [field, dir] of Object.entries(sortObj)) {
-          reversedSort[field] = (dir === 1 ? -1 : 1) as 1 | -1;
-        }
-        sort = reversedSort;
-      }
-
-      // Stage builder for simple collections
-      const stageBuilder: SimpleStageBuilder = {
-        match: (matchFilter: Record<string, unknown>) => ({
-          $match: matchFilter,
-        }),
-        unwind: (field: string) => ({
-          $unwind: field.startsWith("$") ? field : `$${field}`,
-        }),
-        lookup: (localField, foreignField, asOrOptions) => {
-          const baseAs = typeof asOrOptions === "string"
-            ? asOrOptions
-            : asOrOptions?.as ?? localField;
-          if (
-            typeof asOrOptions === "object" &&
-            (asOrOptions.pipeline || asOrOptions.let)
-          ) {
+        // Stage builder for simple collections
+        const stageBuilder: SimpleStageBuilder = {
+          match: (matchFilter: Record<string, unknown>) => ({
+            $match: matchFilter,
+          }),
+          unwind: (field: string) => ({
+            $unwind: field.startsWith("$") ? field : `$${field}`,
+          }),
+          lookup: (localField, foreignField, asOrOptions) => {
+            const baseAs = typeof asOrOptions === "string"
+              ? asOrOptions
+              : asOrOptions?.as ?? localField;
+            if (
+              typeof asOrOptions === "object" &&
+              (asOrOptions.pipeline || asOrOptions.let)
+            ) {
+              return {
+                $lookup: {
+                  from: collectionName,
+                  localField,
+                  foreignField,
+                  as: baseAs,
+                  ...(asOrOptions.let ? { let: asOrOptions.let } : {}),
+                  ...(asOrOptions.pipeline
+                    ? { pipeline: asOrOptions.pipeline }
+                    : {}),
+                },
+              };
+            }
             return {
               $lookup: {
                 from: collectionName,
                 localField,
                 foreignField,
                 as: baseAs,
-                ...(asOrOptions.let ? { let: asOrOptions.let } : {}),
-                ...(asOrOptions.pipeline
-                  ? { pipeline: asOrOptions.pipeline }
-                  : {}),
               },
             };
-          }
-          return {
-            $lookup: {
-              from: collectionName,
-              localField,
-              foreignField,
-              as: baseAs,
-            },
-          };
-        },
-        externalLookup: (
-          fromCollection,
-          localField,
-          foreignField,
-          asOrOptions,
-        ) => {
-          const baseAs = typeof asOrOptions === "string"
-            ? asOrOptions
-            : asOrOptions?.as ?? localField;
-          if (
-            typeof asOrOptions === "object" &&
-            (asOrOptions.pipeline || asOrOptions.let)
-          ) {
+          },
+          externalLookup: (
+            fromCollection,
+            localField,
+            foreignField,
+            asOrOptions,
+          ) => {
+            const baseAs = typeof asOrOptions === "string"
+              ? asOrOptions
+              : asOrOptions?.as ?? localField;
+            if (
+              typeof asOrOptions === "object" &&
+              (asOrOptions.pipeline || asOrOptions.let)
+            ) {
+              return {
+                $lookup: {
+                  from: fromCollection,
+                  localField,
+                  foreignField,
+                  as: baseAs,
+                  ...(asOrOptions.let ? { let: asOrOptions.let } : {}),
+                  ...(asOrOptions.pipeline
+                    ? { pipeline: asOrOptions.pipeline }
+                    : {}),
+                },
+              };
+            }
             return {
               $lookup: {
                 from: fromCollection,
                 localField,
                 foreignField,
                 as: baseAs,
-                ...(asOrOptions.let ? { let: asOrOptions.let } : {}),
-                ...(asOrOptions.pipeline
-                  ? { pipeline: asOrOptions.pipeline }
-                  : {}),
               },
             };
-          }
-          return {
-            $lookup: {
-              from: fromCollection,
-              localField,
-              foreignField,
-              as: baseAs,
-            },
-          };
-        },
-        project: (projection) => ({ $project: projection }),
-        addFields: (fields) => ({ $addFields: fields }),
-        group: (grouping) => ({ $group: grouping }),
-        sort: (sortSpec) => ({ $sort: sortSpec }),
-        limit: (limitVal) => ({ $limit: limitVal }),
-        skip: (skipVal) => ({ $skip: skipVal }),
-      };
+          },
+          project: (projection) => ({ $project: projection }),
+          addFields: (fields) => ({ $addFields: fields }),
+          group: (grouping) => ({ $group: grouping }),
+          sort: (sortSpec) => ({ $sort: sortSpec }),
+          limit: (limitVal) => ({ $limit: limitVal }),
+          skip: (skipVal) => ({ $skip: skipVal }),
+        };
 
-      // Build aggregation pipeline if provided
-      const customPipeline = pipelineBuilder
-        ? pipelineBuilder(stageBuilder)
-        : [];
+        // Build aggregation pipeline if provided
+        const customPipeline = pipelineBuilder
+          ? pipelineBuilder(stageBuilder)
+          : [];
 
-      // Count total + position. When a custom pipeline is present, the
-      // count must reflect docs that pass through the WHOLE pipeline
-      // (e.g. $lookup-based JOIN filters), not just the base $match —
-      // otherwise the UI shows misleading "2 / 15" when only 2 docs
-      // survive the pipeline. We run a sibling aggregation that mirrors
-      // the data pipeline up to the matching stages and appends $count.
-      let total: number | undefined;
-      let position: number | undefined;
-      if (!skipTotal) {
-        if (customPipeline.length > 0) {
-          const countPipeline: m.Document[] = [
-            { $match: baseQuery },
-            ...customPipeline,
-            { $count: "total" },
-          ];
-          const totalResult = await collection.aggregate(countPipeline, {
-            session,
-          }).toArray();
-          total = (totalResult[0]?.total as number | undefined) ?? 0;
+        // Count total + position. When a custom pipeline is present, the
+        // count must reflect docs that pass through the WHOLE pipeline
+        // (e.g. $lookup-based JOIN filters), not just the base $match —
+        // otherwise the UI shows misleading "2 / 15" when only 2 docs
+        // survive the pipeline. We run a sibling aggregation that mirrors
+        // the data pipeline up to the matching stages and appends $count.
+        let total: number | undefined;
+        let position: number | undefined;
+        if (!skipTotal) {
+          if (customPipeline.length > 0) {
+            const countPipeline: m.Document[] = [
+              { $match: baseQuery },
+              ...customPipeline,
+              { $count: "total" },
+            ];
+            const totalResult = await collection.aggregate(countPipeline, {
+              session,
+            }).toArray();
+            total = (totalResult[0]?.total as number | undefined) ?? 0;
 
-          if (afterId) {
-            const afterFilter = await buildCursorFilter(afterId, "after");
-            if (afterFilter) {
-              const afterPipeline: m.Document[] = [
-                { $match: { ...baseQuery, ...afterFilter } },
-                ...customPipeline,
-                { $count: "total" },
-              ];
-              const afterResult = await collection.aggregate(afterPipeline, {
-                session,
-              }).toArray();
-              const afterCount =
-                (afterResult[0]?.total as number | undefined) ?? 0;
-              position = total - afterCount;
+            if (afterId) {
+              const afterFilter = await buildCursorFilter(afterId, "after");
+              if (afterFilter) {
+                const afterPipeline: m.Document[] = [
+                  { $match: { ...baseQuery, ...afterFilter } },
+                  ...customPipeline,
+                  { $count: "total" },
+                ];
+                const afterResult = await collection.aggregate(afterPipeline, {
+                  session,
+                }).toArray();
+                const afterCount =
+                  (afterResult[0]?.total as number | undefined) ?? 0;
+                position = total - afterCount;
+              } else {
+                position = 1;
+              }
+            } else if (beforeId) {
+              position = -1; // computed post-fetch (same marker as the find-path)
             } else {
-              position = 1;
+              position = 0;
             }
-          } else if (beforeId) {
-            position = -1; // computed post-fetch (same marker as the find-path)
           } else {
-            position = 0;
+            // Find-style fast path: countDocuments is cheaper than aggregate.
+            total = await collection.countDocuments(baseQuery, { session });
+
+            if (afterId) {
+              const afterFilter = await buildCursorFilter(afterId, "after");
+              if (afterFilter) {
+                const afterCount = await collection.countDocuments(
+                  { ...baseQuery, ...afterFilter } as m.Filter<TInput>,
+                  { session },
+                );
+                position = total - afterCount;
+              } else {
+                position = 1;
+              }
+            } else if (beforeId) {
+              position = -1;
+            } else {
+              position = 0;
+            }
+          }
+        }
+
+        let hardLimit = 10_000;
+        const elements: R[] = [];
+
+        // Use aggregation pipeline when custom pipeline is provided
+        if (customPipeline.length > 0) {
+          const aggregationPipeline: m.Document[] = [
+            { $match: query },
+            { $sort: sort },
+            ...customPipeline,
+          ];
+
+          const cursor = collection.aggregate(aggregationPipeline, { session });
+
+          try {
+            while (hardLimit-- > 0 && limit > 0) {
+              const doc = await cursor.next() as WithId<TOutput> | null;
+              if (!doc) break;
+
+              // Validate document with schema (only original fields, not lookup fields)
+              const validation = v.safeParse(schema, doc);
+              if (!validation.success) {
+                continue; // Skip invalid documents
+              }
+
+              // Merge original doc (with lookup fields) with validated output
+              const validatedDoc = { ...doc, ...validation.output } as WithId<
+                TOutput
+              >;
+
+              // Step 1: Prepare - enrich document with external data
+              const enrichedDoc = prepare
+                ? await prepare(validatedDoc)
+                : validatedDoc as unknown as E;
+
+              // Step 2: Filter - apply custom filtering logic
+              const isValid = await customFilter?.(enrichedDoc) ?? true;
+              if (!isValid) continue;
+
+              // Step 3: Format - transform document to final output format
+              const finalDoc = format
+                ? await format(enrichedDoc)
+                : enrichedDoc as unknown as R;
+
+              elements.push(finalDoc);
+              limit--;
+            }
+          } finally {
+            await cursor.close();
           }
         } else {
-          // Find-style fast path: countDocuments is cheaper than aggregate.
-          total = await collection.countDocuments(baseQuery, { session });
+          // Use simple find for non-pipeline queries
+          const cursor = collection.find(query, { session }).sort(
+            sort as m.Sort,
+          );
 
-          if (afterId) {
-            const afterFilter = await buildCursorFilter(afterId, "after");
-            if (afterFilter) {
-              const afterCount = await collection.countDocuments(
-                { ...baseQuery, ...afterFilter } as m.Filter<TInput>,
+          try {
+            while (hardLimit-- > 0 && limit > 0) {
+              const doc = await cursor.next() as WithId<TOutput> | null;
+              if (!doc) break;
+
+              // Validate document with schema
+              const validation = v.safeParse(schema, doc);
+              if (!validation.success) {
+                continue; // Skip invalid documents
+              }
+
+              const validatedDoc = validation.output as WithId<TOutput>;
+
+              // Step 1: Prepare - enrich document with external data
+              const enrichedDoc = prepare
+                ? await prepare(validatedDoc)
+                : validatedDoc as unknown as E;
+
+              // Step 2: Filter - apply custom filtering logic
+              const isValid = await customFilter?.(enrichedDoc) ?? true;
+              if (!isValid) continue;
+
+              // Step 3: Format - transform document to final output format
+              const finalDoc = format
+                ? await format(enrichedDoc)
+                : enrichedDoc as unknown as R;
+
+              elements.push(finalDoc);
+              limit--;
+            }
+          } finally {
+            await cursor.close();
+          }
+        }
+
+        // If peek was requested, pop the extra row (fetched in cursor's natural order, before any beforeId reverse)
+        let hasMore: boolean | undefined;
+        if (peek) {
+          if (elements.length > requestedLimit) {
+            hasMore = true;
+            elements.pop();
+          } else {
+            hasMore = false;
+          }
+        }
+
+        // If paginating backwards (beforeId), reverse to maintain consistent order with forward pagination
+        if (beforeId) {
+          elements.reverse();
+          // Calculate position: count of elements before the first returned element
+          // After reverse, elements[0] is the earliest in the sorted order
+          // Position = total elements before anchor - elements returned
+          if (!skipTotal) {
+            const beforeFilter = await buildCursorFilter(beforeId, "before");
+            if (beforeFilter) {
+              const beforeCount = await collection.countDocuments(
+                { ...baseQuery, ...beforeFilter } as m.Filter<TInput>,
                 { session },
               );
-              position = total - afterCount;
+              position = Math.max(0, beforeCount - elements.length);
             } else {
-              position = 1;
+              position = 0;
             }
-          } else if (beforeId) {
-            position = -1;
-          } else {
-            position = 0;
           }
         }
-      }
 
-      let hardLimit = 10_000;
-      const elements: R[] = [];
-
-      // Use aggregation pipeline when custom pipeline is provided
-      if (customPipeline.length > 0) {
-        const aggregationPipeline: m.Document[] = [
-          { $match: query },
-          { $sort: sort },
-          ...customPipeline,
-        ];
-
-        const cursor = collection.aggregate(aggregationPipeline, { session });
-
-        try {
-          while (hardLimit-- > 0 && limit > 0) {
-            const doc = await cursor.next() as WithId<TOutput> | null;
-            if (!doc) break;
-
-            // Validate document with schema (only original fields, not lookup fields)
-            const validation = v.safeParse(schema, doc);
-            if (!validation.success) {
-              continue; // Skip invalid documents
-            }
-
-            // Merge original doc (with lookup fields) with validated output
-            const validatedDoc = { ...doc, ...validation.output } as WithId<
-              TOutput
-            >;
-
-            // Step 1: Prepare - enrich document with external data
-            const enrichedDoc = prepare
-              ? await prepare(validatedDoc)
-              : validatedDoc as unknown as E;
-
-            // Step 2: Filter - apply custom filtering logic
-            const isValid = await customFilter?.(enrichedDoc) ?? true;
-            if (!isValid) continue;
-
-            // Step 3: Format - transform document to final output format
-            const finalDoc = format
-              ? await format(enrichedDoc)
-              : enrichedDoc as unknown as R;
-
-            elements.push(finalDoc);
-            limit--;
-          }
-        } finally {
-          await cursor.close();
-        }
-      } else {
-        // Use simple find for non-pipeline queries
-        const cursor = collection.find(query, { session }).sort(sort as m.Sort);
-
-        try {
-          while (hardLimit-- > 0 && limit > 0) {
-            const doc = await cursor.next() as WithId<TOutput> | null;
-            if (!doc) break;
-
-            // Validate document with schema
-            const validation = v.safeParse(schema, doc);
-            if (!validation.success) {
-              continue; // Skip invalid documents
-            }
-
-            const validatedDoc = validation.output as WithId<TOutput>;
-
-            // Step 1: Prepare - enrich document with external data
-            const enrichedDoc = prepare
-              ? await prepare(validatedDoc)
-              : validatedDoc as unknown as E;
-
-            // Step 2: Filter - apply custom filtering logic
-            const isValid = await customFilter?.(enrichedDoc) ?? true;
-            if (!isValid) continue;
-
-            // Step 3: Format - transform document to final output format
-            const finalDoc = format
-              ? await format(enrichedDoc)
-              : enrichedDoc as unknown as R;
-
-            elements.push(finalDoc);
-            limit--;
-          }
-        } finally {
-          await cursor.close();
-        }
-      }
-
-      // If peek was requested, pop the extra row (fetched in cursor's natural order, before any beforeId reverse)
-      let hasMore: boolean | undefined;
-      if (peek) {
-        if (elements.length > requestedLimit) {
-          hasMore = true;
-          elements.pop();
-        } else {
-          hasMore = false;
-        }
-      }
-
-      // If paginating backwards (beforeId), reverse to maintain consistent order with forward pagination
-      if (beforeId) {
-        elements.reverse();
-        // Calculate position: count of elements before the first returned element
-        // After reverse, elements[0] is the earliest in the sorted order
-        // Position = total elements before anchor - elements returned
-        if (!skipTotal) {
-          const beforeFilter = await buildCursorFilter(beforeId, "before");
-          if (beforeFilter) {
-            const beforeCount = await collection.countDocuments(
-              { ...baseQuery, ...beforeFilter } as m.Filter<TInput>,
-              { session },
-            );
-            position = Math.max(0, beforeCount - elements.length);
-          } else {
-            position = 0;
-          }
-        }
-      }
-
-      return {
-        total,
-        position,
-        data: elements,
-        ...(peek ? { hasMore } : {}),
+        return {
+          total,
+          position,
+          data: elements,
+          ...(peek ? { hasMore } : {}),
+        };
       };
+      if (!tele) return run();
+      return tele.withOp(
+        "paginate",
+        { [TA.FILTER_KEYS]: filterKeys(filter) },
+        run,
+        (r) => ({ [TA.RETURNED_ROWS]: r.data.length }),
+      );
     },
     countDocuments(filter, options?) {
-      const session = sessionContext.getSession();
-      return collection.countDocuments(filter, { session, ...options });
+      const run = () => {
+        const session = sessionContext.getSession();
+        return collection.countDocuments(filter, { session, ...options });
+      };
+      if (!tele) return run();
+      return tele.withOp(
+        "countDocuments",
+        { [TA.FILTER_KEYS]: filterKeys(filter) },
+        run,
+      );
     },
     estimatedDocumentCount(options?) {
-      const session = sessionContext.getSession();
-      return collection.estimatedDocumentCount({ session, ...options });
+      const run = () => {
+        const session = sessionContext.getSession();
+        return collection.estimatedDocumentCount({ session, ...options });
+      };
+      if (!tele) return run();
+      return tele.withOp("estimatedDocumentCount", undefined, run);
     },
     distinct(key, filter, options?) {
-      const session = sessionContext.getSession();
-      return collection.distinct(key as string, filter, {
-        session,
-        ...options,
-      });
+      const run = () => {
+        const session = sessionContext.getSession();
+        return collection.distinct(key as string, filter, {
+          session,
+          ...options,
+        });
+      };
+      if (!tele) return run();
+      return tele.withOp(
+        "distinct",
+        { [TA.FILTER_KEYS]: filterKeys(filter) },
+        run,
+        (r) => ({ [TA.RETURNED_ROWS]: r.length }),
+      );
     },
 
     // Document update operations
     replaceOne(filter, replacement, options?) {
-      const validation = v.safeParse(schema, replacement);
-      if (!validation.success) {
-        throw {
-          message: "Validation error",
-          errors: validation,
-        };
-      }
+      const run = () => {
+        const validation = v.safeParse(schema, replacement);
+        if (!validation.success) {
+          throw {
+            message: "Validation error",
+            errors: validation,
+          };
+        }
 
-      const sanitizedReplacement = sanitizeForMongoDB(validation.output, {
-        undefinedBehavior: opts.undefinedBehavior || "remove",
-        deep: true,
-      }) as unknown as TInput;
-      const session = sessionContext.getSession();
-      return collection.replaceOne(filter, sanitizedReplacement, {
-        session,
-        ...options,
-      });
-    },
-    updateOne(filter, update, options?) {
-      // @TODO: check if update is valid
-      return retryOnWriteConflict(async () => {
-        // Process removeField() symbols in $set before sanitization
-        const processedUpdate = processUpdateWithRemoveField(
-          update as Record<string, unknown>,
-        );
-        const sanitizedUpdate = sanitizeForMongoDB(processedUpdate, {
+        const sanitizedReplacement = sanitizeForMongoDB(validation.output, {
           undefinedBehavior: opts.undefinedBehavior || "remove",
           deep: true,
-        });
+        }) as unknown as TInput;
         const session = sessionContext.getSession();
-        return await collection.updateOne(
-          filter as any,
-          sanitizedUpdate as any,
-          {
-            session,
-            ...options,
-          },
-        );
-      });
-    },
-    updateMany(filter, update, options?) {
-      // @TODO: check if update is valid
-      return retryOnWriteConflict(async () => {
-        // Process removeField() symbols in $set before sanitization
-        const processedUpdate = processUpdateWithRemoveField(
-          update as Record<string, unknown>,
-        );
-        const sanitizedUpdate = sanitizeForMongoDB(processedUpdate, {
-          undefinedBehavior: opts.undefinedBehavior || "remove",
-          deep: true,
-        });
-        const session = sessionContext.getSession();
-        return await collection.updateMany(filter, sanitizedUpdate as any, {
+        return collection.replaceOne(filter, sanitizedReplacement, {
           session,
           ...options,
         });
-      });
+      };
+      if (!tele) return run();
+      return tele.withOp(
+        "replaceOne",
+        { [TA.FILTER_KEYS]: filterKeys(filter) },
+        run,
+        (r) => ({
+          [TA.MATCHED_COUNT]: r.matchedCount,
+          [TA.MODIFIED_COUNT]: r.modifiedCount,
+        }),
+      );
+    },
+    updateOne(filter, update, options?) {
+      // @TODO: check if update is valid
+      const run = (op?: OpContext) =>
+        retryOnWriteConflict(async () => {
+          // Process removeField() symbols in $set before sanitization
+          const processedUpdate = processUpdateWithRemoveField(
+            update as Record<string, unknown>,
+          );
+          const sanitizedUpdate = sanitizeForMongoDB(processedUpdate, {
+            undefinedBehavior: opts.undefinedBehavior || "remove",
+            deep: true,
+          });
+          const session = sessionContext.getSession();
+          return await collection.updateOne(
+            filter as any,
+            sanitizedUpdate as any,
+            {
+              session,
+              ...options,
+            },
+          );
+        }, op ? { onRetry: op.onRetry } : undefined);
+      if (!tele) return run();
+      return tele.withOp(
+        "updateOne",
+        {
+          [TA.FILTER_KEYS]: filterKeys(filter),
+          [TA.UPDATE_OPERATORS]: updateOperators(update),
+        },
+        run,
+        (r) => ({
+          [TA.MATCHED_COUNT]: r.matchedCount,
+          [TA.MODIFIED_COUNT]: r.modifiedCount,
+        }),
+      );
+    },
+    updateMany(filter, update, options?) {
+      // @TODO: check if update is valid
+      const run = (op?: OpContext) =>
+        retryOnWriteConflict(async () => {
+          // Process removeField() symbols in $set before sanitization
+          const processedUpdate = processUpdateWithRemoveField(
+            update as Record<string, unknown>,
+          );
+          const sanitizedUpdate = sanitizeForMongoDB(processedUpdate, {
+            undefinedBehavior: opts.undefinedBehavior || "remove",
+            deep: true,
+          });
+          const session = sessionContext.getSession();
+          return await collection.updateMany(filter, sanitizedUpdate as any, {
+            session,
+            ...options,
+          });
+        }, op ? { onRetry: op.onRetry } : undefined);
+      if (!tele) return run();
+      return tele.withOp(
+        "updateMany",
+        {
+          [TA.FILTER_KEYS]: filterKeys(filter),
+          [TA.UPDATE_OPERATORS]: updateOperators(update),
+        },
+        run,
+        (r) => ({
+          [TA.MATCHED_COUNT]: r.matchedCount,
+          [TA.MODIFIED_COUNT]: r.modifiedCount,
+        }),
+      );
     },
 
     // Document delete operations
     deleteOne(filter, options?) {
-      const session = sessionContext.getSession();
-      return collection.deleteOne(filter, { session, ...options });
+      const run = () => {
+        const session = sessionContext.getSession();
+        return collection.deleteOne(filter, { session, ...options });
+      };
+      if (!tele) return run();
+      return tele.withOp(
+        "deleteOne",
+        { [TA.FILTER_KEYS]: filterKeys(filter) },
+        run,
+        (r) => ({ [TA.DELETED_COUNT]: r.deletedCount }),
+      );
     },
     deleteMany(filter, options?) {
-      if (opts.safeDelete) {
-        const filterSize = Object.keys(filter ?? {}).length;
-        if (filterSize === 0) throw new Error("Filter is empty");
+      const run = () => {
+        if (opts.safeDelete) {
+          const filterSize = Object.keys(filter ?? {}).length;
+          if (filterSize === 0) throw new Error("Filter is empty");
 
-        let anyValidFilter = false;
-        for (const key in filter) {
-          if (key === "_id") continue;
-          const value = filter[key];
-          if (value !== undefined) {
-            anyValidFilter = true;
-            break;
+          let anyValidFilter = false;
+          for (const key in filter) {
+            if (key === "_id") continue;
+            const value = filter[key];
+            if (value !== undefined) {
+              anyValidFilter = true;
+              break;
+            }
+          }
+
+          if (!anyValidFilter) {
+            throw new Error("Filter is empty or only contains _id");
           }
         }
 
-        if (!anyValidFilter) {
-          throw new Error("Filter is empty or only contains _id");
-        }
-      }
-
-      const session = sessionContext.getSession();
-      return collection.deleteMany(filter, { session, ...options });
+        const session = sessionContext.getSession();
+        return collection.deleteMany(filter, { session, ...options });
+      };
+      if (!tele) return run();
+      return tele.withOp(
+        "deleteMany",
+        { [TA.FILTER_KEYS]: filterKeys(filter) },
+        run,
+        (r) => ({ [TA.DELETED_COUNT]: r.deletedCount }),
+      );
     },
 
     // Compound operations
     findOneAndDelete(filter, options?) {
-      const session = sessionContext.getSession();
-      return collection.findOneAndDelete(filter, { session, ...options });
+      const run = () => {
+        const session = sessionContext.getSession();
+        return collection.findOneAndDelete(filter, { session, ...options });
+      };
+      if (!tele) return run();
+      return tele.withOp(
+        "findOneAndDelete",
+        { [TA.FILTER_KEYS]: filterKeys(filter) },
+        run,
+      );
     },
     findOneAndReplace(filter, replacement, options?) {
-      const validation = v.safeParse(schema, replacement);
-      if (!validation.success) {
-        throw {
-          message: "Validation error",
-          errors: validation,
-        };
-      }
+      const run = () => {
+        const validation = v.safeParse(schema, replacement);
+        if (!validation.success) {
+          throw {
+            message: "Validation error",
+            errors: validation,
+          };
+        }
 
-      const sanitizedReplacement = sanitizeForMongoDB(validation.output, {
-        undefinedBehavior: opts.undefinedBehavior || "remove",
-        deep: true,
-      }) as unknown as TInput;
+        const sanitizedReplacement = sanitizeForMongoDB(validation.output, {
+          undefinedBehavior: opts.undefinedBehavior || "remove",
+          deep: true,
+        }) as unknown as TInput;
 
-      const session = sessionContext.getSession();
-      return collection.findOneAndReplace(filter, sanitizedReplacement, {
-        session,
-        ...options,
-      });
+        const session = sessionContext.getSession();
+        return collection.findOneAndReplace(filter, sanitizedReplacement, {
+          session,
+          ...options,
+        });
+      };
+      if (!tele) return run();
+      return tele.withOp(
+        "findOneAndReplace",
+        { [TA.FILTER_KEYS]: filterKeys(filter) },
+        run,
+      );
     },
     findOneAndUpdate(filter, update, options?) {
-      // Process removeField() symbols in $set before sanitization
-      const processedUpdate = processUpdateWithRemoveField(
-        update as Record<string, unknown>,
+      const run = () => {
+        // Process removeField() symbols in $set before sanitization
+        const processedUpdate = processUpdateWithRemoveField(
+          update as Record<string, unknown>,
+        );
+        const sanitizedUpdate = sanitizeForMongoDB(processedUpdate, {
+          undefinedBehavior: opts.undefinedBehavior || "remove",
+          deep: true,
+        });
+        const session = sessionContext.getSession();
+        return collection.findOneAndUpdate(filter, sanitizedUpdate as any, {
+          session,
+          ...options,
+        });
+      };
+      if (!tele) return run();
+      return tele.withOp(
+        "findOneAndUpdate",
+        {
+          [TA.FILTER_KEYS]: filterKeys(filter),
+          [TA.UPDATE_OPERATORS]: updateOperators(update),
+        },
+        run,
       );
-      const sanitizedUpdate = sanitizeForMongoDB(processedUpdate, {
-        undefinedBehavior: opts.undefinedBehavior || "remove",
-        deep: true,
-      });
-      const session = sessionContext.getSession();
-      return collection.findOneAndUpdate(filter, sanitizedUpdate as any, {
-        session,
-        ...options,
-      });
     },
 
     // Bulk operations
@@ -1266,8 +1448,22 @@ export async function collection<
       return collection.aggregate(pipeline, { session, ...options });
     },
     bulkWrite(operations, options?) {
-      const session = sessionContext.getSession();
-      return collection.bulkWrite(operations, { session, ...options });
+      const run = () => {
+        const session = sessionContext.getSession();
+        return collection.bulkWrite(operations, { session, ...options });
+      };
+      if (!tele) return run();
+      return tele.withOp(
+        "bulkWrite",
+        { [TA.BATCH_SIZE]: operations.length },
+        run,
+        (r) => ({
+          [TA.INSERTED_COUNT]: r.insertedCount,
+          [TA.MATCHED_COUNT]: r.matchedCount,
+          [TA.MODIFIED_COUNT]: r.modifiedCount,
+          [TA.DELETED_COUNT]: r.deletedCount,
+        }),
+      );
     },
     initializeOrderedBulkOp(options?) {
       const session = sessionContext.getSession();
