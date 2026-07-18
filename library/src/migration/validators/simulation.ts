@@ -982,9 +982,9 @@ export class SimulationValidator implements MigrationValidator {
             }`,
           );
         }
-        const docBefore =
-          (stateBefore.scopedMultiCollections || {})[scopedName]?.content
-            ?.[docIndex];
+        const docBefore = (stateBefore.scopedMultiCollections || {})[scopedName]
+          ?.content
+          ?.[docIndex];
         const equal = dirtyEquivalent(docBefore, doc);
         if (!equal) {
           issues.push({

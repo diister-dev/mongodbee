@@ -24,7 +24,7 @@ import { assert, assertEquals } from "@std/assert";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import {
   createSimulationValidator,
-  SimulationValidator,
+  type SimulationValidator,
 } from "../../src/migration/validators/simulation.ts";
 import { createEmptyDatabaseState } from "../../src/migration/types.ts";
 import { refId } from "../../src/ids.ts";

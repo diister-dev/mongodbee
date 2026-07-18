@@ -158,7 +158,10 @@ Deno.test("gate: index metadata drift (withIndex) is detected", () => {
 
   const projectWithUniqueEmail = {
     collections: {
-      users: { _id: v.string(), email: withIndex(v.string(), { unique: true }) },
+      users: {
+        _id: v.string(),
+        email: withIndex(v.string(), { unique: true }),
+      },
     },
   };
 

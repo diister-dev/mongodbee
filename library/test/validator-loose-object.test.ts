@@ -27,11 +27,18 @@ Deno.test("looseObject: envelope validated, unknown keys PRESERVED end-to-end", 
     // Unknown keys must survive insert AND read (v.object would strip them).
     const id = await docs.insertOne({
       name: "kpi",
-      node: { type: "kpi", title: "Participants", sources: [{ id: "A" }] } as never,
+      node: {
+        type: "kpi",
+        title: "Participants",
+        sources: [{ id: "A" }],
+      } as never,
     });
     assert(id, "insert with extra keys should pass");
     const stored = await docs.findOne({ _id: id });
-    assertEquals((stored?.node as Record<string, unknown>).title, "Participants");
+    assertEquals(
+      (stored?.node as Record<string, unknown>).title,
+      "Participants",
+    );
     assertEquals(
       ((stored?.node as Record<string, unknown>).sources as unknown[]).length,
       1,
@@ -39,7 +46,10 @@ Deno.test("looseObject: envelope validated, unknown keys PRESERVED end-to-end", 
 
     // The REQUIRED entry is still enforced.
     try {
-      await docs.insertOne({ name: "bad", node: { title: "no type" } as never });
+      await docs.insertOne({
+        name: "bad",
+        node: { title: "no type" } as never,
+      });
       assert(false, "missing required `type` should fail");
     } catch (error) {
       assert(error, "validation error expected");
