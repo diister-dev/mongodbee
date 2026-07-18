@@ -20,6 +20,14 @@ import { dirtyEquivalent } from "./utils/object.ts";
 import { createLogger } from "./utils/logger.ts";
 import { applyScopedMultiCollectionIndexes } from "./indexes-applier.ts";
 import { mongoOperationQueue } from "./operation.ts";
+import {
+  createOperationTracer,
+  filterKeys,
+  type OpContext,
+  registerClientTelemetry,
+  TELEMETRY_ATTRIBUTES as TA,
+  type TelemetryOptions,
+} from "./telemetry.ts";
 
 const log = createLogger("scoped-multi-collection");
 
@@ -63,6 +71,8 @@ export type ScopedMultiCollectionConfig<
    * is read-only.
    */
   allowUnscoped?: boolean;
+  /** Opt-in OpenTelemetry tracing for this collection's operations. */
+  telemetry?: TelemetryOptions;
 };
 
 // -------- Per-type schema augmentation -----------------------------------
@@ -539,6 +549,13 @@ export async function scopedMultiCollection<
   const collection = db.collection<any>(collectionName);
   const sessionContext = getSessionContext(db.client);
 
+  const tele = createOperationTracer(config.telemetry, {
+    dbName: db.databaseName,
+    collectionName,
+    getSession: () => sessionContext.getSession(),
+  });
+  registerClientTelemetry(db.client, config.telemetry);
+
   await applyScopedMultiCollectionIndexes(collection, storageSchemas, {
     queue: mongoOperationQueue,
   });
@@ -578,245 +595,367 @@ export async function scopedMultiCollection<
       _scope: scopeId,
 
       async insertOne(type, doc) {
-        const typeName = type as string;
-        const record = doc as Record<string, unknown>;
-        assertNoReservedFields(record);
-
-        const schema = insertSchemas[typeName];
-        const parsed = v.parse(schema, {
-          ...record,
-          // Auto-mint `_id` when the caller omits it, mirroring the
-          // multiCollection contract. The per-type `_id` schema is often a
-          // bare `refId(type)` (required, no default), so we cannot rely on a
-          // `dbId` default here — without this, inserting such a type would
-          // throw "Expected _id but received undefined".
-          _id: record._id ?? `${typeName}:${newId()}`,
-          _scope: scopeId,
-        });
-
-        const safeDoc = sanitizeForMongoDB(parsed, {
-          undefinedBehavior: "remove",
-          deep: true,
-          // deno-lint-ignore no-explicit-any
-        }) as any;
-
-        const session = sessionContext.getSession();
-        const result = await collection.insertOne(safeDoc, { session });
-        if (!result.acknowledged) throw new Error("Insert failed");
-        return result.insertedId as unknown as string;
-      },
-
-      async insertMany(type, docs) {
-        const typeName = type as string;
-        const schema = insertSchemas[typeName];
-
-        const parsed = docs.map((d) => {
-          const record = d as Record<string, unknown>;
+        const run = async () => {
+          const typeName = type as string;
+          const record = doc as Record<string, unknown>;
           assertNoReservedFields(record);
-          return v.parse(schema, {
+
+          const schema = insertSchemas[typeName];
+          const parsed = v.parse(schema, {
             ...record,
+            // Auto-mint `_id` when the caller omits it, mirroring the
+            // multiCollection contract. The per-type `_id` schema is often a
+            // bare `refId(type)` (required, no default), so we cannot rely on a
+            // `dbId` default here — without this, inserting such a type would
+            // throw "Expected _id but received undefined".
             _id: record._id ?? `${typeName}:${newId()}`,
             _scope: scopeId,
           });
-        });
 
-        const safeDocs = parsed.map((p) =>
-          sanitizeForMongoDB(p, {
+          const safeDoc = sanitizeForMongoDB(parsed, {
             undefinedBehavior: "remove",
             deep: true,
             // deno-lint-ignore no-explicit-any
-          }) as any
-        );
+          }) as any;
 
-        const session = sessionContext.getSession();
-        const result = await collection.insertMany(safeDocs, { session });
-        if (!result.acknowledged) throw new Error("Insert failed");
-        return Object.values(result.insertedIds) as unknown as string[];
+          const session = sessionContext.getSession();
+          const result = await collection.insertOne(safeDoc, { session });
+          if (!result.acknowledged) throw new Error("Insert failed");
+          return result.insertedId as unknown as string;
+        };
+        if (!tele) return run();
+        return tele.withOp("insertOne", {
+          [TA.SCOPE]: scopeId,
+          [TA.DOC_TYPE]: String(type),
+        }, run);
+      },
+
+      async insertMany(type, docs) {
+        const run = async () => {
+          const typeName = type as string;
+          const schema = insertSchemas[typeName];
+
+          const parsed = docs.map((d) => {
+            const record = d as Record<string, unknown>;
+            assertNoReservedFields(record);
+            return v.parse(schema, {
+              ...record,
+              _id: record._id ?? `${typeName}:${newId()}`,
+              _scope: scopeId,
+            });
+          });
+
+          const safeDocs = parsed.map((p) =>
+            sanitizeForMongoDB(p, {
+              undefinedBehavior: "remove",
+              deep: true,
+              // deno-lint-ignore no-explicit-any
+            }) as any
+          );
+
+          const session = sessionContext.getSession();
+          const result = await collection.insertMany(safeDocs, { session });
+          if (!result.acknowledged) throw new Error("Insert failed");
+          return Object.values(result.insertedIds) as unknown as string[];
+        };
+        if (!tele) return run();
+        return tele.withOp(
+          "insertMany",
+          {
+            [TA.SCOPE]: scopeId,
+            [TA.DOC_TYPE]: String(type),
+            [TA.BATCH_SIZE]: docs.length,
+          },
+          run,
+          (ids) => ({ [TA.INSERTED_COUNT]: ids.length }),
+        );
       },
 
       async getById(type, id) {
-        const typeName = type as string;
-        const session = sessionContext.getSession();
-        const raw = await collection.findOne({
-          _id: id,
-          _type: typeName,
-          _scope: scopeId,
+        const run = async () => {
+          const typeName = type as string;
+          const session = sessionContext.getSession();
+          const raw = await collection.findOne({
+            _id: id,
+            _type: typeName,
+            _scope: scopeId,
+            // deno-lint-ignore no-explicit-any
+          } as any, { session });
+          if (!raw) {
+            throw new Error(
+              `getById(${typeName}, ${id}): no element found in scope "${scopeId}"`,
+            );
+          }
           // deno-lint-ignore no-explicit-any
-        } as any, { session });
-        if (!raw) {
-          throw new Error(
-            `getById(${typeName}, ${id}): no element found in scope "${scopeId}"`,
-          );
-        }
-        // deno-lint-ignore no-explicit-any
-        return v.parse(storageSchemas[typeName], raw) as any;
+          return v.parse(storageSchemas[typeName], raw) as any;
+        };
+        if (!tele) return run();
+        return tele.withOp("getById", {
+          [TA.SCOPE]: scopeId,
+          [TA.DOC_TYPE]: String(type),
+          [TA.FILTER_KEYS]: "_id",
+        }, run);
       },
 
       async findOne(type, filter) {
-        const typeName = type as string;
-        const session = sessionContext.getSession();
-        const conditions: Record<string, unknown>[] = [
-          { _type: typeName },
-          { _scope: scopeId },
-        ];
-        if (filter) conditions.push(filter as Record<string, unknown>);
+        const run = async () => {
+          const typeName = type as string;
+          const session = sessionContext.getSession();
+          const conditions: Record<string, unknown>[] = [
+            { _type: typeName },
+            { _scope: scopeId },
+          ];
+          if (filter) conditions.push(filter as Record<string, unknown>);
 
-        // deno-lint-ignore no-explicit-any
-        const raw = await collection.findOne({ $and: conditions } as any, {
-          session,
-        });
-        if (!raw) return null;
-        // deno-lint-ignore no-explicit-any
-        return v.parse(storageSchemas[typeName], raw) as any;
+          // deno-lint-ignore no-explicit-any
+          const raw = await collection.findOne({ $and: conditions } as any, {
+            session,
+          });
+          if (!raw) return null;
+          // deno-lint-ignore no-explicit-any
+          return v.parse(storageSchemas[typeName], raw) as any;
+        };
+        if (!tele) return run();
+        return tele.withOp("findOne", {
+          [TA.SCOPE]: scopeId,
+          [TA.DOC_TYPE]: String(type),
+          [TA.FILTER_KEYS]: filterKeys(filter),
+        }, run);
       },
 
       async find(type, filter, options) {
-        const typeName = type as string;
-        const session = sessionContext.getSession();
-        const { validate = true, ...findOptions } = options ?? {};
-        const conditions: Record<string, unknown>[] = [
-          { _type: typeName },
-          { _scope: scopeId },
-        ];
-        if (filter) conditions.push(filter as Record<string, unknown>);
+        const run = async () => {
+          const typeName = type as string;
+          const session = sessionContext.getSession();
+          const { validate = true, ...findOptions } = options ?? {};
+          const conditions: Record<string, unknown>[] = [
+            { _type: typeName },
+            { _scope: scopeId },
+          ];
+          if (filter) conditions.push(filter as Record<string, unknown>);
 
-        // deno-lint-ignore no-explicit-any
-        const cursor = collection.find({ $and: conditions } as any, {
-          session,
-          ...findOptions,
-        });
-        const raw = await cursor.toArray();
-        // `validate: false` skips the per-document parse for trusted hot-path
-        // reads, returning the raw stored docs. Schema transforms are NOT
-        // applied in that mode — opt out only when you don't depend on them.
-        if (validate === false) {
           // deno-lint-ignore no-explicit-any
-          return raw as any;
-        }
-        const out: unknown[] = [];
-        for (const item of raw) {
-          const parsed = v.safeParse(storageSchemas[typeName], item);
-          if (parsed.success) out.push(parsed.output);
-        }
-        // deno-lint-ignore no-explicit-any
-        return out as any;
+          const cursor = collection.find({ $and: conditions } as any, {
+            session,
+            ...findOptions,
+          });
+          const raw = await cursor.toArray();
+          // `validate: false` skips the per-document parse for trusted hot-path
+          // reads, returning the raw stored docs. Schema transforms are NOT
+          // applied in that mode — opt out only when you don't depend on them.
+          if (validate === false) {
+            // deno-lint-ignore no-explicit-any
+            return raw as any;
+          }
+          const out: unknown[] = [];
+          for (const item of raw) {
+            const parsed = v.safeParse(storageSchemas[typeName], item);
+            if (parsed.success) out.push(parsed.output);
+          }
+          // deno-lint-ignore no-explicit-any
+          return out as any;
+        };
+        if (!tele) return run();
+        return tele.withOp(
+          "find",
+          {
+            [TA.SCOPE]: scopeId,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: filterKeys(filter),
+          },
+          run,
+          (docs) => ({ [TA.RETURNED_ROWS]: docs.length }),
+        );
       },
 
       async findProject(type, fields, filter, options) {
-        const typeName = type as string;
-        const session = sessionContext.getSession();
-        const conditions: Record<string, unknown>[] = [
-          { _type: typeName },
-          { _scope: scopeId },
-        ];
-        if (filter) conditions.push(filter as Record<string, unknown>);
-        const cursor = collection.find(
+        const run = async () => {
+          const typeName = type as string;
+          const session = sessionContext.getSession();
+          const conditions: Record<string, unknown>[] = [
+            { _type: typeName },
+            { _scope: scopeId },
+          ];
+          if (filter) conditions.push(filter as Record<string, unknown>);
+          const cursor = collection.find(
+            // deno-lint-ignore no-explicit-any
+            { $and: conditions } as any,
+            {
+              session,
+              ...options,
+              projection: buildProjection(fields as readonly string[]),
+            },
+          );
+          // Projected docs are partial — return them raw. Validating against
+          // the full type schema would reject the omitted fields.
           // deno-lint-ignore no-explicit-any
-          { $and: conditions } as any,
+          return (await cursor.toArray()) as any;
+        };
+        if (!tele) return run();
+        return tele.withOp(
+          "findProject",
           {
-            session,
-            ...options,
-            projection: buildProjection(fields as readonly string[]),
+            [TA.SCOPE]: scopeId,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: filterKeys(filter),
           },
+          run,
+          (docs) => ({ [TA.RETURNED_ROWS]: docs.length }),
         );
-        // Projected docs are partial — return them raw. Validating against the
-        // full type schema would reject the omitted fields.
-        // deno-lint-ignore no-explicit-any
-        return (await cursor.toArray()) as any;
       },
 
       async findOneAny(filter) {
-        const session = sessionContext.getSession();
-        const conditions: Record<string, unknown>[] = [{ _scope: scopeId }];
-        if (filter) conditions.push(filter as Record<string, unknown>);
-        // deno-lint-ignore no-explicit-any
-        const raw = await collection.findOne({ $and: conditions } as any, {
-          session,
-        });
-        if (!raw) return null;
-        // deno-lint-ignore no-explicit-any
-        return v.parse(storageUnion, raw) as any;
+        const run = async () => {
+          const session = sessionContext.getSession();
+          const conditions: Record<string, unknown>[] = [{ _scope: scopeId }];
+          if (filter) conditions.push(filter as Record<string, unknown>);
+          // deno-lint-ignore no-explicit-any
+          const raw = await collection.findOne({ $and: conditions } as any, {
+            session,
+          });
+          if (!raw) return null;
+          // deno-lint-ignore no-explicit-any
+          return v.parse(storageUnion, raw) as any;
+        };
+        if (!tele) return run();
+        return tele.withOp("findOneAny", {
+          [TA.SCOPE]: scopeId,
+          [TA.FILTER_KEYS]: filterKeys(filter),
+        }, run);
       },
 
       async findAny(filter, options) {
-        const session = sessionContext.getSession();
-        const { validate = true, ...findOptions } = options ?? {};
-        const conditions: Record<string, unknown>[] = [{ _scope: scopeId }];
-        if (filter) conditions.push(filter as Record<string, unknown>);
-        const cursor = collection.find(
+        const run = async () => {
+          const session = sessionContext.getSession();
+          const { validate = true, ...findOptions } = options ?? {};
+          const conditions: Record<string, unknown>[] = [{ _scope: scopeId }];
+          if (filter) conditions.push(filter as Record<string, unknown>);
+          const cursor = collection.find(
+            // deno-lint-ignore no-explicit-any
+            { $and: conditions } as any,
+            { session, ...findOptions },
+          );
+          const raw = await cursor.toArray();
           // deno-lint-ignore no-explicit-any
-          { $and: conditions } as any,
-          { session, ...findOptions },
+          if (validate === false) return raw as any;
+          const out: unknown[] = [];
+          for (const item of raw) {
+            const parsed = v.safeParse(storageUnion, item);
+            if (parsed.success) out.push(parsed.output);
+          }
+          // deno-lint-ignore no-explicit-any
+          return out as any;
+        };
+        if (!tele) return run();
+        return tele.withOp(
+          "findAny",
+          {
+            [TA.SCOPE]: scopeId,
+            [TA.FILTER_KEYS]: filterKeys(filter),
+          },
+          run,
+          (docs) => ({ [TA.RETURNED_ROWS]: docs.length }),
         );
-        const raw = await cursor.toArray();
-        // deno-lint-ignore no-explicit-any
-        if (validate === false) return raw as any;
-        const out: unknown[] = [];
-        for (const item of raw) {
-          const parsed = v.safeParse(storageUnion, item);
-          if (parsed.success) out.push(parsed.output);
-        }
-        // deno-lint-ignore no-explicit-any
-        return out as any;
       },
 
       countDocuments(type, filter, options) {
-        const typeName = type as string;
-        const session = sessionContext.getSession();
-        const conditions: Record<string, unknown>[] = [
-          { _type: typeName },
-          { _scope: scopeId },
-        ];
-        if (filter) conditions.push(filter as Record<string, unknown>);
-        return collection.countDocuments(
-          // deno-lint-ignore no-explicit-any
-          { $and: conditions } as any,
-          { session, ...options },
-        );
+        const run = () => {
+          const typeName = type as string;
+          const session = sessionContext.getSession();
+          const conditions: Record<string, unknown>[] = [
+            { _type: typeName },
+            { _scope: scopeId },
+          ];
+          if (filter) conditions.push(filter as Record<string, unknown>);
+          return collection.countDocuments(
+            // deno-lint-ignore no-explicit-any
+            { $and: conditions } as any,
+            { session, ...options },
+          );
+        };
+        if (!tele) return run();
+        return tele.withOp("countDocuments", {
+          [TA.SCOPE]: scopeId,
+          [TA.DOC_TYPE]: String(type),
+          [TA.FILTER_KEYS]: filterKeys(filter),
+        }, run);
       },
 
       async deleteId(type, id) {
-        const typeName = type as string;
-        const session = sessionContext.getSession();
-        const result = await collection.deleteOne({
-          _id: id,
-          _type: typeName,
-          _scope: scopeId,
-          // deno-lint-ignore no-explicit-any
-        } as any, { session });
-        if (!result.acknowledged) throw new Error("Delete failed");
-        if (result.deletedCount === 0) {
-          throw new Error(
-            `deleteId(${typeName}, ${id}): no element found in scope "${scopeId}"`,
-          );
-        }
-        return result.deletedCount;
+        const run = async () => {
+          const typeName = type as string;
+          const session = sessionContext.getSession();
+          const result = await collection.deleteOne({
+            _id: id,
+            _type: typeName,
+            _scope: scopeId,
+            // deno-lint-ignore no-explicit-any
+          } as any, { session });
+          if (!result.acknowledged) throw new Error("Delete failed");
+          if (result.deletedCount === 0) {
+            throw new Error(
+              `deleteId(${typeName}, ${id}): no element found in scope "${scopeId}"`,
+            );
+          }
+          return result.deletedCount;
+        };
+        if (!tele) return run();
+        return tele.withOp("deleteId", {
+          [TA.SCOPE]: scopeId,
+          [TA.DOC_TYPE]: String(type),
+        }, run);
       },
 
       async deleteIds(type, ids) {
-        const typeName = type as string;
-        const session = sessionContext.getSession();
-        const result = await collection.deleteMany({
-          _id: { $in: ids },
-          _type: typeName,
-          _scope: scopeId,
-          // deno-lint-ignore no-explicit-any
-        } as any, { session });
-        if (!result.acknowledged) throw new Error("Delete failed");
-        return result.deletedCount;
+        const run = async () => {
+          const typeName = type as string;
+          const session = sessionContext.getSession();
+          const result = await collection.deleteMany({
+            _id: { $in: ids },
+            _type: typeName,
+            _scope: scopeId,
+            // deno-lint-ignore no-explicit-any
+          } as any, { session });
+          if (!result.acknowledged) throw new Error("Delete failed");
+          return result.deletedCount;
+        };
+        if (!tele) return run();
+        return tele.withOp(
+          "deleteIds",
+          {
+            [TA.SCOPE]: scopeId,
+            [TA.DOC_TYPE]: String(type),
+            [TA.BATCH_SIZE]: ids.length,
+          },
+          run,
+          (count) => ({ [TA.DELETED_COUNT]: count }),
+        );
       },
 
       async deleteMany(type, filter) {
-        const typeName = type as string;
-        const session = sessionContext.getSession();
-        const result = await collection.deleteMany({
-          ...(filter as Record<string, unknown>),
-          _type: typeName,
-          _scope: scopeId,
-          // deno-lint-ignore no-explicit-any
-        } as any, { session });
-        if (!result.acknowledged) throw new Error("Delete failed");
-        return result.deletedCount;
+        const run = async () => {
+          const typeName = type as string;
+          const session = sessionContext.getSession();
+          const result = await collection.deleteMany({
+            ...(filter as Record<string, unknown>),
+            _type: typeName,
+            _scope: scopeId,
+            // deno-lint-ignore no-explicit-any
+          } as any, { session });
+          if (!result.acknowledged) throw new Error("Delete failed");
+          return result.deletedCount;
+        };
+        if (!tele) return run();
+        return tele.withOp(
+          "deleteMany",
+          {
+            [TA.SCOPE]: scopeId,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: filterKeys(filter),
+          },
+          run,
+          (count) => ({ [TA.DELETED_COUNT]: count }),
+        );
       },
 
       async updateOne(type, id, doc) {
@@ -830,357 +969,401 @@ export async function scopedMultiCollection<
         const updateOps = buildUpdateOps(set, unset);
         if (Object.keys(updateOps).length === 0) return 0;
 
-        return retryOnWriteConflict(async () => {
-          const session = sessionContext.getSession();
-          const result = await collection.updateOne(
-            {
-              _id: id,
-              _type: typeName,
-              _scope: scopeId,
-              // deno-lint-ignore no-explicit-any
-              // deno-lint-ignore no-explicit-any
-            } as any,
-            updateOps as any,
-            { session },
-          );
-          if (!result.acknowledged) throw new Error("Update failed");
-          if (result.matchedCount === 0) {
-            throw new Error(
-              `updateOne(${typeName}, ${id}): no element found in scope "${scopeId}"`,
+        const run = (op?: OpContext) =>
+          retryOnWriteConflict(async () => {
+            const session = sessionContext.getSession();
+            const result = await collection.updateOne(
+              {
+                _id: id,
+                _type: typeName,
+                _scope: scopeId,
+                // deno-lint-ignore no-explicit-any
+                // deno-lint-ignore no-explicit-any
+              } as any,
+              updateOps as any,
+              { session },
             );
-          }
-          return result.modifiedCount;
-        });
+            if (!result.acknowledged) throw new Error("Update failed");
+            if (result.matchedCount === 0) {
+              throw new Error(
+                `updateOne(${typeName}, ${id}): no element found in scope "${scopeId}"`,
+              );
+            }
+            return result.modifiedCount;
+          }, op ? { onRetry: op.onRetry } : undefined);
+        if (!tele) return run();
+        return tele.withOp(
+          "updateOne",
+          {
+            [TA.SCOPE]: scopeId,
+            [TA.DOC_TYPE]: String(type),
+            [TA.UPDATE_FIELDS]: Object.keys(doc).length,
+          },
+          run,
+          (modified) => ({ [TA.MODIFIED_COUNT]: modified }),
+        );
       },
 
       async updateMany(ops) {
-        const bulkOps: m.AnyBulkWriteOperation[] = [];
-        for (const typeName in ops) {
-          const items = ops[typeName as keyof T];
-          if (!items) continue;
-          for (const id in items) {
-            const partial = items[id];
-            if (!partial) continue;
-            assertNoReservedFields(partial as Record<string, unknown>);
-            const { set, unset } = extractFieldsToRemove(
-              partial as Record<string, unknown>,
-            );
-            const updateOps = buildUpdateOps(set, unset);
-            if (Object.keys(updateOps).length === 0) continue;
-            bulkOps.push({
-              updateOne: {
-                filter: {
-                  _id: id,
-                  _type: typeName,
-                  _scope: scopeId,
-                  // deno-lint-ignore no-explicit-any
-                } as any,
-                update: updateOps,
-              },
-            });
+        const run = async (op?: OpContext) => {
+          const bulkOps: m.AnyBulkWriteOperation[] = [];
+          for (const typeName in ops) {
+            const items = ops[typeName as keyof T];
+            if (!items) continue;
+            for (const id in items) {
+              const partial = items[id];
+              if (!partial) continue;
+              assertNoReservedFields(partial as Record<string, unknown>);
+              const { set, unset } = extractFieldsToRemove(
+                partial as Record<string, unknown>,
+              );
+              const updateOps = buildUpdateOps(set, unset);
+              if (Object.keys(updateOps).length === 0) continue;
+              bulkOps.push({
+                updateOne: {
+                  filter: {
+                    _id: id,
+                    _type: typeName,
+                    _scope: scopeId,
+                    // deno-lint-ignore no-explicit-any
+                  } as any,
+                  update: updateOps,
+                },
+              });
+            }
           }
-        }
-        if (bulkOps.length === 0) return 0;
+          if (bulkOps.length === 0) return 0;
+          op?.setAttributes({ [TA.BATCH_SIZE]: bulkOps.length });
 
-        return retryOnWriteConflict(async () => {
-          const session = sessionContext.getSession();
-          const result = await collection.bulkWrite(bulkOps, { session });
-          return result.modifiedCount;
-        });
+          return retryOnWriteConflict(async () => {
+            const session = sessionContext.getSession();
+            const result = await collection.bulkWrite(bulkOps, { session });
+            return result.modifiedCount;
+          }, op ? { onRetry: op.onRetry } : undefined);
+        };
+        if (!tele) return run();
+        return tele.withOp(
+          "updateMany",
+          { [TA.SCOPE]: scopeId },
+          run,
+          (modified) => ({ [TA.MODIFIED_COUNT]: modified }),
+        );
       },
 
       async aggregate(stageBuilder) {
-        const stage = buildScopedStageBuilder<T>(collectionName, {
-          kind: "single",
-          id: scopeId,
-        });
-        const userPipeline = stageBuilder(stage);
-        // First stage always narrows to the bound scope. All subsequent
-        // stages operate on the scoped subset only.
-        const pipeline: AggregationStage[] = [
-          { $match: { _scope: scopeId } },
-          ...userPipeline,
-        ];
-        const session = sessionContext.getSession();
-        const cursor = collection.aggregate(pipeline, { session });
-        return await cursor.toArray();
+        const run = async () => {
+          const stage = buildScopedStageBuilder<T>(collectionName, {
+            kind: "single",
+            id: scopeId,
+          });
+          const userPipeline = stageBuilder(stage);
+          // First stage always narrows to the bound scope. All subsequent
+          // stages operate on the scoped subset only.
+          const pipeline: AggregationStage[] = [
+            { $match: { _scope: scopeId } },
+            ...userPipeline,
+          ];
+          const session = sessionContext.getSession();
+          const cursor = collection.aggregate(pipeline, { session });
+          return await cursor.toArray();
+        };
+        if (!tele) return run();
+        return tele.withOp(
+          "aggregate",
+          { [TA.SCOPE]: scopeId },
+          run,
+          (rows) => ({ [TA.RETURNED_ROWS]: rows.length }),
+        );
       },
 
       async paginate(type, filter, options) {
-        const typeName = type as string;
-        const { skipTotal = false, peek = false } = options || {};
-        const requestedLimit = options?.limit ?? 100;
-        let limit = peek ? requestedLimit + 1 : requestedLimit;
-        const afterId = options?.afterId;
-        const beforeId = options?.beforeId;
-        const prepare = options?.prepare;
-        const customFilter = options?.filter;
-        const format = options?.format;
-        const pipelineBuilder = options?.pipeline;
-        const sortInput = options?.sort ?? { _id: 1 };
-        const session = sessionContext.getSession();
+        const run = async () => {
+          const typeName = type as string;
+          const { skipTotal = false, peek = false } = options || {};
+          const requestedLimit = options?.limit ?? 100;
+          let limit = peek ? requestedLimit + 1 : requestedLimit;
+          const afterId = options?.afterId;
+          const beforeId = options?.beforeId;
+          const prepare = options?.prepare;
+          const customFilter = options?.filter;
+          const format = options?.format;
+          const pipelineBuilder = options?.pipeline;
+          const sortInput = options?.sort ?? { _id: 1 };
+          const session = sessionContext.getSession();
 
-        // Normalize sort + always add an `_id` tie-breaker so duplicate sort
-        // values keep a stable (cursor-safe) order.
-        const sortObj: Record<string, 1 | -1> =
-          typeof sortInput === "object" && !Array.isArray(sortInput)
-            ? { ...(sortInput as Record<string, 1 | -1>) }
-            : {
-              _id: sortInput === 1 || sortInput === "asc" ||
-                  sortInput === "ascending"
-                ? 1
-                : -1,
-            };
-        if (!("_id" in sortObj)) sortObj._id = 1;
-        let sort: Record<string, 1 | -1> = { ...sortObj };
+          // Normalize sort + always add an `_id` tie-breaker so duplicate sort
+          // values keep a stable (cursor-safe) order.
+          const sortObj: Record<string, 1 | -1> =
+            typeof sortInput === "object" && !Array.isArray(sortInput)
+              ? { ...(sortInput as Record<string, 1 | -1>) }
+              : {
+                _id: sortInput === 1 || sortInput === "asc" ||
+                    sortInput === "ascending"
+                  ? 1
+                  : -1,
+              };
+          if (!("_id" in sortObj)) sortObj._id = 1;
+          let sort: Record<string, 1 | -1> = { ...sortObj };
 
-        // Scope + type are non-bypassable; the user filter narrows further.
-        const baseQuery: Record<string, unknown>[] = [
-          { _scope: scopeId },
-          { _type: typeName },
-        ];
-        if (filter) baseQuery.push(filter as Record<string, unknown>);
+          // Scope + type are non-bypassable; the user filter narrows further.
+          const baseQuery: Record<string, unknown>[] = [
+            { _scope: scopeId },
+            { _type: typeName },
+          ];
+          if (filter) baseQuery.push(filter as Record<string, unknown>);
 
-        // Build a cursor filter from an anchor doc. Single-field `_id` sort
-        // uses a simple comparison; a compound sort emits the lexicographic
-        // `$or` ladder. The anchor is fetched WITHIN the bound scope, so a
-        // cross-scope id can never seed a cursor.
-        const buildCursorFilter = async (
-          anchorId: string,
-          direction: "after" | "before",
-        ): Promise<Record<string, unknown> | null> => {
-          const anchor = await collection.findOne(
-            // deno-lint-ignore no-explicit-any
-            { _id: anchorId, _scope: scopeId, _type: typeName } as any,
-            { session },
-          );
-          if (!anchor) return null;
-          const anchorDoc = anchor as Record<string, unknown>;
-          const sortFields = Object.keys(sortObj);
-          const isForward = direction === "after";
-          if (sortFields.length === 1 && sortFields[0] === "_id") {
-            const op = (sortObj._id === 1) === isForward ? "$gt" : "$lt";
-            return { _id: { [op]: anchorId } };
-          }
-          const conditions: Record<string, unknown>[] = [];
-          for (let i = 0; i < sortFields.length; i++) {
-            const f = sortFields[i];
-            const dir = sortObj[f];
-            const condition: Record<string, unknown> = {};
-            for (let j = 0; j < i; j++) {
-              const prev = sortFields[j];
-              condition[prev] = getNestedValue(anchorDoc, prev);
-            }
-            const op = (dir === 1) === isForward ? "$gt" : "$lt";
-            condition[f] = { [op]: getNestedValue(anchorDoc, f) };
-            conditions.push(condition);
-          }
-          return { $or: conditions };
-        };
-
-        // Resolve the (mutually exclusive) cursor. Backward paging walks the
-        // reversed sort and re-reverses the page below.
-        let cursorFilter: Record<string, unknown> | null = null;
-        if (afterId) {
-          if (!afterId.startsWith(`${typeName}:`)) {
-            throw new Error(
-              `paginate: invalid afterId format — expected "${typeName}:..." prefix`,
-            );
-          }
-          cursorFilter = await buildCursorFilter(afterId, "after");
-        } else if (beforeId) {
-          if (!beforeId.startsWith(`${typeName}:`)) {
-            throw new Error(
-              `paginate: invalid beforeId format — expected "${typeName}:..." prefix`,
-            );
-          }
-          cursorFilter = await buildCursorFilter(beforeId, "before");
-          const reversed: Record<string, 1 | -1> = {};
-          for (const [f, d] of Object.entries(sortObj)) {
-            reversed[f] = (d === 1 ? -1 : 1) as 1 | -1;
-          }
-          sort = reversed;
-        }
-
-        // User pipeline (scope-aware builder). Used for BOTH the count and the
-        // data fetch so `total` reflects docs that survive the WHOLE pipeline
-        // (e.g. a $lookup-based JOIN filter), not just the base scope+type
-        // match.
-        const stageBuilder = buildScopedStageBuilder<T>(collectionName, {
-          kind: "single",
-          id: scopeId,
-        });
-        const userPipeline = pipelineBuilder
-          ? pipelineBuilder(stageBuilder)
-          : [];
-
-        // total + position. `position` is the 0-based count of docs preceding
-        // the current page's first row (0 on the first page). `-1` marks the
-        // backward path, where the absolute position is resolved post-fetch.
-        let total: number | undefined;
-        let position: number | undefined;
-        if (!skipTotal) {
-          if (userPipeline.length > 0) {
-            const countPipeline: AggregationStage[] = [
-              { $match: { $and: baseQuery } },
-              ...userPipeline,
-              { $count: "total" },
-            ];
-            const totalResult = await collection
-              .aggregate(countPipeline, { session })
-              .toArray();
-            total = (totalResult[0]?.total as number | undefined) ?? 0;
-            if (afterId) {
-              if (cursorFilter) {
-                const afterPipeline: AggregationStage[] = [
-                  { $match: { $and: [...baseQuery, cursorFilter] } },
-                  ...userPipeline,
-                  { $count: "total" },
-                ];
-                const afterResult = await collection
-                  .aggregate(afterPipeline, { session })
-                  .toArray();
-                const afterCount =
-                  (afterResult[0]?.total as number | undefined) ?? 0;
-                position = total - afterCount;
-              } else {
-                position = 1;
-              }
-            } else if (beforeId) {
-              position = -1;
-            } else {
-              position = 0;
-            }
-          } else {
-            total = await collection.countDocuments(
+          // Build a cursor filter from an anchor doc. Single-field `_id` sort
+          // uses a simple comparison; a compound sort emits the lexicographic
+          // `$or` ladder. The anchor is fetched WITHIN the bound scope, so a
+          // cross-scope id can never seed a cursor.
+          const buildCursorFilter = async (
+            anchorId: string,
+            direction: "after" | "before",
+          ): Promise<Record<string, unknown> | null> => {
+            const anchor = await collection.findOne(
               // deno-lint-ignore no-explicit-any
-              { $and: baseQuery } as any,
+              { _id: anchorId, _scope: scopeId, _type: typeName } as any,
               { session },
             );
-            if (afterId) {
+            if (!anchor) return null;
+            const anchorDoc = anchor as Record<string, unknown>;
+            const sortFields = Object.keys(sortObj);
+            const isForward = direction === "after";
+            if (sortFields.length === 1 && sortFields[0] === "_id") {
+              const op = (sortObj._id === 1) === isForward ? "$gt" : "$lt";
+              return { _id: { [op]: anchorId } };
+            }
+            const conditions: Record<string, unknown>[] = [];
+            for (let i = 0; i < sortFields.length; i++) {
+              const f = sortFields[i];
+              const dir = sortObj[f];
+              const condition: Record<string, unknown> = {};
+              for (let j = 0; j < i; j++) {
+                const prev = sortFields[j];
+                condition[prev] = getNestedValue(anchorDoc, prev);
+              }
+              const op = (dir === 1) === isForward ? "$gt" : "$lt";
+              condition[f] = { [op]: getNestedValue(anchorDoc, f) };
+              conditions.push(condition);
+            }
+            return { $or: conditions };
+          };
+
+          // Resolve the (mutually exclusive) cursor. Backward paging walks the
+          // reversed sort and re-reverses the page below.
+          let cursorFilter: Record<string, unknown> | null = null;
+          if (afterId) {
+            if (!afterId.startsWith(`${typeName}:`)) {
+              throw new Error(
+                `paginate: invalid afterId format — expected "${typeName}:..." prefix`,
+              );
+            }
+            cursorFilter = await buildCursorFilter(afterId, "after");
+          } else if (beforeId) {
+            if (!beforeId.startsWith(`${typeName}:`)) {
+              throw new Error(
+                `paginate: invalid beforeId format — expected "${typeName}:..." prefix`,
+              );
+            }
+            cursorFilter = await buildCursorFilter(beforeId, "before");
+            const reversed: Record<string, 1 | -1> = {};
+            for (const [f, d] of Object.entries(sortObj)) {
+              reversed[f] = (d === 1 ? -1 : 1) as 1 | -1;
+            }
+            sort = reversed;
+          }
+
+          // User pipeline (scope-aware builder). Used for BOTH the count and the
+          // data fetch so `total` reflects docs that survive the WHOLE pipeline
+          // (e.g. a $lookup-based JOIN filter), not just the base scope+type
+          // match.
+          const stageBuilder = buildScopedStageBuilder<T>(collectionName, {
+            kind: "single",
+            id: scopeId,
+          });
+          const userPipeline = pipelineBuilder
+            ? pipelineBuilder(stageBuilder)
+            : [];
+
+          // total + position. `position` is the 0-based count of docs preceding
+          // the current page's first row (0 on the first page). `-1` marks the
+          // backward path, where the absolute position is resolved post-fetch.
+          let total: number | undefined;
+          let position: number | undefined;
+          if (!skipTotal) {
+            if (userPipeline.length > 0) {
+              const countPipeline: AggregationStage[] = [
+                { $match: { $and: baseQuery } },
+                ...userPipeline,
+                { $count: "total" },
+              ];
+              const totalResult = await collection
+                .aggregate(countPipeline, { session })
+                .toArray();
+              total = (totalResult[0]?.total as number | undefined) ?? 0;
+              if (afterId) {
+                if (cursorFilter) {
+                  const afterPipeline: AggregationStage[] = [
+                    { $match: { $and: [...baseQuery, cursorFilter] } },
+                    ...userPipeline,
+                    { $count: "total" },
+                  ];
+                  const afterResult = await collection
+                    .aggregate(afterPipeline, { session })
+                    .toArray();
+                  const afterCount =
+                    (afterResult[0]?.total as number | undefined) ?? 0;
+                  position = total - afterCount;
+                } else {
+                  position = 1;
+                }
+              } else if (beforeId) {
+                position = -1;
+              } else {
+                position = 0;
+              }
+            } else {
+              total = await collection.countDocuments(
+                // deno-lint-ignore no-explicit-any
+                { $and: baseQuery } as any,
+                { session },
+              );
+              if (afterId) {
+                if (cursorFilter) {
+                  const afterCount = await collection.countDocuments(
+                    // deno-lint-ignore no-explicit-any
+                    { $and: [...baseQuery, cursorFilter] } as any,
+                    { session },
+                  );
+                  position = total - afterCount;
+                } else {
+                  position = 1;
+                }
+              } else if (beforeId) {
+                position = -1;
+              } else {
+                position = 0;
+              }
+            }
+          }
+
+          const finalQuery = cursorFilter
+            ? { $and: [...baseQuery, cursorFilter] }
+            : { $and: baseQuery };
+
+          // Find-path server cap: bound the query at `limit` UNLESS a `filter(doc)`
+          // callback is set — a rejecting filter can shrink the page, so we keep
+          // the cursor open past `limit` and stop in JS instead. With no filter the
+          // cap makes it a bounded top-`limit` query (index-friendly). The pipeline
+          // path never server-caps (see below) — it relies on the JS limit.
+          const serverCap = customFilter ? undefined : limit;
+
+          // deno-lint-ignore no-explicit-any
+          let cursor: m.FindCursor<any> | m.AggregationCursor<any>;
+          if (userPipeline.length > 0) {
+            // `$sort` goes BEFORE the user pipeline so it can ride an index, and
+            // so the expensive pipeline stages ($lookup, …) run LAZILY — only for
+            // the ~`limit` docs the JS loop consumes before it closes the cursor,
+            // not for the whole cursor-filtered set. No server-side `$limit` here:
+            // a filtering pipeline can shrink the page, so `limit` is enforced
+            // JS-side (which is also what lets the cursor close early). This
+            // mirrors collection.paginate / multiCollection.paginate.
+            const dataPipeline: AggregationStage[] = [
+              { $match: finalQuery },
+              { $sort: sort },
+              ...userPipeline,
+            ];
+            // deno-lint-ignore no-explicit-any
+            cursor = collection.aggregate(dataPipeline as any, { session });
+          } else {
+            // deno-lint-ignore no-explicit-any
+            const findCursor = collection.find(finalQuery as any, { session })
+              .sort(sort as m.Sort);
+            cursor = serverCap !== undefined
+              ? findCursor.limit(serverCap)
+              : findCursor;
+          }
+
+          // Stream rows: the `limit` is applied in JS so a rejecting
+          // `filter(doc)` can shrink the page below `limit` while the cursor
+          // keeps yielding more candidates. `hardLimit` bounds a pathological
+          // filter that rejects everything.
+          let hardLimit = 10_000;
+          const data: unknown[] = [];
+          try {
+            while (hardLimit-- > 0 && limit > 0) {
+              const doc = await cursor.next();
+              if (!doc) break;
+              const parsed = v.safeParse(storageSchemas[typeName], doc);
+              if (!parsed.success) continue;
+              // Preserve pipeline-added fields ($lookup results) alongside the
+              // validated document (parse strips unknown keys).
+              const validatedDoc = pipelineBuilder
+                ? { ...doc, ...parsed.output }
+                : parsed.output;
+              const enriched = prepare
+                ? await prepare(validatedDoc as never)
+                : validatedDoc;
+              const keep = (await customFilter?.(enriched as never)) ?? true;
+              if (!keep) continue;
+              const finalDoc = format
+                ? await format(enriched as never)
+                : enriched;
+              data.push(finalDoc);
+              limit--;
+            }
+          } finally {
+            await cursor.close();
+          }
+
+          // peek: the extra row signals "more after this page" without a count.
+          let hasMore: boolean | undefined;
+          if (peek) {
+            if (data.length > requestedLimit) {
+              hasMore = true;
+              data.pop();
+            } else {
+              hasMore = false;
+            }
+          }
+
+          // Backward page came back in reversed order — restore forward order and
+          // resolve the absolute position now that the page length is known.
+          if (beforeId) {
+            data.reverse();
+            if (!skipTotal) {
               if (cursorFilter) {
-                const afterCount = await collection.countDocuments(
+                const beforeCount = await collection.countDocuments(
                   // deno-lint-ignore no-explicit-any
                   { $and: [...baseQuery, cursorFilter] } as any,
                   { session },
                 );
-                position = total - afterCount;
+                position = Math.max(0, beforeCount - data.length);
               } else {
-                position = 1;
+                position = 0;
               }
-            } else if (beforeId) {
-              position = -1;
-            } else {
-              position = 0;
             }
           }
-        }
 
-        const finalQuery = cursorFilter
-          ? { $and: [...baseQuery, cursorFilter] }
-          : { $and: baseQuery };
-
-        // Find-path server cap: bound the query at `limit` UNLESS a `filter(doc)`
-        // callback is set — a rejecting filter can shrink the page, so we keep
-        // the cursor open past `limit` and stop in JS instead. With no filter the
-        // cap makes it a bounded top-`limit` query (index-friendly). The pipeline
-        // path never server-caps (see below) — it relies on the JS limit.
-        const serverCap = customFilter ? undefined : limit;
-
-        // deno-lint-ignore no-explicit-any
-        let cursor: m.FindCursor<any> | m.AggregationCursor<any>;
-        if (userPipeline.length > 0) {
-          // `$sort` goes BEFORE the user pipeline so it can ride an index, and
-          // so the expensive pipeline stages ($lookup, …) run LAZILY — only for
-          // the ~`limit` docs the JS loop consumes before it closes the cursor,
-          // not for the whole cursor-filtered set. No server-side `$limit` here:
-          // a filtering pipeline can shrink the page, so `limit` is enforced
-          // JS-side (which is also what lets the cursor close early). This
-          // mirrors collection.paginate / multiCollection.paginate.
-          const dataPipeline: AggregationStage[] = [
-            { $match: finalQuery },
-            { $sort: sort },
-            ...userPipeline,
-          ];
-          // deno-lint-ignore no-explicit-any
-          cursor = collection.aggregate(dataPipeline as any, { session });
-        } else {
-          // deno-lint-ignore no-explicit-any
-          const findCursor = collection.find(finalQuery as any, { session })
-            .sort(sort as m.Sort);
-          cursor = serverCap !== undefined
-            ? findCursor.limit(serverCap)
-            : findCursor;
-        }
-
-        // Stream rows: the `limit` is applied in JS so a rejecting
-        // `filter(doc)` can shrink the page below `limit` while the cursor
-        // keeps yielding more candidates. `hardLimit` bounds a pathological
-        // filter that rejects everything.
-        let hardLimit = 10_000;
-        const data: unknown[] = [];
-        try {
-          while (hardLimit-- > 0 && limit > 0) {
-            const doc = await cursor.next();
-            if (!doc) break;
-            const parsed = v.safeParse(storageSchemas[typeName], doc);
-            if (!parsed.success) continue;
-            // Preserve pipeline-added fields ($lookup results) alongside the
-            // validated document (parse strips unknown keys).
-            const validatedDoc = pipelineBuilder
-              ? { ...doc, ...parsed.output }
-              : parsed.output;
-            const enriched = prepare
-              ? await prepare(validatedDoc as never)
-              : validatedDoc;
-            const keep = (await customFilter?.(enriched as never)) ?? true;
-            if (!keep) continue;
-            const finalDoc = format
-              ? await format(enriched as never)
-              : enriched;
-            data.push(finalDoc);
-            limit--;
-          }
-        } finally {
-          await cursor.close();
-        }
-
-        // peek: the extra row signals "more after this page" without a count.
-        let hasMore: boolean | undefined;
-        if (peek) {
-          if (data.length > requestedLimit) {
-            hasMore = true;
-            data.pop();
-          } else {
-            hasMore = false;
-          }
-        }
-
-        // Backward page came back in reversed order — restore forward order and
-        // resolve the absolute position now that the page length is known.
-        if (beforeId) {
-          data.reverse();
-          if (!skipTotal) {
-            if (cursorFilter) {
-              const beforeCount = await collection.countDocuments(
-                // deno-lint-ignore no-explicit-any
-                { $and: [...baseQuery, cursorFilter] } as any,
-                { session },
-              );
-              position = Math.max(0, beforeCount - data.length);
-            } else {
-              position = 0;
-            }
-          }
-        }
-
-        return {
-          total,
-          position,
-          // deno-lint-ignore no-explicit-any
-          data: data as any,
-          ...(peek ? { hasMore } : {}),
+          return {
+            total,
+            position,
+            // deno-lint-ignore no-explicit-any
+            data: data as any,
+            ...(peek ? { hasMore } : {}),
+          };
         };
+        if (!tele) return run();
+        return tele.withOp(
+          "paginate",
+          {
+            [TA.SCOPE]: scopeId,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: filterKeys(filter),
+          },
+          run,
+          (result) => ({ [TA.RETURNED_ROWS]: result.data.length }),
+        );
       },
     };
   }
@@ -1202,97 +1385,161 @@ export async function scopedMultiCollection<
       return { _scope: { $in: scopeIds } };
     }
 
+    // Telemetry: a multi-scope view reports its scope ids as an array; the
+    // unscoped view (scopeIds === null) carries no scope attribute at all.
+    // Only allocated when telemetry is enabled.
+    const scopeAttr = tele && scopeIds !== null ? [...scopeIds] : undefined;
+
     return {
       _scopes: scopeIds === null ? [] : [...scopeIds],
 
       async findOne(type, userFilter) {
-        const typeName = type as string;
-        const session = sessionContext.getSession();
-        const conditions: Record<string, unknown>[] = [{ _type: typeName }];
-        const sm = scopeMatch();
-        if (sm) conditions.push(sm);
-        if (userFilter) conditions.push(userFilter as Record<string, unknown>);
+        const run = async () => {
+          const typeName = type as string;
+          const session = sessionContext.getSession();
+          const conditions: Record<string, unknown>[] = [{ _type: typeName }];
+          const sm = scopeMatch();
+          if (sm) conditions.push(sm);
+          if (userFilter) {
+            conditions.push(userFilter as Record<string, unknown>);
+          }
 
-        // deno-lint-ignore no-explicit-any
-        const raw = await collection.findOne({ $and: conditions } as any, {
-          session,
-        });
-        if (!raw) return null;
-        // deno-lint-ignore no-explicit-any
-        return v.parse(storageSchemas[typeName], raw) as any;
+          // deno-lint-ignore no-explicit-any
+          const raw = await collection.findOne({ $and: conditions } as any, {
+            session,
+          });
+          if (!raw) return null;
+          // deno-lint-ignore no-explicit-any
+          return v.parse(storageSchemas[typeName], raw) as any;
+        };
+        if (!tele) return run();
+        return tele.withOp("findOne", {
+          [TA.SCOPE]: scopeAttr,
+          [TA.DOC_TYPE]: String(type),
+          [TA.FILTER_KEYS]: filterKeys(userFilter),
+        }, run);
       },
 
       async find(type, userFilter, options) {
-        const typeName = type as string;
-        const session = sessionContext.getSession();
-        const { validate = true, ...findOptions } = options ?? {};
-        const conditions: Record<string, unknown>[] = [{ _type: typeName }];
-        const sm = scopeMatch();
-        if (sm) conditions.push(sm);
-        if (userFilter) conditions.push(userFilter as Record<string, unknown>);
+        const run = async () => {
+          const typeName = type as string;
+          const session = sessionContext.getSession();
+          const { validate = true, ...findOptions } = options ?? {};
+          const conditions: Record<string, unknown>[] = [{ _type: typeName }];
+          const sm = scopeMatch();
+          if (sm) conditions.push(sm);
+          if (userFilter) {
+            conditions.push(userFilter as Record<string, unknown>);
+          }
 
-        const cursor = collection.find(
+          const cursor = collection.find(
+            // deno-lint-ignore no-explicit-any
+            { $and: conditions } as any,
+            { session, ...findOptions },
+          );
+          const raw = await cursor.toArray();
           // deno-lint-ignore no-explicit-any
-          { $and: conditions } as any,
-          { session, ...findOptions },
+          if (validate === false) return raw as any;
+          const out: unknown[] = [];
+          for (const item of raw) {
+            const parsed = v.safeParse(storageSchemas[typeName], item);
+            if (parsed.success) out.push(parsed.output);
+          }
+          // deno-lint-ignore no-explicit-any
+          return out as any;
+        };
+        if (!tele) return run();
+        return tele.withOp(
+          "find",
+          {
+            [TA.SCOPE]: scopeAttr,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: filterKeys(userFilter),
+          },
+          run,
+          (docs) => ({ [TA.RETURNED_ROWS]: docs.length }),
         );
-        const raw = await cursor.toArray();
-        // deno-lint-ignore no-explicit-any
-        if (validate === false) return raw as any;
-        const out: unknown[] = [];
-        for (const item of raw) {
-          const parsed = v.safeParse(storageSchemas[typeName], item);
-          if (parsed.success) out.push(parsed.output);
-        }
-        // deno-lint-ignore no-explicit-any
-        return out as any;
       },
 
       async findProject(type, fields, userFilter, options) {
-        const typeName = type as string;
-        const session = sessionContext.getSession();
-        const conditions: Record<string, unknown>[] = [{ _type: typeName }];
-        const sm = scopeMatch();
-        if (sm) conditions.push(sm);
-        if (userFilter) conditions.push(userFilter as Record<string, unknown>);
-        const cursor = collection.find(
+        const run = async () => {
+          const typeName = type as string;
+          const session = sessionContext.getSession();
+          const conditions: Record<string, unknown>[] = [{ _type: typeName }];
+          const sm = scopeMatch();
+          if (sm) conditions.push(sm);
+          if (userFilter) {
+            conditions.push(userFilter as Record<string, unknown>);
+          }
+          const cursor = collection.find(
+            // deno-lint-ignore no-explicit-any
+            { $and: conditions } as any,
+            {
+              session,
+              ...options,
+              projection: buildProjection(fields as readonly string[]),
+            },
+          );
           // deno-lint-ignore no-explicit-any
-          { $and: conditions } as any,
+          return (await cursor.toArray()) as any;
+        };
+        if (!tele) return run();
+        return tele.withOp(
+          "findProject",
           {
-            session,
-            ...options,
-            projection: buildProjection(fields as readonly string[]),
+            [TA.SCOPE]: scopeAttr,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: filterKeys(userFilter),
           },
+          run,
+          (docs) => ({ [TA.RETURNED_ROWS]: docs.length }),
         );
-        // deno-lint-ignore no-explicit-any
-        return (await cursor.toArray()) as any;
       },
 
       countDocuments(type, userFilter, options) {
-        const typeName = type as string;
-        const session = sessionContext.getSession();
-        const conditions: Record<string, unknown>[] = [{ _type: typeName }];
-        const sm = scopeMatch();
-        if (sm) conditions.push(sm);
-        if (userFilter) conditions.push(userFilter as Record<string, unknown>);
+        const run = () => {
+          const typeName = type as string;
+          const session = sessionContext.getSession();
+          const conditions: Record<string, unknown>[] = [{ _type: typeName }];
+          const sm = scopeMatch();
+          if (sm) conditions.push(sm);
+          if (userFilter) {
+            conditions.push(userFilter as Record<string, unknown>);
+          }
 
-        return collection.countDocuments(
-          // deno-lint-ignore no-explicit-any
-          { $and: conditions } as any,
-          { session, ...options },
-        );
+          return collection.countDocuments(
+            // deno-lint-ignore no-explicit-any
+            { $and: conditions } as any,
+            { session, ...options },
+          );
+        };
+        if (!tele) return run();
+        return tele.withOp("countDocuments", {
+          [TA.SCOPE]: scopeAttr,
+          [TA.DOC_TYPE]: String(type),
+          [TA.FILTER_KEYS]: filterKeys(userFilter),
+        }, run);
       },
 
       async aggregate(stageBuilder) {
-        const stage = buildScopedStageBuilder<T>(collectionName, filter);
-        const userPipeline = stageBuilder(stage);
-        const pipeline: AggregationStage[] = [];
-        const sm = scopeMatch();
-        if (sm) pipeline.push({ $match: sm });
-        pipeline.push(...userPipeline);
-        const session = sessionContext.getSession();
-        const cursor = collection.aggregate(pipeline, { session });
-        return await cursor.toArray();
+        const run = async () => {
+          const stage = buildScopedStageBuilder<T>(collectionName, filter);
+          const userPipeline = stageBuilder(stage);
+          const pipeline: AggregationStage[] = [];
+          const sm = scopeMatch();
+          if (sm) pipeline.push({ $match: sm });
+          pipeline.push(...userPipeline);
+          const session = sessionContext.getSession();
+          const cursor = collection.aggregate(pipeline, { session });
+          return await cursor.toArray();
+        };
+        if (!tele) return run();
+        return tele.withOp(
+          "aggregate",
+          { [TA.SCOPE]: scopeAttr },
+          run,
+          (rows) => ({ [TA.RETURNED_ROWS]: rows.length }),
+        );
       },
     };
   }
@@ -1323,20 +1570,33 @@ export async function scopedMultiCollection<
     unscoped: unscopedView,
 
     async listScopes() {
-      const session = sessionContext.getSession();
-      const values = await collection.distinct("_scope", {}, { session });
-      return values.filter((v): v is string => typeof v === "string");
+      const run = async () => {
+        const session = sessionContext.getSession();
+        const values = await collection.distinct("_scope", {}, { session });
+        return values.filter((v): v is string => typeof v === "string");
+      };
+      if (!tele) return run();
+      return tele.withOp(
+        "listScopes",
+        undefined,
+        run,
+        (scopes) => ({ [TA.RETURNED_ROWS]: scopes.length }),
+      );
     },
 
     async scopeExists(id) {
       const validated = assertScopeValue(id);
-      const session = sessionContext.getSession();
-      const count = await collection.countDocuments(
-        // deno-lint-ignore no-explicit-any
-        { _scope: validated } as any,
-        { session, limit: 1 },
-      );
-      return count > 0;
+      const run = async () => {
+        const session = sessionContext.getSession();
+        const count = await collection.countDocuments(
+          // deno-lint-ignore no-explicit-any
+          { _scope: validated } as any,
+          { session, limit: 1 },
+        );
+        return count > 0;
+      };
+      if (!tele) return run();
+      return tele.withOp("scopeExists", { [TA.SCOPE]: validated }, run);
     },
 
     async dropScope(id, options) {
@@ -1347,35 +1607,53 @@ export async function scopedMultiCollection<
         );
       }
       const validated = assertScopeValue(id);
-      const session = sessionContext.getSession();
-      const result = await collection.deleteMany(
-        // deno-lint-ignore no-explicit-any
-        { _scope: validated } as any,
-        { session },
+      const run = async () => {
+        const session = sessionContext.getSession();
+        const result = await collection.deleteMany(
+          // deno-lint-ignore no-explicit-any
+          { _scope: validated } as any,
+          { session },
+        );
+        if (!result.acknowledged) throw new Error("dropScope: delete failed");
+        return result.deletedCount;
+      };
+      if (!tele) return run();
+      return tele.withOp(
+        "dropScope",
+        { [TA.SCOPE]: validated },
+        run,
+        (count) => ({ [TA.DELETED_COUNT]: count }),
       );
-      if (!result.acknowledged) throw new Error("dropScope: delete failed");
-      return result.deletedCount;
     },
 
     async scopeStats(id) {
       const validated = assertScopeValue(id);
-      const session = sessionContext.getSession();
-      const cursor = collection.aggregate(
-        [
-          { $match: { _scope: validated } },
-          { $group: { _id: "$_type", count: { $sum: 1 } } },
-        ],
-        { session },
+      const run = async () => {
+        const session = sessionContext.getSession();
+        const cursor = collection.aggregate(
+          [
+            { $match: { _scope: validated } },
+            { $group: { _id: "$_type", count: { $sum: 1 } } },
+          ],
+          { session },
+        );
+        const groups = await cursor.toArray();
+        const byType: Record<string, number> = {};
+        let total = 0;
+        for (const g of groups as { _id: string; count: number }[]) {
+          byType[g._id] = g.count;
+          total += g.count;
+        }
+        // deno-lint-ignore no-explicit-any
+        return { total, byType: byType as any };
+      };
+      if (!tele) return run();
+      return tele.withOp(
+        "scopeStats",
+        { [TA.SCOPE]: validated },
+        run,
+        (stats) => ({ [TA.RETURNED_ROWS]: Object.keys(stats.byType).length }),
       );
-      const groups = await cursor.toArray();
-      const byType: Record<string, number> = {};
-      let total = 0;
-      for (const g of groups as { _id: string; count: number }[]) {
-        byType[g._id] = g.count;
-        total += g.count;
-      }
-      // deno-lint-ignore no-explicit-any
-      return { total, byType: byType as any };
     },
 
     withSession: sessionContext.withSession,
