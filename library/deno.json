@@ -12,12 +12,14 @@
     "@std/assert": "jsr:@std/assert@1.0.19",
     "valibot": "npm:valibot@1.4.0",
     "mongodb": "npm:mongodb@6.21.0",
-    "@diister/valibot-mock": "jsr:@diister/valibot-mock@0.1.4"
+    "@diister/valibot-mock": "jsr:@diister/valibot-mock@0.1.4",
+    "@opentelemetry/api": "npm:@opentelemetry/api@^1.9.0"
   },
   "exports": {
     ".": "./mod.ts",
     "./schema": "./schema.ts",
     "./session": "./session.ts",
+    "./telemetry": "./telemetry.ts",
     "./ids": "./src/ids.ts",
     "./indexes": "./src/indexes.ts",
     "./schema-navigator": "./src/schema-navigator.ts",
@@ -39,7 +41,7 @@
     }
   },
   "tasks": {
-    "check": "deno check mod.ts schema.ts session.ts src/ids.ts src/indexes.ts src/schema-navigator.ts src/types.ts src/migration/mod.ts src/migration/cli/mod.ts src/migration/cli/bin.ts",
+    "check": "deno check mod.ts schema.ts session.ts telemetry.ts src/ids.ts src/indexes.ts src/schema-navigator.ts src/types.ts src/migration/mod.ts src/migration/cli/mod.ts src/migration/cli/bin.ts",
     "lint": "deno lint",
     "fmt:check": "deno fmt --check",
     "test": "deno test -A --parallel --quiet",
