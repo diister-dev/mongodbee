@@ -14,6 +14,7 @@
     <a href="#-scoped-multi-collections">Scoped</a> •
     <a href="#-migration-system">Migrations</a> •
     <a href="#-transactions">Transactions</a> •
+    <a href="#-opentelemetry-tracing">Telemetry</a> •
     <a href="#-indexes-with-withindex">Indexing</a> •
     <a href="#-project-status">Status</a>
   </p>
@@ -934,6 +935,45 @@ await users.withSession(async () => {
   // Both operations succeed or fail together
 });
 ```
+
+## 📡 OpenTelemetry Tracing
+
+MongoDBee can emit OpenTelemetry spans for every collection operation and
+transaction. Tracing is strictly **opt-in** and depends only on
+`@opentelemetry/api`: MongoDBee never instantiates an SDK, and when no provider
+is registered (or telemetry is disabled) every code path is a silent no-op with
+zero overhead.
+
+```typescript
+// 1. The application registers its own OpenTelemetry SDK
+//    (e.g. NodeTracerProvider + BatchSpanProcessor + OTLP exporter,
+//     then provider.register() — or Deno's built-in OTel support)
+
+// 2. Enable telemetry per collection
+const users = await collection(db, "users", schema, {
+  telemetry: { enabled: true },
+});
+
+await users.insertOne({ ... }); // → CLIENT span "insertOne users"
+
+await users.withSession(async () => {
+  // → INTERNAL span "mongodb.transaction" wrapping the operation spans
+});
+```
+
+Spans never carry filter/update values or document contents — only field names,
+operator names and counts. Error messages are scrubbed of user values before
+recording: validation messages are replaced by a synthetic message, MongoDBee's
+own errors are recorded with their interpolated ids/scope values stripped, and
+driver messages are recorded after redacting known value-embedding patterns
+(e.g. duplicate-key values). Unknown driver messages may in rare cases still
+contain values; either way the caller always receives the original, untouched
+error.
+
+For the full configuration reference, span catalog, attribute table, PII policy
+and limitations, see [TELEMETRY.md](./doc/TELEMETRY.md). A ready-to-import
+[Grafana dashboard](./doc/grafana/README.md) (with the matching OTel Collector
+config) ships in `doc/grafana/`.
 
 ## 📋 Examples
 
