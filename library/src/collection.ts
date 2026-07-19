@@ -17,6 +17,7 @@ import {
   registerClientTelemetry,
   TELEMETRY_ATTRIBUTES as TA,
   type TelemetryOptions,
+  traced,
   updateOperators,
 } from "./telemetry.ts";
 import type { Db } from "./mongodb.ts";
@@ -594,8 +595,8 @@ export async function collection<
         }
         return inserted.insertedId as WithId<TOutput>["_id"];
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "insertOne",
         undefined,
         run,
@@ -624,10 +625,10 @@ export async function collection<
         }
         return inserted;
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "insertMany",
-        { [TA.BATCH_SIZE]: docs.length },
+        () => ({ [TA.BATCH_SIZE]: docs.length }),
         run,
         (r) => ({ [TA.INSERTED_COUNT]: r.insertedCount }),
       );
@@ -657,10 +658,10 @@ export async function collection<
           result,
         };
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "findOne",
-        { [TA.FILTER_KEYS]: filterKeys(filter) },
+        () => ({ [TA.FILTER_KEYS]: filterKeys(filter) }),
         run,
         (r) => ({ [TA.RETURNED_ROWS]: r ? 1 : 0 }),
       );
@@ -687,10 +688,10 @@ export async function collection<
           result,
         };
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "getById",
-        { [TA.FILTER_KEYS]: "_id" },
+        () => ({ [TA.FILTER_KEYS]: "_id" }),
         run,
         () => ({ [TA.RETURNED_ROWS]: 1 }),
       );
@@ -1186,10 +1187,10 @@ export async function collection<
           ...(peek ? { hasMore } : {}),
         };
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "paginate",
-        { [TA.FILTER_KEYS]: filterKeys(filter) },
+        () => ({ [TA.FILTER_KEYS]: filterKeys(filter) }),
         run,
         (r) => ({ [TA.RETURNED_ROWS]: r.data.length }),
       );
@@ -1199,10 +1200,10 @@ export async function collection<
         const session = sessionContext.getSession();
         return collection.countDocuments(filter, { session, ...options });
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "countDocuments",
-        { [TA.FILTER_KEYS]: filterKeys(filter) },
+        () => ({ [TA.FILTER_KEYS]: filterKeys(filter) }),
         run,
       );
     },
@@ -1211,8 +1212,7 @@ export async function collection<
         const session = sessionContext.getSession();
         return collection.estimatedDocumentCount({ session, ...options });
       };
-      if (!tele) return run();
-      return tele.withOp("estimatedDocumentCount", undefined, run);
+      return traced(tele, "estimatedDocumentCount", undefined, run);
     },
     distinct(key, filter, options?) {
       const run = () => {
@@ -1222,10 +1222,10 @@ export async function collection<
           ...options,
         });
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "distinct",
-        { [TA.FILTER_KEYS]: filterKeys(filter) },
+        () => ({ [TA.FILTER_KEYS]: filterKeys(filter) }),
         run,
         (r) => ({ [TA.RETURNED_ROWS]: r.length }),
       );
@@ -1252,10 +1252,10 @@ export async function collection<
           ...options,
         });
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "replaceOne",
-        { [TA.FILTER_KEYS]: filterKeys(filter) },
+        () => ({ [TA.FILTER_KEYS]: filterKeys(filter) }),
         run,
         (r) => ({
           [TA.MATCHED_COUNT]: r.matchedCount,
@@ -1286,13 +1286,13 @@ export async function collection<
             },
           );
         }, op ? { onRetry: op.onRetry } : undefined);
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "updateOne",
-        {
+        () => ({
           [TA.FILTER_KEYS]: filterKeys(filter),
           [TA.UPDATE_OPERATORS]: updateOperators(update),
-        },
+        }),
         run,
         (r) => ({
           [TA.MATCHED_COUNT]: r.matchedCount,
@@ -1319,13 +1319,13 @@ export async function collection<
             ...options,
           });
         }, op ? { onRetry: op.onRetry } : undefined);
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "updateMany",
-        {
+        () => ({
           [TA.FILTER_KEYS]: filterKeys(filter),
           [TA.UPDATE_OPERATORS]: updateOperators(update),
-        },
+        }),
         run,
         (r) => ({
           [TA.MATCHED_COUNT]: r.matchedCount,
@@ -1341,10 +1341,10 @@ export async function collection<
         const session = sessionContext.getSession();
         return collection.deleteOne(filter, { session, ...options });
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "deleteOne",
-        { [TA.FILTER_KEYS]: filterKeys(filter) },
+        () => ({ [TA.FILTER_KEYS]: filterKeys(filter) }),
         run,
         (r) => ({ [TA.DELETED_COUNT]: r.deletedCount }),
       );
@@ -1373,10 +1373,10 @@ export async function collection<
         const session = sessionContext.getSession();
         return collection.deleteMany(filter, { session, ...options });
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "deleteMany",
-        { [TA.FILTER_KEYS]: filterKeys(filter) },
+        () => ({ [TA.FILTER_KEYS]: filterKeys(filter) }),
         run,
         (r) => ({ [TA.DELETED_COUNT]: r.deletedCount }),
       );
@@ -1388,10 +1388,10 @@ export async function collection<
         const session = sessionContext.getSession();
         return collection.findOneAndDelete(filter, { session, ...options });
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "findOneAndDelete",
-        { [TA.FILTER_KEYS]: filterKeys(filter) },
+        () => ({ [TA.FILTER_KEYS]: filterKeys(filter) }),
         run,
       );
     },
@@ -1416,10 +1416,10 @@ export async function collection<
           ...options,
         });
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "findOneAndReplace",
-        { [TA.FILTER_KEYS]: filterKeys(filter) },
+        () => ({ [TA.FILTER_KEYS]: filterKeys(filter) }),
         run,
       );
     },
@@ -1439,13 +1439,13 @@ export async function collection<
           ...options,
         });
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "findOneAndUpdate",
-        {
+        () => ({
           [TA.FILTER_KEYS]: filterKeys(filter),
           [TA.UPDATE_OPERATORS]: updateOperators(update),
-        },
+        }),
         run,
       );
     },
@@ -1460,10 +1460,10 @@ export async function collection<
         const session = sessionContext.getSession();
         return collection.bulkWrite(operations, { session, ...options });
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "bulkWrite",
-        { [TA.BATCH_SIZE]: operations.length },
+        () => ({ [TA.BATCH_SIZE]: operations.length }),
         run,
         (r) => ({
           [TA.INSERTED_COUNT]: r.insertedCount,

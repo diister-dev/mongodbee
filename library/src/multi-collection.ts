@@ -28,6 +28,7 @@ import {
   registerClientTelemetry,
   TELEMETRY_ATTRIBUTES as TA,
   type TelemetryOptions,
+  traced,
 } from "./telemetry.ts";
 
 const log = createLogger("multi-collection");
@@ -585,10 +586,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
         return result.insertedId as unknown as string;
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "insertOne",
-        { [TA.DOC_TYPE]: String(key) },
+        () => ({ [TA.DOC_TYPE]: String(key) }),
         run,
         () => ({ [TA.INSERTED_COUNT]: 1 }),
       );
@@ -624,13 +625,13 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
         return Object.values(result.insertedIds) as unknown as string[];
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "insertMany",
-        {
+        () => ({
           [TA.DOC_TYPE]: String(key),
           [TA.BATCH_SIZE]: docs.length,
-        },
+        }),
         run,
         (ids) => ({ [TA.INSERTED_COUNT]: ids.length }),
       );
@@ -651,11 +652,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
         return v.parse(schema, result);
       };
-      if (!tele) return run();
-      return tele.withOp("getById", {
+      return traced(tele, "getById", () => ({
         [TA.DOC_TYPE]: String(key),
         [TA.FILTER_KEYS]: "_id",
-      }, run);
+      }), run);
     },
     async findOne(key, filter) {
       const run = async () => {
@@ -673,11 +673,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
         return v.parse(schema, result);
       };
-      if (!tele) return run();
-      return tele.withOp("findOne", {
+      return traced(tele, "findOne", () => ({
         [TA.DOC_TYPE]: String(key),
         [TA.FILTER_KEYS]: filterKeys(filter),
-      }, run);
+      }), run);
     },
     async find(key, filter, options) {
       const run = async () => {
@@ -708,13 +707,13 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
         return output;
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "find",
-        {
+        () => ({
           [TA.DOC_TYPE]: String(key),
           [TA.FILTER_KEYS]: filterKeys(filter),
-        },
+        }),
         run,
         (docs) => ({ [TA.RETURNED_ROWS]: docs.length }),
       );
@@ -1312,15 +1311,15 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           ...(peek ? { hasMore } : {}),
         };
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "paginate",
-        {
+        () => ({
           [TA.DOC_TYPE]: Array.isArray(keyOrKeys)
             ? keyOrKeys.map((k) => String(k))
             : String(keyOrKeys),
           [TA.FILTER_KEYS]: filterKeys(filter),
-        },
+        }),
         run,
         (r) => ({ [TA.RETURNED_ROWS]: r.data.length }),
       );
@@ -1343,11 +1342,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           ...options,
         });
       };
-      if (!tele) return run();
-      return tele.withOp("countDocuments", {
+      return traced(tele, "countDocuments", () => ({
         [TA.DOC_TYPE]: String(key),
         [TA.FILTER_KEYS]: filterKeys(filter),
-      }, run);
+      }), run);
     },
     async deleteId(key, id) {
       const run = async () => {
@@ -1374,13 +1372,13 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
         return result.deletedCount;
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "deleteId",
-        {
+        () => ({
           [TA.DOC_TYPE]: String(key),
           [TA.FILTER_KEYS]: "_id",
-        },
+        }),
         run,
         (count) => ({ [TA.DELETED_COUNT]: count }),
       );
@@ -1411,14 +1409,14 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
         return result.deletedCount;
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "deleteIds",
-        {
+        () => ({
           [TA.DOC_TYPE]: String(key),
           [TA.FILTER_KEYS]: "_id",
           [TA.BATCH_SIZE]: ids.length,
-        },
+        }),
         run,
         (count) => ({ [TA.DELETED_COUNT]: count }),
       );
@@ -1441,13 +1439,13 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
         return result.deletedCount;
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "deleteMany",
-        {
+        () => ({
           [TA.DOC_TYPE]: String(key),
           [TA.FILTER_KEYS]: filterKeys(filter),
-        },
+        }),
         run,
         (count) => ({ [TA.DELETED_COUNT]: count }),
       );
@@ -1464,12 +1462,12 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
         return result.deletedCount;
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "deleteAny",
-        {
+        () => ({
           [TA.FILTER_KEYS]: filterKeys(filter),
-        },
+        }),
         run,
         (count) => ({ [TA.DELETED_COUNT]: count }),
       );
@@ -1483,10 +1481,9 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         }
         return v.parse(schema, result);
       };
-      if (!tele) return run();
-      return tele.withOp("findOneAny", {
+      return traced(tele, "findOneAny", () => ({
         [TA.FILTER_KEYS]: filterKeys(filter),
-      }, run);
+      }), run);
     },
     async findAny(filter, options) {
       const run = async () => {
@@ -1502,12 +1499,12 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
         return output;
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "findAny",
-        {
+        () => ({
           [TA.FILTER_KEYS]: filterKeys(filter),
-        },
+        }),
         run,
         (docs) => ({ [TA.RETURNED_ROWS]: docs.length }),
       );
@@ -1576,13 +1573,13 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           return result.modifiedCount;
         }, op ? { onRetry: op.onRetry } : undefined);
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "updateOne",
-        {
+        () => ({
           [TA.DOC_TYPE]: String(key),
           [TA.UPDATE_FIELDS]: Object.keys(doc).length,
-        },
+        }),
         run,
         (modified) => ({ [TA.MODIFIED_COUNT]: modified }),
       );
@@ -1664,10 +1661,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           // This is not an error condition
           return result.modifiedCount;
         }, op ? { onRetry: op.onRetry } : undefined);
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "updateMany",
-        { [TA.DOC_TYPE]: Object.keys(operation) },
+        () => ({ [TA.DOC_TYPE]: Object.keys(operation) }),
         run,
         (modified) => ({ [TA.MODIFIED_COUNT]: modified }),
       );
@@ -1847,8 +1844,8 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
         return await cursor.toArray();
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "aggregate",
         undefined,
         run,
@@ -1866,8 +1863,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         const session = sessionContext.getSession();
         return await collection.drop({ session });
       };
-      if (!tele) return run();
-      return tele.withOp("drop", undefined, run);
+      return traced(tele, "drop", undefined, run);
     },
   };
 }

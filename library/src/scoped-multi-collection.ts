@@ -28,6 +28,7 @@ import {
   registerClientTelemetry,
   TELEMETRY_ATTRIBUTES as TA,
   type TelemetryOptions,
+  traced,
 } from "./telemetry.ts";
 
 const log = createLogger("scoped-multi-collection");
@@ -669,13 +670,13 @@ export async function scopedMultiCollection<
           if (!result.acknowledged) throw new Error("Insert failed");
           return result.insertedId as unknown as string;
         };
-        if (!tele) return run();
-        return tele.withOp(
+        return traced(
+          tele,
           "insertOne",
-          {
+          () => ({
             [TA.SCOPE]: recordScope ? scopeId : undefined,
             [TA.DOC_TYPE]: String(type),
-          },
+          }),
           run,
           () => ({ [TA.INSERTED_COUNT]: 1 }),
         );
@@ -709,14 +710,14 @@ export async function scopedMultiCollection<
           if (!result.acknowledged) throw new Error("Insert failed");
           return Object.values(result.insertedIds) as unknown as string[];
         };
-        if (!tele) return run();
-        return tele.withOp(
+        return traced(
+          tele,
           "insertMany",
-          {
+          () => ({
             [TA.SCOPE]: recordScope ? scopeId : undefined,
             [TA.DOC_TYPE]: String(type),
             [TA.BATCH_SIZE]: docs.length,
-          },
+          }),
           run,
           (ids) => ({ [TA.INSERTED_COUNT]: ids.length }),
         );
@@ -741,12 +742,11 @@ export async function scopedMultiCollection<
           // deno-lint-ignore no-explicit-any
           return v.parse(storageSchemas[typeName], raw) as any;
         };
-        if (!tele) return run();
-        return tele.withOp("getById", {
+        return traced(tele, "getById", () => ({
           [TA.SCOPE]: recordScope ? scopeId : undefined,
           [TA.DOC_TYPE]: String(type),
           [TA.FILTER_KEYS]: "_id",
-        }, run);
+        }), run);
       },
 
       async findOne(type, filter) {
@@ -767,12 +767,11 @@ export async function scopedMultiCollection<
           // deno-lint-ignore no-explicit-any
           return v.parse(storageSchemas[typeName], raw) as any;
         };
-        if (!tele) return run();
-        return tele.withOp("findOne", {
+        return traced(tele, "findOne", () => ({
           [TA.SCOPE]: recordScope ? scopeId : undefined,
           [TA.DOC_TYPE]: String(type),
           [TA.FILTER_KEYS]: filterKeys(filter),
-        }, run);
+        }), run);
       },
 
       async find(type, filter, options) {
@@ -807,14 +806,14 @@ export async function scopedMultiCollection<
           // deno-lint-ignore no-explicit-any
           return out as any;
         };
-        if (!tele) return run();
-        return tele.withOp(
+        return traced(
+          tele,
           "find",
-          {
+          () => ({
             [TA.SCOPE]: recordScope ? scopeId : undefined,
             [TA.DOC_TYPE]: String(type),
             [TA.FILTER_KEYS]: filterKeys(filter),
-          },
+          }),
           run,
           (docs) => ({ [TA.RETURNED_ROWS]: docs.length }),
         );
@@ -843,14 +842,14 @@ export async function scopedMultiCollection<
           // deno-lint-ignore no-explicit-any
           return (await cursor.toArray()) as any;
         };
-        if (!tele) return run();
-        return tele.withOp(
+        return traced(
+          tele,
           "findProject",
-          {
+          () => ({
             [TA.SCOPE]: recordScope ? scopeId : undefined,
             [TA.DOC_TYPE]: String(type),
             [TA.FILTER_KEYS]: filterKeys(filter),
-          },
+          }),
           run,
           (docs) => ({ [TA.RETURNED_ROWS]: docs.length }),
         );
@@ -869,11 +868,10 @@ export async function scopedMultiCollection<
           // deno-lint-ignore no-explicit-any
           return v.parse(storageUnion, raw) as any;
         };
-        if (!tele) return run();
-        return tele.withOp("findOneAny", {
+        return traced(tele, "findOneAny", () => ({
           [TA.SCOPE]: recordScope ? scopeId : undefined,
           [TA.FILTER_KEYS]: filterKeys(filter),
-        }, run);
+        }), run);
       },
 
       async findAny(filter, options) {
@@ -898,13 +896,13 @@ export async function scopedMultiCollection<
           // deno-lint-ignore no-explicit-any
           return out as any;
         };
-        if (!tele) return run();
-        return tele.withOp(
+        return traced(
+          tele,
           "findAny",
-          {
+          () => ({
             [TA.SCOPE]: recordScope ? scopeId : undefined,
             [TA.FILTER_KEYS]: filterKeys(filter),
-          },
+          }),
           run,
           (docs) => ({ [TA.RETURNED_ROWS]: docs.length }),
         );
@@ -925,12 +923,11 @@ export async function scopedMultiCollection<
             { session, ...options },
           );
         };
-        if (!tele) return run();
-        return tele.withOp("countDocuments", {
+        return traced(tele, "countDocuments", () => ({
           [TA.SCOPE]: recordScope ? scopeId : undefined,
           [TA.DOC_TYPE]: String(type),
           [TA.FILTER_KEYS]: filterKeys(filter),
-        }, run);
+        }), run);
       },
 
       async deleteId(type, id) {
@@ -952,12 +949,11 @@ export async function scopedMultiCollection<
           }
           return result.deletedCount;
         };
-        if (!tele) return run();
-        return tele.withOp("deleteId", {
+        return traced(tele, "deleteId", () => ({
           [TA.SCOPE]: recordScope ? scopeId : undefined,
           [TA.DOC_TYPE]: String(type),
           [TA.FILTER_KEYS]: "_id",
-        }, run);
+        }), run);
       },
 
       async deleteIds(type, ids) {
@@ -973,15 +969,15 @@ export async function scopedMultiCollection<
           if (!result.acknowledged) throw new Error("Delete failed");
           return result.deletedCount;
         };
-        if (!tele) return run();
-        return tele.withOp(
+        return traced(
+          tele,
           "deleteIds",
-          {
+          () => ({
             [TA.SCOPE]: recordScope ? scopeId : undefined,
             [TA.DOC_TYPE]: String(type),
             [TA.FILTER_KEYS]: "_id",
             [TA.BATCH_SIZE]: ids.length,
-          },
+          }),
           run,
           (count) => ({ [TA.DELETED_COUNT]: count }),
         );
@@ -1000,14 +996,14 @@ export async function scopedMultiCollection<
           if (!result.acknowledged) throw new Error("Delete failed");
           return result.deletedCount;
         };
-        if (!tele) return run();
-        return tele.withOp(
+        return traced(
+          tele,
           "deleteMany",
-          {
+          () => ({
             [TA.SCOPE]: recordScope ? scopeId : undefined,
             [TA.DOC_TYPE]: String(type),
             [TA.FILTER_KEYS]: filterKeys(filter),
-          },
+          }),
           run,
           (count) => ({ [TA.DELETED_COUNT]: count }),
         );
@@ -1061,14 +1057,14 @@ export async function scopedMultiCollection<
             return result.modifiedCount;
           }, op ? { onRetry: op.onRetry } : undefined);
         };
-        if (!tele) return run();
-        return tele.withOp(
+        return traced(
+          tele,
           "updateOne",
-          {
+          () => ({
             [TA.SCOPE]: recordScope ? scopeId : undefined,
             [TA.DOC_TYPE]: String(type),
             [TA.UPDATE_FIELDS]: Object.keys(doc).length,
-          },
+          }),
           run,
           (modified) => ({ [TA.MODIFIED_COUNT]: modified }),
         );
@@ -1123,10 +1119,10 @@ export async function scopedMultiCollection<
             return result.modifiedCount;
           }, op ? { onRetry: op.onRetry } : undefined);
         };
-        if (!tele) return run();
-        return tele.withOp(
+        return traced(
+          tele,
           "updateMany",
-          { [TA.SCOPE]: recordScope ? scopeId : undefined },
+          () => ({ [TA.SCOPE]: recordScope ? scopeId : undefined }),
           run,
           (modified) => ({ [TA.MODIFIED_COUNT]: modified }),
         );
@@ -1149,10 +1145,10 @@ export async function scopedMultiCollection<
           const cursor = collection.aggregate(pipeline, { session });
           return await cursor.toArray();
         };
-        if (!tele) return run();
-        return tele.withOp(
+        return traced(
+          tele,
           "aggregate",
-          { [TA.SCOPE]: recordScope ? scopeId : undefined },
+          () => ({ [TA.SCOPE]: recordScope ? scopeId : undefined }),
           run,
           (rows) => ({ [TA.RETURNED_ROWS]: rows.length }),
         );
@@ -1481,14 +1477,14 @@ export async function scopedMultiCollection<
             ...(peek ? { hasMore } : {}),
           };
         };
-        if (!tele) return run();
-        return tele.withOp(
+        return traced(
+          tele,
           "paginate",
-          {
+          () => ({
             [TA.SCOPE]: recordScope ? scopeId : undefined,
             [TA.DOC_TYPE]: String(type),
             [TA.FILTER_KEYS]: filterKeys(filter),
-          },
+          }),
           run,
           (result) => ({ [TA.RETURNED_ROWS]: result.data.length }),
         );
@@ -1543,12 +1539,11 @@ export async function scopedMultiCollection<
           // deno-lint-ignore no-explicit-any
           return v.parse(storageSchemas[typeName], raw) as any;
         };
-        if (!tele) return run();
-        return tele.withOp("findOne", {
+        return traced(tele, "findOne", () => ({
           [TA.SCOPE]: scopeAttr,
           [TA.DOC_TYPE]: String(type),
           [TA.FILTER_KEYS]: filterKeys(userFilter),
-        }, run);
+        }), run);
       },
 
       async find(type, userFilter, options) {
@@ -1579,14 +1574,14 @@ export async function scopedMultiCollection<
           // deno-lint-ignore no-explicit-any
           return out as any;
         };
-        if (!tele) return run();
-        return tele.withOp(
+        return traced(
+          tele,
           "find",
-          {
+          () => ({
             [TA.SCOPE]: scopeAttr,
             [TA.DOC_TYPE]: String(type),
             [TA.FILTER_KEYS]: filterKeys(userFilter),
-          },
+          }),
           run,
           (docs) => ({ [TA.RETURNED_ROWS]: docs.length }),
         );
@@ -1614,14 +1609,14 @@ export async function scopedMultiCollection<
           // deno-lint-ignore no-explicit-any
           return (await cursor.toArray()) as any;
         };
-        if (!tele) return run();
-        return tele.withOp(
+        return traced(
+          tele,
           "findProject",
-          {
+          () => ({
             [TA.SCOPE]: scopeAttr,
             [TA.DOC_TYPE]: String(type),
             [TA.FILTER_KEYS]: filterKeys(userFilter),
-          },
+          }),
           run,
           (docs) => ({ [TA.RETURNED_ROWS]: docs.length }),
         );
@@ -1644,12 +1639,11 @@ export async function scopedMultiCollection<
             { session, ...options },
           );
         };
-        if (!tele) return run();
-        return tele.withOp("countDocuments", {
+        return traced(tele, "countDocuments", () => ({
           [TA.SCOPE]: scopeAttr,
           [TA.DOC_TYPE]: String(type),
           [TA.FILTER_KEYS]: filterKeys(userFilter),
-        }, run);
+        }), run);
       },
 
       async aggregate(stageBuilder) {
@@ -1664,10 +1658,10 @@ export async function scopedMultiCollection<
           const cursor = collection.aggregate(pipeline, { session });
           return await cursor.toArray();
         };
-        if (!tele) return run();
-        return tele.withOp(
+        return traced(
+          tele,
           "aggregate",
-          { [TA.SCOPE]: scopeAttr },
+          () => ({ [TA.SCOPE]: scopeAttr }),
           run,
           (rows) => ({ [TA.RETURNED_ROWS]: rows.length }),
         );
@@ -1714,8 +1708,8 @@ export async function scopedMultiCollection<
         const values = await collection.distinct("_scope", {}, { session });
         return values.filter((v): v is string => typeof v === "string");
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "listScopes",
         undefined,
         run,
@@ -1734,10 +1728,9 @@ export async function scopedMultiCollection<
         );
         return count > 0;
       };
-      if (!tele) return run();
-      return tele.withOp("scopeExists", {
+      return traced(tele, "scopeExists", () => ({
         [TA.SCOPE]: recordScope ? validated : undefined,
-      }, run);
+      }), run);
     },
 
     async dropScope(id, options) {
@@ -1758,10 +1751,10 @@ export async function scopedMultiCollection<
         if (!result.acknowledged) throw new Error("dropScope: delete failed");
         return result.deletedCount;
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "dropScope",
-        { [TA.SCOPE]: recordScope ? validated : undefined },
+        () => ({ [TA.SCOPE]: recordScope ? validated : undefined }),
         run,
         (count) => ({ [TA.DELETED_COUNT]: count }),
       );
@@ -1788,10 +1781,10 @@ export async function scopedMultiCollection<
         // deno-lint-ignore no-explicit-any
         return { total, byType: byType as any };
       };
-      if (!tele) return run();
-      return tele.withOp(
+      return traced(
+        tele,
         "scopeStats",
-        { [TA.SCOPE]: recordScope ? validated : undefined },
+        () => ({ [TA.SCOPE]: recordScope ? validated : undefined }),
         run,
         (stats) => ({ [TA.RETURNED_ROWS]: Object.keys(stats.byType).length }),
       );
@@ -1810,8 +1803,7 @@ export async function scopedMultiCollection<
         const session = sessionContext.getSession();
         return await collection.drop({ session });
       };
-      if (!tele) return run();
-      return tele.withOp("drop", undefined, run);
+      return traced(tele, "drop", undefined, run);
     },
   };
 }

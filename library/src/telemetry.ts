@@ -407,6 +407,44 @@ export function createOperationTracer(
 }
 
 /**
+ * Factors the instrumentation scaffold repeated at every instrumented call
+ * site: `if (!tele) return run(); return tele.withOp(...)`. Runs the operation
+ * directly when telemetry is disabled, otherwise wraps it in a span via
+ * {@link OperationTracer.withOp}.
+ *
+ * Two behaviours are load-bearing and part of the contract:
+ *
+ * - `attributes` is a **thunk**, evaluated only on the instrumented path, so
+ *   the disabled (`tele === null`) path never evaluates attribute-building
+ *   expressions ({@link filterKeys}, {@link updateOperators}, ...). Passing the
+ *   attributes eagerly would defeat the purpose of the `null` fast path.
+ * - When `tele` is `null`, `run()` is invoked **directly** and its result
+ *   returned as-is (not adapted or re-wrapped), so a `run` that throws
+ *   synchronously still throws synchronously — behaviourally identical to the
+ *   hand-written `if (!tele) return run();`.
+ *
+ * @param tele - The per-collection tracer, or `null` when telemetry is off.
+ * @param operationName - Public MongoDBee operation name (`insertOne`, ...).
+ * @param attributes - Thunk producing the span's initial attributes, or
+ *   `undefined` when the operation records none up front.
+ * @param run - The operation body; receives an {@link OpContext} on the
+ *   instrumented path and no argument on the disabled path.
+ * @param resultAttributes - Optional mapper from the result to extra span
+ *   attributes, applied only while the span is recording.
+ * @internal
+ */
+export function traced<T>(
+  tele: OperationTracer | null,
+  operationName: string,
+  attributes: (() => Attributes | undefined) | undefined,
+  run: (op?: OpContext) => Promise<T>,
+  resultAttributes?: (result: T) => Attributes | undefined,
+): Promise<T> {
+  if (!tele) return run();
+  return tele.withOp(operationName, attributes?.(), run, resultAttributes);
+}
+
+/**
  * Registers a transaction tracer for a MongoDB client so that `withSession`
  * emits `mongodb.transaction` spans. No-op unless `telemetry.enabled` is
  * true. Called by the collection factories; the last enabled registration
