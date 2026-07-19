@@ -464,3 +464,59 @@ Deno.test("telemetry: duplicate-key driver errors are recorded with the indexed 
     );
   });
 });
+
+Deno.test("telemetry: server errors embedding the document _id are recorded with the _id redacted", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const { exporter, telemetry } = makeTestTelemetry();
+    const items = await collection(db, "items", { name: v.string() }, {
+      telemetry,
+    });
+
+    // A sentinel string _id we can scan for. `$inc` on the string field `name`
+    // makes the server reject the update with a message that embeds the
+    // document's _id: `... {_id: "<value>"} has the field 'name' ...`.
+    const SENTINEL_ID = "PII_SENTINEL_INC_ID_5b9c";
+    // The schema declares no `_id`, so its input type is an ObjectId; the ODM
+    // still accepts a caller-chosen `_id` at runtime (`_id: v.optional(v.any())`).
+    // deno-lint-ignore no-explicit-any
+    await items.insertOne({ _id: SENTINEL_ID, name: "hello" } as any);
+    exporter.reset();
+
+    const driverError = await assertRejects(() =>
+      // $inc on a non-numeric field — a document-style update the ODM passes
+      // straight through to the driver, which returns a Plan-executor error.
+      items.updateOne(
+        { _id: SENTINEL_ID },
+        // deno-lint-ignore no-explicit-any
+        { $inc: { name: 1 } } as any,
+      )
+    );
+
+    // The caller still receives the original, untouched driver message.
+    assert(driverError instanceof Error, "driver error must be an Error");
+    assert(
+      driverError.message.includes("non-numeric type"),
+      "original driver error message must reach the caller",
+    );
+    assert(
+      driverError.message.includes(SENTINEL_ID),
+      "the document _id stays in the caller-facing message",
+    );
+
+    // The span records a synthetic exception with the _id redacted.
+    const span = onlySpan(exporter, "updateOne items");
+    assertEquals(span.status.code, SpanStatusCode.ERROR);
+    const exception = span.events.find((e) => e.name === "exception");
+    assertExists(exception, "exception event must be recorded");
+    const exceptionMessage = exception.attributes?.["exception.message"];
+    assert(
+      typeof exceptionMessage === "string" &&
+        exceptionMessage.includes("{_id: <redacted>}"),
+      "the document _id must be redacted in the recorded exception",
+    );
+    assert(
+      !dumpSpans(exporter).includes(SENTINEL_ID),
+      "the document _id leaked into the span dump",
+    );
+  });
+});

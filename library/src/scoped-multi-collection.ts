@@ -603,9 +603,14 @@ export async function scopedMultiCollection<
 
   function assertScopeValue(id: unknown): string {
     if (id === null || id === undefined || id === "") {
-      throw new Error(
+      // `errorWithSafeMessage`: these validations can fire OUTSIDE an op span
+      // (e.g. `scopeExists`/`scope` before `traced`), so inside a transaction a
+      // throw lands on the `mongodb.transaction` span. The safe variant drops
+      // the interpolated `received ...` value.
+      throw errorWithSafeMessage(
         "scope(): scope value must be a non-empty string ; received " +
           (id === "" ? "empty string" : String(id)),
+        "scope(): scope value must be a non-empty string",
       );
     }
     let parsed: unknown;
@@ -613,9 +618,12 @@ export async function scopedMultiCollection<
       parsed = v.parse(config.scope, id);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      throw new Error(
+      // Safe variant drops both the raw scope value and the valibot detail —
+      // either can embed the user-provided value.
+      throw errorWithSafeMessage(
         `scope(): value "${String(id)}" does not validate against the ` +
           `configured scope schema: ${detail}`,
+        "scope(): value does not validate against the configured scope schema",
       );
     }
     // Return the parse OUTPUT, not the raw input : if the scope schema
@@ -1122,7 +1130,10 @@ export async function scopedMultiCollection<
         return traced(
           tele,
           "updateMany",
-          () => ({ [TA.SCOPE]: recordScope ? scopeId : undefined }),
+          () => ({
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
+            [TA.DOC_TYPE]: Object.keys(ops),
+          }),
           run,
           (modified) => ({ [TA.MODIFIED_COUNT]: modified }),
         );
@@ -1793,13 +1804,15 @@ export async function scopedMultiCollection<
     withSession: sessionContext.withSession,
 
     async drop(options) {
-      if (!options?.force) {
-        throw new Error(
-          "drop() requires { force: true } to proceed — the operation " +
-            "deletes the underlying collection and all its data.",
-        );
-      }
+      // Guard runs INSIDE `run` so a misuse (missing `{ force: true }`) still
+      // emits an ERROR span — mirroring `multiCollection().drop`.
       const run = async () => {
+        if (!options?.force) {
+          throw new Error(
+            "drop() requires { force: true } to proceed — the operation " +
+              "deletes the underlying collection and all its data.",
+          );
+        }
         const session = sessionContext.getSession();
         return await collection.drop({ session });
       };

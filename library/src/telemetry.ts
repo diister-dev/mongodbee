@@ -237,9 +237,17 @@ export function errorWithSafeMessage(
   message: string,
   safeMessage: string,
 ): Error {
-  return Object.assign(new Error(message), {
-    [TELEMETRY_SAFE_MESSAGE]: safeMessage,
+  const error = new Error(message);
+  // Non-enumerable so object spreads of the error (`{ ...error }`) never carry
+  // the annotation onward; `recordSafeError` reads it by symbol access, which
+  // is unaffected by enumerability.
+  Object.defineProperty(error, TELEMETRY_SAFE_MESSAGE, {
+    value: safeMessage,
+    enumerable: false,
+    writable: true,
+    configurable: true,
   });
+  return error;
 }
 
 /** Reads a {@link TELEMETRY_SAFE_MESSAGE} annotation off an error, if present. */
@@ -261,6 +269,11 @@ const DRIVER_MESSAGE_REDACTIONS: readonly [RegExp, string][] = [
   // Duplicate-key errors embed the indexed value:
   // `E11000 duplicate key error ... dup key: { email: "user@example.com" }`.
   [/dup key: \{.*\}/s, "dup key: <redacted>"],
+  // Server errors that echo the offending document embed its `_id`:
+  // `Plan executor error ... {_id: ObjectId('...')} has the field ...` or
+  // `Cannot apply $inc to a value of non-numeric type ... {_id: "type:val"} ...`.
+  // Non-greedy so only the `_id` object literal is redacted.
+  [/\{_id: .*?\}/gs, "{_id: <redacted>}"],
 ];
 
 /**

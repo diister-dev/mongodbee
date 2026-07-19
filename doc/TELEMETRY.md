@@ -129,8 +129,9 @@ re-thrown unchanged.
 **`scopedMultiCollection()` operations:**
 
 - All operations performed through the `scope(id)`, `scopes(ids)` and `unscoped`
-  views (same operation names as `multiCollection()`); scoped-view spans
-  additionally carry the `mongodbee.scope` attribute
+  views (largely the same operation names as `multiCollection()`, plus
+  `findProject`; note `deleteAny` is `multiCollection()`-only); scoped-view
+  spans additionally carry the `mongodbee.scope` attribute
 - Scope management: `listScopes`, `scopeExists`, `dropScope`, `scopeStats`
 - Collection: `drop`
 

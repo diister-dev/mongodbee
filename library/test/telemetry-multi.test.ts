@@ -396,6 +396,58 @@ Deno.test("telemetry scoped: drop emits a CLIENT span", async () => {
   });
 });
 
+Deno.test("telemetry scoped: invalid scope value in a handle op inside a transaction stays caller-side but never lands on the transaction span", async () => {
+  await withDatabase("telemetry-scoped-invalid-scope-tx", async (db) => {
+    const t = makeTestTelemetry();
+    const catalog = await scopedMultiCollection(db, "catalog7", {
+      scope: refId("exposition"),
+      types: {
+        artwork: {
+          title: v.string(),
+        },
+      },
+      telemetry: t.telemetry,
+    });
+
+    // Violates the scope schema (wrong prefix, not `exposition:`). A unique
+    // sentinel so we can assert it reaches the caller but never a span.
+    const SENTINEL_INVALID_SCOPE = "wrongprefix:PIISENTINELINVALIDSCOPE_4d7e";
+
+    // `assertScopeValue` runs OUTSIDE any op span (scopeExists validates the id
+    // before `traced()`), so inside a transaction the throw lands on the
+    // `mongodb.transaction` span via `recordSafeError` — the exact leak vector
+    // `errorWithSafeMessage` closes.
+    const error = await assertRejects(() =>
+      catalog.withSession(async () => {
+        await catalog.scopeExists(SENTINEL_INVALID_SCOPE);
+      })
+    );
+
+    // The caller-facing message keeps the offending value for debuggability.
+    assert(error instanceof Error);
+    assert(
+      error.message.includes(SENTINEL_INVALID_SCOPE),
+      "the invalid scope value must stay in the caller-facing message",
+    );
+
+    // A transaction span was emitted and recorded the failure (aborted/ERROR).
+    const txSpans = spansNamed(t, "mongodb.transaction");
+    assertEquals(txSpans.length, 1);
+    assertEquals(txSpans[0].attributes[A.TX_OUTCOME], "aborted");
+    assertEquals(txSpans[0].status.code, SpanStatusCode.ERROR);
+
+    // No scopeExists op span exists — the throw happened before `traced()`.
+    assertEquals(spansNamed(t, "scopeExists catalog7").length, 0);
+
+    // The full span dump (transaction span's recorded exception + status)
+    // never carries the sentinel scope value.
+    assert(
+      !dumpSpans(t.exporter).includes(SENTINEL_INVALID_SCOPE),
+      "the invalid scope value leaked into the span dump",
+    );
+  });
+});
+
 Deno.test("telemetry scoped: recordScope false omits mongodbee.scope everywhere", async () => {
   await withDatabase("telemetry-scoped-norecord", async (db) => {
     const t = makeTestTelemetry();
@@ -430,6 +482,13 @@ Deno.test("telemetry scoped: recordScope false omits mongodbee.scope everywhere"
     );
     await catalog.unscoped.findOne("artwork", {});
 
+    // Handle ops honour recordScope: false too — their spans also carry the
+    // scope value only through the (now-omitted) mongodbee.scope attribute.
+    // dropScope runs last so it does not empty the scope before the others.
+    assertEquals(await catalog.scopeExists(SENTINEL_SCOPE_A), true);
+    await catalog.scopeStats(SENTINEL_SCOPE_A);
+    await catalog.dropScope(SENTINEL_SCOPE_A, { confirm: true });
+
     const dump = dumpSpans(t.exporter);
     assert(
       t.exporter.getFinishedSpans().length > 0,
@@ -452,5 +511,16 @@ Deno.test("telemetry scoped: recordScope false omits mongodbee.scope everywhere"
       !(A.SCOPE in insertSpans[0].attributes),
       "the insert span must not carry mongodbee.scope",
     );
+
+    // Handle ops (scopeExists/scopeStats/dropScope) likewise omit the scope
+    // attribute when recordScope is false.
+    for (const opName of ["scopeExists", "scopeStats", "dropScope"]) {
+      const opSpans = spansNamed(t, `${opName} catalog6`);
+      assertEquals(opSpans.length, 1, `expected exactly one ${opName} span`);
+      assert(
+        !(A.SCOPE in opSpans[0].attributes),
+        `${opName} span must not carry mongodbee.scope when recordScope is false`,
+      );
+    }
   });
 });
