@@ -107,7 +107,9 @@ function constructorToValidator(
           }
         }
 
-        const strict = type === "strict_object" ? { additionalProperties: false } : {};
+        const strict = type === "strict_object"
+          ? { additionalProperties: false }
+          : {};
         if (required.length == 0) {
           return {
             bsonType: "object",

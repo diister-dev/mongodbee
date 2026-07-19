@@ -87,7 +87,9 @@ function djb2(input: string): number {
  *
  * The output has the shape `<prefix>:<base36-fingerprint>` and contains
  * only `[a-z0-9]` so it satisfies the `refId(prefix)` validation
- * (`^prefix:[a-zA-Z0-9]+`).
+ * (`^prefix:[a-zA-Z0-9]+`). When `prefix` is empty (a plain `v.string()`
+ * `_id` that carries no type prefix) the bare fingerprint is returned —
+ * never a leading colon.
  *
  * Determinism comes from combining the migration id, an operation
  * signature (which distinguishes seed operations within a migration), and
@@ -116,7 +118,9 @@ export function deterministicSeedId(
   const b = djb2(`${docIndex}|${opSignature}|${migrationId}`)
     .toString(36)
     .padStart(7, "0");
-  return `${prefix}:${a}${b}`;
+  const fingerprint = `${a}${b}`;
+  // No prefix (plain `v.string()` id) → bare fingerprint, not `:fingerprint`.
+  return prefix ? `${prefix}:${fingerprint}` : fingerprint;
 }
 
 /**
@@ -142,6 +146,37 @@ export function flowTargetId(
     prefix,
     migrationId,
     `flow:${sourceCollection}:${sourceId}`,
+    0,
+  );
+}
+
+/**
+ * Deterministic target `_id` for a document routed by a `flow_to_scope`
+ * operation whose `map` dropped the source `_id` (so a fresh id must be
+ * minted). Deriving it from the migration id, the concrete source collection
+ * and the source `_id` — instead of a random UUID — makes a crashed flow
+ * retryable: a re-run recomputes the SAME id, so the applier's upsert/conflict
+ * path recognises the already-flowed document instead of silently duplicating
+ * it.
+ *
+ * The returned id is prefixed with the target `_type` (`<type>:<fingerprint>`)
+ * to match the id shape a scoped collection expects.
+ *
+ * @param toType - Target `_type` (used as the id prefix)
+ * @param migrationId - Emitting migration id
+ * @param sourceCollection - Concrete source collection name
+ * @param sourceId - Source document `_id`
+ */
+export function flowScopeTargetId(
+  toType: string,
+  migrationId: string,
+  sourceCollection: string,
+  sourceId: string,
+): string {
+  return deterministicSeedId(
+    toType,
+    migrationId,
+    `flow_to_scope:${sourceCollection}:${sourceId}`,
     0,
   );
 }

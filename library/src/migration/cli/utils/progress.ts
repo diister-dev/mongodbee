@@ -10,11 +10,11 @@
  *
  * @module
  */
+import process from "node:process";
 import type { MigrationProgressEvent } from "../../appliers/mongodb.ts";
 import { dim } from "@std/fmt/colors";
 
 const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const encoder = new TextEncoder();
 
 /** A wired `onProgress` callback plus a `finish` to close any open line. */
 export interface ProgressReporter {
@@ -28,7 +28,7 @@ export interface ProgressReporter {
  * {@link createMongodbApplier} and call `finish()` in a `finally`.
  *
  * @param options.enabled - Render live progress. Defaults to `false`; callers
- *   typically pass `Deno.stdout.isTerminal()`.
+ *   typically pass `process.stdout.isTTY`.
  * @param options.write - Sink for rendered chunks. Defaults to stdout;
  *   injectable so the renderer can be unit-tested without a TTY.
  */
@@ -41,7 +41,7 @@ export function createProgressReporter(
   const enabled = options.enabled ?? false;
   const write = options.write ??
     ((chunk: string) => {
-      Deno.stdout.writeSync(encoder.encode(chunk));
+      process.stdout.write(chunk);
     });
 
   let frame = 0;

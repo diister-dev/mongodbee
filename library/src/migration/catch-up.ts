@@ -71,8 +71,16 @@ export async function detectInstancesNeedingCatchUp(
   const modelTypes = extractModelTypesFromMigrations(allMigrations);
 
   for (const modelType of modelTypes) {
-    // Discover all instances of this model type
-    const instances = await discoverMultiCollectionInstances(db, modelType);
+    // Discover all instances of this model type. Catch-up detection is a
+    // read-only listing path (it runs no destructive op on the result), so it
+    // must not crash on a prefix-named collection that lacks a valid
+    // `_information` marker — skip such collections instead of throwing. The
+    // destructive apply paths (flow-to-scope consume, validator sync) use the
+    // default fail-loud discovery, so an unidentifiable collection is still
+    // surfaced when a migration would actually touch it.
+    const instances = await discoverMultiCollectionInstances(db, modelType, {
+      onUnverifiedPrefixMatch: "skip",
+    });
 
     for (const collectionName of instances) {
       // Get migrations document for this instance
@@ -240,6 +248,18 @@ export function filterOperationsForModelType(
       case "seed_multimodel_instances_type":
       case "transform_multimodel_instances_type":
         return op.modelType === modelType;
+
+      // A flow-to-scope that reads FROM every instance of this model is a
+      // consolidation of this model's data. A lagging instance that missed it
+      // MUST have this operation applied during catch-up — otherwise the
+      // filtered-ops-empty branch in the caller would record the migration as
+      // "applied" while the instance keeps its un-consolidated data forever
+      // (its data never reaching the scoped target). Only the
+      // `multiModelInstances` source shape is model-scoped; `collection` and
+      // `multiCollectionType` sources are unrelated to this model type.
+      case "flow_to_scope":
+        return op.from.kind === "multiModelInstances" &&
+          op.from.model === modelType;
 
       // Skip collection and multi-collection operations
       case "create_collection":

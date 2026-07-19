@@ -629,6 +629,8 @@ export class SimulationValidator implements MigrationValidator {
       )
     ) {
       const currentCollState = stateAfter.multiCollections[multiCollectionName];
+      // Never created in state: the creation check already reports it.
+      if (!currentCollState) continue;
       const allCollTypes = Object.keys(currentMultiCollSchema);
       for (const element of currentCollState.content) {
         const elementType = element._type as string;
@@ -982,9 +984,9 @@ export class SimulationValidator implements MigrationValidator {
             }`,
           );
         }
-        const docBefore =
-          (stateBefore.scopedMultiCollections || {})[scopedName]?.content
-            ?.[docIndex];
+        const docBefore = (stateBefore.scopedMultiCollections || {})[scopedName]
+          ?.content
+          ?.[docIndex];
         const equal = dirtyEquivalent(docBefore, doc);
         if (!equal) {
           issues.push({

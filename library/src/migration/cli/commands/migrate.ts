@@ -716,12 +716,17 @@ export async function migrateCommand(
             if (op.type === "create_collection") return true;
             if (op.type === "create_multicollection") return true;
             if (op.type === "create_multimodel_instance") return true;
+            if (op.type === "create_scoped_multicollection") return true;
             if (op.type === "update_indexes") return true;
+            if (op.type === "rename_collection" && op.lossy) return true;
+            if (op.type === "flow" && op.lossy) return true;
+            if (op.type === "flow_to_scope" && op.lossy) return true;
             if (
               (op.type === "transform_collection" ||
                 op.type === "transform_multicollection_type" ||
                 op.type === "transform_multimodel_instance_type" ||
-                op.type === "transform_multimodel_instances_type") &&
+                op.type === "transform_multimodel_instances_type" ||
+                op.type === "transform_scoped_multicollection_type") &&
               op.lossy
             ) {
               return true;
@@ -735,8 +740,16 @@ export async function migrateCommand(
               return `Create multi-collection: ${op.collectionName}`;
             } else if (op.type === "create_multimodel_instance") {
               return `Create multi-model instance: ${op.collectionName}`;
+            } else if (op.type === "create_scoped_multicollection") {
+              return `Create scoped multi-collection: ${op.collectionName}`;
             } else if (op.type === "update_indexes") {
               return `Update indexes: ${op.collectionName}`;
+            } else if (op.type === "rename_collection") {
+              return `Rename collection: ${op.from} → ${op.to} (drops existing "${op.to}")`;
+            } else if (op.type === "flow") {
+              return `Flow documents into: ${op.into.collection}`;
+            } else if (op.type === "flow_to_scope") {
+              return `Flow documents into scoped collection: ${op.into.collection}`;
             } else if (op.type === "transform_collection") {
               return `Transform collection: ${op.collectionName}`;
             } else if (op.type === "transform_multicollection_type") {
@@ -745,6 +758,10 @@ export async function migrateCommand(
               return `Transform multi-model instance type: ${op.collectionName}.${op.documentType}`;
             } else if (op.type === "transform_multimodel_instances_type") {
               return `Transform multi-model instances type: ${op.modelType}.${op.documentType}`;
+            } else if (op.type === "transform_scoped_multicollection_type") {
+              return `Transform scoped multi-collection type: ${op.collectionName}.${op.documentType}`;
+            } else if (op.type === "seed_scoped_multicollection_type") {
+              return `Seed scoped multi-collection type: ${op.collectionName}.${op.documentType}`;
             }
             return "";
           })
@@ -844,7 +861,7 @@ export async function migrateCommand(
         // Live progress for long-running operations (transform/flow/...). The
         // applier emits onProgress events; the reporter draws an in-place line.
         const progress = createProgressReporter({
-          enabled: options.progress ?? Deno.stdout.isTerminal(),
+          enabled: options.progress ?? process.stdout.isTTY,
         });
 
         // Create applier with migration context

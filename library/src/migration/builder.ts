@@ -758,8 +758,16 @@ function createMigrationBuilder(
     flow(config) {
       const sourceDisposition = config.source ?? "keep";
       const irreversible = sourceDisposition === "consume";
-      const targetIdSchema = options.schemas?.collections
-        ?.[config.into.collection]?._id;
+      // The target may be a plain collection, a multi-collection, or a scoped
+      // multi-collection. Multi/scoped schemas are keyed by document type, so
+      // fall back to the first type's `_id` as the representative prefix source.
+      const targetName = config.into.collection;
+      const multiSchema = options.schemas?.multiCollections?.[targetName];
+      const scopedTypes = options.schemas?.scopedMultiCollections?.[targetName]
+        ?.types;
+      const targetIdSchema = options.schemas?.collections?.[targetName]?._id ??
+        (multiSchema ? Object.values(multiSchema)[0]?._id : undefined) ??
+        (scopedTypes ? Object.values(scopedTypes)[0]?._id : undefined);
 
       state.operations.push({
         type: "flow",

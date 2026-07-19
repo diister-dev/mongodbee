@@ -8,7 +8,7 @@
 // silently killing "next/prev/load-more" on EVERY exposition-scoped list while
 // still rendering "1–25 / 58". Page 1 `position` MUST be `0`.
 
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { withDatabase } from "./+shared.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";
@@ -248,5 +248,125 @@ Deno.test("paginate: pipeline count reflects docs surviving the JOIN", async () 
     );
     assertEquals(page.position, 0);
     assertEquals(page.data.length, 12);
+  });
+});
+
+// [N9] An afterId/beforeId that does not resolve to an anchor within the bound
+// scope+type must FAIL LOUD — naming the id, type and scope — instead of
+// silently restarting at page 1 with a bogus position.
+Deno.test("paginate: afterId with no anchor throws, naming id + scope (N9)", async () => {
+  await withDatabase("smc-paginate-afterid-missing", async (db) => {
+    const catalog = await makeCatalog(db);
+    await seedParticipants(catalog, EXPO_A, 10);
+    await seedParticipants(catalog, EXPO_B, 5);
+    const view = catalog.scope(EXPO_A);
+
+    // Well-formed id (right prefix) but not present in this scope+type.
+    const err = await assertRejects(
+      () =>
+        view.paginate("participant", undefined, {
+          limit: 5,
+          afterId: "participant:doesnotexist",
+        }),
+      Error,
+    );
+    assert(err.message.includes("participant:doesnotexist"));
+    assert(err.message.includes(EXPO_A));
+
+    // An id that exists only in ANOTHER scope must not silently reset to page 1.
+    const bPage = await catalog.scope(EXPO_B).paginate(
+      "participant",
+      undefined,
+      { limit: 5 },
+    );
+    const bId = bPage.data[0]._id as string;
+    await assertRejects(
+      () => view.paginate("participant", undefined, { limit: 5, afterId: bId }),
+      Error,
+    );
+  });
+});
+
+Deno.test("paginate: beforeId with no anchor throws, naming id + scope (N9)", async () => {
+  await withDatabase("smc-paginate-beforeid-missing", async (db) => {
+    const catalog = await makeCatalog(db);
+    await seedParticipants(catalog, EXPO_A, 10);
+    const view = catalog.scope(EXPO_A);
+
+    const err = await assertRejects(
+      () =>
+        view.paginate("participant", undefined, {
+          limit: 5,
+          beforeId: "participant:nopenope",
+        }),
+      Error,
+    );
+    assert(err.message.includes("participant:nopenope"));
+    assert(err.message.includes(EXPO_A));
+  });
+});
+
+// [N6] With a filtering pipeline present, `beforeId`'s position must be
+// computed through the SAME aggregate($count) shape as `total` — otherwise a
+// plain countDocuments counts docs that the pipeline drops, and `position`
+// disagrees with the pipeline-aware `total`.
+Deno.test("paginate: beforeId position is pipeline-aware (N6)", async () => {
+  await withDatabase("smc-paginate-before-pipeline", async (db) => {
+    const catalog = await makeCatalog(db);
+    const view = catalog.scope(EXPO_A);
+
+    // Deterministic, lexicographically sortable ids → a fixed _id-asc order.
+    const pid = (i: number) => `participant:p${String(i).padStart(2, "0")}`;
+    for (let i = 0; i < 20; i++) {
+      await view.insertOne("participant", {
+        _id: pid(i),
+        name: `P${i}`,
+        seat: i,
+        vip: false,
+      });
+    }
+    // Only ODD-indexed participants get a membership → 10 JOIN survivors,
+    // interleaved with non-survivors in _id order.
+    for (let i = 1; i < 20; i += 2) {
+      await view.insertOne("membership", {
+        _id: `membership:m${String(i).padStart(2, "0")}`,
+        participantId: pid(i),
+        org: "org:x",
+      });
+    }
+
+    // deno-lint-ignore no-explicit-any
+    const pipeline = (stage: any) => [
+      stage.lookup("membership", "_id", "participantId", "m"),
+      { $match: { "m.0": { $exists: true } } },
+    ];
+
+    const p1 = await view.paginate("participant", undefined, {
+      limit: 5,
+      pipeline,
+    });
+    assertEquals(p1.total, 10, "total counts JOIN survivors only");
+    assertEquals(p1.position, 0);
+    const p1ids = p1.data.map((d: { _id: string }) => d._id);
+    assertEquals(p1ids, [pid(1), pid(3), pid(5), pid(7), pid(9)]);
+
+    const p2 = await view.paginate("participant", undefined, {
+      limit: 5,
+      pipeline,
+      afterId: p1ids[p1ids.length - 1],
+    });
+    assertEquals(p2.position, 5);
+    const anchor = p2.data[0]._id as string; // pid(11)
+
+    // Walk BACK from page 2's first row → must rebuild page 1 at position 0.
+    // Before the fix the before-count ignored the pipeline and counted ALL 11
+    // participants with _id < anchor → position = 6 (wrong).
+    const back = await view.paginate("participant", undefined, {
+      limit: 5,
+      pipeline,
+      beforeId: anchor,
+    });
+    assertEquals(back.position, 0, "beforeId position must be pipeline-aware");
+    assertEquals(back.data.map((d: { _id: string }) => d._id), p1ids);
   });
 });
