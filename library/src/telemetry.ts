@@ -9,9 +9,13 @@
  * no-op. Tracing is strictly opt-in through {@link TelemetryOptions} passed to
  * `collection()`, `multiCollection()` or `scopedMultiCollection()`.
  *
- * Privacy: spans never carry user data. Filter/update *values*, document
- * contents and validation issues are never recorded — only structural
- * information such as field names, operator names and counts.
+ * Privacy: spans never carry filter, update or document *values* — only
+ * structural information such as field names, operator names and counts.
+ * Validation issues are replaced by a synthetic message; MongoDBee's own
+ * thrown errors are recorded with their interpolated user values stripped; and
+ * driver error messages are recorded only after redacting known
+ * value-embedding patterns (e.g. duplicate-key values). Unknown driver
+ * messages may, in rare cases, still contain values.
  *
  * @example
  * ```typescript
@@ -201,24 +205,108 @@ function isValidationError(error: unknown): boolean {
 }
 
 /**
+ * Well-known property key attached to errors thrown by MongoDBee itself to
+ * carry a PII-free variant of the message. When present,
+ * {@link recordSafeError} records this variant on the span instead of the
+ * caller-facing `message` — which may interpolate user-provided ids or scope
+ * values. Use {@link Symbol.for} so the key is stable across module instances.
+ */
+export const TELEMETRY_SAFE_MESSAGE: symbol = Symbol.for(
+  "mongodbee.telemetrySafeMessage",
+);
+
+/**
+ * Builds an `Error` whose caller-visible `message` (and hence `stack`) is
+ * exactly `message`, but which also carries `safeMessage` under
+ * {@link TELEMETRY_SAFE_MESSAGE} for the span recorder. Use it at throw sites
+ * whose message interpolates user-provided values (ids, scope values) so that
+ * the span records the structural variant only, byte-for-byte identical
+ * caller-facing behaviour aside.
+ * @internal
+ */
+export function errorWithSafeMessage(
+  message: string,
+  safeMessage: string,
+): Error {
+  return Object.assign(new Error(message), {
+    [TELEMETRY_SAFE_MESSAGE]: safeMessage,
+  });
+}
+
+/** Reads a {@link TELEMETRY_SAFE_MESSAGE} annotation off an error, if present. */
+function readSafeMessage(error: Error): string | undefined {
+  const value = (error as unknown as Record<symbol, unknown>)[
+    TELEMETRY_SAFE_MESSAGE
+  ];
+  return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * Ordered list of `[pattern, replacement]` redactions applied to raw MongoDB
+ * driver error messages. Each entry targets a known driver message shape that
+ * embeds a user-controlled *value* in its text, redacting the value while
+ * keeping the message recognizable. Extend this list as new value-embedding
+ * driver patterns surface.
+ */
+const DRIVER_MESSAGE_REDACTIONS: readonly [RegExp, string][] = [
+  // Duplicate-key errors embed the indexed value:
+  // `E11000 duplicate key error ... dup key: { email: "user@example.com" }`.
+  [/dup key: \{.*\}/s, "dup key: <redacted>"],
+];
+
+/**
+ * Redacts known value-embedding substrings from a raw driver error message so
+ * it can be recorded on a span without leaking indexed values. Returns the
+ * message unchanged when no pattern matches.
+ */
+function scrubDriverErrorMessage(message: string): string {
+  let scrubbed = message;
+  for (const [pattern, replacement] of DRIVER_MESSAGE_REDACTIONS) {
+    scrubbed = scrubbed.replace(pattern, replacement);
+  }
+  return scrubbed;
+}
+
+/**
  * Records an error on a span without ever serializing user data.
  *
- * Validation errors (valibot `ValiError`, MongoDBee validation throws) embed
- * the received values in their message/payload, so they are replaced by a
- * synthetic message. Other errors are recorded as-is per OpenTelemetry
- * conventions.
+ * Priority: (1) validation errors (valibot `ValiError`, MongoDBee validation
+ * throws) embed received values in their message/payload and are replaced by a
+ * synthetic message; (2) MongoDBee's own errors carrying a
+ * {@link TELEMETRY_SAFE_MESSAGE} annotation record that PII-free variant;
+ * (3) other errors have their message scrubbed of known value-embedding driver
+ * patterns — a changed message is recorded as a synthetic exception without a
+ * stack (a stack's first line re-embeds the raw message), an unchanged message
+ * keeps the native exception (with its stack) per OpenTelemetry conventions;
+ * (4) non-`Error` values fall back to a generic message.
  */
 function recordSafeError(span: Span, error: unknown): void {
   let errorType: string;
   let statusMessage: string;
+  let safeMessage: string | undefined;
   if (isValidationError(error)) {
     errorType = error instanceof Error ? error.name : "ValidationError";
     statusMessage = SAFE_VALIDATION_MESSAGE;
     span.recordException({ name: errorType, message: SAFE_VALIDATION_MESSAGE });
+  } else if (
+    error instanceof Error &&
+    (safeMessage = readSafeMessage(error)) !== undefined
+  ) {
+    errorType = error.name;
+    statusMessage = safeMessage;
+    span.recordException({ name: errorType, message: safeMessage });
   } else if (error instanceof Error) {
     errorType = error.name;
-    statusMessage = error.message;
-    span.recordException(error);
+    const scrubbed = scrubDriverErrorMessage(error.message);
+    if (scrubbed !== error.message) {
+      // A redaction fired: record a synthetic exception carrying only the
+      // scrubbed text. No stack — its first line would re-embed the raw value.
+      statusMessage = scrubbed;
+      span.recordException({ name: errorType, message: scrubbed });
+    } else {
+      statusMessage = error.message;
+      span.recordException(error);
+    }
   } else {
     errorType = "Error";
     statusMessage = "Operation failed";

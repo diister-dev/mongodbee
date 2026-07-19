@@ -938,7 +938,11 @@ await users.withSession(async () => {
 
 ## 📡 OpenTelemetry Tracing
 
-MongoDBee can emit OpenTelemetry spans for every collection operation and transaction. Tracing is strictly **opt-in** and depends only on `@opentelemetry/api`: MongoDBee never instantiates an SDK, and when no provider is registered (or telemetry is disabled) every code path is a silent no-op with zero overhead.
+MongoDBee can emit OpenTelemetry spans for every collection operation and
+transaction. Tracing is strictly **opt-in** and depends only on
+`@opentelemetry/api`: MongoDBee never instantiates an SDK, and when no provider
+is registered (or telemetry is disabled) every code path is a silent no-op with
+zero overhead.
 
 ```typescript
 // 1. The application registers its own OpenTelemetry SDK
@@ -957,9 +961,17 @@ await users.withSession(async () => {
 });
 ```
 
-Spans never carry user data: filter/update values and document contents are never recorded — only field names, operator names and counts. Validation error messages are replaced by a synthetic message (they may embed document values); driver error messages are recorded as-is per OpenTelemetry conventions.
+Spans never carry filter/update values or document contents — only field names,
+operator names and counts. Error messages are scrubbed of user values before
+recording: validation messages are replaced by a synthetic message, MongoDBee's
+own errors are recorded with their interpolated ids/scope values stripped, and
+driver messages are recorded after redacting known value-embedding patterns
+(e.g. duplicate-key values). Unknown driver messages may in rare cases still
+contain values; either way the caller always receives the original, untouched
+error.
 
-For the full configuration reference, span catalog, attribute table, PII policy and limitations, see [TELEMETRY.md](./doc/TELEMETRY.md).
+For the full configuration reference, span catalog, attribute table, PII policy
+and limitations, see [TELEMETRY.md](./doc/TELEMETRY.md).
 
 ## 📋 Examples
 

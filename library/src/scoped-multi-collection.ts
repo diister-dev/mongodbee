@@ -22,6 +22,7 @@ import { applyScopedMultiCollectionIndexes } from "./indexes-applier.ts";
 import { mongoOperationQueue } from "./operation.ts";
 import {
   createOperationTracer,
+  errorWithSafeMessage,
   filterKeys,
   type OpContext,
   registerClientTelemetry,
@@ -721,8 +722,9 @@ export async function scopedMultiCollection<
             // deno-lint-ignore no-explicit-any
           } as any, { session });
           if (!raw) {
-            throw new Error(
+            throw errorWithSafeMessage(
               `getById(${typeName}, ${id}): no element found in scope "${scopeId}"`,
+              `getById(${typeName}): no element found in scope`,
             );
           }
           // deno-lint-ignore no-explicit-any
@@ -932,8 +934,9 @@ export async function scopedMultiCollection<
           } as any, { session });
           if (!result.acknowledged) throw new Error("Delete failed");
           if (result.deletedCount === 0) {
-            throw new Error(
+            throw errorWithSafeMessage(
               `deleteId(${typeName}, ${id}): no element found in scope "${scopeId}"`,
+              `deleteId(${typeName}): no element found in scope`,
             );
           }
           return result.deletedCount;
@@ -1036,8 +1039,9 @@ export async function scopedMultiCollection<
             );
             if (!result.acknowledged) throw new Error("Update failed");
             if (result.matchedCount === 0) {
-              throw new Error(
+              throw errorWithSafeMessage(
                 `updateOne(${typeName}, ${id}): no element found in scope "${scopeId}"`,
+                `updateOne(${typeName}): no element found in scope`,
               );
             }
             return result.modifiedCount;
@@ -1225,9 +1229,11 @@ export async function scopedMultiCollection<
             // position (as the previous impl did) — a stale/cross-scope id is a
             // caller bug, not "start over".
             if (cursorFilter === null) {
-              throw new Error(
+              throw errorWithSafeMessage(
                 `paginate: afterId "${afterId}" was not found as type ` +
                   `"${typeName}" in scope "${scopeId}" — cannot anchor the page`,
+                `paginate: afterId was not found as type "${typeName}" in ` +
+                  `scope — cannot anchor the page`,
               );
             }
           } else if (beforeId) {
@@ -1238,9 +1244,11 @@ export async function scopedMultiCollection<
             }
             cursorFilter = await buildCursorFilter(beforeId, "before");
             if (cursorFilter === null) {
-              throw new Error(
+              throw errorWithSafeMessage(
                 `paginate: beforeId "${beforeId}" was not found as type ` +
                   `"${typeName}" in scope "${scopeId}" — cannot anchor the page`,
+                `paginate: beforeId was not found as type "${typeName}" in ` +
+                  `scope — cannot anchor the page`,
               );
             }
             const reversed: Record<string, 1 | -1> = {};

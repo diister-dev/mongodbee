@@ -4,8 +4,8 @@
  * `db.operation.batch.size`, plus the anti-PII guarantee (inserted/filtered
  * values never reach the spans).
  */
-import { assert, assertEquals, assertExists } from "@std/assert";
-import { SpanKind } from "@opentelemetry/api";
+import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
+import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import { withDatabase } from "./+shared.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
@@ -188,5 +188,74 @@ Deno.test("telemetry scoped: scope + doc_type attributes on views", async () => 
       !dump.includes("987654"),
       "numeric document value leaked into spans",
     );
+  });
+});
+
+Deno.test("telemetry scoped: not-found error keeps the id caller-side but strips it from the span", async () => {
+  await withDatabase("telemetry-scoped-notfound", async (db) => {
+    const t = makeTestTelemetry();
+    const catalog = await scopedMultiCollection(db, "catalog3", {
+      scope: refId("exposition"),
+      types: {
+        artwork: {
+          title: v.string(),
+        },
+      },
+      telemetry: t.telemetry,
+    });
+
+    // Both the id and the scope value are unique sentinels: a missing getById
+    // interpolates them into the caller-facing message.
+    const SENTINEL_ID = "artwork:PIISENTINELGETBYIDID9f2a";
+    const SENTINEL_SCOPE = "exposition:PIISENTINELSCOPE7b";
+
+    const expo = catalog.scope(SENTINEL_SCOPE);
+    const error = await assertRejects(() =>
+      expo.getById("artwork", SENTINEL_ID)
+    );
+
+    // Caller-facing behaviour is unchanged: the message still names the missing
+    // id and the scope so the developer can debug.
+    assert(error instanceof Error);
+    assert(
+      error.message.includes(SENTINEL_ID),
+      "id must stay in the caller-facing message",
+    );
+    assert(
+      error.message.includes(SENTINEL_SCOPE),
+      "scope value must stay in the caller-facing message",
+    );
+
+    const span = spansNamed(t, "getById catalog3").at(-1);
+    assertExists(span);
+    assertEquals(span.status.code, SpanStatusCode.ERROR);
+
+    // The recorded exception and the status message must carry neither the id
+    // nor the scope value. NOTE: the mongodbee.scope ATTRIBUTE legitimately
+    // holds the scope value (structural metadata), so this assertion targets
+    // the exception event and status message specifically — not the full dump.
+    const exceptionEvent = span.events.find((e) => e.name === "exception");
+    assertExists(exceptionEvent);
+    const exceptionMessage = exceptionEvent.attributes?.["exception.message"];
+    assert(typeof exceptionMessage === "string", "exception message recorded");
+    for (
+      const [channel, text] of [
+        ["exception message", exceptionMessage],
+        ["status message", String(span.status.message ?? "")],
+      ] as const
+    ) {
+      assert(
+        !text.includes(SENTINEL_ID),
+        `id leaked into the ${channel}`,
+      );
+      assert(
+        !text.includes(SENTINEL_SCOPE),
+        `scope value leaked into the ${channel}`,
+      );
+    }
+
+    // The scope value IS expected on the dedicated attribute — confirm the
+    // structural metadata is still there.
+    assertEquals(span.attributes[A.SCOPE], SENTINEL_SCOPE);
   });
 });

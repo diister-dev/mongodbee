@@ -270,15 +270,17 @@ Deno.test("telemetry: spans never contain document or filter values (anti-PII)",
 
 Deno.test("telemetry: error paths record ERROR spans and re-throw the original error", async (t) => {
   await withDatabase(t.name, async (db) => {
+    const DUP_SENTINEL = "PII_SENTINEL_DUP_EMAIL_3af1@example.com";
     const { exporter, telemetry } = makeTestTelemetry();
     const users = await collection(db, "users", userSchema, { telemetry });
     await users.createIndex({ email: 1 }, { unique: true });
-    await users.insertOne({ name: "First", email: "dup@example.com", age: 1 });
+    await users.insertOne({ name: "First", email: DUP_SENTINEL, age: 1 });
     exporter.reset();
 
-    // --- Real driver error: duplicate key on the unique index.
+    // --- Real driver error: duplicate key on the unique index. The driver
+    // message embeds the indexed value (`dup key: { email: "..." }`).
     const driverError = await assertRejects(() =>
-      users.insertOne({ name: "Second", email: "dup@example.com", age: 2 })
+      users.insertOne({ name: "Second", email: DUP_SENTINEL, age: 2 })
     );
     assert(driverError instanceof Error, "driver error must be an Error");
     assertEquals(
@@ -289,6 +291,10 @@ Deno.test("telemetry: error paths record ERROR spans and re-throw the original e
     assert(
       driverError.message.includes("E11000"),
       "original driver error message must reach the caller",
+    );
+    assert(
+      driverError.message.includes(DUP_SENTINEL),
+      "the indexed value stays in the caller-facing message",
     );
 
     const dupSpan = onlySpan(exporter, "insertOne users");
@@ -301,6 +307,17 @@ Deno.test("telemetry: error paths record ERROR spans and re-throw the original e
     assertEquals(dupErrorType, driverError.name);
     const dupException = dupSpan.events.find((e) => e.name === "exception");
     assertExists(dupException, "exception event must be recorded");
+    // The indexed value must be redacted before it reaches the span.
+    const dupExceptionMessage = dupException.attributes?.["exception.message"];
+    assert(
+      typeof dupExceptionMessage === "string" &&
+        dupExceptionMessage.includes("<redacted>"),
+      "duplicate-key value must be redacted in the recorded exception",
+    );
+    assert(
+      !dumpSpans(exporter).includes(DUP_SENTINEL),
+      "the indexed value leaked into the span dump",
+    );
 
     exporter.reset();
 
@@ -368,6 +385,57 @@ Deno.test("telemetry: error paths record ERROR spans and re-throw the original e
     assert(
       !dumpSpans(exporter).includes(SENTINEL_DB),
       "read-path validation details must not leak into spans",
+    );
+  });
+});
+
+Deno.test("telemetry: duplicate-key driver errors are recorded with the indexed value redacted", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const SENTINEL_EMAIL = "PII_SENTINEL_DUPKEY_7c3e@example.com";
+
+    const { exporter, telemetry } = makeTestTelemetry();
+    const users = await collection(db, "users", userSchema, { telemetry });
+    await users.createIndex({ email: 1 }, { unique: true });
+    await users.insertOne({ name: "First", email: SENTINEL_EMAIL, age: 1 });
+    exporter.reset();
+
+    // The duplicate insert fails on the unique index; the raw driver message
+    // embeds the indexed value as `dup key: { email: "<value>" }`.
+    const driverError = await assertRejects(() =>
+      users.insertOne({ name: "Second", email: SENTINEL_EMAIL, age: 2 })
+    );
+
+    // The caller receives the ORIGINAL, untouched driver error — value included.
+    assert(driverError instanceof Error, "driver error must be an Error");
+    assertEquals(
+      (driverError as unknown as { code?: number }).code,
+      11000,
+      "original driver error code must reach the caller",
+    );
+    assert(
+      driverError.message.includes("E11000"),
+      "original driver error message must reach the caller",
+    );
+    assert(
+      driverError.message.includes(SENTINEL_EMAIL),
+      "the indexed value stays in the caller-facing message",
+    );
+
+    // The span never leaks the indexed value: it is redacted before recording.
+    assert(
+      !dumpSpans(exporter).includes(SENTINEL_EMAIL),
+      "the indexed value leaked into the span dump",
+    );
+
+    const dupSpan = onlySpan(exporter, "insertOne users");
+    assertEquals(dupSpan.status.code, SpanStatusCode.ERROR);
+    const dupException = dupSpan.events.find((e) => e.name === "exception");
+    assertExists(dupException, "exception event must be recorded");
+    const exceptionMessage = dupException.attributes?.["exception.message"];
+    assert(
+      typeof exceptionMessage === "string" &&
+        exceptionMessage.includes("<redacted>"),
+      "duplicate-key value must be redacted in the recorded exception",
     );
   });
 });
