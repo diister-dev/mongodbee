@@ -5,18 +5,155 @@ import type {
 } from "../types.ts";
 import {
   extractIdPrefix,
+  flowScopeTargetId,
   flowTargetId,
   resolveSeedId,
 } from "../utils/seed-id.ts";
 import { getIrreversibleOperations } from "../builder.ts";
 
-/** Simple equality matcher for in-memory `where` filters (exact match only). */
+/** Field-level `where` operators the simulation understands. */
+const SUPPORTED_OPERATORS =
+  "$eq, $ne, $in, $nin, $gt, $gte, $lt, $lte, $exists";
+
+/**
+ * Read a possibly dotted path (`"a.b.c"`) from a document, so a `where` using
+ * nested field access matches the same documents the MongoDB applier would.
+ * Returns `undefined` for any missing segment.
+ */
+function getFieldByPath(doc: Record<string, unknown>, path: string): unknown {
+  if (!path.includes(".")) return doc[path];
+  let current: unknown = doc;
+  for (const part of path.split(".")) {
+    if (current === null || current === undefined) return undefined;
+    if (typeof current !== "object") return undefined;
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+}
+
+/** Structural equality for the JSON-shaped data these migrations deal in. */
+function valuesEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a === null || b === null || a === undefined || b === undefined) {
+    return a === b;
+  }
+  if (a instanceof Date && b instanceof Date) {
+    return a.getTime() === b.getTime();
+  }
+  if (typeof a !== "object" || typeof b !== "object") return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
+      return false;
+    }
+    return a.every((v, i) => valuesEqual(v, b[i]));
+  }
+  const ao = a as Record<string, unknown>;
+  const bo = b as Record<string, unknown>;
+  const ak = Object.keys(ao);
+  const bk = Object.keys(bo);
+  if (ak.length !== bk.length) return false;
+  return ak.every((k) => valuesEqual(ao[k], bo[k]));
+}
+
+/**
+ * True when `cond` is a Mongo operator expression — a plain object whose keys
+ * ALL begin with `$` (e.g. `{ $in: [...] }`). A plain object with non-`$` keys
+ * is a nested-equality match, not an operator expression.
+ */
+function isOperatorExpression(cond: unknown): cond is Record<string, unknown> {
+  if (cond === null || typeof cond !== "object" || Array.isArray(cond)) {
+    return false;
+  }
+  const keys = Object.keys(cond);
+  return keys.length > 0 && keys.every((k) => k.startsWith("$"));
+}
+
+/** Ordering comparison for `$gt`/`$gte`/`$lt`/`$lte`; `undefined` if incomparable. */
+function compareValues(a: unknown, b: unknown): number | undefined {
+  if (typeof a === "number" && typeof b === "number") return a - b;
+  if (typeof a === "string" && typeof b === "string") {
+    return a < b ? -1 : a > b ? 1 : 0;
+  }
+  if (a instanceof Date && b instanceof Date) {
+    return a.getTime() - b.getTime();
+  }
+  return undefined;
+}
+
+/**
+ * Apply a single field-level operator. THROWS on any `$`-operator the
+ * simulation does not implement — failing loud rather than silently matching
+ * nothing (which would let a dry-run disagree with production).
+ */
+function applyOperator(
+  fieldValue: unknown,
+  op: string,
+  operand: unknown,
+): boolean {
+  switch (op) {
+    case "$eq":
+      return valuesEqual(fieldValue, operand);
+    case "$ne":
+      return !valuesEqual(fieldValue, operand);
+    case "$in":
+      return Array.isArray(operand) &&
+        operand.some((o) => valuesEqual(fieldValue, o));
+    case "$nin":
+      return Array.isArray(operand) &&
+        !operand.some((o) => valuesEqual(fieldValue, o));
+    case "$gt": {
+      const c = compareValues(fieldValue, operand);
+      return c !== undefined && c > 0;
+    }
+    case "$gte": {
+      const c = compareValues(fieldValue, operand);
+      return c !== undefined && c >= 0;
+    }
+    case "$lt": {
+      const c = compareValues(fieldValue, operand);
+      return c !== undefined && c < 0;
+    }
+    case "$lte": {
+      const c = compareValues(fieldValue, operand);
+      return c !== undefined && c <= 0;
+    }
+    case "$exists":
+      return (fieldValue !== undefined) === Boolean(operand);
+    default:
+      throw new Error(
+        `Operator "${op}" is not supported in simulation (memory applier). ` +
+          `Supported operators: ${SUPPORTED_OPERATORS}.`,
+      );
+  }
+}
+
+/**
+ * Match a document against an in-memory `where` filter with Mongo-like
+ * semantics: nested dot-paths, and the common field operators ($eq, $ne, $in,
+ * $nin, $gt, $gte, $lt, $lte, $exists). Any other `$`-operator — including a
+ * top-level logical operator such as `$and`/`$or` — throws, so the simulation
+ * never silently disagrees with what the real database would move or delete.
+ */
 function matchesWhere(
   doc: Record<string, unknown>,
   where?: Record<string, unknown>,
 ): boolean {
   if (!where) return true;
-  return Object.entries(where).every(([k, val]) => doc[k] === val);
+  return Object.entries(where).every(([key, condition]) => {
+    if (key.startsWith("$")) {
+      throw new Error(
+        `Operator "${key}" is not supported in simulation (memory applier). ` +
+          `Supported field operators: ${SUPPORTED_OPERATORS}.`,
+      );
+    }
+    const fieldValue = getFieldByPath(doc, key);
+    if (isOperatorExpression(condition)) {
+      return Object.entries(condition).every(([op, operand]) =>
+        applyOperator(fieldValue, op, operand)
+      );
+    }
+    return valuesEqual(fieldValue, condition);
+  });
 }
 
 export function createMemoryApplier(migration: MigrationDefinition) {
@@ -571,14 +708,41 @@ export function createMemoryApplier(migration: MigrationDefinition) {
       },
     },
     flow_to_scope: {
+      /**
+       * Simulate routing documents into a scoped multi-collection. Kept in
+       * lockstep with the mongodb applier:
+       * - conflicts are keyed on the target `_id` ALONE (the primary key of the
+       *   single physical scoped collection), not on `(_scope, _type, _id)`;
+       * - a minted target id (when `map` drops `_id`) is DETERMINISTIC, so a
+       *   replay lands on the same id instead of a fresh random one;
+       * - `source: "consume"` removes only the source docs that ACTUALLY landed
+       *   (inserted/merged). With `onConflict: "skip"`, skipped docs never land,
+       *   so the whole-source drop fast path is used only when nothing was
+       *   skipped — otherwise skipped docs are left in the source.
+       *
+       * Skip/landed bookkeeping is tracked PER SOURCE — one instance's skipped
+       * doc must not stop a sibling instance from being consumed away. The
+       * mongodb applier processes each discovered source independently, so a
+       * `skip` in instance A drops only A's landed docs while a clean instance B
+       * is still dropped whole; the simulation mirrors that per-source decision.
+       *
+       * Idempotent replay: deterministic ids make a retry land on the same id,
+       * but under the DEFAULT `onConflict: "error"` a replay throws a conflict on
+       * a doc a crashed run already flowed. Clean re-application (retry / C8
+       * catch-up) therefore requires `onConflict: "skip"` or `"merge"`.
+       */
       apply: (state, operation) => {
         const target =
           (state.scopedMultiCollections[operation.into.collection] ??= {
             content: [],
           });
 
-        // Gather (doc, ctx, remove) from the source selector.
-        const items: {
+        // Resolve the concrete source(s) and the docs each contributes. Each
+        // source carries `dropWhole` — how to consume it when nothing was
+        // skipped (drop the whole collection / instance key). `undefined` means
+        // a filtered subset, where non-matching docs must survive, so a consume
+        // deletes only the landed docs.
+        type Item = {
           doc: Record<string, unknown>;
           ctx: {
             sourceCollection?: string;
@@ -586,11 +750,17 @@ export function createMemoryApplier(migration: MigrationDefinition) {
             documentType?: string;
           };
           remove: () => void;
+        };
+        const sources: {
+          srcColl: string;
+          items: Item[];
+          dropWhole?: () => void;
         }[] = [];
         const from = operation.from;
         if (from.kind === "collection") {
           const coll = state.collections[from.name];
           if (coll) {
+            const items: Item[] = [];
             for (const doc of [...coll.content]) {
               if (matchesWhere(doc, from.where)) {
                 items.push({
@@ -602,12 +772,23 @@ export function createMemoryApplier(migration: MigrationDefinition) {
                 });
               }
             }
+            sources.push({
+              srcColl: from.name,
+              items,
+              // A fully-consumed collection is removed entirely (key dropped),
+              // so a drained collection no longer "exists"; a `where` is a
+              // filtered subset (non-matching docs stay).
+              dropWhole: from.where
+                ? undefined
+                : () => delete state.collections[from.name],
+            });
           }
         } else if (from.kind === "multiModelInstances") {
           for (
             const [instanceName, inst] of Object.entries(state.multiModels)
           ) {
             if (inst.modelType !== from.model) continue;
+            const items: Item[] = [];
             for (const doc of [...inst.content]) {
               // Skip the multi-collection's internal bookkeeping docs
               // (`_information`/`_migrations`) — mongodbee plumbing, not real
@@ -623,10 +804,19 @@ export function createMemoryApplier(migration: MigrationDefinition) {
                 },
               });
             }
+            sources.push({
+              srcColl: instanceName,
+              items,
+              // A whole instance consolidated away is dropped entirely,
+              // including its bookkeeping docs (the drop is not a filtered
+              // subset), so a drained instance no longer "exists".
+              dropWhole: () => delete state.multiModels[instanceName],
+            });
           }
         } else {
           const coll = state.multiCollections[from.collectionName];
           if (coll) {
+            const items: Item[] = [];
             for (const doc of [...coll.content]) {
               if (doc._type === from.documentType) {
                 items.push({
@@ -638,63 +828,82 @@ export function createMemoryApplier(migration: MigrationDefinition) {
                 });
               }
             }
+            // A single `_type` out of a shared multi-collection is a filtered
+            // subset — other types must survive, so consume the landed docs only.
+            sources.push({ srcColl: from.collectionName, items });
           }
         }
 
-        for (const { doc, ctx } of items) {
-          const scope = operation.scope(doc, ctx);
-          const mapped = operation.map
-            ? operation.map({ ...doc }, ctx)
-            : { ...doc };
-          const toType = operation.toType
-            ? operation.toType(doc, ctx)
-            : (mapped._type ?? doc._type) as string;
-          let id = mapped._id;
-          if (id === undefined || id === null) {
-            id = `${toType}:${crypto.randomUUID().replace(/-/g, "")}`;
-          }
-          const outDoc = { ...mapped, _id: id, _type: toType, _scope: scope };
+        const onConflict = operation.onConflict ?? "error";
 
-          const idx = target.content.findIndex(
-            (d) => d._scope === scope && d._type === toType && d._id === id,
-          );
-          if (idx >= 0) {
-            const onConflict = operation.onConflict ?? "error";
-            if (onConflict === "error") {
-              throw new Error(
-                `flow_to_scope: conflict on (${scope}, ${toType}, ${id})`,
+        // Process each source INDEPENDENTLY so its skip/landed bookkeeping — and
+        // therefore its consume decision — is scoped to that source, exactly as
+        // the mongodb applier iterates its discovered sources.
+        for (const source of sources) {
+          // Removers for the source docs that actually landed in the target,
+          // and whether any doc was skipped (so `consume` preserves it).
+          const landedRemovers: (() => void)[] = [];
+          let anySkipped = false;
+
+          for (const { doc, ctx, remove } of source.items) {
+            const scope = operation.scope(doc, ctx);
+            const mapped = operation.map
+              ? operation.map({ ...doc }, ctx)
+              : { ...doc };
+            const toType = operation.toType
+              ? operation.toType(doc, ctx)
+              : (mapped._type ?? doc._type) as string;
+            let id = mapped._id;
+            if (id === undefined || id === null) {
+              // DETERMINISTIC id (not a random UUID) so a replay lands the same
+              // id — matching the mongodb applier's retry behaviour.
+              id = flowScopeTargetId(
+                toType,
+                migrationId,
+                source.srcColl,
+                String(doc._id),
               );
             }
-            if (onConflict === "skip") continue;
-            const merged = operation.merge
-              ? operation.merge(target.content[idx], outDoc)
-              : { ...target.content[idx], ...outDoc };
-            target.content[idx] = {
-              ...merged,
-              _id: id,
-              _type: toType,
-              _scope: scope,
-            };
-          } else {
-            target.content.push(outDoc);
-          }
-        }
+            const outDoc = { ...mapped, _id: id, _type: toType, _scope: scope };
 
-        if (operation.sourceDisposition === "consume") {
-          // Fully-consumed sources are removed entirely (key dropped), so a
-          // drained collection / multi-model instance no longer "exists".
-          if (from.kind === "collection" && !from.where) {
-            delete state.collections[from.name];
-          } else if (from.kind === "multiModelInstances") {
-            for (
-              const [instanceName, inst] of Object.entries(state.multiModels)
-            ) {
-              if (inst.modelType === from.model) {
-                delete state.multiModels[instanceName];
+            // Conflict on `_id` alone — the primary key of the physical scoped
+            // collection — exactly like the mongodb applier.
+            const idx = target.content.findIndex((d) => d._id === id);
+            if (idx >= 0) {
+              if (onConflict === "error") {
+                throw new Error(
+                  `flow_to_scope: conflict on (${scope}, ${toType}, ${id})`,
+                );
               }
+              if (onConflict === "skip") {
+                // Incoming doc dropped — it never lands, so its source stays.
+                anySkipped = true;
+                continue;
+              }
+              const merged = operation.merge
+                ? operation.merge(target.content[idx], outDoc)
+                : { ...target.content[idx], ...outDoc };
+              target.content[idx] = {
+                ...merged,
+                _id: id,
+                _type: toType,
+                _scope: scope,
+              };
+            } else {
+              target.content.push(outDoc);
             }
-          } else {
-            for (const { remove } of items) remove(); // filtered subset only
+            landedRemovers.push(remove);
+          }
+
+          if (operation.sourceDisposition === "consume") {
+            if (anySkipped || !source.dropWhole) {
+              // Some docs were skipped (they must survive), OR the source is a
+              // filtered subset (non-matching docs must survive) — remove ONLY
+              // the docs that landed; everything else stays in place.
+              for (const remove of landedRemovers) remove();
+            } else {
+              source.dropWhole();
+            }
           }
         }
         return state;

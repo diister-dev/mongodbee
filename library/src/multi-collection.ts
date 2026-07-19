@@ -590,6 +590,11 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     },
     async insertMany(key, docs) {
       const run = async () => {
+        // Validate each doc against the SPECIFIC element schema (as insertOne
+        // does), not the whole union: the union would try every member per doc
+        // (O(types) work) and, on failure, surface an aggregated cross-type error
+        // instead of the precise one. Semantics are identical for valid input.
+        const schema = schemaElements[key];
         const validation = docs.map((doc) => {
           const _id = doc._id ?? `${key as string}:${newId()}`;
           return v.parse(schema, {
@@ -1262,10 +1267,32 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           if (!skipTotal) {
             const beforeFilter = await buildCursorFilter(beforeId, "before");
             if (beforeFilter) {
-              const beforeCount = await collection.countDocuments(
-                { $and: [...baseQuery, beforeFilter] } as never,
-                { session },
-              );
+              // Mirror the `total` computation: when a user pipeline is present,
+              // the before-count must run through the same aggregate($count)
+              // shape so `position` stays consistent with a pipeline-aware
+              // `total`. A plain countDocuments would ignore the pipeline's
+              // filtering stages and yield an inconsistent position.
+              let beforeCount: number;
+              if (userPipeline.length > 0) {
+                const beforePipeline: AggregationStage[] = [
+                  { $match: { $and: [...baseQuery, beforeFilter] } },
+                  ...userPipeline,
+                  { $count: "total" },
+                ];
+                const beforeResult = await collection.aggregate(
+                  beforePipeline,
+                  {
+                    session,
+                  },
+                ).toArray();
+                beforeCount = (beforeResult[0]?.total as number | undefined) ??
+                  0;
+              } else {
+                beforeCount = await collection.countDocuments(
+                  { $and: [...baseQuery, beforeFilter] } as never,
+                  { session },
+                );
+              }
               position = Math.max(0, beforeCount - elements.length);
             } else {
               position = 0;

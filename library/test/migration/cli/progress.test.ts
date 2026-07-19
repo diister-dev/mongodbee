@@ -1,4 +1,5 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import process from "node:process";
 import { createProgressReporter } from "../../../src/migration/cli/utils/progress.ts";
 import type { MigrationProgressEvent } from "../../../src/migration/appliers/mongodb.ts";
 
@@ -78,4 +79,30 @@ Deno.test("progress: finish() closes a still-open line (e.g. on error mid-operat
   // no `done` (operation threw) → finish must emit the closing newline
   r.finish();
   assert(out.endsWith("\n"));
+});
+
+// Regression for C6: the default sink must go through `process.stdout` (works
+// on Deno/Node/Bun) rather than the Deno-only `Deno.stdout.writeSync`, which
+// throws `ReferenceError: Deno is not defined` under Node/Bun. Spy on
+// `process.stdout.write` and confirm the un-injected reporter reaches it.
+Deno.test("progress: default writer routes through process.stdout (cross-runtime)", () => {
+  // deno-lint-ignore no-explicit-any
+  const stdout = process.stdout as any;
+  const originalWrite = stdout.write;
+  let captured = "";
+  stdout.write = (chunk: unknown): boolean => {
+    captured += typeof chunk === "string"
+      ? chunk
+      : new TextDecoder().decode(chunk as Uint8Array);
+    return true;
+  };
+  try {
+    // No `write` injected → exercises the default (process.stdout) sink.
+    const r = createProgressReporter({ enabled: true });
+    r.onProgress(ev({ phase: "done", processed: 5, elapsedMs: 1000 }));
+    r.finish();
+  } finally {
+    stdout.write = originalWrite;
+  }
+  assertStringIncludes(plain(captured), "5 docs");
 });

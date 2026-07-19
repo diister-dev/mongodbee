@@ -115,6 +115,7 @@ ${yellow("MIGRATE OPTIONS:")}
   --force           Skip all confirmations (use with caution!)
   --auto-sync       Automatically catch up orphaned multi-model instances
   --verbose         Show detailed migration information
+  --progress        Force the live progress line (auto-detected on a TTY; use --no-progress to disable)
   -m, --mode        Simulation mode: quick, normal, hard (default: normal)
   -l, --last        Only validate the last N migrations
 
@@ -145,7 +146,13 @@ async function main(): Promise<void> {
       "help",
       "check-indexes",
       "validate",
+      "progress",
     ],
+    // `progress` stays tri-state: `--progress` forces the live line on,
+    // `--no-progress` forces it off, and omitting it leaves `undefined` so the
+    // command falls back to TTY auto-detection.
+    negatable: ["progress"],
+    default: { progress: undefined },
     string: ["config", "env", "name", "mode"],
     alias: {
       v: "version",

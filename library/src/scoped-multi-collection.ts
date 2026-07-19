@@ -14,7 +14,7 @@ import { toMongoValidator } from "./validator.ts";
 import { dbId, newId } from "./ids.ts";
 import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
 import { getSessionContext } from "./session.ts";
-import { getNestedValue } from "./dot-notation.ts";
+import { createDotNotationSchema, getNestedValue } from "./dot-notation.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
 import { dirtyEquivalent } from "./utils/object.ts";
 import { createLogger } from "./utils/logger.ts";
@@ -236,6 +236,15 @@ export type ScopedView<
   ): Promise<number>;
 
   deleteId<K extends keyof T>(type: K, id: string): Promise<number>;
+  /**
+   * Delete several ids at once within the bound scope ; returns the number of
+   * documents removed.
+   *
+   * Deliberate divergence from `multiCollection.deleteIds`: this does NOT throw
+   * when `deletedCount === 0`. A scoped batch delete where some (or all) ids
+   * belong to another scope — and thus match nothing here — is a normal
+   * outcome, so an empty delete returns `0` rather than raising.
+   */
   deleteIds<K extends keyof T>(type: K, ids: string[]): Promise<number>;
   deleteMany<K extends keyof T>(
     type: K,
@@ -248,6 +257,15 @@ export type ScopedView<
     doc: WithRemovable<Partial<UserInputDoc<T, K>>>,
   ): Promise<number>;
 
+  /**
+   * Apply per-id partial updates across one or more types, all within the
+   * bound scope ; returns the total number of documents modified.
+   *
+   * Deliberate divergence from `multiCollection.updateMany`: this returns `0`
+   * (and does NOT throw) when nothing matched — an empty batch, or a batch
+   * whose ids all fall outside this scope, is a normal outcome here rather than
+   * an error condition.
+   */
   updateMany(
     ops: {
       [K in keyof T]?: {
@@ -543,6 +561,21 @@ export async function scopedMultiCollection<
 
   const storageUnion = v.union(Object.values(storageSchemas));
 
+  // Dot-notation schemas, one per type, used to validate the `$set` paths of
+  // updateOne/updateMany. Same mechanism as `multiCollection` (see
+  // `createDotNotationSchema`) : a dotted update key (`a.b.c`) is validated
+  // against the matching leaf schema — running the schema's pipe checks and
+  // transforms — instead of being deferred to Mongo's opaque
+  // "Document failed validation". Built from the per-type insert schemas.
+  const dotSchemaElements = Object.entries(insertSchemas).reduce(
+    (acc, [typeName, schema]) => {
+      acc[typeName] = createDotNotationSchema(schema);
+      return acc;
+    },
+    // deno-lint-ignore no-explicit-any
+    {} as Record<string, v.BaseSchema<any, any, any>>,
+  );
+
   await applyValidator(db, collectionName, storageUnion);
 
   // deno-lint-ignore no-explicit-any
@@ -567,8 +600,9 @@ export async function scopedMultiCollection<
           (id === "" ? "empty string" : String(id)),
       );
     }
+    let parsed: unknown;
     try {
-      v.parse(config.scope, id);
+      parsed = v.parse(config.scope, id);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       throw new Error(
@@ -576,7 +610,12 @@ export async function scopedMultiCollection<
           `configured scope schema: ${detail}`,
       );
     }
-    return String(id);
+    // Return the parse OUTPUT, not the raw input : if the scope schema
+    // transforms (trim/lowercase/…), inserts store the transformed `_scope`
+    // (they parse through `insertSchemas`), so every view filter MUST use that
+    // same transformed value — otherwise documents become invisible to the
+    // very view that inserted them.
+    return String(parsed);
   }
 
   function assertNoReservedFields(doc: Record<string, unknown>) {
@@ -966,6 +1005,19 @@ export async function scopedMultiCollection<
         const { set, unset } = extractFieldsToRemove(
           doc as Record<string, unknown>,
         );
+
+        // Validate the $set paths against the per-type dot-notation schema
+        // (runs the schema's pipe checks/transforms) so a bad value surfaces a
+        // clear Valibot error instead of Mongo's opaque "Document failed
+        // validation". Reserved fields are already rejected above. Mirrors
+        // multiCollection.updateOne. Done outside the retry — a validation
+        // error is not a transient write conflict.
+        const dotSchema = dotSchemaElements[typeName];
+        if (!dotSchema) {
+          throw new Error(`updateOne: unknown type "${typeName}"`);
+        }
+        if (Object.keys(set).length > 0) v.parse(dotSchema, set);
+
         const updateOps = buildUpdateOps(set, unset);
         if (Object.keys(updateOps).length === 0) return 0;
 
@@ -977,7 +1029,6 @@ export async function scopedMultiCollection<
                 _id: id,
                 _type: typeName,
                 _scope: scopeId,
-                // deno-lint-ignore no-explicit-any
                 // deno-lint-ignore no-explicit-any
               } as any,
               updateOps as any,
@@ -1017,6 +1068,16 @@ export async function scopedMultiCollection<
               const { set, unset } = extractFieldsToRemove(
                 partial as Record<string, unknown>,
               );
+
+              // Validate the $set paths against the per-type dot-notation schema
+              // (pipe checks/transforms) before building the bulk op — same as
+              // updateOne / multiCollection.updateMany.
+              const dotSchema = dotSchemaElements[typeName];
+              if (!dotSchema) {
+                throw new Error(`updateMany: unknown type "${typeName}"`);
+              }
+              if (Object.keys(set).length > 0) v.parse(dotSchema, set);
+
               const updateOps = buildUpdateOps(set, unset);
               if (Object.keys(updateOps).length === 0) continue;
               bulkOps.push({
@@ -1159,6 +1220,16 @@ export async function scopedMultiCollection<
               );
             }
             cursorFilter = await buildCursorFilter(afterId, "after");
+            // Anchor must exist WITHIN this scope+type. This API is new, so we
+            // fail loud rather than silently restart at page 1 with a bogus
+            // position (as the previous impl did) — a stale/cross-scope id is a
+            // caller bug, not "start over".
+            if (cursorFilter === null) {
+              throw new Error(
+                `paginate: afterId "${afterId}" was not found as type ` +
+                  `"${typeName}" in scope "${scopeId}" — cannot anchor the page`,
+              );
+            }
           } else if (beforeId) {
             if (!beforeId.startsWith(`${typeName}:`)) {
               throw new Error(
@@ -1166,6 +1237,12 @@ export async function scopedMultiCollection<
               );
             }
             cursorFilter = await buildCursorFilter(beforeId, "before");
+            if (cursorFilter === null) {
+              throw new Error(
+                `paginate: beforeId "${beforeId}" was not found as type ` +
+                  `"${typeName}" in scope "${scopeId}" — cannot anchor the page`,
+              );
+            }
             const reversed: Record<string, 1 | -1> = {};
             for (const [f, d] of Object.entries(sortObj)) {
               reversed[f] = (d === 1 ? -1 : 1) as 1 | -1;
@@ -1266,8 +1343,14 @@ export async function scopedMultiCollection<
             // the ~`limit` docs the JS loop consumes before it closes the cursor,
             // not for the whole cursor-filtered set. No server-side `$limit` here:
             // a filtering pipeline can shrink the page, so `limit` is enforced
-            // JS-side (which is also what lets the cursor close early). This
-            // mirrors collection.paginate / multiCollection.paginate.
+            // JS-side (which is also what lets the cursor close early).
+            //
+            // NOTE: this deliberately DIVERGES from multiCollection.paginate,
+            // which sorts AFTER the user pipeline (so callers can sort on fields
+            // the pipeline adds — e.g. a `$lookup`/`$addFields` result). Here the
+            // sort runs FIRST — mirroring collection.paginate — to keep it
+            // index-backed and the `$lookup` lazy; the trade-off is that sorting
+            // on pipeline-added fields is NOT supported by the scoped view.
             const dataPipeline: AggregationStage[] = [
               { $match: finalQuery },
               { $sort: sort },
@@ -1333,11 +1416,31 @@ export async function scopedMultiCollection<
             data.reverse();
             if (!skipTotal) {
               if (cursorFilter) {
-                const beforeCount = await collection.countDocuments(
-                  // deno-lint-ignore no-explicit-any
-                  { $and: [...baseQuery, cursorFilter] } as any,
-                  { session },
-                );
+                // The before-count must be computed through the SAME shape as
+                // `total`: when a user pipeline exists, count via the
+                // aggregate($count) form so `position` stays consistent with a
+                // pipeline-aware `total` (a plain countDocuments would ignore the
+                // pipeline's filtering stages).
+                let beforeCount: number;
+                if (userPipeline.length > 0) {
+                  const beforePipeline: AggregationStage[] = [
+                    { $match: { $and: [...baseQuery, cursorFilter] } },
+                    ...userPipeline,
+                    { $count: "total" },
+                  ];
+                  const beforeResult = await collection
+                    .aggregate(beforePipeline, { session })
+                    .toArray();
+                  beforeCount =
+                    (beforeResult[0]?.total as number | undefined) ??
+                      0;
+                } else {
+                  beforeCount = await collection.countDocuments(
+                    // deno-lint-ignore no-explicit-any
+                    { $and: [...baseQuery, cursorFilter] } as any,
+                    { session },
+                  );
+                }
                 position = Math.max(0, beforeCount - data.length);
               } else {
                 position = 0;
@@ -1549,6 +1652,14 @@ export async function scopedMultiCollection<
     : new Proxy({} as UnscopedView<T, S>, {
       get(_target, prop) {
         if (prop === "_scopes") return [];
+        // Let thenable checks (`then`), JSON serialization (`toJSON`) and any
+        // inspection symbol (Symbol.toStringTag / Symbol.iterator / Node's
+        // util.inspect.custom, …) probe the object harmlessly — otherwise a
+        // bare `console.log(catalog)` or an accidental `await catalog.unscoped`
+        // would explode. Only the real view methods stay guarded.
+        if (typeof prop === "symbol" || prop === "then" || prop === "toJSON") {
+          return undefined;
+        }
         throw new Error(
           `unscoped: access to "${
             String(prop)

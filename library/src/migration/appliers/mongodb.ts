@@ -32,6 +32,7 @@ import {
 } from "../multicollection-registry.ts";
 import {
   extractIdPrefix,
+  flowScopeTargetId,
   flowTargetId,
   resolveSeedId,
 } from "../utils/seed-id.ts";
@@ -60,6 +61,26 @@ function resolveSeedDocId(
     opSignature,
     docIndex,
   );
+}
+
+/**
+ * Wrap a scoped-collection transformer so the discriminators (`_id`, `_type`,
+ * `_scope`) are ALWAYS re-pinned from the original document after the user
+ * transform runs. A transform that accidentally drops `_scope`/`_type` would
+ * otherwise make its documents invisible to every scoped query — and, because
+ * the memory (simulation) applier already force-restores these fields, a
+ * dry-run would pass while production silently corrupted the data. Re-pinning
+ * here keeps the two appliers in lockstep: the discriminators can never be lost.
+ */
+function repinScopedDiscriminators(
+  transform: (doc: Record<string, unknown>) => Record<string, unknown>,
+): (doc: Record<string, unknown>) => Record<string, unknown> {
+  return (doc) => ({
+    ...transform(doc),
+    _type: doc._type,
+    _scope: doc._scope,
+    _id: doc._id,
+  });
 }
 
 /**
@@ -174,6 +195,13 @@ export function createMongodbApplier(
   /**
    * Insert seed documents in batches, emitting progress so a large seed isn't
    * a silent wait. The total is known up front, so the line shows a bar + %.
+   *
+   * Writes are idempotent: every seed doc already carries a DETERMINISTIC `_id`
+   * (see utils/seed-id.ts), so a `replaceOne {upsert:true}` keyed on `_id` is
+   * exactly-once. A plain `insertMany` would throw E11000 on the first already
+   * inserted doc when a crashed migration (some pages written, migration not
+   * recorded) is retried — permanently bricking it. The upsert form re-runs
+   * cleanly.
    */
   async function insertSeedBatches(
     collection: ReturnType<Db["collection"]>,
@@ -188,8 +216,20 @@ export function createMongodbApplier(
     );
     for (let i = 0; i < documents.length; i += opts.batchSize) {
       const batch = documents.slice(i, i + opts.batchSize);
-      // deno-lint-ignore no-explicit-any
-      await collection.insertMany(batch as any);
+      const bulkOps = batch.map((doc) => ({
+        replaceOne: {
+          filter: { _id: (doc as Record<string, unknown>)._id } as Record<
+            string,
+            unknown
+          >,
+          replacement: doc,
+          upsert: true,
+        },
+      }));
+      if (bulkOps.length > 0) {
+        // deno-lint-ignore no-explicit-any
+        await collection.bulkWrite(bulkOps as any);
+      }
       reporter.add(batch.length);
     }
     reporter.done();
@@ -1631,8 +1671,20 @@ export function createMongodbApplier(
             );
             return out;
           });
-          // deno-lint-ignore no-explicit-any
-          await target.insertMany(mapped as any);
+          // Idempotent copy: the target `_id` is DETERMINISTIC (flowTargetId),
+          // so upsert-by-`_id` re-runs cleanly. A plain insertMany would throw
+          // E11000 on a retry after a crash left some pages already written.
+          const bulkOps = mapped.map((doc) => ({
+            replaceOne: {
+              filter: { _id: doc._id } as Record<string, unknown>,
+              replacement: doc,
+              upsert: true,
+            },
+          }));
+          if (bulkOps.length > 0) {
+            // deno-lint-ignore no-explicit-any
+            await target.bulkWrite(bulkOps as any);
+          }
           reporter.add(docs.length);
           lastId = docs[docs.length - 1]._id;
         }
@@ -1685,6 +1737,29 @@ export function createMongodbApplier(
       },
     },
     flow_to_scope: {
+      /**
+       * Route documents from a source into a scoped multi-collection.
+       *
+       * Conflict handling (`onConflict`) is keyed on the target `_id` — the
+       * primary key of the single physical scoped collection, so an `_id`
+       * match already implies a `(scope, type, _id)` conflict.
+       *
+       * `source: "consume"` deletes the source only for documents that
+       * ACTUALLY landed in the target (inserted or merged). With
+       * `onConflict: "skip"`, a skipped document never lands, so its source is
+       * preserved: the whole-collection drop / `deleteMany(where)` fast path is
+       * used ONLY when zero documents were skipped, otherwise the consume falls
+       * back to per-`_id` deletes of the landed docs and leaves skipped source
+       * docs in place.
+       *
+       * Writes use deterministic ids + upsert, so a retry never DUPLICATES an
+       * already-flowed document. Idempotent replay is only clean under
+       * `onConflict: "skip"` or `"merge"`, though: with the DEFAULT
+       * `onConflict: "error"`, a retry (or a C8 catch-up re-applying a
+       * `source: "keep"` flow) hits its own previously-written docs and throws a
+       * conflict — fail-loud, not a silent no-op. Prefer `skip`/`merge` for
+       * consolidations expected to be retried or caught up.
+       */
       apply: async (operation) => {
         const target = db.collection(operation.into.collection);
         const from = operation.from;
@@ -1751,6 +1826,13 @@ export function createMongodbApplier(
           const sourceColl = db.collection(src.coll);
           const baseWhere = (src.where ?? {}) as Record<string, unknown>;
 
+          // Source `_id`s whose target doc actually LANDED (inserted/merged).
+          // Only tracked for `onConflict: "skip"` — the only mode that can
+          // leave a source doc behind — so error/merge keep the whole-source
+          // fast path with no bookkeeping cost.
+          const landedSourceIds: unknown[] = [];
+          let anySkipped = false;
+
           // Batch by `_id` cursor. The source is consumed only AFTER the whole
           // loop, never mutated mid-iteration, so the cursor is stable. Each
           // page does ONE bulk existence read + ONE bulkWrite — replacing the
@@ -1780,7 +1862,15 @@ export function createMongodbApplier(
                 : (mapped._type ?? doc._type) as string;
               let id = mapped._id;
               if (id === undefined || id === null) {
-                id = `${toType}:${crypto.randomUUID().replace(/-/g, "")}`;
+                // DETERMINISTIC id (not a random UUID): a retry recomputes the
+                // same id, so an already-flowed doc is recognised by the
+                // existence read below instead of being silently duplicated.
+                id = flowScopeTargetId(
+                  toType,
+                  migration.id,
+                  src.coll,
+                  String(doc._id),
+                );
               }
               const outDoc = {
                 ...mapped,
@@ -1788,7 +1878,13 @@ export function createMongodbApplier(
                 _type: toType,
                 _scope: scope,
               };
-              return { id: id as string, scope, toType, outDoc };
+              return {
+                id: id as string,
+                sourceId: doc._id,
+                scope,
+                toType,
+                outDoc,
+              };
             });
 
             // One existence read for the whole page. `_id` is the primary key,
@@ -1810,51 +1906,48 @@ export function createMongodbApplier(
             );
 
             // Plan one write per id, collapsing duplicates WITHIN the page and
-            // resolving conflicts against already-persisted docs identically to
-            // the previous per-doc logic.
-            const planned = new Map<
-              string,
-              { type: "insert" | "replace"; doc: Record<string, unknown> }
-            >();
+            // resolving conflicts against already-persisted docs. Track which
+            // source docs land so a `consume` deletes ONLY those (skipped docs
+            // must survive in the source).
+            const planned = new Map<string, Record<string, unknown>>();
             for (const c of computed) {
-              const prior = planned.get(c.id);
-              const base = prior ? prior.doc : existingMap.get(c.id);
+              const base = planned.get(c.id) ?? existingMap.get(c.id);
               if (base) {
                 if (onConflict === "error") {
                   throw new Error(
                     `flow_to_scope: conflict on (${c.scope}, ${c.toType}, ${c.id})`,
                   );
                 }
-                if (onConflict === "skip") continue; // keep the first / existing
+                if (onConflict === "skip") {
+                  // Incoming doc dropped — it never lands, so its source stays.
+                  anySkipped = true;
+                  continue;
+                }
                 const merged = operation.merge
                   ? operation.merge(base, c.outDoc)
                   : { ...base, ...c.outDoc };
                 planned.set(c.id, {
-                  // Already in the DB → must replace; otherwise (within-page
-                  // merge of two new docs) it stays an insert.
-                  type: existingMap.has(c.id) ? "replace" : "insert",
-                  doc: {
-                    ...merged,
-                    _id: c.id,
-                    _type: c.toType,
-                    _scope: c.scope,
-                  },
+                  ...merged,
+                  _id: c.id,
+                  _type: c.toType,
+                  _scope: c.scope,
                 });
               } else {
-                planned.set(c.id, { type: "insert", doc: c.outDoc });
+                planned.set(c.id, c.outDoc);
               }
+              if (onConflict === "skip") landedSourceIds.push(c.sourceId);
             }
 
-            const bulkOps = [...planned.values()].map((entry) =>
-              entry.type === "insert"
-                ? { insertOne: { document: entry.doc } }
-                : {
-                  replaceOne: {
-                    filter: { _id: entry.doc._id } as Record<string, unknown>,
-                    replacement: entry.doc,
-                  },
-                }
-            );
+            // Every write is an idempotent upsert keyed on `_id` — a crashed
+            // run that already wrote some of this page is retryable without an
+            // E11000 on re-insert.
+            const bulkOps = [...planned.values()].map((doc) => ({
+              replaceOne: {
+                filter: { _id: doc._id } as Record<string, unknown>,
+                replacement: doc,
+                upsert: true,
+              },
+            }));
             if (bulkOps.length > 0) {
               // deno-lint-ignore no-explicit-any
               await target.bulkWrite(bulkOps as any);
@@ -1863,7 +1956,23 @@ export function createMongodbApplier(
           }
 
           if (operation.sourceDisposition === "consume") {
-            if (src.ctx.instanceName) {
+            if (onConflict === "skip" && anySkipped) {
+              // Some docs were skipped and never landed — a full drop /
+              // deleteMany(where) would destroy them. Delete ONLY the source
+              // docs that actually landed, leaving skipped docs in the source.
+              for (
+                let i = 0;
+                i < landedSourceIds.length;
+                i += opts.batchSize
+              ) {
+                const chunk = landedSourceIds.slice(i, i + opts.batchSize);
+                if (chunk.length > 0) {
+                  await sourceColl.deleteMany(
+                    { _id: { $in: chunk } } as Record<string, unknown>,
+                  );
+                }
+              }
+            } else if (src.ctx.instanceName) {
               // A whole multi-model instance is consolidated away — drop it
               // entirely, including the `_information`/`_migrations` bookkeeping
               // (the read `where` only excludes those from the flow, not the drop).
@@ -2082,9 +2191,11 @@ export function createMongodbApplier(
         await transformDocuments(
           operation.collectionName,
           filter,
-          operation.up as (
-            doc: Record<string, unknown>,
-          ) => Record<string, unknown>,
+          repinScopedDiscriminators(
+            operation.up as (
+              doc: Record<string, unknown>,
+            ) => Record<string, unknown>,
+          ),
           operation.type,
         );
       },
@@ -2101,9 +2212,11 @@ export function createMongodbApplier(
         await transformDocuments(
           operation.collectionName,
           filter,
-          operation.down as (
-            doc: Record<string, unknown>,
-          ) => Record<string, unknown>,
+          repinScopedDiscriminators(
+            operation.down as (
+              doc: Record<string, unknown>,
+            ) => Record<string, unknown>,
+          ),
         );
       },
     },
@@ -2316,10 +2429,13 @@ export function createMongodbApplier(
     if (applyError) throw applyError;
 
     // STEP 4: Record migration on ALL multi-model instances (even if not affected)
-    // This ensures complete tracking of which migrations each instance has seen
+    // This ensures complete tracking of which migrations each instance has seen.
+    // Use the direction's target schemas so a `down` on a migration that
+    // REMOVED a model still records against the model the parent reinstates.
     if (opts.currentMigrationId && targetSchemas.multiModels) {
       await recordMigrationOnAllMultiModelInstances(
         direction === "up" ? "applied" : "reverted",
+        targetSchemas.multiModels,
       );
     }
   }
@@ -2331,11 +2447,12 @@ export function createMongodbApplier(
    */
   async function recordMigrationOnAllMultiModelInstances(
     operation: "applied" | "reverted",
+    multiModels: SchemasDefinition["multiModels"],
   ): Promise<void> {
     if (!opts.currentMigrationId) return;
-    if (!migration.schemas.multiModels) return;
+    if (!multiModels) return;
 
-    const modelTypes = Object.keys(migration.schemas.multiModels);
+    const modelTypes = Object.keys(multiModels);
     const recordedKey = `${opts.currentMigrationId}:${operation}:all`;
 
     // Prevent duplicate recording

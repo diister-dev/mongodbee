@@ -205,16 +205,68 @@ export type MultiCollectionMigrations = {
 };
 
 /**
+ * How {@link discoverMultiCollectionInstances} treats a collection whose NAME
+ * matches the `<model>:` instance convention but which carries NO valid
+ * `_information` marker while still holding real documents — i.e. a collection
+ * we cannot positively identify as an instance of this model.
+ *
+ * - `"throw"` (default): fail LOUD. Collect every such collection and throw a
+ *   single error listing them. Destructive consumers (flow / drop / validator
+ *   `collMod`) must never silently act on a collection we can't verify — this
+ *   halts them before any data is flowed or dropped and tells the operator how
+ *   to proceed.
+ * - `"skip"`: exclude them from the result without throwing. For read-only
+ *   listing / detection paths that must not crash — they run no destructive op
+ *   on the result, so an unidentifiable collection is simply left unlisted.
+ * - `"include"`: legacy name-only behaviour — treat them as instances. Unsafe
+ *   to feed into a destructive op; kept only for callers that explicitly want
+ *   name-convention discovery regardless of metadata.
+ */
+export type UnverifiedPrefixMatchMode = "throw" | "skip" | "include";
+
+/**
+ * Options for {@link discoverMultiCollectionInstances}.
+ */
+export interface DiscoverInstancesOptions {
+  /**
+   * What to do with a `<model>:` prefix-named collection that has no valid
+   * `_information` marker but does contain data. Defaults to `"throw"`.
+   */
+  onUnverifiedPrefixMatch?: UnverifiedPrefixMatchMode;
+}
+
+/**
  * Discovers all instances of a specific multi-collection type
+ *
+ * An instance is recognised by its `_information` marker document
+ * (`_type === "_information"`, `collectionType === <model>`). Collections whose
+ * NAME follows the `<model>:<id>` convention but carry no such marker are
+ * ambiguous: they may be a real instance with corrupt/missing metadata, OR an
+ * unrelated collection that merely matches the naming convention. Because
+ * callers feed this list into destructive operations (flow-to-scope `consume`
+ * drops each instance; validator sync runs `collMod` over each), treating a
+ * name-only match as an instance would widen the blast radius to unrelated
+ * data. Rather than silently skip such a collection (hiding data) OR silently
+ * treat it as an instance (risking a destructive op on unrelated data), the
+ * default is to fail LOUD via {@link DiscoverInstancesOptions.onUnverifiedPrefixMatch}.
+ *
+ * Empty prefix-named collections carry no data at risk (a freshly-created or
+ * about-to-be-adopted instance, or a stray empty collection) and are always
+ * skipped silently so legitimate adoption / validator-sync paths keep working.
  *
  * @param db - Database instance
  * @param collectionType - The type/model of multi-collection to discover
+ * @param options - Discovery options (see {@link DiscoverInstancesOptions})
  * @returns Array of collection names
+ * @throws If `onUnverifiedPrefixMatch` is `"throw"` (the default) and one or
+ *   more non-empty prefix-named collections lack a valid `_information` marker.
  */
 export async function discoverMultiCollectionInstances(
   db: Db,
   collectionType: string,
+  options: DiscoverInstancesOptions = {},
 ): Promise<string[]> {
+  const onUnverified = options.onUnverifiedPrefixMatch ?? "throw";
   const session = getSessionFromDb(db);
 
   // List all collections in the database
@@ -222,11 +274,13 @@ export async function discoverMultiCollectionInstances(
   const collections = await db.listCollections().toArray();
   const instances = new Set<string>();
 
-  // Instances are named `<model>:<id>` by convention. Match by that name first
-  // so an instance is discovered even when its `_information` bookkeeping doc
-  // is missing or corrupt — otherwise a consolidation would SILENTLY skip its
-  // data. Fall back to the `_information.collectionType` metadata for instances
-  // whose name doesn't follow the prefix convention.
+  // Prefix-named collections that hold data but expose no valid `_information`
+  // marker — collected so we can report ALL of them in one loud error instead
+  // of blindly (and destructively) treating them as instances.
+  const unverified: string[] = [];
+
+  // Instances are named `<model>:<id>` by convention, but the NAME alone is not
+  // proof — the authoritative signal is the `_information` marker document.
   const namePrefix = `${collectionType}:`;
 
   for (const collInfo of collections) {
@@ -237,27 +291,81 @@ export async function discoverMultiCollectionInstances(
       continue;
     }
 
-    // Name-convention match (robust to missing/corrupt metadata).
-    if (collName.startsWith(namePrefix)) {
+    const isPrefixMatch = collName.startsWith(namePrefix);
+
+    // Read the `_information` marker. This is authoritative: a matching marker
+    // makes the collection an instance regardless of its name; a marker for a
+    // different type rules it out.
+    let info: MultiCollectionInfo | null = null;
+    try {
+      info = await db.collection(collName).findOne({
+        _type: MULTI_COLLECTION_INFO_TYPE,
+      }, { session }) as MultiCollectionInfo | null;
+    } catch (_error) {
+      // Unreadable collection. For a non-prefix collection it is simply not one
+      // of ours; for a prefix match we can't prove it safe, so fall through to
+      // the suspicious-handling below.
+      if (!isPrefixMatch) continue;
+    }
+
+    // Verified instance: marker names this exact model type.
+    if (info && info.collectionType === collectionType) {
       instances.add(collName);
       continue;
     }
 
-    try {
-      const collection = db.collection(collName);
-
-      // Check if this collection has multi-collection info
-      const info = await collection.findOne({
-        _type: MULTI_COLLECTION_INFO_TYPE,
-      }, { session }) as MultiCollectionInfo | null;
-
-      if (info && info.collectionType === collectionType) {
-        instances.add(collName); // Return the full collection name
-      }
-    } catch (_error) {
-      // Silently skip collections that can't be read
+    // Marker present but for a DIFFERENT model — belongs to another type, never
+    // ours (whether or not the name matches our prefix).
+    if (
+      info && typeof info.collectionType === "string" &&
+      info.collectionType.length > 0
+    ) {
       continue;
     }
+
+    // No matching marker and no prefix match → not an instance of this model.
+    if (!isPrefixMatch) continue;
+
+    // Prefix match but NO valid marker. An EMPTY collection carries no data at
+    // risk (freshly-created / soon-to-be-adopted instance, or a stray empty
+    // collection), so skip it silently to keep adoption / validator-sync paths
+    // working. Only a NON-EMPTY unidentifiable collection is suspicious — a
+    // destructive consumer would otherwise flow or drop its real data.
+    let hasData = false;
+    try {
+      const anyDoc = await db.collection(collName).findOne({}, {
+        projection: { _id: 1 },
+        session,
+      });
+      hasData = anyDoc !== null;
+    } catch (_error) {
+      // Can't prove it empty → treat as data-bearing (suspicious).
+      hasData = true;
+    }
+    if (!hasData) continue;
+
+    if (onUnverified === "include") {
+      instances.add(collName);
+    } else if (onUnverified === "throw") {
+      unverified.push(collName);
+    }
+    // "skip": excluded from `instances`, no throw.
+  }
+
+  if (onUnverified === "throw" && unverified.length > 0) {
+    unverified.sort((a, b) => a.localeCompare(b));
+    throw new Error(
+      `discoverMultiCollectionInstances("${collectionType}"): ` +
+        `${unverified.length} collection(s) match the "${namePrefix}*" ` +
+        `instance naming convention but have no valid ` +
+        `"${MULTI_COLLECTION_INFO_TYPE}" marker and contain data: ` +
+        `${unverified.join(", ")}. Refusing to treat them as instances — a ` +
+        `destructive migration step (flow-to-scope consume, drop, or ` +
+        `validator sync) could otherwise flow or drop unrelated data. To ` +
+        `proceed, either register/repair each collection as an instance (see ` +
+        `markAsMultiCollection) or rename/remove it so it no longer matches ` +
+        `the "${namePrefix}*" convention.`,
+    );
   }
 
   return [...instances].sort((a, b) => a.localeCompare(b));

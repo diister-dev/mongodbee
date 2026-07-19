@@ -133,7 +133,7 @@ Deno.test("paginate: limit + sort", async () => {
 });
 
 Deno.test("paginate: afterId pagination is scope-bounded", async () => {
-  await withDatabase("smc-paginate-after", async (db) => {
+  await withDatabase("smc-agg-paginate-after", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);
     const expoB = catalog.scope(EXPO_B);

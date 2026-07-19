@@ -242,6 +242,142 @@ Deno.test(".scope(id) cross-scope isolation: insert into A, never visible from B
   });
 });
 
+// [N1] The scope value stored on inserts must match what the view filters on.
+// If the scope schema TRANSFORMS (trim/lowercase/…), `.scope(id)` must resolve
+// to the parse OUTPUT — otherwise the view filters on the untransformed input
+// and never sees the very documents it inserted.
+Deno.test(".scope(id) applies the scope schema transform so inserts stay visible (N1)", async () => {
+  await withDatabase("smc-scope-transform", async (db) => {
+    const catalog = await scopedMultiCollection(db, "catalog", {
+      scope: v.pipe(v.string(), v.trim(), v.toLowerCase()),
+      types: { artwork: { title: v.string() } },
+    });
+
+    // Mixed case + surrounding whitespace — the schema normalizes it.
+    const expo = catalog.scope("  EXPO-Alpha  ");
+    const id = await expo.insertOne("artwork", { title: "Mona Lisa" });
+
+    // The stored _scope is the TRANSFORMED value.
+    const raw = await db.collection("catalog").findOne({ _id: id as never });
+    assertExists(raw);
+    assertEquals(raw._scope, "expo-alpha");
+
+    // The regression: the SAME view must see the doc it just inserted.
+    const found = await expo.find("artwork");
+    assertEquals(found.length, 1);
+    assertEquals(found[0].title, "Mona Lisa");
+
+    // A differently-cased/spaced id resolves to the same physical scope.
+    const expo2 = catalog.scope("expo-alpha");
+    assertEquals((await expo2.find("artwork")).length, 1);
+  });
+});
+
+// [N2] Scoped updates must run Valibot validation on the $set paths (as
+// multiCollection.updateOne does) rather than deferring to Mongo's opaque
+// "Document failed validation". A `v.check()` predicate is invisible to the
+// generated Mongo JSON-Schema validator, so without the fix an invalid update
+// would silently persist.
+Deno.test(".scope(id).updateOne validates $set values with Valibot (N2)", async () => {
+  await withDatabase("smc-update-validate", async (db) => {
+    const catalog = await scopedMultiCollection(db, "catalog", {
+      scope: refId("exposition"),
+      types: {
+        item: {
+          code: v.pipe(
+            v.string(),
+            v.check((s: string) => !s.includes(" "), "no spaces allowed"),
+          ),
+          qty: v.number(),
+        },
+      },
+    });
+    const expo = catalog.scope(EXPO_A);
+    const id = await expo.insertOne("item", { code: "abc", qty: 1 });
+
+    // Violates the valibot check (Mongo's validator can't see it) → must reject.
+    await assertRejects(() =>
+      expo.updateOne("item", id, { code: "has space" })
+    );
+    // The invalid value must NOT have been written.
+    assertEquals((await expo.getById("item", id)).code, "abc");
+
+    // A plain type mismatch is likewise caught before hitting Mongo.
+    await assertRejects(
+      // deno-lint-ignore no-explicit-any
+      () => expo.updateOne("item", id, { qty: "twelve" as any }),
+    );
+
+    // Reserved fields stay rejected on update.
+    await assertRejects(
+      // deno-lint-ignore no-explicit-any
+      () => expo.updateOne("item", id, { _scope: EXPO_B } as any),
+      Error,
+      "_scope",
+    );
+
+    // A valid update still goes through.
+    assertEquals(await expo.updateOne("item", id, { code: "xyz", qty: 2 }), 1);
+    const after = await expo.getById("item", id);
+    assertEquals(after.code, "xyz");
+    assertEquals(after.qty, 2);
+  });
+});
+
+// [N2] updateMany validates each batch entry the same way.
+Deno.test(".scope(id).updateMany validates $set values with Valibot (N2)", async () => {
+  await withDatabase("smc-update-many-validate", async (db) => {
+    const catalog = await scopedMultiCollection(db, "catalog", {
+      scope: refId("exposition"),
+      types: {
+        item: {
+          code: v.pipe(
+            v.string(),
+            v.check((s: string) => !s.includes(" "), "no spaces allowed"),
+          ),
+        },
+      },
+    });
+    const expo = catalog.scope(EXPO_A);
+    const id = await expo.insertOne("item", { code: "abc" });
+
+    await assertRejects(() =>
+      expo.updateMany({ item: { [id]: { code: "has space" } } })
+    );
+    assertEquals((await expo.getById("item", id)).code, "abc");
+  });
+});
+
+// [N8] The unscoped-disabled Proxy must tolerate inspection / thenable probes
+// (then / toJSON / any symbol) so `console.log(catalog)` and accidental
+// `await`s don't explode — while still guarding the real view methods.
+Deno.test(".unscoped (disabled) tolerates inspection and thenable probes (N8)", async () => {
+  await withDatabase("smc-unscoped-probe", async (db) => {
+    const catalog = await makeCatalog(db); // allowUnscoped not set → disabled
+    const unscoped = catalog.unscoped;
+
+    // Thenable / serialization / inspection probes resolve to undefined.
+    assertEquals((unscoped as { then?: unknown }).then, undefined);
+    assertEquals((unscoped as { toJSON?: unknown }).toJSON, undefined);
+    assertEquals(
+      (unscoped as Record<symbol, unknown>)[Symbol.toStringTag],
+      undefined,
+    );
+
+    // console.log of the parent object must not throw.
+    console.log(catalog);
+    // Awaiting the proxy resolves to itself (then === undefined) — no throw.
+    assertEquals(await unscoped, unscoped);
+
+    // Real view methods are still guarded.
+    assertRejectsLike(
+      // deno-lint-ignore no-explicit-any
+      () => (unscoped as any).find("artwork"),
+      "allowUnscoped",
+    );
+  });
+});
+
 // Helper: assertRejects for sync-throwing functions (scope() throws sync)
 function assertRejectsLike(
   fn: () => unknown,
