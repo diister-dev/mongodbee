@@ -1,9 +1,8 @@
 import * as v from "../src/schema.ts";
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals } from "@std/assert";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { withDatabase } from "./+shared.ts";
-import { ObjectId } from "mongodb";
 import { defineModel } from "../src/multi-collection-model.ts";
 
 // Simple test schemas
@@ -112,7 +111,7 @@ Deno.test("Session Concurrent: Regular collection operations inside and outside 
     );
 
     // Wait for transaction to complete
-    const sessionResults = await sessionUpdatePromise;
+    await sessionUpdatePromise;
 
     // After transaction, check final state
     const finalUser = await users.getById(userId);
@@ -201,7 +200,7 @@ Deno.test("Session Concurrent: MultiCollection operations inside and outside ses
     });
 
     // Wait for transaction to complete
-    const sessionResults = await sessionUpdatePromise;
+    await sessionUpdatePromise;
 
     // After transaction, check final state
     const finalProduct = await store.findOne("product", { _id: productId });
@@ -294,7 +293,7 @@ Deno.test("Session Concurrent: Mixed collection types with concurrent operations
     });
 
     // Wait for transaction to complete
-    const sessionResults = await sessionUpdatePromise;
+    await sessionUpdatePromise;
 
     // After transaction, check final state
     const finalUser = await users.getById(userId);

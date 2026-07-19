@@ -157,6 +157,6 @@ export async function closeAllWatchers(db: m.Db): Promise<void> {
     await watchers.changeStream.close();
     watchingMap.delete(db);
     // Give the change stream time to fully close and release resources
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
 }

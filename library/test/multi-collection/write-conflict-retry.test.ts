@@ -51,7 +51,11 @@ Deno.test("Write Conflict Retry: Sequential operations with artificial conflicts
 
     const finalCounter = await store.findOne("counter", { _id: counterId });
     assert(finalCounter !== null);
-    assertEquals(finalCounter.value, 10, "All sequential updates should succeed");
+    assertEquals(
+      finalCounter.value,
+      10,
+      "All sequential updates should succeed",
+    );
   });
 });
 
@@ -64,8 +68,6 @@ Deno.test("Write Conflict Retry: Verify retry happens on actual conflicts", asyn
       value: 0,
       lastUpdated: new Date().toISOString(),
     });
-
-    let retryCount = 0;
 
     // We can't easily force a write conflict, but we can verify the retry logic
     // is in place by checking that updates complete successfully
@@ -163,7 +165,7 @@ Deno.test("Write Conflict Retry: Rapid updates with staggered timing", async (t)
     console.log(`Final stock after rapid updates: ${finalProduct.stock}`);
     assert(
       [75, 80, 85, 90, 95].includes(finalProduct.stock),
-      "Final stock should be one of the updated values"
+      "Final stock should be one of the updated values",
     );
   });
 });
@@ -228,7 +230,7 @@ Deno.test("Write Conflict Retry: Verify no errors on simple updates", async (t) 
     // Simple sequential updates should never fail with retry logic
     for (let i = 0; i < 20; i++) {
       await store.updateOne("product", productId, {
-        stock: 100 - i - 1,  // -1 ensures each update changes the value
+        stock: 100 - i - 1, // -1 ensures each update changes the value
       });
     }
 

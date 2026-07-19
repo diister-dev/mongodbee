@@ -6,8 +6,15 @@
 
 import { blue, bold, dim, green, red, yellow } from "@std/fmt/colors";
 import type { MigrationDefinition } from "../../types.ts";
-import { createEmptyDatabaseState, type SimulationDatabaseState } from "../../types.ts";
-import { createSimulationValidator, type SimulationPowerLevel, type SimulationValidatorOptions } from "../../validators/simulation.ts";
+import {
+  createEmptyDatabaseState,
+  type SimulationDatabaseState,
+} from "../../types.ts";
+import {
+  createSimulationValidator,
+  type SimulationPowerLevel,
+  type SimulationValidatorOptions,
+} from "../../validators/simulation.ts";
 
 export interface MigrationValidationResult {
   migration: MigrationDefinition;
@@ -47,7 +54,7 @@ export interface ValidateMigrationsOptions {
 
 /**
  * Validates all migrations with simulation
- * 
+ *
  * Uses state propagation with configurable retention ratio to avoid O(n²) complexity.
  * By default, keeps 50% of the previous state and generates 50% fresh mock data
  * to balance performance with edge case coverage.
@@ -72,10 +79,20 @@ export async function validateMigrationsWithSimulation(
     ? migrations.slice(0, -lastN)
     : [];
 
-  const modeLabel = powerLevel === "quick" ? "quick" : powerLevel === "hard" ? "hard" : "normal";
-  const lastNLabel = lastN && lastN > 0 ? ` (last ${Math.min(lastN, migrations.length)})` : "";
+  const modeLabel = powerLevel === "quick"
+    ? "quick"
+    : powerLevel === "hard"
+    ? "hard"
+    : "normal";
+  const lastNLabel = lastN && lastN > 0
+    ? ` (last ${Math.min(lastN, migrations.length)})`
+    : "";
 
-  console.log(bold(`🧪 Validating migrations with simulation [${modeLabel}]${lastNLabel}...`));
+  console.log(
+    bold(
+      `🧪 Validating migrations with simulation [${modeLabel}]${lastNLabel}...`,
+    ),
+  );
   console.log();
 
   const stateRetentionRatio = options.stateRetentionRatio ?? 0.5;
@@ -95,7 +112,11 @@ export async function validateMigrationsWithSimulation(
   // Track current state to propagate between migrations (O(n) instead of O(n²))
   let currentState: SimulationDatabaseState = createEmptyDatabaseState();
 
-  // Fast-forward through skipped migrations (just state propagation, minimal output)
+  // Fast-forward through skipped migrations. We still run the full simulation
+  // (it is needed to propagate state), so its verdict is authoritative: a
+  // broken migration outside the --last N window is still broken and must NOT
+  // be hidden behind a green "all valid" banner. Only the *reporting detail*
+  // is reduced for skipped migrations, never the correctness gate.
   if (skippedMigrations.length > 0) {
     console.log(dim(`  Skipping ${skippedMigrations.length} migration(s)...`));
     for (const migration of skippedMigrations) {
@@ -104,24 +125,56 @@ export async function validateMigrationsWithSimulation(
           migration,
           currentState,
         );
-        if (validationResult.success && validationResult.data?.stateAfterMigration) {
-          currentState = simulationValidator.prepareStateForNextMigration(
-            validationResult.data.stateAfterMigration as SimulationDatabaseState,
-            migration.schemas,
+        if (validationResult.success) {
+          if (validationResult.data?.stateAfterMigration) {
+            currentState = simulationValidator.prepareStateForNextMigration(
+              validationResult.data
+                .stateAfterMigration as SimulationDatabaseState,
+              migration.schemas,
+            );
+          }
+          results.push({
+            migration,
+            valid: true,
+            errors: [],
+            warnings: ["Skipped (--last N mode)"],
+          });
+        } else {
+          allValid = false;
+          console.log(
+            red(
+              `  ✗ ${migration.name} ${
+                dim(`(${migration.id})`)
+              } is invalid (in skipped --last N range)`,
+            ),
           );
+          for (const error of validationResult.errors) {
+            console.log(red(`      ${error}`));
+          }
+          results.push({
+            migration,
+            valid: false,
+            errors: validationResult.errors,
+            warnings: validationResult.warnings,
+          });
         }
+      } catch (error) {
+        allValid = false;
+        const errorMessage = error instanceof Error
+          ? error.message
+          : String(error);
+        console.log(
+          red(
+            `  ✗ ${migration.name} ${
+              dim(`(${migration.id})`)
+            } validation error (in skipped --last N range): ${errorMessage}`,
+          ),
+        );
         results.push({
           migration,
-          valid: true,
-          errors: [],
-          warnings: ["Skipped (--last N mode)"],
-        });
-      } catch {
-        results.push({
-          migration,
-          valid: true,
-          errors: [],
-          warnings: ["Skipped (--last N mode)"],
+          valid: false,
+          errors: [errorMessage],
+          warnings: [],
         });
       }
     }
@@ -153,9 +206,9 @@ export async function validateMigrationsWithSimulation(
 
         console.log(
           green(
-            `    ✓ Valid (${operationCount} operation${operationCount !== 1 ? "s" : ""}, ${
-              isReversible ? "reversible" : "irreversible"
-            })`,
+            `    ✓ Valid (${operationCount} operation${
+              operationCount !== 1 ? "s" : ""
+            }, ${isReversible ? "reversible" : "irreversible"})`,
           ),
         );
 
@@ -164,11 +217,12 @@ export async function validateMigrationsWithSimulation(
             console.log(yellow(`      ⚠ ${warning}`));
           }
         }
-        
+
         // Update state for next migration: apply retention ratio (keep X%, generate fresh X%)
         if (validationResult.data?.stateAfterMigration) {
           currentState = simulationValidator.prepareStateForNextMigration(
-            validationResult.data.stateAfterMigration as SimulationDatabaseState,
+            validationResult.data
+              .stateAfterMigration as SimulationDatabaseState,
             migration.schemas,
           );
         }
@@ -220,7 +274,9 @@ export async function validateMigrationsWithSimulation(
 
   if (!allValid) {
     console.log(
-      red(bold("✗ Some migrations have errors. Please fix them before applying.")),
+      red(
+        bold("✗ Some migrations have errors. Please fix them before applying."),
+      ),
     );
     throw new Error("Migration validation failed");
   }

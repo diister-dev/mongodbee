@@ -1,4 +1,3 @@
-import * as v from "../src/schema.ts";
 import { removeField } from "../src/sanitizer.ts";
 import { assert, assertEquals } from "@std/assert";
 
@@ -18,7 +17,7 @@ class MockCollection {
     return { insertedId: "mock-id" };
   }
 
-  async replaceOne(filter: any, replacement: any) {
+  async replaceOne(_filter: any, replacement: any) {
     this.lastDoc = this.sanitize(replacement);
     return { modifiedCount: 1 };
   }
@@ -217,8 +216,6 @@ Deno.test("Integration: Update operations maintain consistency", async () => {
     phone: "123-456-7890",
     bio: "Software developer",
   });
-
-  const initialDoc = collection.getLastDocument();
 
   // Update with mixed undefined and removeField()
   await collection.replaceOne({}, {

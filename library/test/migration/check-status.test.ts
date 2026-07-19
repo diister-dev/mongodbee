@@ -335,7 +335,10 @@ Deno.test("checkMigrationStatus - index validation - reports index issues", asyn
     const firstIssue = status.indexes.issues[0];
     assertEquals(typeof firstIssue.collection, "string");
     assertEquals(typeof firstIssue.path, "string");
-    assertEquals(["missing", "outdated", "orphaned"].includes(firstIssue.type), true);
+    assertEquals(
+      ["missing", "outdated", "orphaned"].includes(firstIssue.type),
+      true,
+    );
     assertEquals(typeof firstIssue.description, "string");
   }
 });
@@ -376,4 +379,3 @@ Deno.test("checkMigrationStatus - index validation - includes detailed issues in
     assertEquals(hasIndexWarnings, true);
   }
 });
-

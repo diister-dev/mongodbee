@@ -205,8 +205,16 @@ Deno.test("MultiCollection: Union - switch between variants", async (t) => {
         entity: {
           name: v.string(),
           data: v.union([
-            v.object({ type: v.literal("typeA"), a: v.string(), commonField: v.string() }),
-            v.object({ type: v.literal("typeB"), b: v.number(), commonField: v.string() }),
+            v.object({
+              type: v.literal("typeA"),
+              a: v.string(),
+              commonField: v.string(),
+            }),
+            v.object({
+              type: v.literal("typeB"),
+              b: v.number(),
+              commonField: v.string(),
+            }),
           ]),
         },
       },
@@ -338,11 +346,20 @@ Deno.test("MultiCollection: Union with different structures - complete replaceme
     const updatedPayment = await coll.findOne("payment", { _id: paymentId });
     assert(updatedPayment !== null);
     assertEquals(updatedPayment.method.type, "bank_transfer");
-    assertEquals((updatedPayment.method as { iban: string }).iban, "FR7630001007941234567890185");
+    assertEquals(
+      (updatedPayment.method as { iban: string }).iban,
+      "FR7630001007941234567890185",
+    );
 
     // Card fields should NOT exist
-    assertEquals((updatedPayment.method as { cardNumber?: string }).cardNumber, undefined);
-    assertEquals((updatedPayment.method as { expiry?: string }).expiry, undefined);
+    assertEquals(
+      (updatedPayment.method as { cardNumber?: string }).cardNumber,
+      undefined,
+    );
+    assertEquals(
+      (updatedPayment.method as { expiry?: string }).expiry,
+      undefined,
+    );
     assertEquals((updatedPayment.method as { cvv?: string }).cvv, undefined);
   });
 });

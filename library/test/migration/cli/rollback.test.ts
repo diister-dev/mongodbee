@@ -221,10 +221,13 @@ Deno.test("rollback - handles migration with operations", async () => {
       content = `import * as v from "valibot";
       ${content}`;
 
-      content = content.replace(`collections: {`, `collections: {
+      content = content.replace(
+        `collections: {`,
+        `collections: {
         users: {
           name: v.string()
-        },`);
+        },`,
+      );
 
       content = content.replace(
         "migrate(migration) {",
@@ -312,7 +315,11 @@ Deno.test("rollback - uses custom config path when provided", async () => {
       await generateCommand({ name: "test", cwd: tempDir });
 
       // Apply with custom config
-      await migrateCommand({ configPath: "./custom.config.ts", cwd: tempDir, force: true });
+      await migrateCommand({
+        configPath: "./custom.config.ts",
+        cwd: tempDir,
+        force: true,
+      });
 
       let appliedIds = await getAppliedMigrationIds(db);
       assertEquals(appliedIds.length, 1);

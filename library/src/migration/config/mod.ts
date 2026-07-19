@@ -40,10 +40,7 @@ export type {
 } from "./types.ts";
 
 // Re-export schemas for external validation
-export {
-  DEFAULT_CONFIG,
-  MigrationSystemConfigSchema,
-} from "./types.ts";
+export { DEFAULT_CONFIG, MigrationSystemConfigSchema } from "./types.ts";
 
 // Re-export all utility functions
 export {

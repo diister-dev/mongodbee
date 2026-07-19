@@ -471,12 +471,12 @@ Deno.test("Paginate with custom sort and afterId", async (t) => {
     // Insert test data with varying createdAt values (not in _id order)
     // We deliberately insert in a different order than the sort order
     const testData = [
-      { name: "Item E", createdAt: 500, priority: 1 },  // Should be 1st with createdAt desc
-      { name: "Item A", createdAt: 100, priority: 5 },  // Should be 5th with createdAt desc
-      { name: "Item C", createdAt: 300, priority: 3 },  // Should be 3rd with createdAt desc
-      { name: "Item B", createdAt: 200, priority: 4 },  // Should be 4th with createdAt desc
-      { name: "Item D", createdAt: 400, priority: 2 },  // Should be 2nd with createdAt desc
-      { name: "Item F", createdAt: 600, priority: 0 },  // Should be 0th with createdAt desc (first)
+      { name: "Item E", createdAt: 500, priority: 1 }, // Should be 1st with createdAt desc
+      { name: "Item A", createdAt: 100, priority: 5 }, // Should be 5th with createdAt desc
+      { name: "Item C", createdAt: 300, priority: 3 }, // Should be 3rd with createdAt desc
+      { name: "Item B", createdAt: 200, priority: 4 }, // Should be 4th with createdAt desc
+      { name: "Item D", createdAt: 400, priority: 2 }, // Should be 2nd with createdAt desc
+      { name: "Item F", createdAt: 600, priority: 0 }, // Should be 0th with createdAt desc (first)
     ];
 
     // Insert one by one to ensure different _id timestamps
@@ -516,10 +516,15 @@ Deno.test("Paginate with custom sort and afterId", async (t) => {
     assertEquals(secondPage.data[2].createdAt, 100); // Item A
 
     // Verify no overlap between pages
-    const firstPageIds = new Set(firstPage.data.map((item) => item._id.toString()));
+    const firstPageIds = new Set(
+      firstPage.data.map((item) => item._id.toString()),
+    );
     for (const item of secondPage.data) {
-      assertEquals(firstPageIds.has(item._id.toString()), false,
-        "Second page should not contain items from first page");
+      assertEquals(
+        firstPageIds.has(item._id.toString()),
+        false,
+        "Second page should not contain items from first page",
+      );
     }
   });
 });
@@ -574,8 +579,8 @@ Deno.test("Paginate with custom sort and beforeId", async (t) => {
     // Original order: VeryHigh(100), High(90), MediumHigh(70), [Medium(50)], Low(10), VeryLow(5)
     // Before Medium(50): VeryHigh, High, MediumHigh - returned in original order
     assertEquals(beforePage.data[0].score, 100); // VeryHigh
-    assertEquals(beforePage.data[1].score, 90);  // High
-    assertEquals(beforePage.data[2].score, 70);  // MediumHigh (closest to anchor)
+    assertEquals(beforePage.data[1].score, 90); // High
+    assertEquals(beforePage.data[2].score, 70); // MediumHigh (closest to anchor)
   });
 });
 
@@ -679,16 +684,22 @@ Deno.test("Paginate with duplicate sort values", async (t) => {
     // Verify no overlap between pages
     const secondPageNames = secondPage.data.map((item) => item.name);
     for (const name of secondPageNames) {
-      assertEquals(firstPageNames.includes(name), false,
-        `Item "${name}" appears in both pages - duplicate detected`);
+      assertEquals(
+        firstPageNames.includes(name),
+        false,
+        `Item "${name}" appears in both pages - duplicate detected`,
+      );
     }
 
     // Verify all 6 items are covered
     const allNames = [...firstPageNames, ...secondPageNames];
     assertEquals(allNames.length, 6);
     for (let i = 1; i <= 6; i++) {
-      assertEquals(allNames.includes(`Item ${i}`), true,
-        `Item ${i} is missing from pagination results`);
+      assertEquals(
+        allNames.includes(`Item ${i}`),
+        true,
+        `Item ${i} is missing from pagination results`,
+      );
     }
   });
 });
@@ -739,8 +750,13 @@ Deno.test("Paginate with duplicate sort values and beforeId", async (t) => {
     const expectedNames = allItems.data.slice(0, 3).map((item) => item.name);
 
     for (let i = 0; i < 3; i++) {
-      assertEquals(beforeNames[i], expectedNames[i],
-        `Position ${i}: expected "${expectedNames[i]}" but got "${beforeNames[i]}"`);
+      assertEquals(
+        beforeNames[i],
+        expectedNames[i],
+        `Position ${i}: expected "${expectedNames[i]}" but got "${
+          beforeNames[i]
+        }"`,
+      );
     }
   });
 });
@@ -778,7 +794,9 @@ Deno.test("Paginate with _id descending sort", async (t) => {
     assertEquals(firstPage.data[3].name, "Item 7");
 
     // Collect first page IDs
-    const firstPageIds = new Set(firstPage.data.map((item) => item._id.toString()));
+    const firstPageIds = new Set(
+      firstPage.data.map((item) => item._id.toString()),
+    );
 
     // Second page
     const secondPage = await items.paginate({}, {
@@ -797,8 +815,11 @@ Deno.test("Paginate with _id descending sort", async (t) => {
 
     // Verify no duplicates
     for (const item of secondPage.data) {
-      assertEquals(firstPageIds.has(item._id.toString()), false,
-        `Duplicate found: ${item.name} appears in both pages`);
+      assertEquals(
+        firstPageIds.has(item._id.toString()),
+        false,
+        `Duplicate found: ${item.name} appears in both pages`,
+      );
     }
 
     // Third page
@@ -815,12 +836,20 @@ Deno.test("Paginate with _id descending sort", async (t) => {
     assertEquals(thirdPage.data[1].name, "Item 1");
 
     // Verify no duplicates with previous pages
-    const secondPageIds = new Set(secondPage.data.map((item) => item._id.toString()));
+    const secondPageIds = new Set(
+      secondPage.data.map((item) => item._id.toString()),
+    );
     for (const item of thirdPage.data) {
-      assertEquals(firstPageIds.has(item._id.toString()), false,
-        `Duplicate found: ${item.name} appears in first page`);
-      assertEquals(secondPageIds.has(item._id.toString()), false,
-        `Duplicate found: ${item.name} appears in second page`);
+      assertEquals(
+        firstPageIds.has(item._id.toString()),
+        false,
+        `Duplicate found: ${item.name} appears in first page`,
+      );
+      assertEquals(
+        secondPageIds.has(item._id.toString()),
+        false,
+        `Duplicate found: ${item.name} appears in second page`,
+      );
     }
   });
 });
@@ -956,7 +985,11 @@ Deno.test("Paginate accumulation with _id descending - no duplicates across 5+ p
     }
 
     // Verify we got all 25 items with no duplicates
-    assertEquals(allCollectedIds.length, 25, `Expected 25 items but got ${allCollectedIds.length}`);
+    assertEquals(
+      allCollectedIds.length,
+      25,
+      `Expected 25 items but got ${allCollectedIds.length}`,
+    );
 
     // Verify order is correct (descending)
     assertEquals(allCollectedNames[0], "Item 25");
@@ -964,7 +997,11 @@ Deno.test("Paginate accumulation with _id descending - no duplicates across 5+ p
 
     // Verify no duplicates using Set
     const uniqueIds = new Set(allCollectedIds);
-    assertEquals(uniqueIds.size, 25, "There are duplicate IDs in the accumulated results");
+    assertEquals(
+      uniqueIds.size,
+      25,
+      "There are duplicate IDs in the accumulated results",
+    );
   });
 });
 

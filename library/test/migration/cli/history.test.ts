@@ -190,7 +190,11 @@ Deno.test("history - uses custom config path when provided", async () => {
       await generateCommand({ name: "test", cwd: tempDir });
 
       // Apply with custom config
-      await migrateCommand({ configPath: "./custom.config.ts", cwd: tempDir, force: true });
+      await migrateCommand({
+        configPath: "./custom.config.ts",
+        cwd: tempDir,
+        force: true,
+      });
 
       // Run history with custom config
       await historyCommand({ configPath: "./custom.config.ts", cwd: tempDir });

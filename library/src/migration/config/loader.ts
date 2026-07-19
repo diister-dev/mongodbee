@@ -442,7 +442,10 @@ export async function loadConfigOld(
     for (const configFilePath of discoverConfigFiles()) {
       try {
         await fs.stat(configFilePath);
-        fileConfig = await loadFromFile(configFilePath) as Record<string, unknown>;
+        fileConfig = await loadFromFile(configFilePath) as Record<
+          string,
+          unknown
+        >;
         configSource = configFilePath;
         break;
       } catch {

@@ -3,7 +3,7 @@ import type * as v from "./schema.ts";
 type UnknownSchema = v.BaseSchema<any, any, any>;
 type UnknownValidation = v.BaseValidation<any, any, any>;
 
-function buildPipelineResult<T>(pipe: any) {
+function buildPipelineResult(pipe: any) {
   return pipe.filter((v: any) => v.kind == "validation" || v.type == "literal")
     .map(constructorToValidator)
     .filter(Boolean)
@@ -47,7 +47,13 @@ function constructorToValidator(
 
   if (kind == "schema") {
     switch (type) {
-      case "object": {
+      // Loose/strict objects share the object translation: MongoDB's
+      // $jsonSchema allows additional properties by DEFAULT, which is exactly
+      // valibot's looseObject semantics (known entries validated, unknown
+      // keys pass through). strictObject adds additionalProperties: false.
+      case "object":
+      case "loose_object":
+      case "strict_object": {
         const s = schema as v.ObjectSchema<any, any>;
 
         // Required fields
@@ -101,10 +107,14 @@ function constructorToValidator(
           }
         }
 
+        const strict = type === "strict_object"
+          ? { additionalProperties: false }
+          : {};
         if (required.length == 0) {
           return {
             bsonType: "object",
             properties,
+            ...strict,
           };
         }
 
@@ -112,6 +122,7 @@ function constructorToValidator(
           bsonType: "object",
           required,
           properties,
+          ...strict,
         };
       }
       // DEPRECATED: Use object instead
@@ -433,6 +444,23 @@ function constructorToValidator(
         const s = schema as v.MaxValueAction<any, any, any>;
         return {
           maximum: s.requirement,
+        };
+      }
+      case "gt_value": {
+        // MongoDB $jsonSchema follows JSON Schema draft-4, where
+        // exclusiveMinimum is a BOOLEAN modifier of `minimum` (not a number).
+        const s = schema as v.GtValueAction<any, any, any>;
+        return {
+          minimum: s.requirement,
+          exclusiveMinimum: true,
+        };
+      }
+      case "lt_value": {
+        // Draft-4: exclusiveMaximum is a boolean modifier of `maximum`.
+        const s = schema as v.LtValueAction<any, any, any>;
+        return {
+          maximum: s.requirement,
+          exclusiveMaximum: true,
         };
       }
       case "min_length": {

@@ -115,6 +115,7 @@ ${yellow("MIGRATE OPTIONS:")}
   --force           Skip all confirmations (use with caution!)
   --auto-sync       Automatically catch up orphaned multi-model instances
   --verbose         Show detailed migration information
+  --progress        Force the live progress line (auto-detected on a TTY; use --no-progress to disable)
   -m, --mode        Simulation mode: quick, normal, hard (default: normal)
   -l, --last        Only validate the last N migrations
 
@@ -136,7 +137,22 @@ function showVersion(): void {
  */
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2), {
-    boolean: ["version", "dry-run", "force", "auto-sync", "verbose", "help", "check-indexes", "validate"],
+    boolean: [
+      "version",
+      "dry-run",
+      "force",
+      "auto-sync",
+      "verbose",
+      "help",
+      "check-indexes",
+      "validate",
+      "progress",
+    ],
+    // `progress` stays tri-state: `--progress` forces the live line on,
+    // `--no-progress` forces it off, and omitting it leaves `undefined` so the
+    // command falls back to TTY auto-detection.
+    negatable: ["progress"],
+    default: { progress: undefined },
     string: ["config", "env", "name", "mode"],
     alias: {
       v: "version",
@@ -181,7 +197,8 @@ async function main(): Promise<void> {
 }
 
 // Run main function if this is the main module
-const isMain = import.meta.url === `file://${process.argv[1]?.replace(/\\/g, "/")}` ||
+const isMain =
+  import.meta.url === `file://${process.argv[1]?.replace(/\\/g, "/")}` ||
   (import.meta as any).main === true;
 
 if (isMain) {

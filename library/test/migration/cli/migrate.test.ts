@@ -12,7 +12,7 @@
  * @module
  */
 
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { MongoClient } from "../../../src/mongodb.ts";
 import { initCommand } from "../../../src/migration/cli/commands/init.ts";
 import { generateCommand } from "../../../src/migration/cli/commands/generate.ts";
@@ -204,11 +204,14 @@ Deno.test("migrate - handles migrations with actual operations", async () => {
       assert(content !== null);
 
       content = `import * as v from "valibot";\n` + content;
-      content = content.replace(`collections: {`, `collections: {
+      content = content.replace(
+        `collections: {`,
+        `collections: {
         users: {
           name: v.string(),
         }
-      `);
+      `,
+      );
       // Add a createCollection operation
       content = content.replace(
         "migrate(migration) {",
@@ -302,13 +305,38 @@ Deno.test("migrate - uses custom config path when provided", async () => {
       await generateCommand({ name: "test", cwd: tempDir });
 
       // Apply with custom config path
-      await migrateCommand({ configPath: "./custom.config.ts", cwd: tempDir, force: true });
+      await migrateCommand({
+        configPath: "./custom.config.ts",
+        cwd: tempDir,
+        force: true,
+      });
 
       // Check migration was applied
       const appliedIds = await getAppliedMigrationIds(db);
       assertEquals(appliedIds.length, 1);
     });
   });
+});
+
+// Regression for C6: the documented `--progress` migrate option must be wired
+// into the CLI (registered in parseArgs and surfaced in help). Run the real CLI
+// entrypoint and assert the flag shows up in the migrate options.
+Deno.test("migrate - `--progress` flag is registered and documented in the CLI", async () => {
+  const mainUrl = new URL(
+    "../../../src/migration/cli/main.ts",
+    import.meta.url,
+  );
+  const command = new Deno.Command("deno", {
+    // `--no-check`: this asserts CLI wiring, not the type-health of the whole
+    // (possibly-in-flight) tree; the `help` path never runs migration code.
+    args: ["run", "--no-check", "-A", mainUrl.href, "help"],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const { code, stdout } = await command.output();
+  assertEquals(code, 0, "CLI help should exit successfully");
+  const out = new TextDecoder().decode(stdout);
+  assertStringIncludes(out, "--progress");
 });
 
 Deno.test("migrate - validates all migrations before applying any", async () => {

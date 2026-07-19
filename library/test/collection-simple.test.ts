@@ -17,7 +17,7 @@ Deno.test("Collection: Basic operations coverage", async (t) => {
     const users = await collection(db, "users", userSchema);
 
     // Test insertOne
-    const _insertResult = await users.insertOne({
+    await users.insertOne({
       name: "John",
       age: 30,
       email: "john@example.com",

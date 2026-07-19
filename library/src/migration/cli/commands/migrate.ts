@@ -28,6 +28,7 @@ import { validateMigrationsWithSimulation } from "../utils/validate-migrations.t
 import type { SimulationPowerLevel } from "../../validators/simulation.ts";
 import { migrationBuilder } from "../../builder.ts";
 import { confirm } from "../utils/confirm.ts";
+import { createProgressReporter } from "../utils/progress.ts";
 import {
   detectInstancesNeedingCatchUp,
   filterOperationsForModelType,
@@ -65,6 +66,11 @@ export interface MigrateCommandOptions {
    * Only validate the last N migrations
    */
   last?: number;
+  /**
+   * Render a live progress line during each migration's execution.
+   * Defaults to auto-detection (on when stdout is a TTY).
+   */
+  progress?: boolean;
 }
 
 /**
@@ -73,7 +79,9 @@ export interface MigrateCommandOptions {
 function parseSimulationMode(mode?: string): SimulationPowerLevel {
   if (!mode) return "normal";
   const normalized = mode.toLowerCase();
-  if (normalized === "quick" || normalized === "normal" || normalized === "hard") {
+  if (
+    normalized === "quick" || normalized === "normal" || normalized === "hard"
+  ) {
     return normalized;
   }
   console.log(yellow(`⚠ Unknown mode "${mode}", using "normal" instead`));
@@ -128,7 +136,7 @@ export async function migrateCommand(
 
     // Discover and load migrations
     const migrationsWithFiles = await loadAllMigrations(migrationsDir);
-    
+
     if (migrationsWithFiles.length === 0) {
       console.log(yellow("⚠ No migrations found"));
       console.log();
@@ -145,7 +153,7 @@ export async function migrateCommand(
       cwd,
       config.paths?.schemas || "./schemas.ts",
     );
-    
+
     console.log(bold("📋 Validating schema consistency..."));
     const schemaValidation = await validateMigrationChainWithProjectSchema(
       allMigrations,
@@ -180,39 +188,58 @@ export async function migrateCommand(
 
     if (pendingMigrations.length === 0) {
       console.log(green("✓ No pending migrations. Database is up to date."));
-      
+
       // Even if no pending migrations, check for instances needing catch-up
       console.log();
-      console.log(bold(blue("🔍 Checking for multi-model instances needing catch-up...")));
-      const catchUpSummary = await detectInstancesNeedingCatchUp(db, allMigrations);
-      
+      console.log(
+        bold(blue("🔍 Checking for multi-model instances needing catch-up...")),
+      );
+      const catchUpSummary = await detectInstancesNeedingCatchUp(
+        db,
+        allMigrations,
+      );
+
       if (catchUpSummary.totalInstances > 0) {
-        console.log(yellow(`⚠  Found ${catchUpSummary.totalInstances} instance(s) needing catch-up`));
+        console.log(
+          yellow(
+            `⚠  Found ${catchUpSummary.totalInstances} instance(s) needing catch-up`,
+          ),
+        );
         console.log();
-        
+
         // Display details
         for (const [modelType, instances] of catchUpSummary.instancesByModel) {
           console.log(yellow(`  Model type: ${modelType}`));
           for (const instance of instances) {
             console.log(yellow(`    • ${instance.collectionName}`));
-            console.log(dim(`      Missing ${instance.missingMigrationIds.length} migration(s)`));
+            console.log(
+              dim(
+                `      Missing ${instance.missingMigrationIds.length} migration(s)`,
+              ),
+            );
             if (instance.isOrphaned) {
-              console.log(dim(`      Status: Orphaned (no migration tracking)`));
+              console.log(
+                dim(`      Status: Orphaned (no migration tracking)`),
+              );
             }
           }
         }
         console.log();
-        
+
         // Execute catch-up if auto-sync or force
         if (opts.autoSync || opts.force) {
           console.log(bold(blue("\n📦 Catching up multi-model instances...")));
           console.log();
 
-          for (const [modelType, instances] of catchUpSummary.instancesByModel) {
+          for (
+            const [modelType, instances] of catchUpSummary.instancesByModel
+          ) {
             for (const instance of instances) {
               console.log(
                 bold(
-                  `Catching up: ${blue(instance.collectionName)} ${dim(`(${modelType})`)}`,
+                  `Catching up: ${blue(instance.collectionName)} ${
+                    dim(`(${modelType})`)
+                  }`,
                 ),
               );
 
@@ -229,7 +256,9 @@ export async function migrateCommand(
                 const startTime = Date.now();
 
                 try {
-                  const builder = migrationBuilder({ schemas: migration.schemas });
+                  const builder = migrationBuilder({
+                    schemas: migration.schemas,
+                  });
                   const migrator = migration.migrate(builder);
 
                   // Filter operations for this specific model type
@@ -240,9 +269,9 @@ export async function migrateCommand(
 
                   if (filteredOps.length === 0) {
                     console.log(dim(`    No relevant operations, skipping`));
-                    
+
                     const duration = Date.now() - startTime;
-                    
+
                     // Still record as applied to maintain consistency
                     await recordMultiCollectionMigration(
                       db,
@@ -279,10 +308,12 @@ export async function migrateCommand(
                     duration,
                   );
 
-                  console.log(green(`    ✓ Applied successfully (${duration}ms)`));
+                  console.log(
+                    green(`    ✓ Applied successfully (${duration}ms)`),
+                  );
                 } catch (error) {
                   const duration = Date.now() - startTime;
-                  
+
                   // Record failure
                   await recordMultiCollectionMigration(
                     db,
@@ -293,24 +324,36 @@ export async function migrateCommand(
                     error instanceof Error ? error.message : String(error),
                   );
 
-                  console.error(red(`    ✗ Failed: ${error instanceof Error ? error.message : String(error)}`));
+                  console.error(
+                    red(
+                      `    ✗ Failed: ${
+                        error instanceof Error ? error.message : String(error)
+                      }`,
+                    ),
+                  );
                   throw error;
                 }
               }
 
-              console.log(green(`  ✓ Catch-up complete for ${instance.collectionName}`));
+              console.log(
+                green(`  ✓ Catch-up complete for ${instance.collectionName}`),
+              );
               console.log();
             }
           }
 
           console.log(green(`✓ All instances caught up successfully`));
         } else {
-          console.log(yellow("  Run 'mongodbee migrate --auto-sync' to catch up these instances"));
+          console.log(
+            yellow(
+              "  Run 'mongodbee migrate --auto-sync' to catch up these instances",
+            ),
+          );
         }
       } else {
         console.log(green("  ✓ All multi-model instances are up to date"));
       }
-      
+
       return;
     }
 
@@ -318,11 +361,20 @@ export async function migrateCommand(
     console.log();
 
     // STEP 0: Check for multi-model instances needing catch-up
-    console.log(bold(blue("🔍 Checking for multi-model instances needing catch-up...")));
-    const catchUpSummary = await detectInstancesNeedingCatchUp(db, allMigrations);
+    console.log(
+      bold(blue("🔍 Checking for multi-model instances needing catch-up...")),
+    );
+    const catchUpSummary = await detectInstancesNeedingCatchUp(
+      db,
+      allMigrations,
+    );
 
     if (catchUpSummary.totalInstances > 0) {
-      console.log(yellow(`\n⚠  Found ${catchUpSummary.totalInstances} instance(s) needing catch-up:`));
+      console.log(
+        yellow(
+          `\n⚠  Found ${catchUpSummary.totalInstances} instance(s) needing catch-up:`,
+        ),
+      );
       console.log();
 
       // Display details
@@ -330,15 +382,27 @@ export async function migrateCommand(
         console.log(yellow(`  Model type: ${bold(modelType)}`));
         for (const instance of instances) {
           console.log(yellow(`    • ${instance.collectionName}`));
-          console.log(dim(`      Missing: ${instance.missingMigrationIds.length} migration(s)`));
+          console.log(
+            dim(
+              `      Missing: ${instance.missingMigrationIds.length} migration(s)`,
+            ),
+          );
           if (instance.isOrphaned) {
-            console.log(red(`      ⚠ Orphaned (no migration tracking - will receive ALL migrations)`));
+            console.log(
+              red(
+                `      ⚠ Orphaned (no migration tracking - will receive ALL migrations)`,
+              ),
+            );
           }
         }
       }
 
       console.log();
-      console.log(dim(`  Total catch-up operations: ${catchUpSummary.totalMissingMigrations}`));
+      console.log(
+        dim(
+          `  Total catch-up operations: ${catchUpSummary.totalMissingMigrations}`,
+        ),
+      );
       console.log();
 
       // Ask for confirmation unless --auto-sync or --force
@@ -348,9 +412,15 @@ export async function migrateCommand(
         );
 
         if (!confirmed) {
-          console.log(yellow("Catch-up cancelled. Continuing with pending migrations only..."));
           console.log(
-            dim("  Warning: Skipped instances may have schema inconsistencies!"),
+            yellow(
+              "Catch-up cancelled. Continuing with pending migrations only...",
+            ),
+          );
+          console.log(
+            dim(
+              "  Warning: Skipped instances may have schema inconsistencies!",
+            ),
           );
           console.log();
         } else {
@@ -358,11 +428,15 @@ export async function migrateCommand(
           console.log(bold(blue("\n📦 Catching up multi-model instances...")));
           console.log();
 
-          for (const [modelType, instances] of catchUpSummary.instancesByModel) {
+          for (
+            const [modelType, instances] of catchUpSummary.instancesByModel
+          ) {
             for (const instance of instances) {
               console.log(
                 bold(
-                  `Catching up: ${blue(instance.collectionName)} ${dim(`(${modelType})`)}`,
+                  `Catching up: ${blue(instance.collectionName)} ${
+                    dim(`(${modelType})`)
+                  }`,
                 ),
               );
 
@@ -379,7 +453,9 @@ export async function migrateCommand(
                 const startTime = Date.now();
 
                 try {
-                  const builder = migrationBuilder({ schemas: migration.schemas });
+                  const builder = migrationBuilder({
+                    schemas: migration.schemas,
+                  });
                   const migrator = migration.migrate(builder);
 
                   // Filter operations for this specific model type
@@ -390,9 +466,9 @@ export async function migrateCommand(
 
                   if (filteredOps.length === 0) {
                     console.log(dim(`    No relevant operations, skipping`));
-                    
+
                     const duration = Date.now() - startTime;
-                    
+
                     // Still record as applied to maintain consistency
                     await recordMultiCollectionMigration(
                       db,
@@ -429,13 +505,17 @@ export async function migrateCommand(
                     duration,
                   );
 
-                  console.log(green(`    ✓ Applied successfully (${duration}ms)`));
+                  console.log(
+                    green(`    ✓ Applied successfully (${duration}ms)`),
+                  );
                 } catch (error) {
                   const duration = Date.now() - startTime;
-                  const errorMessage = error instanceof Error ? error.message : String(error);
-                  
+                  const errorMessage = error instanceof Error
+                    ? error.message
+                    : String(error);
+
                   console.log(red(`    ✗ Failed: ${errorMessage}`));
-                  
+
                   // Record migration as failed for this instance
                   await recordMultiCollectionMigration(
                     db,
@@ -445,7 +525,7 @@ export async function migrateCommand(
                     duration,
                     errorMessage,
                   );
-                  
+
                   throw new Error(
                     `Catch-up failed for ${instance.collectionName}: ${errorMessage}`,
                   );
@@ -469,9 +549,13 @@ export async function migrateCommand(
       } else {
         // Auto-sync enabled or force flag - apply catch-up automatically
         if (opts.autoSync) {
-          console.log(dim("  --auto-sync flag detected, catching up automatically..."));
+          console.log(
+            dim("  --auto-sync flag detected, catching up automatically..."),
+          );
         } else {
-          console.log(dim("  --force flag detected, catching up automatically..."));
+          console.log(
+            dim("  --force flag detected, catching up automatically..."),
+          );
         }
         console.log();
 
@@ -483,7 +567,9 @@ export async function migrateCommand(
           for (const instance of instances) {
             console.log(
               bold(
-                `Catching up: ${blue(instance.collectionName)} ${dim(`(${modelType})`)}`,
+                `Catching up: ${blue(instance.collectionName)} ${
+                  dim(`(${modelType})`)
+                }`,
               ),
             );
 
@@ -500,7 +586,9 @@ export async function migrateCommand(
               const startTime = Date.now();
 
               try {
-                const builder = migrationBuilder({ schemas: migration.schemas });
+                const builder = migrationBuilder({
+                  schemas: migration.schemas,
+                });
                 const migrator = migration.migrate(builder);
 
                 // Filter operations for this specific model type
@@ -511,9 +599,9 @@ export async function migrateCommand(
 
                 if (filteredOps.length === 0) {
                   console.log(dim(`    No relevant operations, skipping`));
-                  
+
                   const duration = Date.now() - startTime;
-                  
+
                   // Still record as applied to maintain consistency
                   await recordMultiCollectionMigration(
                     db,
@@ -550,13 +638,17 @@ export async function migrateCommand(
                   duration,
                 );
 
-                console.log(green(`    ✓ Applied successfully (${duration}ms)`));
+                console.log(
+                  green(`    ✓ Applied successfully (${duration}ms)`),
+                );
               } catch (error) {
                 const duration = Date.now() - startTime;
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                
+                const errorMessage = error instanceof Error
+                  ? error.message
+                  : String(error);
+
                 console.log(red(`    ✗ Failed: ${errorMessage}`));
-                
+
                 // Record migration as failed for this instance
                 await recordMultiCollectionMigration(
                   db,
@@ -566,7 +658,7 @@ export async function migrateCommand(
                   duration,
                   errorMessage,
                 );
-                
+
                 throw new Error(
                   `Catch-up failed for ${instance.collectionName}: ${errorMessage}`,
                 );
@@ -620,42 +712,59 @@ export async function migrateCommand(
       const isLossy = state.hasProperty("lossy");
       const lossyTransforms = isLossy
         ? state.operations
-            .filter((op) => {
-              if (op.type === "create_collection") return true;
-              if (op.type === "create_multicollection") return true;
-              if (op.type === "create_multimodel_instance") return true;
-              if (op.type === "update_indexes") return true;
-              if (
-                (op.type === "transform_collection" ||
-                  op.type === "transform_multicollection_type" ||
-                  op.type === "transform_multimodel_instance_type" ||
-                  op.type === "transform_multimodel_instances_type") &&
-                op.lossy
-              ) {
-                return true;
-              }
-              return false;
-            })
-            .map((op) => {
-              if (op.type === "create_collection") {
-                return `Create collection: ${op.collectionName}`;
-              } else if (op.type === "create_multicollection") {
-                return `Create multi-collection: ${op.collectionName}`;
-              } else if (op.type === "create_multimodel_instance") {
-                return `Create multi-model instance: ${op.collectionName}`;
-              } else if (op.type === "update_indexes") {
-                return `Update indexes: ${op.collectionName}`;
-              } else if (op.type === "transform_collection") {
-                return `Transform collection: ${op.collectionName}`;
-              } else if (op.type === "transform_multicollection_type") {
-                return `Transform multi-collection type: ${op.collectionName}.${op.documentType}`;
-              } else if (op.type === "transform_multimodel_instance_type") {
-                return `Transform multi-model instance type: ${op.collectionName}.${op.documentType}`;
-              } else if (op.type === "transform_multimodel_instances_type") {
-                return `Transform multi-model instances type: ${op.modelType}.${op.documentType}`;
-              }
-              return "";
-            })
+          .filter((op) => {
+            if (op.type === "create_collection") return true;
+            if (op.type === "create_multicollection") return true;
+            if (op.type === "create_multimodel_instance") return true;
+            if (op.type === "create_scoped_multicollection") return true;
+            if (op.type === "update_indexes") return true;
+            if (op.type === "rename_collection" && op.lossy) return true;
+            if (op.type === "flow" && op.lossy) return true;
+            if (op.type === "flow_to_scope" && op.lossy) return true;
+            if (
+              (op.type === "transform_collection" ||
+                op.type === "transform_multicollection_type" ||
+                op.type === "transform_multimodel_instance_type" ||
+                op.type === "transform_multimodel_instances_type" ||
+                op.type === "transform_scoped_multicollection_type") &&
+              op.lossy
+            ) {
+              return true;
+            }
+            return false;
+          })
+          .map((op) => {
+            if (op.type === "create_collection") {
+              return `Create collection: ${op.collectionName}`;
+            } else if (op.type === "create_multicollection") {
+              return `Create multi-collection: ${op.collectionName}`;
+            } else if (op.type === "create_multimodel_instance") {
+              return `Create multi-model instance: ${op.collectionName}`;
+            } else if (op.type === "create_scoped_multicollection") {
+              return `Create scoped multi-collection: ${op.collectionName}`;
+            } else if (op.type === "update_indexes") {
+              return `Update indexes: ${op.collectionName}`;
+            } else if (op.type === "rename_collection") {
+              return `Rename collection: ${op.from} → ${op.to} (drops existing "${op.to}")`;
+            } else if (op.type === "flow") {
+              return `Flow documents into: ${op.into.collection}`;
+            } else if (op.type === "flow_to_scope") {
+              return `Flow documents into scoped collection: ${op.into.collection}`;
+            } else if (op.type === "transform_collection") {
+              return `Transform collection: ${op.collectionName}`;
+            } else if (op.type === "transform_multicollection_type") {
+              return `Transform multi-collection type: ${op.collectionName}.${op.documentType}`;
+            } else if (op.type === "transform_multimodel_instance_type") {
+              return `Transform multi-model instance type: ${op.collectionName}.${op.documentType}`;
+            } else if (op.type === "transform_multimodel_instances_type") {
+              return `Transform multi-model instances type: ${op.modelType}.${op.documentType}`;
+            } else if (op.type === "transform_scoped_multicollection_type") {
+              return `Transform scoped multi-collection type: ${op.collectionName}.${op.documentType}`;
+            } else if (op.type === "seed_scoped_multicollection_type") {
+              return `Seed scoped multi-collection type: ${op.collectionName}.${op.documentType}`;
+            }
+            return "";
+          })
         : [];
 
       if (isIrreversible || isLossy) {
@@ -678,7 +787,9 @@ export async function migrateCommand(
     // Show irreversible warnings and require confirmation
     if (irreversibleMigrations.length > 0 && !options.force) {
       console.log(
-        red("⚠  WARNING: Some migrations are IRREVERSIBLE (cannot be rolled back):"),
+        red(
+          "⚠  WARNING: Some migrations are IRREVERSIBLE (cannot be rolled back):",
+        ),
       );
       console.log();
 
@@ -747,13 +858,25 @@ export async function migrateCommand(
 
         console.log(dim("  📝 Executing operations..."));
 
+        // Live progress for long-running operations (transform/flow/...). The
+        // applier emits onProgress events; the reporter draws an in-place line.
+        const progress = createProgressReporter({
+          enabled: options.progress ?? process.stdout.isTTY,
+        });
+
         // Create applier with migration context
         const migrationApplier = createMongodbApplier(db, migration, {
           currentMigrationId: migration.id,
+          onProgress: progress.onProgress,
         });
 
-        // Apply all operations and synchronize schemas
-        await migrationApplier.applyMigration(migrator.operations, 'up');
+        // Apply all operations and synchronize schemas. `finally` closes the
+        // progress line so a success/error log starts on a clean row.
+        try {
+          await migrationApplier.applyMigration(migrator.operations, "up");
+        } finally {
+          progress.finish();
+        }
 
         const duration = Date.now() - startTime;
 

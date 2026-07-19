@@ -1,7 +1,7 @@
 import * as v from "../src/schema.ts";
 import { collection } from "../src/collection.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
-import { type Db, MongoClient } from "../src/mongodb.ts";
+import { MongoClient } from "../src/mongodb.ts";
 import { removeField } from "../src/sanitizer.ts";
 
 // Mock MongoDB setup for testing

@@ -1,12 +1,12 @@
 /**
  * Integration test: Schema evolution patterns
- * 
+ *
  * Tests common schema evolution scenarios:
  * 1. Adding optional fields (no transformation needed)
  * 2. Making optional fields required (transformation needed)
  * 3. Type migrations (string → enum, number → formatted string)
  * 4. Restructuring (flat → nested objects)
- * 
+ *
  * @module
  */
 
@@ -39,73 +39,89 @@ Deno.test("Schema Evolution: Optional to required field progression", async () =
   });
 
   // Step 2: Add optional description field
-  const m2 = migrationDefinition("2025_01_02_DESC", "add_optional_description", {
-    parent: m1,
-    schemas: {
-      collections: {
-        products: {
-          _id: v.string(),
-          name: v.string(),
-          price: v.number(),
-          description: v.optional(v.string()), // ← OPTIONAL field
+  const m2 = migrationDefinition(
+    "2025_01_02_DESC",
+    "add_optional_description",
+    {
+      parent: m1,
+      schemas: {
+        collections: {
+          products: {
+            _id: v.string(),
+            name: v.string(),
+            price: v.number(),
+            description: v.optional(v.string()), // ← OPTIONAL field
+          },
         },
+        multiModels: {},
       },
-      multiModels: {},
+      migrate(m) {
+        // Even for optional fields, we need transformation if schema changed
+        m.collection("products").transform({
+          up: (doc) => ({
+            ...doc,
+            description: undefined, // Explicitly set to undefined for optional field
+          }),
+          down: (doc) => {
+            const { description: _description, ...rest } = doc;
+            return rest;
+          },
+        });
+        return m.compile();
+      },
     },
-    migrate(m) {
-      // Even for optional fields, we need transformation if schema changed
-      m.collection("products").transform({
-        up: (doc) => ({
-          ...doc,
-          description: undefined, // Explicitly set to undefined for optional field
-        }),
-        down: (doc) => {
-          const { description: _description, ...rest } = doc;
-          return rest;
-        },
-      });
-      return m.compile();
-    },
-  });
+  );
 
   // Step 3: Make description required (needs transformation)
-  const m3 = migrationDefinition("2025_01_03_DESC_REQ", "make_description_required", {
-    parent: m2,
-    schemas: {
-      collections: {
-        products: {
-          _id: v.string(),
-          name: v.string(),
-          price: v.number(),
-          description: v.string(), // ← NOW REQUIRED
+  const m3 = migrationDefinition(
+    "2025_01_03_DESC_REQ",
+    "make_description_required",
+    {
+      parent: m2,
+      schemas: {
+        collections: {
+          products: {
+            _id: v.string(),
+            name: v.string(),
+            price: v.number(),
+            description: v.string(), // ← NOW REQUIRED
+          },
         },
+        multiModels: {},
       },
-      multiModels: {},
+      migrate(m) {
+        // Transform to provide default description for products without one
+        m.collection("products").transform({
+          up: (doc) => ({
+            ...doc,
+            description: doc.description || "No description available",
+          }),
+          down: (doc) => ({
+            ...doc,
+            description: undefined, // Back to optional
+          }),
+        });
+        return m.compile();
+      },
     },
-    migrate(m) {
-      // Transform to provide default description for products without one
-      m.collection("products").transform({
-        up: (doc) => ({
-          ...doc,
-          description: doc.description || "No description available",
-        }),
-        down: (doc) => ({
-          ...doc,
-          description: undefined, // Back to optional
-        }),
-      });
-      return m.compile();
-    },
-  });
+  );
 
   const r1 = await validateMigrationWithSimulation(m1);
   assertEquals(r1.success, true, "Initial schema should be valid");
 
   const r2 = await validateMigrationWithSimulation(m2);
-  assertEquals(r2.success, true, "Adding optional field should not require transformation");
+  assertEquals(
+    r2.success,
+    true,
+    "Adding optional field should not require transformation",
+  );
 
   const r3 = await validateMigrationWithSimulation(m3);
-  assertEquals(r3.success, true, "Making field required should succeed with transformation");
+  assertEquals(
+    r3.success,
+    true,
+    "Making field required should succeed with transformation",
+  );
 });
 
 Deno.test("Schema Evolution: Type migration (string → enum)", async () => {
@@ -133,52 +149,65 @@ Deno.test("Schema Evolution: Type migration (string → enum)", async () => {
   });
 
   // Step 2: Migrate to enum (controlled values)
-  const m2 = migrationDefinition("2025_01_02_STATUS_ENUM", "migrate_status_to_enum", {
-    parent: m1,
-    schemas: {
-      collections: {
-        orders: {
-          _id: v.string(),
-          status: v.picklist(["pending", "processing", "completed", "cancelled"]), // ← ENUM
-          total: v.number(),
+  const m2 = migrationDefinition(
+    "2025_01_02_STATUS_ENUM",
+    "migrate_status_to_enum",
+    {
+      parent: m1,
+      schemas: {
+        collections: {
+          orders: {
+            _id: v.string(),
+            status: v.picklist([
+              "pending",
+              "processing",
+              "completed",
+              "cancelled",
+            ]), // ← ENUM
+            total: v.number(),
+          },
         },
+        multiModels: {},
       },
-      multiModels: {},
-    },
-    migrate(m) {
-      // Transform to normalize status values
-      m.collection("orders").transform({
-        up: (doc) => {
-          const status = (doc.status as string).toLowerCase();
-          // Map old values to new enum values
-          const statusMap: Record<string, string> = {
-            "pending": "pending",
-            "in progress": "processing",
-            "processing": "processing",
-            "done": "completed",
-            "completed": "completed",
-            "canceled": "cancelled",
-            "cancelled": "cancelled",
-          };
-          return {
+      migrate(m) {
+        // Transform to normalize status values
+        m.collection("orders").transform({
+          up: (doc) => {
+            const status = (doc.status as string).toLowerCase();
+            // Map old values to new enum values
+            const statusMap: Record<string, string> = {
+              "pending": "pending",
+              "in progress": "processing",
+              "processing": "processing",
+              "done": "completed",
+              "completed": "completed",
+              "canceled": "cancelled",
+              "cancelled": "cancelled",
+            };
+            return {
+              ...doc,
+              status: statusMap[status] || "pending",
+            };
+          },
+          down: (doc) => ({
             ...doc,
-            status: statusMap[status] || "pending",
-          };
-        },
-        down: (doc) => ({
-          ...doc,
-          status: doc.status, // Enum values are still valid strings
-        }),
-      });
-      return m.compile();
+            status: doc.status, // Enum values are still valid strings
+          }),
+        });
+        return m.compile();
+      },
     },
-  });
+  );
 
   const r1 = await validateMigrationWithSimulation(m1);
   assertEquals(r1.success, true, "Free-form string status should be valid");
 
   const r2 = await validateMigrationWithSimulation(m2);
-  assertEquals(r2.success, true, "Migrating to enum with normalization should succeed");
+  assertEquals(
+    r2.success,
+    true,
+    "Migrating to enum with normalization should succeed",
+  );
 });
 
 Deno.test("Schema Evolution: Restructuring (flat → nested)", async () => {
@@ -214,54 +243,62 @@ Deno.test("Schema Evolution: Restructuring (flat → nested)", async () => {
   });
 
   // Step 2: Nest address fields
-  const m2 = migrationDefinition("2025_01_02_NEST_ADDRESS", "nest_address_fields", {
-    parent: m1,
-    schemas: {
-      collections: {
-        users: {
-          _id: v.string(),
-          name: v.string(),
-          email: v.string(),
-          address: v.object({ // ← NESTED structure
-            street: v.string(),
-            city: v.string(),
-            country: v.string(),
-          }),
-        },
-      },
-      multiModels: {},
-    },
-    migrate(m) {
-      // Transform to nest address fields
-      m.collection("users").transform({
-        up: (doc) => ({
-          _id: doc._id,
-          name: doc.name,
-          email: doc.email,
-          address: {
-            street: doc.street as string,
-            city: doc.city as string,
-            country: doc.country as string,
+  const m2 = migrationDefinition(
+    "2025_01_02_NEST_ADDRESS",
+    "nest_address_fields",
+    {
+      parent: m1,
+      schemas: {
+        collections: {
+          users: {
+            _id: v.string(),
+            name: v.string(),
+            email: v.string(),
+            address: v.object({ // ← NESTED structure
+              street: v.string(),
+              city: v.string(),
+              country: v.string(),
+            }),
           },
-        }),
-        down: (doc) => ({
-          _id: doc._id,
-          name: doc.name,
-          email: doc.email,
-          street: (doc.address as { street: string }).street,
-          city: (doc.address as { city: string }).city,
-          country: (doc.address as { country: string }).country,
-        }),
-      });
-      return m.compile();
+        },
+        multiModels: {},
+      },
+      migrate(m) {
+        // Transform to nest address fields
+        m.collection("users").transform({
+          up: (doc) => ({
+            _id: doc._id,
+            name: doc.name,
+            email: doc.email,
+            address: {
+              street: doc.street as string,
+              city: doc.city as string,
+              country: doc.country as string,
+            },
+          }),
+          down: (doc) => ({
+            _id: doc._id,
+            name: doc.name,
+            email: doc.email,
+            street: (doc.address as { street: string }).street,
+            city: (doc.address as { city: string }).city,
+            country: (doc.address as { country: string }).country,
+          }),
+        });
+        return m.compile();
+      },
     },
-  });
+  );
 
   const r1 = await validateMigrationWithSimulation(m1);
   assertEquals(r1.success, true, "Flat structure should be valid");
 
   const r2 = await validateMigrationWithSimulation(m2);
-  assertEquals(r2.success, true, "Nesting fields should succeed with transformation");
+  assertEquals(
+    r2.success,
+    true,
+    "Nesting fields should succeed with transformation",
+  );
 });
 
 Deno.test("Schema Evolution: Number to formatted string", async () => {
@@ -288,103 +325,123 @@ Deno.test("Schema Evolution: Number to formatted string", async () => {
   });
 
   // Step 2: Migrate to formatted string with currency
-  const m2 = migrationDefinition("2025_01_02_PRICE_STR", "price_as_formatted_string", {
-    parent: m1,
-    schemas: {
-      collections: {
-        items: {
-          _id: v.string(),
-          name: v.string(),
-          price: v.pipe(
-            v.string(),
-            v.regex(/^\$-?\d+\.\d{2}$/), // Format: $XX.XX
-          ),
+  const m2 = migrationDefinition(
+    "2025_01_02_PRICE_STR",
+    "price_as_formatted_string",
+    {
+      parent: m1,
+      schemas: {
+        collections: {
+          items: {
+            _id: v.string(),
+            name: v.string(),
+            price: v.pipe(
+              v.string(),
+              v.regex(/^\$-?\d+\.\d{2}$/), // Format: $XX.XX
+            ),
+          },
         },
+        multiModels: {},
       },
-      multiModels: {},
+      migrate(m) {
+        // Transform number to formatted currency string
+        m.collection("items").transform({
+          up: (doc) => ({
+            ...doc,
+            price: `$${((doc.price as number) / 100).toFixed(2)}`,
+          }),
+          down: (doc) => ({
+            ...doc,
+            price: Math.round(parseFloat((doc.price as string).slice(1)) * 100),
+          }),
+        });
+        return m.compile();
+      },
     },
-    migrate(m) {
-      // Transform number to formatted currency string
-      m.collection("items").transform({
-        up: (doc) => ({
-          ...doc,
-          price: `$${((doc.price as number) / 100).toFixed(2)}`,
-        }),
-        down: (doc) => ({
-          ...doc,
-          price: Math.round(parseFloat((doc.price as string).slice(1)) * 100),
-        }),
-      });
-      return m.compile();
-    },
-  });
+  );
 
   const r1 = await validateMigrationWithSimulation(m1);
   assertEquals(r1.success, true, "Numeric price should be valid");
 
   const r2 = await validateMigrationWithSimulation(m2);
-  assertEquals(r2.success, true, "Formatted string price should succeed with transformation");
+  assertEquals(
+    r2.success,
+    true,
+    "Formatted string price should succeed with transformation",
+  );
 });
 
 Deno.test("Schema Evolution: Adding validation constraints progressively", async () => {
   // Step 1: Basic email field
-  const m1 = migrationDefinition("2025_01_01_EMAIL_BASIC", "email_no_validation", {
-    parent: null,
-    schemas: {
-      collections: {
-        contacts: {
-          _id: v.string(),
-          email: v.string(), // No validation
+  const m1 = migrationDefinition(
+    "2025_01_01_EMAIL_BASIC",
+    "email_no_validation",
+    {
+      parent: null,
+      schemas: {
+        collections: {
+          contacts: {
+            _id: v.string(),
+            email: v.string(), // No validation
+          },
         },
+        multiModels: {},
       },
-      multiModels: {},
+      migrate(m) {
+        m.createCollection("contacts").seed([
+          { _id: "c1", email: "alice@example.com" },
+          { _id: "c2", email: "bob@test.org" },
+        ]);
+        return m.compile();
+      },
     },
-    migrate(m) {
-      m.createCollection("contacts").seed([
-        { _id: "c1", email: "alice@example.com" },
-        { _id: "c2", email: "bob@test.org" },
-      ]);
-      return m.compile();
-    },
-  });
+  );
 
   // Step 2: Add email format validation
-  const m2 = migrationDefinition("2025_01_02_EMAIL_VALID", "add_email_validation", {
-    parent: m1,
-    schemas: {
-      collections: {
-        contacts: {
-          _id: v.string(),
-          email: v.pipe(v.string(), v.email()), // ← Added validation
+  const m2 = migrationDefinition(
+    "2025_01_02_EMAIL_VALID",
+    "add_email_validation",
+    {
+      parent: m1,
+      schemas: {
+        collections: {
+          contacts: {
+            _id: v.string(),
+            email: v.pipe(v.string(), v.email()), // ← Added validation
+          },
         },
+        multiModels: {},
       },
-      multiModels: {},
+      migrate(m) {
+        // Transformation to clean up invalid emails
+        m.collection("contacts").transform({
+          up: (doc) => {
+            const email = doc.email as string;
+            // Simple validation: contains @ and .
+            if (!email.includes("@") || !email.includes(".")) {
+              return {
+                ...doc,
+                email: "invalid@example.com", // Placeholder for invalid emails
+              };
+            }
+            return doc;
+          },
+          down: (doc) => doc, // No change needed going back
+        });
+        return m.compile();
+      },
     },
-    migrate(m) {
-      // Transformation to clean up invalid emails
-      m.collection("contacts").transform({
-        up: (doc) => {
-          const email = doc.email as string;
-          // Simple validation: contains @ and .
-          if (!email.includes("@") || !email.includes(".")) {
-            return {
-              ...doc,
-              email: "invalid@example.com", // Placeholder for invalid emails
-            };
-          }
-          return doc;
-        },
-        down: (doc) => doc, // No change needed going back
-      });
-      return m.compile();
-    },
-  });
+  );
 
   const r1 = await validateMigrationWithSimulation(m1);
   assertEquals(r1.success, true, "Unvalidated email should be valid");
 
   const r2 = await validateMigrationWithSimulation(m2);
-  assertEquals(r2.success, true, "Adding email validation should succeed with cleanup");
+  assertEquals(
+    r2.success,
+    true,
+    "Adding email validation should succeed with cleanup",
+  );
 });
 
 Deno.test("Schema Evolution: Array field addition and transformation", async () => {

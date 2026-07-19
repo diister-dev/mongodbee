@@ -174,7 +174,7 @@ Deno.test("UpdateOne: Invalid id format test", async (t) => {
     const collection = await multiCollection(db, "test", testModel);
 
     // Insert test user
-    const userId = await collection.insertOne("user", {
+    await collection.insertOne("user", {
       name: "John",
       age: 30,
     });
@@ -413,7 +413,9 @@ Deno.test("UpdateOne: Remove optional field with removeField()", async (t) => {
     });
 
     // Verify both fields were removed
-    const afterMultipleRemoval = await collection.findOne("user", { _id: userId });
+    const afterMultipleRemoval = await collection.findOne("user", {
+      _id: userId,
+    });
     assert(afterMultipleRemoval !== null);
     assertEquals(afterMultipleRemoval.name, "John Doe");
     assertEquals(afterMultipleRemoval.email, "john@example.com");
@@ -457,7 +459,9 @@ Deno.test("UpdateOne: Mix update and remove fields", async (t) => {
     });
 
     // Verify mixed update/remove
-    const updatedProduct = await collection.findOne("product", { _id: productId });
+    const updatedProduct = await collection.findOne("product", {
+      _id: productId,
+    });
     assert(updatedProduct !== null);
     assertEquals(updatedProduct.name, "Gaming Laptop");
     assertEquals(updatedProduct.price, 1299.99);

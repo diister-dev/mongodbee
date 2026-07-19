@@ -34,6 +34,15 @@ export type IndexMetadata = {
    * `_type` scoping filter.
    */
   partialFilterExpression?: m.Document;
+  /**
+   * Scoped-multi-collection only : opt out of the default `_scope`
+   * scoping. When `true`, a `unique` index will enforce uniqueness across
+   * **every** scope (typical for slugs, public identifiers, etc.).
+   *
+   * Ignored by regular `collection` and `multiCollection` (they have no
+   * scope concept).
+   */
+  global?: boolean;
 };
 
 export type IndexDatabase = {
@@ -41,6 +50,12 @@ export type IndexDatabase = {
   collation?: m.CollationOptions;
   expireAfterSeconds?: number;
   partialFilterExpression?: m.Document;
+  /**
+   * Scoped-multi-collection sentinel. Ignored by `collection` and
+   * `multiCollection` ; consumed by `scopedMultiCollection` to opt out of
+   * `_scope` scoping for this index.
+   */
+  global?: boolean;
 };
 
 /**
@@ -94,6 +109,9 @@ export function withIndex<
   }
   if (options.partialFilterExpression) {
     indexDatabase.partialFilterExpression = options.partialFilterExpression;
+  }
+  if (options.global) {
+    indexDatabase.global = true;
   }
 
   return v.pipe(
@@ -185,7 +203,9 @@ export function keyEqual(
  * Normalize collation options for comparison by extracting only significant fields.
  * MongoDB adds many default fields (version, caseLevel, etc.) that we should ignore.
  */
-function normalizeCollation(collation: unknown): Record<string, unknown> | undefined {
+function normalizeCollation(
+  collation: unknown,
+): Record<string, unknown> | undefined {
   if (!collation || typeof collation !== "object") return undefined;
 
   const obj = collation as Record<string, unknown>;
@@ -229,7 +249,9 @@ export function normalizeIndexOptions(
       : undefined;
   return {
     unique: hasUnique,
-    collation: collationVal ? JSON.stringify(normalizeCollation(collationVal)) : undefined,
+    collation: collationVal
+      ? JSON.stringify(normalizeCollation(collationVal))
+      : undefined,
     partialFilterExpression: pfeVal ? JSON.stringify(pfeVal) : undefined,
     expireAfterSeconds: typeof ttlVal === "number" ? ttlVal : undefined,
   };

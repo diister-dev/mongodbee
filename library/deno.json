@@ -1,8 +1,9 @@
 {
   "name": "@diister/mongodbee",
-  "version": "0.22.4",
+  "version": "0.23.0-beta.6",
   "license": "MIT",
   "imports": {
+    "@std/expect": "jsr:@std/expect@^1.0.19",
     "@std/ulid": "jsr:@std/ulid@1.0.0",
     "@std/cli": "jsr:@std/cli@1.0.29",
     "@std/fmt": "jsr:@std/fmt@1.0.10",
@@ -11,7 +12,7 @@
     "@std/assert": "jsr:@std/assert@1.0.19",
     "valibot": "npm:valibot@1.4.0",
     "mongodb": "npm:mongodb@6.21.0",
-    "@diister/valibot-mock": "jsr:@diister/valibot-mock@0.1.1"
+    "@diister/valibot-mock": "jsr:@diister/valibot-mock@0.1.4"
   },
   "exports": {
     ".": "./mod.ts",
@@ -20,11 +21,27 @@
     "./ids": "./src/ids.ts",
     "./indexes": "./src/indexes.ts",
     "./schema-navigator": "./src/schema-navigator.ts",
+    "./types": "./src/types.ts",
     "./migration": "./src/migration/mod.ts",
     "./migration/cli": "./src/migration/cli/mod.ts",
     "./migration/cli/bin": "./src/migration/cli/bin.ts"
   },
+  "compilerOptions": {
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
+  "fmt": {
+    "exclude": ["**/*.md"]
+  },
+  "lint": {
+    "rules": {
+      "exclude": ["no-explicit-any", "require-await"]
+    }
+  },
   "tasks": {
+    "check": "deno check mod.ts schema.ts session.ts src/ids.ts src/indexes.ts src/schema-navigator.ts src/types.ts src/migration/mod.ts src/migration/cli/mod.ts src/migration/cli/bin.ts",
+    "lint": "deno lint",
+    "fmt:check": "deno fmt --check",
     "test": "deno test -A --parallel --quiet",
     "test:leaks": "deno test -A --parallel --quiet --trace-leaks",
     "migrate": "deno run --allow-read --allow-write --allow-net --allow-env src/migration/cli/bin.ts",

@@ -2,8 +2,7 @@
  * Tests for paginate with pipeline support in simple collections (collection.ts)
  */
 
-import { afterEach, beforeEach, describe, it } from "jsr:@std/testing/bdd";
-import { expect } from "jsr:@std/expect";
+import { expect } from "@std/expect";
 import * as v from "../src/schema.ts";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
@@ -45,12 +44,20 @@ Deno.test("Collection paginate with pipeline - self lookup", async (t) => {
       age: v.number(),
       managerId: v.optional(v.string()),
     };
-    
+
     const employees = await collection(db, "employees", ManagerSchema);
-    
+
     const managerId = await employees.insertOne({ name: "Manager", age: 45 });
-    await employees.insertOne({ name: "Employee1", age: 28, managerId: managerId.toString() });
-    await employees.insertOne({ name: "Employee2", age: 32, managerId: managerId.toString() });
+    await employees.insertOne({
+      name: "Employee1",
+      age: 28,
+      managerId: managerId.toString(),
+    });
+    await employees.insertOne({
+      name: "Employee2",
+      age: 32,
+      managerId: managerId.toString(),
+    });
 
     const result = await employees.paginate({ managerId: { $exists: true } }, {
       pipeline: (stage) => [
@@ -83,26 +90,48 @@ Deno.test("Collection paginate with pipeline - externalLookup", async (t) => {
     const departments = await collection(db, "departments", DepartmentSchema);
 
     // Insert departments
-    const engDeptId = await departments.insertOne({ name: "Engineering", budget: 100000 });
+    const engDeptId = await departments.insertOne({
+      name: "Engineering",
+      budget: 100000,
+    });
     const hrDeptId = await departments.insertOne({ name: "HR", budget: 50000 });
 
     // Insert users with department references (store ObjectId as string)
-    await users.insertOne({ name: "Alice", age: 30, departmentId: engDeptId.toString() });
-    await users.insertOne({ name: "Bob", age: 25, departmentId: engDeptId.toString() });
-    await users.insertOne({ name: "Charlie", age: 35, departmentId: hrDeptId.toString() });
+    await users.insertOne({
+      name: "Alice",
+      age: 30,
+      departmentId: engDeptId.toString(),
+    });
+    await users.insertOne({
+      name: "Bob",
+      age: 25,
+      departmentId: engDeptId.toString(),
+    });
+    await users.insertOne({
+      name: "Charlie",
+      age: 35,
+      departmentId: hrDeptId.toString(),
+    });
 
     // Use addFields to convert string to ObjectId for lookup match
     const result = await users.paginate({}, {
       pipeline: (stage) => [
         stage.addFields({ departmentOid: { $toObjectId: "$departmentId" } }),
-        stage.externalLookup("departments", "departmentOid", "_id", "department"),
-        stage.addFields({ departmentName: { $arrayElemAt: ["$department.name", 0] } }),
+        stage.externalLookup(
+          "departments",
+          "departmentOid",
+          "_id",
+          "department",
+        ),
+        stage.addFields({
+          departmentName: { $arrayElemAt: ["$department.name", 0] },
+        }),
       ],
     });
 
     expect(result.total).toBe(3);
     expect(result.data.length).toBe(3);
-    
+
     // All users should have their department lookup
     expect((result.data[0] as any).department).toBeDefined();
     expect((result.data[0] as any).departmentName).toBeDefined();
@@ -131,10 +160,10 @@ Deno.test("Collection paginate with pipeline - project", async (t) => {
 
     expect(result.total).toBe(2);
     expect(result.data.length).toBe(2);
-    
+
     // First doc (Alice, age 30)
     expect((result.data[0] as any).isOld).toBe(true);
-    // Second doc (Bob, age 25)  
+    // Second doc (Bob, age 25)
     expect((result.data[1] as any).isOld).toBe(false);
   });
 });
@@ -157,7 +186,9 @@ Deno.test("Collection paginate with pipeline - cursor pagination afterId", async
       afterId: id1,
       limit: 2,
       pipeline: (stage) => [
-        stage.addFields({ ageGroup: { $cond: [{ $gte: ["$age", 25] }, "adult", "young"] } }),
+        stage.addFields({
+          ageGroup: { $cond: [{ $gte: ["$age", 25] }, "adult", "young"] },
+        }),
       ],
     });
 
@@ -188,7 +219,9 @@ Deno.test("Collection paginate with pipeline - cursor pagination beforeId", asyn
       beforeId: id3,
       limit: 2,
       pipeline: (stage) => [
-        stage.addFields({ decade: { $multiply: [{ $floor: { $divide: ["$age", 10] } }, 10] } }),
+        stage.addFields({
+          decade: { $multiply: [{ $floor: { $divide: ["$age", 10] } }, 10] },
+        }),
       ],
     });
 
@@ -243,13 +276,20 @@ Deno.test("Collection paginate with pipeline - prepare filter format", async (t)
 
     type UserWithScore = { name: string; score: number };
 
-    const result = await users.paginate<UserWithScore, { displayName: string; finalScore: number }>({}, {
+    const result = await users.paginate<
+      UserWithScore,
+      { displayName: string; finalScore: number }
+    >({}, {
       pipeline: (stage) => [
         stage.addFields({ score: { $multiply: ["$age", 10] } }),
       ],
-      prepare: (doc) => ({ name: doc.name, score: (doc as any).score }) as UserWithScore,
+      prepare: (doc) =>
+        ({ name: doc.name, score: (doc as any).score }) as UserWithScore,
       filter: (doc) => doc.score > 260, // Filter out Bob (250)
-      format: (doc) => ({ displayName: `User: ${doc.name}`, finalScore: doc.score }),
+      format: (doc) => ({
+        displayName: `User: ${doc.name}`,
+        finalScore: doc.score,
+      }),
     });
 
     expect(result.total).toBe(3);
@@ -300,11 +340,13 @@ Deno.test("Collection paginate with pipeline - match stage", async (t) => {
 
     const result = await users.paginate({}, {
       pipeline: (stage) => [
-        stage.addFields({ ageCategory: { $cond: [{ $gte: ["$age", 30] }, "senior", "junior"] } }),
+        stage.addFields({
+          ageCategory: { $cond: [{ $gte: ["$age", 30] }, "senior", "junior"] },
+        }),
         stage.match({ ageCategory: "senior" }),
       ],
     });
-    
+
     expect(result.total).toBe(2);
     expect(result.data.length).toBe(2);
     expect(result.data[0].name).toBe("Alice");
@@ -328,10 +370,17 @@ Deno.test("Collection paginate with pipeline - externalLookup with advanced opti
     const users = await collection(db, "users", UserSchema);
     const departments = await collection(db, "departments", DepartmentSchema);
 
-    const engDeptId = await departments.insertOne({ name: "Engineering", budget: 100000 });
+    const engDeptId = await departments.insertOne({
+      name: "Engineering",
+      budget: 100000,
+    });
     await departments.insertOne({ name: "HR", budget: 50000 });
 
-    await users.insertOne({ name: "Alice", age: 30, departmentId: engDeptId.toString() });
+    await users.insertOne({
+      name: "Alice",
+      age: 30,
+      departmentId: engDeptId.toString(),
+    });
 
     // Convert string to ObjectId for lookup, use advanced pipeline options
     const result = await users.paginate({}, {

@@ -27,7 +27,8 @@ export function isWriteConflictError(error: unknown): boolean {
   // Check for various write conflict error messages
   return (
     message.includes("write conflict") ||
-    (message.includes("plan execution") && message.includes("write conflict")) ||
+    (message.includes("plan execution") &&
+      message.includes("write conflict")) ||
     message.includes("writeconflict") ||
     message.includes("transaction") && message.includes("aborted") ||
     // MongoDB error code for write conflicts
@@ -105,7 +106,7 @@ export interface RetryOptions {
  */
 export async function retryOnWriteConflict<T>(
   operation: () => Promise<T>,
-  options: RetryOptions = {}
+  options: RetryOptions = {},
 ): Promise<T> {
   const {
     maxRetries = 3,
@@ -125,10 +126,11 @@ export async function retryOnWriteConflict<T>(
       // Try to execute the operation
       return await operation();
     } catch (error) {
-      console.error("Retry attempt", attempt + 1, "due to error:", error);
       lastError = error instanceof Error ? error : new Error(String(error));
 
-      // Check if we should retry this error
+      // Check if we should retry this error — only log/announce a retry once
+      // we've actually decided to retry (avoids noisy "Retry attempt" lines
+      // for application errors that are immediately rethrown).
       if (!shouldRetry(error)) {
         throw error;
       }
@@ -137,6 +139,13 @@ export async function retryOnWriteConflict<T>(
       if (attempt >= maxRetries) {
         throw error;
       }
+
+      console.error(
+        "Retry attempt",
+        attempt + 1,
+        "due to write conflict:",
+        error,
+      );
 
       // Calculate delay for next retry
       let delayMs = initialDelay;

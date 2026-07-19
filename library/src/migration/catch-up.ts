@@ -12,9 +12,9 @@ import type { MigrationDefinition, MigrationRule } from "./types.ts";
 import {
   discoverMultiCollectionInstances,
   getMultiCollectionMigrations,
-  getMultiModelAppliedMigrationIds,
   shouldInstanceReceiveMigrationByChain,
 } from "./multicollection-registry.ts";
+import { getAppliedMigrationIdsFromHistory } from "./migration-history.ts";
 import { migrationBuilder } from "./builder.ts";
 import { getAppliedMigrationIds } from "./state.ts";
 
@@ -71,8 +71,16 @@ export async function detectInstancesNeedingCatchUp(
   const modelTypes = extractModelTypesFromMigrations(allMigrations);
 
   for (const modelType of modelTypes) {
-    // Discover all instances of this model type
-    const instances = await discoverMultiCollectionInstances(db, modelType);
+    // Discover all instances of this model type. Catch-up detection is a
+    // read-only listing path (it runs no destructive op on the result), so it
+    // must not crash on a prefix-named collection that lacks a valid
+    // `_information` marker — skip such collections instead of throwing. The
+    // destructive apply paths (flow-to-scope consume, validator sync) use the
+    // default fail-loud discovery, so an unidentifiable collection is still
+    // surfaced when a migration would actually touch it.
+    const instances = await discoverMultiCollectionInstances(db, modelType, {
+      onUnverifiedPrefixMatch: "skip",
+    });
 
     for (const collectionName of instances) {
       // Get migrations document for this instance
@@ -96,17 +104,18 @@ export async function detectInstancesNeedingCatchUp(
         // Instance has migrations - check which ones are missing
         // Since migrations are now recorded on ALL instances (even if not affected),
         // we can simply compare the applied IDs with globally applied IDs
-        
-        // Get only migrations with "applied" status (excludes reverted/failed)
-        const appliedIds = await getMultiModelAppliedMigrationIds(
-          db,
-          collectionName,
+
+        // Get only migrations with "applied" status (excludes reverted/failed).
+        // Reuse the `_migrations` doc already fetched above instead of issuing a
+        // second findOne for the same document (the old double-fetch).
+        const appliedIds = getAppliedMigrationIdsFromHistory(
+          migrationsDoc.appliedMigrations,
         );
         const appliedSet = new Set(appliedIds);
 
         // Find the migration when this instance was created
         const instanceCreationMigration = allMigrations.find(
-          (m) => m.id === migrationsDoc.fromMigrationId
+          (m) => m.id === migrationsDoc.fromMigrationId,
         );
 
         missingMigrationIds = allMigrations
@@ -117,15 +126,15 @@ export async function detectInstancesNeedingCatchUp(
             if (!instanceCreationMigration) {
               console.warn(
                 `Could not find creation migration ${migrationsDoc.fromMigrationId} for instance ${collectionName}. ` +
-                `This instance may need manual review.`
+                  `This instance may need manual review.`,
               );
               return true;
             }
-            
+
             // Instance should receive migrations that happened at or after its creation
             return shouldInstanceReceiveMigrationByChain(
               instanceCreationMigration,
-              m
+              m,
             );
           })
           .filter((m) => !appliedSet.has(m.id))
@@ -200,15 +209,15 @@ function hasMigrationForModelType(
 
   // Having the schema is not enough - we need to check if there are actual operations
   // Generate operations by executing the migration
-  const builder = migrationBuilder({ 
+  const builder = migrationBuilder({
     schemas: migration.schemas,
     parentSchemas: migration.parent?.schemas,
   });
   const state = migration.migrate(builder);
-  
+
   // Filter operations for this model type
   const relevantOps = filterOperationsForModelType(state.operations, modelType);
-  
+
   // Only return true if there are actual operations
   return relevantOps.length > 0;
 }
@@ -239,6 +248,18 @@ export function filterOperationsForModelType(
       case "seed_multimodel_instances_type":
       case "transform_multimodel_instances_type":
         return op.modelType === modelType;
+
+      // A flow-to-scope that reads FROM every instance of this model is a
+      // consolidation of this model's data. A lagging instance that missed it
+      // MUST have this operation applied during catch-up — otherwise the
+      // filtered-ops-empty branch in the caller would record the migration as
+      // "applied" while the instance keeps its un-consolidated data forever
+      // (its data never reaching the scoped target). Only the
+      // `multiModelInstances` source shape is model-scoped; `collection` and
+      // `multiCollectionType` sources are unrelated to this model type.
+      case "flow_to_scope":
+        return op.from.kind === "multiModelInstances" &&
+          op.from.model === modelType;
 
       // Skip collection and multi-collection operations
       case "create_collection":
