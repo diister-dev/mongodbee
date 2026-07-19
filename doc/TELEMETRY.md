@@ -258,6 +258,14 @@ the application must have a **context manager** registered:
 Without a registered context manager, spans are still emitted and exported — but
 each one is a root span, with no parent/child relationship between them.
 
+## Grafana Dashboard
+
+A ready-to-import Grafana dashboard (plus the OTel Collector `spanmetrics`
+configuration that feeds it) ships in [`doc/grafana/`](./grafana/README.md):
+RED metrics per operation/collection, latency quantiles and heatmap, error
+breakdown by type, transaction outcomes and per-doc-type panels, with a
+TraceQL cookbook for trace-level drill-down.
+
 ## Limitations (v1)
 
 - **Change streams are not traced**: `watch()` / `.on(...)` event listeners emit

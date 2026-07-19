@@ -971,7 +971,9 @@ contain values; either way the caller always receives the original, untouched
 error.
 
 For the full configuration reference, span catalog, attribute table, PII policy
-and limitations, see [TELEMETRY.md](./doc/TELEMETRY.md).
+and limitations, see [TELEMETRY.md](./doc/TELEMETRY.md). A ready-to-import
+[Grafana dashboard](./doc/grafana/README.md) (with the matching OTel Collector
+config) ships in `doc/grafana/`.
 
 ## 📋 Examples
 

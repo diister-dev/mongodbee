@@ -1,0 +1,76 @@
+# Example OpenTelemetry Collector configuration for MongoDBee 🐝
+#
+# MongoDBee emits traces only (see doc/TELEMETRY.md). This configuration
+# derives RED metrics (Rate, Errors, Duration) from those spans with the
+# `spanmetrics` connector so the Grafana dashboard in this directory can be
+# driven from Prometheus. Traces are (optionally) forwarded to Tempo.
+#
+#   application (OTel SDK, OTLP export)
+#        │ traces
+#        ▼
+#   OTel Collector ──── spanmetrics ────► Prometheus ──► Grafana (dashboard)
+#        │ traces
+#        ▼
+#      Tempo (optional, trace drill-down)
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+connectors:
+  spanmetrics:
+    # The dashboard queries assume this namespace: metrics are exported as
+    # `traces_span_metrics_calls_total` and
+    # `traces_span_metrics_duration_seconds_*`.
+    namespace: traces.span.metrics
+    histogram:
+      unit: s
+      explicit:
+        buckets: [2ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2500ms, 5s, 10s]
+    exemplars:
+      enabled: true
+    # Every dimension below becomes a Prometheus label (dots become
+    # underscores). They map 1:1 to the MongoDBee span attributes documented
+    # in doc/TELEMETRY.md — all PII-safe, low-cardinality values.
+    dimensions:
+      - name: db.system.name
+      - name: db.namespace
+      - name: db.collection.name
+      - name: db.operation.name
+      - name: error.type
+      - name: mongodbee.doc_type
+      - name: mongodbee.transaction.outcome
+      # ⚠ mongodbee.scope is deliberately NOT a dimension: one label value per
+      # tenant/scope can explode Prometheus cardinality, and scope values may
+      # be sensitive. Uncomment only if your scope set is small and non-PII
+      # (or use `recordScope: false` in MongoDBee and keep it span-only).
+      # - name: mongodbee.scope
+
+processors:
+  batch: {}
+
+exporters:
+  # Scrape endpoint for Prometheus (add a scrape job for <collector>:8889).
+  prometheus:
+    endpoint: 0.0.0.0:8889
+  # Optional: forward traces to Tempo for drill-down (TraceQL examples in
+  # README.md). Remove this exporter if you do not run a trace backend.
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [spanmetrics, otlp/tempo]
+    metrics:
+      receivers: [spanmetrics]
+      processors: [batch]
+      exporters: [prometheus]
