@@ -104,6 +104,7 @@ Deno.test("telemetry multi: doc_type on typed ops, none on *Any, batch size on d
     assertEquals(deleteIdsSpans.length, 1);
     assertEquals(deleteIdsSpans[0].attributes[A.BATCH_SIZE], 2);
     assertEquals(deleteIdsSpans[0].attributes[A.DOC_TYPE], "product");
+    assertEquals(deleteIdsSpans[0].attributes[A.FILTER_KEYS], "_id");
 
     // Anti-PII: no inserted/filtered value ever reaches a span
     const dump = dumpSpans(t.exporter);
@@ -257,5 +258,199 @@ Deno.test("telemetry scoped: not-found error keeps the id caller-side but strips
     // The scope value IS expected on the dedicated attribute — confirm the
     // structural metadata is still there.
     assertEquals(span.attributes[A.SCOPE], SENTINEL_SCOPE);
+  });
+});
+
+Deno.test("telemetry multi: updateMany carries doc_type as the string[] of type names", async () => {
+  await withDatabase("telemetry-multi-updatemany", async (db) => {
+    const t = makeTestTelemetry();
+    const catalog = await multiCollection(db, "catalog", {
+      product: {
+        name: v.string(),
+        price: v.number(),
+      },
+      category: {
+        name: v.string(),
+      },
+    }, { telemetry: t.telemetry });
+
+    const productId = await catalog.insertOne("product", {
+      name: "SENTINEL_UPDATEMANY_PRODUCT_2b1a",
+      price: 10,
+    });
+    const categoryId = await catalog.insertOne("category", {
+      name: "SENTINEL_UPDATEMANY_CATEGORY_2b1a",
+    });
+    t.exporter.reset();
+
+    const modified = await catalog.updateMany({
+      product: { [productId]: { price: 20 } },
+      category: { [categoryId]: { name: "renamed" } },
+    });
+    assertEquals(modified, 2);
+
+    const updateManySpans = spansNamed(t, "updateMany catalog");
+    assertEquals(updateManySpans.length, 1);
+    // doc_type is the array of the operation's top-level type keys, in order.
+    assertEquals(updateManySpans[0].attributes[A.DOC_TYPE], [
+      "product",
+      "category",
+    ]);
+    assertEquals(updateManySpans[0].attributes[A.BATCH_SIZE], 2);
+  });
+});
+
+Deno.test("telemetry multi: updateOne validation failure records one ERROR span and rethrows", async () => {
+  await withDatabase("telemetry-multi-updateone-invalid", async (db) => {
+    const t = makeTestTelemetry();
+    const catalog = await multiCollection(db, "catalog", {
+      product: {
+        name: v.string(),
+        price: v.number(),
+      },
+    }, { telemetry: t.telemetry });
+
+    const productId = await catalog.insertOne("product", {
+      name: "valid",
+      price: 1,
+    });
+    t.exporter.reset();
+
+    // `price` must be a number: this string value fails schema validation,
+    // which runs inside the span (so the span is recorded as ERROR).
+    const SENTINEL_INVALID = "SENTINEL_INVALID_PRICE_7f3a";
+    const error = await assertRejects(() =>
+      catalog.updateOne("product", productId, {
+        price: SENTINEL_INVALID as unknown as number,
+      })
+    );
+
+    // The original validation error reaches the caller unchanged.
+    assert(error instanceof Error, "the thrown value must be an Error");
+    assertEquals((error as Error).name, "ValiError");
+
+    // Exactly one ERROR span named "updateOne catalog".
+    const updateOneSpans = spansNamed(t, "updateOne catalog");
+    assertEquals(updateOneSpans.length, 1);
+    assertEquals(updateOneSpans[0].status.code, SpanStatusCode.ERROR);
+    assertEquals(updateOneSpans[0].attributes[A.DOC_TYPE], "product");
+
+    // The rejected value never leaks into the span (synthetic message only).
+    assert(
+      !dumpSpans(t.exporter).includes(SENTINEL_INVALID),
+      "the invalid value leaked into the span dump",
+    );
+  });
+});
+
+Deno.test("telemetry multi: drop emits a CLIENT span", async () => {
+  await withDatabase("telemetry-multi-drop", async (db) => {
+    const t = makeTestTelemetry();
+    const catalog = await multiCollection(db, "catalog", {
+      product: {
+        name: v.string(),
+      },
+    }, { telemetry: t.telemetry });
+    await catalog.insertOne("product", { name: "SENTINEL_DROP_PRODUCT_9c2d" });
+    t.exporter.reset();
+
+    const dropped = await catalog.drop({ force: true });
+    assertEquals(dropped, true);
+
+    const dropSpans = spansNamed(t, "drop catalog");
+    assertEquals(dropSpans.length, 1);
+    assertEquals(dropSpans[0].kind, SpanKind.CLIENT);
+    assertEquals(dropSpans[0].attributes[A.DB_SYSTEM], "mongodb");
+    assertEquals(dropSpans[0].attributes[A.DB_NAMESPACE], db.databaseName);
+    assertEquals(dropSpans[0].attributes[A.COLLECTION_NAME], "catalog");
+    assertEquals(dropSpans[0].attributes[A.OPERATION_NAME], "drop");
+  });
+});
+
+Deno.test("telemetry scoped: drop emits a CLIENT span", async () => {
+  await withDatabase("telemetry-scoped-drop", async (db) => {
+    const t = makeTestTelemetry();
+    const catalog = await scopedMultiCollection(db, "catalog5", {
+      scope: refId("exposition"),
+      types: {
+        artwork: {
+          title: v.string(),
+        },
+      },
+      telemetry: t.telemetry,
+    });
+    await catalog.scope(EXPO_A).insertOne("artwork", {
+      title: "SENTINEL_DROP_ARTWORK_1e4f",
+    });
+    t.exporter.reset();
+
+    const dropped = await catalog.drop({ force: true });
+    assertEquals(dropped, true);
+
+    const dropSpans = spansNamed(t, "drop catalog5");
+    assertEquals(dropSpans.length, 1);
+    assertEquals(dropSpans[0].kind, SpanKind.CLIENT);
+    assertEquals(dropSpans[0].attributes[A.DB_SYSTEM], "mongodb");
+    assertEquals(dropSpans[0].attributes[A.COLLECTION_NAME], "catalog5");
+    assertEquals(dropSpans[0].attributes[A.OPERATION_NAME], "drop");
+  });
+});
+
+Deno.test("telemetry scoped: recordScope false omits mongodbee.scope everywhere", async () => {
+  await withDatabase("telemetry-scoped-norecord", async (db) => {
+    const t = makeTestTelemetry();
+    // Both scope ids are unique sentinels: with recordScope disabled, neither
+    // the attribute KEY nor the scope VALUE may appear anywhere in the dump.
+    const SENTINEL_SCOPE_A = "exposition:norecordscopeaaa01";
+    const SENTINEL_SCOPE_B = "exposition:norecordscopebbb02";
+    const catalog = await scopedMultiCollection(db, "catalog6", {
+      scope: refId("exposition"),
+      types: {
+        artwork: {
+          title: v.string(),
+          year: v.number(),
+        },
+      },
+      allowUnscoped: true,
+      telemetry: { ...t.telemetry, recordScope: false },
+    });
+
+    // Ops still work end-to-end while no scope metadata is recorded.
+    const expo = catalog.scope(SENTINEL_SCOPE_A);
+    const id = await expo.insertOne("artwork", { title: "T", year: 1 });
+    assertExists(id);
+    const found = await expo.findOne("artwork", {});
+    assertExists(found);
+    assertEquals(await expo.countDocuments("artwork"), 1);
+
+    // Multi-scope and unscoped views run through the other scope-attr path.
+    await catalog.scopes([SENTINEL_SCOPE_A, SENTINEL_SCOPE_B]).findOne(
+      "artwork",
+      {},
+    );
+    await catalog.unscoped.findOne("artwork", {});
+
+    const dump = dumpSpans(t.exporter);
+    assert(
+      t.exporter.getFinishedSpans().length > 0,
+      "expected at least one finished span",
+    );
+    assert(
+      !dump.includes(A.SCOPE),
+      "the mongodbee.scope attribute must be absent when recordScope is false",
+    );
+    assert(
+      !dump.includes(SENTINEL_SCOPE_A) && !dump.includes(SENTINEL_SCOPE_B),
+      "scope values must not appear when recordScope is false",
+    );
+
+    // Non-scope structural metadata is still recorded (doc_type).
+    const insertSpans = spansNamed(t, "insertOne catalog6");
+    assertEquals(insertSpans.length, 1);
+    assertEquals(insertSpans[0].attributes[A.DOC_TYPE], "artwork");
+    assert(
+      !(A.SCOPE in insertSpans[0].attributes),
+      "the insert span must not carry mongodbee.scope",
+    );
   });
 });

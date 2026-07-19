@@ -590,6 +590,12 @@ export async function scopedMultiCollection<
   });
   registerClientTelemetry(db.client, config.telemetry);
 
+  // Whether spans carry the `mongodbee.scope` attribute. Disabled for
+  // deployments whose scope values are PII-bearing (e.g. emails) : when
+  // `false`, every scope attribute is set to `undefined`, which `prune()`
+  // drops before the value ever reaches the SDK.
+  const recordScope = config.telemetry?.recordScope !== false;
+
   await applyScopedMultiCollectionIndexes(collection, storageSchemas, {
     queue: mongoOperationQueue,
   });
@@ -664,10 +670,15 @@ export async function scopedMultiCollection<
           return result.insertedId as unknown as string;
         };
         if (!tele) return run();
-        return tele.withOp("insertOne", {
-          [TA.SCOPE]: scopeId,
-          [TA.DOC_TYPE]: String(type),
-        }, run);
+        return tele.withOp(
+          "insertOne",
+          {
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
+            [TA.DOC_TYPE]: String(type),
+          },
+          run,
+          () => ({ [TA.INSERTED_COUNT]: 1 }),
+        );
       },
 
       async insertMany(type, docs) {
@@ -702,7 +713,7 @@ export async function scopedMultiCollection<
         return tele.withOp(
           "insertMany",
           {
-            [TA.SCOPE]: scopeId,
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
             [TA.DOC_TYPE]: String(type),
             [TA.BATCH_SIZE]: docs.length,
           },
@@ -732,7 +743,7 @@ export async function scopedMultiCollection<
         };
         if (!tele) return run();
         return tele.withOp("getById", {
-          [TA.SCOPE]: scopeId,
+          [TA.SCOPE]: recordScope ? scopeId : undefined,
           [TA.DOC_TYPE]: String(type),
           [TA.FILTER_KEYS]: "_id",
         }, run);
@@ -758,7 +769,7 @@ export async function scopedMultiCollection<
         };
         if (!tele) return run();
         return tele.withOp("findOne", {
-          [TA.SCOPE]: scopeId,
+          [TA.SCOPE]: recordScope ? scopeId : undefined,
           [TA.DOC_TYPE]: String(type),
           [TA.FILTER_KEYS]: filterKeys(filter),
         }, run);
@@ -800,7 +811,7 @@ export async function scopedMultiCollection<
         return tele.withOp(
           "find",
           {
-            [TA.SCOPE]: scopeId,
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
             [TA.DOC_TYPE]: String(type),
             [TA.FILTER_KEYS]: filterKeys(filter),
           },
@@ -836,7 +847,7 @@ export async function scopedMultiCollection<
         return tele.withOp(
           "findProject",
           {
-            [TA.SCOPE]: scopeId,
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
             [TA.DOC_TYPE]: String(type),
             [TA.FILTER_KEYS]: filterKeys(filter),
           },
@@ -860,7 +871,7 @@ export async function scopedMultiCollection<
         };
         if (!tele) return run();
         return tele.withOp("findOneAny", {
-          [TA.SCOPE]: scopeId,
+          [TA.SCOPE]: recordScope ? scopeId : undefined,
           [TA.FILTER_KEYS]: filterKeys(filter),
         }, run);
       },
@@ -891,7 +902,7 @@ export async function scopedMultiCollection<
         return tele.withOp(
           "findAny",
           {
-            [TA.SCOPE]: scopeId,
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
             [TA.FILTER_KEYS]: filterKeys(filter),
           },
           run,
@@ -916,7 +927,7 @@ export async function scopedMultiCollection<
         };
         if (!tele) return run();
         return tele.withOp("countDocuments", {
-          [TA.SCOPE]: scopeId,
+          [TA.SCOPE]: recordScope ? scopeId : undefined,
           [TA.DOC_TYPE]: String(type),
           [TA.FILTER_KEYS]: filterKeys(filter),
         }, run);
@@ -943,8 +954,9 @@ export async function scopedMultiCollection<
         };
         if (!tele) return run();
         return tele.withOp("deleteId", {
-          [TA.SCOPE]: scopeId,
+          [TA.SCOPE]: recordScope ? scopeId : undefined,
           [TA.DOC_TYPE]: String(type),
+          [TA.FILTER_KEYS]: "_id",
         }, run);
       },
 
@@ -965,8 +977,9 @@ export async function scopedMultiCollection<
         return tele.withOp(
           "deleteIds",
           {
-            [TA.SCOPE]: scopeId,
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
             [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: "_id",
             [TA.BATCH_SIZE]: ids.length,
           },
           run,
@@ -991,7 +1004,7 @@ export async function scopedMultiCollection<
         return tele.withOp(
           "deleteMany",
           {
-            [TA.SCOPE]: scopeId,
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
             [TA.DOC_TYPE]: String(type),
             [TA.FILTER_KEYS]: filterKeys(filter),
           },
@@ -1001,31 +1014,32 @@ export async function scopedMultiCollection<
       },
 
       async updateOne(type, id, doc) {
-        const typeName = type as string;
-        assertNoReservedFields(doc as Record<string, unknown>);
+        const run = async (op?: OpContext) => {
+          const typeName = type as string;
+          assertNoReservedFields(doc as Record<string, unknown>);
 
-        // Split out removeField() symbols → $unset, the rest → $set.
-        const { set, unset } = extractFieldsToRemove(
-          doc as Record<string, unknown>,
-        );
+          // Split out removeField() symbols → $unset, the rest → $set.
+          const { set, unset } = extractFieldsToRemove(
+            doc as Record<string, unknown>,
+          );
 
-        // Validate the $set paths against the per-type dot-notation schema
-        // (runs the schema's pipe checks/transforms) so a bad value surfaces a
-        // clear Valibot error instead of Mongo's opaque "Document failed
-        // validation". Reserved fields are already rejected above. Mirrors
-        // multiCollection.updateOne. Done outside the retry — a validation
-        // error is not a transient write conflict.
-        const dotSchema = dotSchemaElements[typeName];
-        if (!dotSchema) {
-          throw new Error(`updateOne: unknown type "${typeName}"`);
-        }
-        if (Object.keys(set).length > 0) v.parse(dotSchema, set);
+          // Validate the $set paths against the per-type dot-notation schema
+          // (runs the schema's pipe checks/transforms) so a bad value surfaces
+          // a clear Valibot error instead of Mongo's opaque "Document failed
+          // validation". Reserved fields are already rejected above. Mirrors
+          // multiCollection.updateOne. Done before the retry — a validation
+          // error is not a transient write conflict — but inside `run` so the
+          // failure is recorded on the span.
+          const dotSchema = dotSchemaElements[typeName];
+          if (!dotSchema) {
+            throw new Error(`updateOne: unknown type "${typeName}"`);
+          }
+          if (Object.keys(set).length > 0) v.parse(dotSchema, set);
 
-        const updateOps = buildUpdateOps(set, unset);
-        if (Object.keys(updateOps).length === 0) return 0;
+          const updateOps = buildUpdateOps(set, unset);
+          if (Object.keys(updateOps).length === 0) return 0;
 
-        const run = (op?: OpContext) =>
-          retryOnWriteConflict(async () => {
+          return retryOnWriteConflict(async () => {
             const session = sessionContext.getSession();
             const result = await collection.updateOne(
               {
@@ -1046,11 +1060,12 @@ export async function scopedMultiCollection<
             }
             return result.modifiedCount;
           }, op ? { onRetry: op.onRetry } : undefined);
+        };
         if (!tele) return run();
         return tele.withOp(
           "updateOne",
           {
-            [TA.SCOPE]: scopeId,
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
             [TA.DOC_TYPE]: String(type),
             [TA.UPDATE_FIELDS]: Object.keys(doc).length,
           },
@@ -1097,8 +1112,10 @@ export async function scopedMultiCollection<
               });
             }
           }
-          if (bulkOps.length === 0) return 0;
+          // Set BATCH_SIZE before the empty-batch early return so no-op spans
+          // still carry a (zero) batch size.
           op?.setAttributes({ [TA.BATCH_SIZE]: bulkOps.length });
+          if (bulkOps.length === 0) return 0;
 
           return retryOnWriteConflict(async () => {
             const session = sessionContext.getSession();
@@ -1109,7 +1126,7 @@ export async function scopedMultiCollection<
         if (!tele) return run();
         return tele.withOp(
           "updateMany",
-          { [TA.SCOPE]: scopeId },
+          { [TA.SCOPE]: recordScope ? scopeId : undefined },
           run,
           (modified) => ({ [TA.MODIFIED_COUNT]: modified }),
         );
@@ -1135,7 +1152,7 @@ export async function scopedMultiCollection<
         if (!tele) return run();
         return tele.withOp(
           "aggregate",
-          { [TA.SCOPE]: scopeId },
+          { [TA.SCOPE]: recordScope ? scopeId : undefined },
           run,
           (rows) => ({ [TA.RETURNED_ROWS]: rows.length }),
         );
@@ -1468,7 +1485,7 @@ export async function scopedMultiCollection<
         return tele.withOp(
           "paginate",
           {
-            [TA.SCOPE]: scopeId,
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
             [TA.DOC_TYPE]: String(type),
             [TA.FILTER_KEYS]: filterKeys(filter),
           },
@@ -1498,8 +1515,11 @@ export async function scopedMultiCollection<
 
     // Telemetry: a multi-scope view reports its scope ids as an array; the
     // unscoped view (scopeIds === null) carries no scope attribute at all.
-    // Only allocated when telemetry is enabled.
-    const scopeAttr = tele && scopeIds !== null ? [...scopeIds] : undefined;
+    // Only allocated when telemetry is enabled and scope recording is on —
+    // when `recordScope` is false the attribute is entirely absent.
+    const scopeAttr = tele && recordScope && scopeIds !== null
+      ? [...scopeIds]
+      : undefined;
 
     return {
       _scopes: scopeIds === null ? [] : [...scopeIds],
@@ -1715,7 +1735,9 @@ export async function scopedMultiCollection<
         return count > 0;
       };
       if (!tele) return run();
-      return tele.withOp("scopeExists", { [TA.SCOPE]: validated }, run);
+      return tele.withOp("scopeExists", {
+        [TA.SCOPE]: recordScope ? validated : undefined,
+      }, run);
     },
 
     async dropScope(id, options) {
@@ -1739,7 +1761,7 @@ export async function scopedMultiCollection<
       if (!tele) return run();
       return tele.withOp(
         "dropScope",
-        { [TA.SCOPE]: validated },
+        { [TA.SCOPE]: recordScope ? validated : undefined },
         run,
         (count) => ({ [TA.DELETED_COUNT]: count }),
       );
@@ -1769,7 +1791,7 @@ export async function scopedMultiCollection<
       if (!tele) return run();
       return tele.withOp(
         "scopeStats",
-        { [TA.SCOPE]: validated },
+        { [TA.SCOPE]: recordScope ? validated : undefined },
         run,
         (stats) => ({ [TA.RETURNED_ROWS]: Object.keys(stats.byType).length }),
       );
@@ -1784,8 +1806,12 @@ export async function scopedMultiCollection<
             "deletes the underlying collection and all its data.",
         );
       }
-      const session = sessionContext.getSession();
-      return await collection.drop({ session });
+      const run = async () => {
+        const session = sessionContext.getSession();
+        return await collection.drop({ session });
+      };
+      if (!tele) return run();
+      return tele.withOp("drop", undefined, run);
     },
   };
 }

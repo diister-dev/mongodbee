@@ -62,6 +62,13 @@ export interface TelemetryOptions {
    * silent no-op when the application has not registered an SDK.
    */
   tracerProvider?: TracerProvider;
+  /**
+   * Record the `mongodbee.scope` attribute on scoped-multi-collection spans.
+   * When `false`, scoped-view spans omit the scope value — use this for
+   * deployments whose scope values are PII-bearing (e.g. emails).
+   * @default true
+   */
+  recordScope?: boolean;
 }
 
 /**
@@ -106,6 +113,8 @@ export const TELEMETRY_ATTRIBUTES = {
   DELETED_COUNT: "mongodbee.result.deleted_count",
   /** Documents inserted by an insert operation. */
   INSERTED_COUNT: "mongodbee.result.inserted_count",
+  /** Documents upserted by an update/replace operation. */
+  UPSERTED_COUNT: "mongodbee.result.upserted_count",
   /** Transaction outcome: `"committed"` or `"aborted"`. */
   TX_OUTCOME: "mongodbee.transaction.outcome",
   /** Write-conflict retries of operations executed inside the transaction. */

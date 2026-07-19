@@ -595,7 +595,12 @@ export async function collection<
         return inserted.insertedId as WithId<TOutput>["_id"];
       };
       if (!tele) return run();
-      return tele.withOp("insertOne", undefined, run);
+      return tele.withOp(
+        "insertOne",
+        undefined,
+        run,
+        () => ({ [TA.INSERTED_COUNT]: 1 }),
+      );
     },
     async insertMany(docs, options?) {
       const run = async () => {
@@ -1255,6 +1260,7 @@ export async function collection<
         (r) => ({
           [TA.MATCHED_COUNT]: r.matchedCount,
           [TA.MODIFIED_COUNT]: r.modifiedCount,
+          [TA.UPSERTED_COUNT]: r.upsertedCount,
         }),
       );
     },
@@ -1291,6 +1297,7 @@ export async function collection<
         (r) => ({
           [TA.MATCHED_COUNT]: r.matchedCount,
           [TA.MODIFIED_COUNT]: r.modifiedCount,
+          [TA.UPSERTED_COUNT]: r.upsertedCount,
         }),
       );
     },
@@ -1323,6 +1330,7 @@ export async function collection<
         (r) => ({
           [TA.MATCHED_COUNT]: r.matchedCount,
           [TA.MODIFIED_COUNT]: r.modifiedCount,
+          [TA.UPSERTED_COUNT]: r.upsertedCount,
         }),
       );
     },
@@ -1461,6 +1469,7 @@ export async function collection<
           [TA.INSERTED_COUNT]: r.insertedCount,
           [TA.MATCHED_COUNT]: r.matchedCount,
           [TA.MODIFIED_COUNT]: r.modifiedCount,
+          [TA.UPSERTED_COUNT]: r.upsertedCount,
           [TA.DELETED_COUNT]: r.deletedCount,
         }),
       );

@@ -92,10 +92,11 @@ const users = await collection(db, "users", schema, {
 `TelemetryOptions` (accepted by `collection()`, `multiCollection()` and
 `scopedMultiCollection()`):
 
-| Option           | Type             | Default                                           | Description                                                                                                                               |
-| ---------------- | ---------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`        | `boolean`        | `false`                                           | Enable span emission for this collection (and transaction spans for the underlying MongoDB client). Resolved once at collection creation. |
-| `tracerProvider` | `TracerProvider` | Global API provider (`trace.getTracerProvider()`) | Provider used to obtain the tracer. The global API provider is a silent no-op when no SDK is registered.                                  |
+| Option           | Type             | Default                                           | Description                                                                                                                                               |
+| ---------------- | ---------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`        | `boolean`        | `false`                                           | Enable span emission for this collection (and transaction spans for the underlying MongoDB client). Resolved once at collection creation.                 |
+| `tracerProvider` | `TracerProvider` | Global API provider (`trace.getTracerProvider()`) | Provider used to obtain the tracer. The global API provider is a silent no-op when no SDK is registered.                                                  |
+| `recordScope`    | `boolean`        | `true`                                            | Record the `mongodbee.scope` attribute on scoped-multi-collection spans. Set to `false` for deployments whose scope values are PII-bearing (e.g. emails). |
 
 The tracer is named `@diister/mongodbee` and versioned with the library version,
 so spans are attributed to MongoDBee in your tracing backend.
@@ -121,7 +122,7 @@ re-thrown unchanged.
 **`multiCollection()` operations:**
 
 - Writes: `insertOne`, `insertMany`, `updateOne`, `updateMany`, `deleteId`,
-  `deleteIds`, `deleteMany`, `deleteAny`
+  `deleteIds`, `deleteMany`, `deleteAny`, `drop`
 - Reads: `getById`, `findOne`, `find`, `findOneAny`, `findAny`, `paginate`,
   `countDocuments`, `aggregate`
 
@@ -131,6 +132,7 @@ re-thrown unchanged.
   views (same operation names as `multiCollection()`); scoped-view spans
   additionally carry the `mongodbee.scope` attribute
 - Scope management: `listScopes`, `scopeExists`, `dropScope`, `scopeStats`
+- Collection: `drop`
 
 > **Note**: For cursor-returning reads (`find`, `findInvalid`), the span starts
 > when `toArray()` is invoked — not when the cursor is created — and records the
@@ -179,6 +181,7 @@ ODM-specific data.
 | `mongodbee.result.modified_count`   | Documents modified by an update/replace operation                                                                              | `1`                     |
 | `mongodbee.result.deleted_count`    | Documents deleted by a delete operation                                                                                        | `4`                     |
 | `mongodbee.result.inserted_count`   | Documents inserted by an insert operation                                                                                      | `25`                    |
+| `mongodbee.result.upserted_count`   | Documents upserted by an update/replace operation                                                                              | `1`                     |
 | `mongodbee.transaction.outcome`     | Transaction outcome                                                                                                            | `committed`, `aborted`  |
 | `mongodbee.transaction.retry_count` | Write-conflict retries of operations executed inside the transaction                                                           | `0`                     |
 
@@ -219,6 +222,16 @@ update or document values. Concretely:
 > value — it is structural metadata identifying which scoped view issued the
 > query, opted into by using a scoped view, not document contents.
 
+> **Warning**: `mongodbee.scope` records the **raw** scope value. Do not enable
+> telemetry with PII-bearing scope values (e.g. emails, user ids that are
+> personal data), or set `recordScope: false` to omit the attribute from
+> scoped-view spans.
+
+> **Warning**: `mongodbee.filter.keys` records field **paths**, not values. This
+> is safe for static schemas, but dynamic dictionary-style keys (e.g. a map
+> whose keys are computed from user data) become field paths and would therefore
+> appear in spans.
+
 This makes the structural attributes safe to use for debugging query shapes. For
 example, spotting a query that forgot its scope constraint:
 
@@ -254,8 +267,10 @@ each one is a root span, with no parent/child relationship between them.
 - **`collection().aggregate()` is not traced**: it returns a raw driver cursor.
   This differs from `multiCollection().aggregate()`, which materializes its
   results and is traced.
-- **DDL / index / admin operations are not traced**: collection creation,
-  validator and index management emit no spans.
+- **Index / validator management is not traced**: collection creation, validator
+  application and index management emit no spans. Collection `drop()` on the
+  `multiCollection()` and `scopedMultiCollection()` handles is the exception —
+  it emits a `drop` span.
 - **Migrations and the CLI are not traced.**
 - **No metrics**: MongoDBee emits traces only. For low-level per-command spans
   or metrics, use the MongoDB driver's command monitoring or

@@ -586,7 +586,12 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         return result.insertedId as unknown as string;
       };
       if (!tele) return run();
-      return tele.withOp("insertOne", { [TA.DOC_TYPE]: String(key) }, run);
+      return tele.withOp(
+        "insertOne",
+        { [TA.DOC_TYPE]: String(key) },
+        run,
+        () => ({ [TA.INSERTED_COUNT]: 1 }),
+      );
     },
     async insertMany(key, docs) {
       const run = async () => {
@@ -1372,7 +1377,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
       if (!tele) return run();
       return tele.withOp(
         "deleteId",
-        { [TA.DOC_TYPE]: String(key) },
+        {
+          [TA.DOC_TYPE]: String(key),
+          [TA.FILTER_KEYS]: "_id",
+        },
         run,
         (count) => ({ [TA.DELETED_COUNT]: count }),
       );
@@ -1408,6 +1416,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         "deleteIds",
         {
           [TA.DOC_TYPE]: String(key),
+          [TA.FILTER_KEYS]: "_id",
           [TA.BATCH_SIZE]: ids.length,
         },
         run,
@@ -1504,24 +1513,25 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
       );
     },
     async updateOne(key, id, doc) {
-      // Validation happens outside retry - no need to retry validation errors
-      const dotSchema = dotSchemaElements[key];
-      if (!dotSchema) {
-        throw new Error(`Invalid element type`);
-      }
+      const run = (op?: OpContext) => {
+        // Validation happens inside run (so failures emit an ERROR span) but
+        // outside retry - no need to retry validation errors
+        const dotSchema = dotSchemaElements[key];
+        if (!dotSchema) {
+          throw new Error(`Invalid element type`);
+        }
 
-      // Extract fields to remove before validation (symbols would fail validation)
-      const { set, unset } = extractFieldsToRemove(
-        doc as Record<string, unknown>,
-      );
+        // Extract fields to remove before validation (symbols would fail validation)
+        const { set, unset } = extractFieldsToRemove(
+          doc as Record<string, unknown>,
+        );
 
-      // Validate only the fields that will be set (not the removed ones)
-      if (Object.keys(set).length > 0) {
-        v.parse(dotSchema, set);
-      }
+        // Validate only the fields that will be set (not the removed ones)
+        if (Object.keys(set).length > 0) {
+          v.parse(dotSchema, set);
+        }
 
-      const run = (op?: OpContext) =>
-        retryOnWriteConflict(async () => {
+        return retryOnWriteConflict(async () => {
           const session = sessionContext.getSession();
 
           // Sanitize the remaining fields
@@ -1565,6 +1575,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           // This is not an error condition
           return result.modifiedCount;
         }, op ? { onRetry: op.onRetry } : undefined);
+      };
       if (!tele) return run();
       return tele.withOp(
         "updateOne",
@@ -1656,7 +1667,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
       if (!tele) return run();
       return tele.withOp(
         "updateMany",
-        undefined,
+        { [TA.DOC_TYPE]: Object.keys(operation) },
         run,
         (modified) => ({ [TA.MODIFIED_COUNT]: modified }),
       );
@@ -1845,12 +1856,18 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
       );
     },
     async drop(options) {
-      if (!options?.force) {
-        throw new Error("Must provide { force: true } to drop the collection");
-      }
+      const run = async () => {
+        if (!options?.force) {
+          throw new Error(
+            "Must provide { force: true } to drop the collection",
+          );
+        }
 
-      const session = sessionContext.getSession();
-      return await collection.drop({ session });
+        const session = sessionContext.getSession();
+        return await collection.drop({ session });
+      };
+      if (!tele) return run();
+      return tele.withOp("drop", undefined, run);
     },
   };
 }

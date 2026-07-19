@@ -86,6 +86,9 @@ Deno.test("telemetry: one CLIENT span per operation with semconv attributes", as
     }
 
     // Operation-specific attributes.
+    const insertOneSpan = onlySpan(exporter, "insertOne users");
+    assertEquals(insertOneSpan.attributes[TA.INSERTED_COUNT], 1);
+
     const findOneSpan = onlySpan(exporter, "findOne users");
     assertEquals(findOneSpan.attributes[TA.FILTER_KEYS], "name");
 
@@ -128,6 +131,28 @@ Deno.test("telemetry: insertMany of N docs emits exactly one span with batch siz
     assertEquals(span.attributes[TA.OPERATION_NAME], "insertMany");
     assertEquals(span.attributes[TA.BATCH_SIZE], 50);
     assertEquals(span.attributes[TA.INSERTED_COUNT], 50);
+  });
+});
+
+Deno.test("telemetry: updateOne upsert records upserted_count === 1", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const { exporter, telemetry } = makeTestTelemetry();
+    const users = await collection(db, "users", userSchema, { telemetry });
+    exporter.reset();
+
+    // The filter matches no document, so { upsert: true } inserts a new one.
+    // `name` is seeded from the filter equality; `$set` supplies the rest.
+    const result = await users.updateOne(
+      { name: "Nonexistent" },
+      { $set: { email: "upsert@example.com", age: 50 } },
+      { upsert: true },
+    );
+    assertEquals(result.matchedCount, 0);
+    assertEquals(result.upsertedCount, 1);
+
+    const span = onlySpan(exporter, "updateOne users");
+    assertEquals(span.attributes[TA.MATCHED_COUNT], 0);
+    assertEquals(span.attributes[TA.UPSERTED_COUNT], 1);
   });
 });
 
