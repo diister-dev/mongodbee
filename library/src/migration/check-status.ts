@@ -633,7 +633,6 @@ export async function checkMigrationStatus(
 
   if (strictValidation && allMigrations.length > 0) {
     const simulationValidator = createSimulationValidator({
-      strictValidation: true,
       maxOperations: 1000,
       stateRetentionRatio: 0.5,
       powerLevel: simulationMode,

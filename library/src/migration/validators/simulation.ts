@@ -81,14 +81,13 @@ export type MigrationValidator = {
 
 /**
  * Configuration options for the simulation validator
+ *
+ * Historical note: `strictValidation` and `trackHistory` used to be
+ * accepted here but were never read by any code path — options promising
+ * unimplemented behavior were removed rather than kept as decoys.
+ * (`checkMigrationStatus` has its own, real `strictValidation` option.)
  */
 export interface SimulationValidatorOptions {
-  /** Whether to use strict validation in the simulation applier */
-  strictValidation?: boolean;
-
-  /** Whether to track operation history during simulation */
-  trackHistory?: boolean;
-
   /** Maximum number of operations to validate (for performance) */
   maxOperations?: number;
 
@@ -122,8 +121,6 @@ export interface SimulationValidatorOptions {
  */
 export const DEFAULT_SIMULATION_VALIDATOR_OPTIONS: SimulationValidatorOptions =
   {
-    strictValidation: true,
-    trackHistory: true,
     maxOperations: 1000,
     stateRetentionRatio: DEFAULT_STATE_RETENTION_RATIO,
     powerLevel: "normal",
@@ -1177,9 +1174,8 @@ export class SimulationValidator implements MigrationValidator {
  * import { createSimulationValidator } from "@diister/mongodbee/migration/validators";
  *
  * const validator = createSimulationValidator({
- *   validateReversibility: true,
- *   strictValidation: true,
  *   maxOperations: 500,
+ *   powerLevel: "quick",
  *   stateRetentionRatio: 0.5 // Keep 50% of previous state
  * });
  *
@@ -1204,8 +1200,7 @@ export function createSimulationValidator(
  * import { validateMigrationWithSimulation } from "@diister/mongodbee/migration/validators";
  *
  * const result = await validateMigrationWithSimulation(migration, {
- *   validateReversibility: false,
- *   strictValidation: true
+ *   powerLevel: "quick"
  * });
  *
  * if (result.success) {
