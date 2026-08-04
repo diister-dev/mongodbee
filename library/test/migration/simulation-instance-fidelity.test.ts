@@ -17,7 +17,7 @@
  *     schema bounding an array at 150k produced 150k items and the validator
  *     ran out of memory cloning the state.
  */
-import { assertEquals } from "@std/assert";
+import { assert, assertEquals } from "@std/assert";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import { createSimulationValidator } from "../../src/migration/validators/simulation.ts";
 import { migrationBuilder } from "../../src/migration/builder.ts";
@@ -107,5 +107,34 @@ Deno.test("memory applier: the bare `<model>` registry entry is not an instance"
   assertEquals(scopes.has("exposition:A"), true, "real instance must flow");
 });
 
-// Point 3 (unbounded mock arrays) is locked in valibot-mock's own suite —
-// that is where the generator, and the fix, live.
+Deno.test("simulation: mock arrays stay bounded when a schema declares a huge maxLength", () => {
+  const schemas = {
+    collections: {
+      "+maps": {
+        _id: v.string(),
+        // The shape that took the validator out of memory: the bound describes
+        // the domain, not the size a mock needs.
+        grids: v.pipe(
+          v.array(v.pipe(v.array(v.number()), v.maxLength(150_000))),
+          v.maxLength(50),
+        ),
+      },
+    },
+  };
+
+  const state = createEmptyDatabaseState();
+  state.collections["+maps"] = {
+    content: [{ _id: "map:1", grids: [] }, { _id: "map:2", grids: [] }],
+  };
+
+  const prepared = createSimulationValidator({ powerLevel: "quick" })
+    .prepareStateForNextMigration(state, schemas);
+
+  for (const doc of prepared.collections["+maps"].content) {
+    const grids = (doc.grids ?? []) as number[][];
+    assert(grids.length <= 100, `outer array unbounded: ${grids.length}`);
+    for (const run of grids) {
+      assert(run.length <= 100, `inner array unbounded: ${run.length}`);
+    }
+  }
+});
