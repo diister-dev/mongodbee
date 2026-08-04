@@ -1319,19 +1319,20 @@ export class SimulationValidator implements MigrationValidator {
       const instanceCount = 1; // For simplicity, generate 1 instance per model type
 
       for (let i = 0; i < instanceCount; i++) {
-        const collectionName = `${modelType}@instance${i + 1}`;
+        // `<model>:<id>`, the real instance-naming convention (see
+        // `discoverMultiCollectionInstances`). A synthetic `@` separator made
+        // the name fail any scope format a migration flows instances into —
+        // `flowToScope` uses `ctx.instanceName` as the scope value.
+        const collectionName = `${modelType}:instance${i + 1}`;
         currentState.multiModels[collectionName] = {
           modelType,
           content: [],
         };
         const modelInstances = currentState.multiModels?.[collectionName];
 
-        if (!currentState.multiModels?.[modelType]) {
-          currentState.multiModels[modelType] = {
-            modelType,
-            content: [],
-          };
-        }
+        // No bare `<model>` entry: production has instance collections only
+        // (`<model>:<id>`), so inventing one gives the appliers a phantom
+        // instance whose name is not a valid scope value.
 
         const docCount = Math.floor(
           Math.random() *

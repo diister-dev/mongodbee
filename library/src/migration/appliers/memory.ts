@@ -788,6 +788,11 @@ export function createMemoryApplier(migration: MigrationDefinition) {
             const [instanceName, inst] of Object.entries(state.multiModels)
           ) {
             if (inst.modelType !== from.model) continue;
+            // Instances are named `<model>:<id>` — same rule the mongodb
+            // applier gets from `discoverMultiCollectionInstances`. Without it
+            // a bare `<model>` registry entry reads as an instance, and its
+            // name becomes a `_scope` value that no scope format accepts.
+            if (!instanceName.startsWith(`${from.model}:`)) continue;
             const items: Item[] = [];
             for (const doc of [...inst.content]) {
               // Skip the multi-collection's internal bookkeeping docs
