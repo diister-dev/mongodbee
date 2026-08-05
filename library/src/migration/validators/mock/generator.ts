@@ -34,7 +34,9 @@ export interface MockDocumentOptions {
  * today, but the conditional keeps the intent explicit rather than relying
  * on the generator's undefined-check.
  */
-function toGeneratorOptions(options?: MockDocumentOptions): MockGeneratorOptions {
+function toGeneratorOptions(
+  options?: MockDocumentOptions,
+): MockGeneratorOptions {
   const out: MockGeneratorOptions = {};
   if (options?.seed !== undefined) out.faker = { seed: options.seed };
   if (options?.resolve !== undefined) out.resolve = options.resolve;

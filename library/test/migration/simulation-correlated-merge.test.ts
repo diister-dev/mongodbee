@@ -135,7 +135,11 @@ Deno.test("simulation: correlated identities make the root↔instance merge bran
   );
   // Root-singleton shape survives the merge: the document IS its scope's record.
   for (const doc of merged) {
-    assertEquals(doc._id, doc._scope, "merged information keeps _id === _scope");
+    assertEquals(
+      doc._id,
+      doc._scope,
+      "merged information keeps _id === _scope",
+    );
   }
 
   // Instance documents landed in scopes that exist as root records — not in
@@ -183,7 +187,8 @@ Deno.test("severity: a correlation finding is never blocking, even on an empty d
         collection: "relics",
         kind: "correlation",
         space: "relic",
-        message: 'Identifier space "relic" is referenced but no _id schema mints it',
+        message:
+          'Identifier space "relic" is referenced but no _id schema mints it',
       },
     ],
     schemas,

@@ -408,9 +408,12 @@ function appendScopedDocs(
   const sequence = cycledTypeNames(typeNames, count);
   const minted = new Map<string, string[]>();
   for (const typeName of typeNames) {
-    const perTypeScopes = sequence
-      .map((t, i) => (t === typeName ? scopes[Math.floor(i / typeNames.length)] : null))
-      .filter((s): s is string => s !== null);
+    const perTypeScopes: string[] = [];
+    sequence.forEach((t, i) => {
+      if (t === typeName) {
+        perTypeScopes.push(scopes[Math.floor(i / typeNames.length)]);
+      }
+    });
     if (perTypeScopes.length === 0) continue;
     const ids = ctx.session.mintIds({
       bucket: "scopedMultiCollections",

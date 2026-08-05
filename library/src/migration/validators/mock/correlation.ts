@@ -625,8 +625,7 @@ export function createCorrelationSession(
       collection: target.collection,
       kind: "correlation",
       space,
-      message:
-        `Correlated draw found no "${space}" id for ${target.bucket} ` +
+      message: `Correlated draw found no "${space}" id for ${target.bucket} ` +
         `"${target.collection}" field "${path}"` +
         (target.scope !== null ? ` (scope "${target.scope}")` : "") +
         ` — an uncorrelated value was generated instead.`,
@@ -827,8 +826,7 @@ export function createCorrelationSession(
   }
 
   function docOptions(target: DocTarget): MockDocumentOptions {
-    const label =
-      `${target.bucket}/${target.collection}/${target.type ?? ""}`;
+    const label = `${target.bucket}/${target.collection}/${target.type ?? ""}`;
     const seed = fnv1a32(`${baseSeed}|doc|${label}|${bump(`doc:${label}`)}`);
 
     const key = targetKey(target.bucket, target.collection, target.type);
