@@ -1,12 +1,10 @@
 {
   "version": "5",
   "specifiers": {
-    "jsr:@std/assert@*": "1.0.19",
-    "jsr:@std/assert@1": "1.0.19",
+    "jsr:@diister/valibot-mock@0.1.6": "0.1.6",
     "jsr:@std/assert@1.0.19": "1.0.19",
     "jsr:@std/assert@^1.0.19": "1.0.19",
     "jsr:@std/cli@1.0.29": "1.0.29",
-    "jsr:@std/expect@*": "1.0.19",
     "jsr:@std/expect@^1.0.19": "1.0.20",
     "jsr:@std/fmt@1.0.10": "1.0.10",
     "jsr:@std/fmt@^1.0.10": "1.0.10",
@@ -15,9 +13,8 @@
     "jsr:@std/internal@^1.0.13": "1.0.14",
     "jsr:@std/internal@^1.0.14": "1.0.14",
     "jsr:@std/path@1.1.4": "1.1.4",
-    "jsr:@std/path@^1.1.4": "1.1.6",
+    "jsr:@std/path@^1.1.4": "1.1.4",
     "jsr:@std/path@^1.1.6": "1.1.6",
-    "jsr:@std/testing@*": "1.0.18",
     "jsr:@std/ulid@1.0.0": "1.0.0",
     "npm:@eslint-community/regexpp@^4.12.2": "4.12.2",
     "npm:@faker-js/faker@10.0.0": "10.0.0",
@@ -30,6 +27,15 @@
     "npm:valibot@1.4.0": "1.4.0"
   },
   "jsr": {
+    "@diister/valibot-mock@0.1.6": {
+      "integrity": "85c991e354a5a72e66ce3d9f5688395d317d6cfa4b680eedc6d59ea3e22c6450",
+      "dependencies": [
+        "npm:@eslint-community/regexpp",
+        "npm:@faker-js/faker",
+        "npm:randexp",
+        "npm:valibot@1.1.0"
+      ]
+    },
     "@std/assert@1.0.19": {
       "integrity": "eaada96ee120cb980bc47e040f82814d786fe8162ecc53c91d8df60b8755991e",
       "dependencies": [
@@ -41,14 +47,6 @@
       "dependencies": [
         "jsr:@std/fmt@^1.0.10",
         "jsr:@std/internal@^1.0.13"
-      ]
-    },
-    "@std/expect@1.0.19": {
-      "integrity": "25271785688c7ff902fa54875d6aa4001f552c5578f7f0fefb5b5aac1fc2ed8a",
-      "dependencies": [
-        "jsr:@std/assert@^1.0.19",
-        "jsr:@std/internal@^1.0.13",
-        "jsr:@std/path@^1.1.4"
       ]
     },
     "@std/expect@1.0.20": {
@@ -85,13 +83,6 @@
       "integrity": "c68485c2a4dfbb5ae3cc74fae4e8c4e5d874cf8a8ed12927917235c758b46cbe",
       "dependencies": [
         "jsr:@std/internal@^1.0.14"
-      ]
-    },
-    "@std/testing@1.0.18": {
-      "integrity": "d3152f57b11666bf6358d0e127c7e3488e91178b0c2d8fbf0793e1c53cd13cb1",
-      "dependencies": [
-        "jsr:@std/assert@^1.0.19",
-        "jsr:@std/internal@^1.0.13"
       ]
     },
     "@std/ulid@1.0.0": {
@@ -235,17 +226,6 @@
       "npm:@opentelemetry/api@^1.9.0",
       "npm:mongodb@6.21.0",
       "npm:valibot@1.4.0"
-    ],
-    "links": {
-      "jsr:@diister/valibot-mock@0.1.6": {
-        "dependencies": [
-          "jsr:@std/assert@1",
-          "npm:@eslint-community/regexpp@^4.12.2",
-          "npm:@faker-js/faker@10.0.0",
-          "npm:randexp@0.5.3",
-          "npm:valibot@1.1.0"
-        ]
-      }
-    }
+    ]
   }
 }

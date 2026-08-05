@@ -15,7 +15,6 @@
     "@diister/valibot-mock": "jsr:@diister/valibot-mock@0.1.6",
     "@opentelemetry/api": "npm:@opentelemetry/api@^1.9.0"
   },
-  "links": ["../../valibot-mock/library"],
   "exports": {
     ".": "./mod.ts",
     "./schema": "./schema.ts",
