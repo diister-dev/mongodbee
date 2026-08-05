@@ -35,6 +35,7 @@ import * as v from "valibot";
 import { dirtyEquivalent } from "../../utils/object.ts";
 import { createMemoryApplier } from "../appliers/memory.ts";
 import {
+  createCorrelationSession,
   DEFAULT_STATE_RETENTION_RATIO,
   foldMockGenerationFailures,
   getMockGenerationConfig,
@@ -43,8 +44,10 @@ import {
   populateDeclaredBuckets,
   populateExistingMultiModelInstances,
   retainAndRefreshBuckets,
+  schemasFingerprint,
   type SimulationPowerLevel,
 } from "./mock/mod.ts";
+import { fnv1a32 } from "../utils/seed-id.ts";
 
 // Mock generation lives in ./mock/ — these stay re-exported here because
 // this file is their historical import path.
@@ -383,7 +386,16 @@ export class SimulationValidator implements MigrationValidator {
           stateAfterMigration,
           definition.schemas.multiModels,
           "ifSparse",
-          { config: this.mockConfig, failures: generationFailures },
+          {
+            config: this.mockConfig,
+            failures: generationFailures,
+            // Seeded on the migration id like the initial-state session:
+            // stable per migration, different between migrations.
+            session: createCorrelationSession({
+              schemas: definition.schemas,
+              seed: fnv1a32(definition.id),
+            }),
+          },
         );
       }
 
@@ -1100,9 +1112,15 @@ export class SimulationValidator implements MigrationValidator {
 
     // "always": the state keeps its real parent seeds AND gains generated
     // documents on top, so both seeded values and edge cases are exercised.
+    // The session seed derives from the migration id: a simulation replays
+    // identically for one migration and differs between migrations.
     populateDeclaredBuckets(currentState, parent.schemas, "always", {
       config: this.mockConfig,
       failures,
+      session: createCorrelationSession({
+        schemas: parent.schemas,
+        seed: fnv1a32(parent.id),
+      }),
     });
 
     return currentState;
@@ -1150,6 +1168,13 @@ export class SimulationValidator implements MigrationValidator {
     const ctx: MockPopulateContext = {
       config: this.mockConfig,
       failures: [],
+      // The locked `(state, schemas)` signature carries no migration id, so
+      // the seed derives from a stable fingerprint of the schemas — which is
+      // exactly what schemasFingerprint exists for.
+      session: createCorrelationSession({
+        schemas,
+        seed: fnv1a32(schemasFingerprint(schemas)),
+      }),
     };
 
     retainAndRefreshBuckets(newState, schemas, ratio, ctx);

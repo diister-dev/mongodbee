@@ -33,6 +33,7 @@ import {
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import { createSimulationValidator } from "../../src/migration/validators/simulation.ts";
 import {
+  createCorrelationSession,
   getMockGenerationConfig,
   type MockPopulateContext,
   populateCollections,
@@ -47,10 +48,13 @@ const GOOD = { _id: v.string(), name: v.string() };
 // exercise the failure path without stubbing the generator.
 const BROKEN = { _id: v.string(), impossible: v.never() };
 
+// An empty-schema session correlates nothing — these tests lock the engine's
+// population semantics, not the identity correlation (locked elsewhere).
 function quickCtx(): MockPopulateContext {
   return {
     config: getMockGenerationConfig("quick"),
     failures: [] as MockGenerationFailure[],
+    session: createCorrelationSession({ schemas: {}, seed: 42 }),
   };
 }
 
@@ -223,10 +227,21 @@ Deno.test("D4: 'ifEmpty' populates a model without instances even when the bucke
 
   // Model `a` already has an instance: untouched, no synthetic sibling.
   assertEquals(state.multiModels["a:real1"].content.length, 1);
-  assertEquals(state.multiModels["a:instance1"], undefined);
-  // Model `b` had none: it gets a populated synthetic instance.
-  assert(state.multiModels["b:instance1"], "model b must get an instance");
-  assertEquals(state.multiModels["b:instance1"].content.length, 10);
+  const aInstances = Object.values(state.multiModels).filter(
+    (i) => i.modelType === "a",
+  );
+  assertEquals(aInstances.length, 1);
+  // Model `b` had none: it gets a populated synthetic instance whose name
+  // follows the real `<model>:<id>` convention (realized, not `b:instance1`).
+  const bNames = Object.keys(state.multiModels).filter(
+    (name) => state.multiModels[name].modelType === "b",
+  );
+  assertEquals(bNames.length, 1, "model b must get exactly one instance");
+  assert(
+    /^b:[a-zA-Z0-9]+$/.test(bNames[0]),
+    `instance name must be a valid model id, got: ${bNames[0]}`,
+  );
+  assertEquals(state.multiModels[bNames[0]].content.length, 10);
   assertEquals(ctx.failures, []);
 });
 
@@ -234,9 +249,9 @@ Deno.test("D4: 'ifEmpty' populates a model without instances even when the bucke
 // D5 — existing entries are preserved, never reassigned
 // ============================================================================
 
-Deno.test("D5: a real instance colliding with the synthetic name keeps its documents", () => {
+Deno.test("D5: an existing instance is never reassigned — synthetic names avoid taken ones", () => {
   const state = createEmptyDatabaseState();
-  state.multiModels["m:instance1"] = {
+  state.multiModels["m:real1"] = {
     modelType: "m",
     content: [{ _id: "keep-me", _type: "t", name: "original" }],
   };
@@ -249,9 +264,16 @@ Deno.test("D5: a real instance colliding with the synthetic name keeps its docum
     ctx,
   );
 
-  const content = state.multiModels["m:instance1"].content;
-  assertEquals(content[0]._id, "keep-me", "existing docs must survive");
-  assertEquals(content.length, 11);
+  // Realized names exclude existing entries, so the real instance survives
+  // byte-identical and the synthetic documents land in a fresh sibling.
+  const real = state.multiModels["m:real1"].content;
+  assertEquals(real.length, 1, "existing instance must stay untouched");
+  assertEquals(real[0]._id, "keep-me", "existing docs must survive");
+  const synthetic = Object.keys(state.multiModels).filter(
+    (name) => name !== "m:real1" && state.multiModels[name].modelType === "m",
+  );
+  assertEquals(synthetic.length, 1, "one synthetic sibling instance");
+  assertEquals(state.multiModels[synthetic[0]].content.length, 10);
 });
 
 Deno.test("D5: 'ifSparse' has no defined meaning for synthetic instances and fails loud", () => {

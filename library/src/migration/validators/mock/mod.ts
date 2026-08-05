@@ -18,7 +18,20 @@ export {
   type SimulationPowerLevel,
 } from "./config.ts";
 
-export { generateMockDocument, generateMockScopeValue } from "./generator.ts";
+export {
+  generateMockDocument,
+  generateMockScopeValue,
+  type MockDocumentOptions,
+} from "./generator.ts";
+
+export {
+  type CorrelationSession,
+  type CorrelationSessionOptions,
+  createCorrelationSession,
+  type DocTarget,
+  type MintRequest,
+  schemasFingerprint,
+} from "./correlation.ts";
 
 export {
   type MockPopulateContext,

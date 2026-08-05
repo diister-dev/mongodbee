@@ -102,6 +102,16 @@ export function foldMockGenerationFailures(
   for (const failure of failures) {
     const probe = BUCKET_PROBES[failure.bucket];
     const label = BUCKET_LABELS[failure.bucket];
+
+    // Correlation findings describe degraded FIDELITY, never absent
+    // coverage: the documents exist, only their identities failed to
+    // coincide. They are never blocking — unlike a generation failure,
+    // where an empty-but-declared target stays an error.
+    if (failure.kind === "correlation") {
+      warnings.push(`Mock identity correlation: ${failure.message}`);
+      continue;
+    }
+
     const message =
       `Mock data generation failed for ${label} "${failure.collection}": ${failure.message}`;
 

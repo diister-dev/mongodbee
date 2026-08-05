@@ -29,7 +29,8 @@ import type {
 } from "../../types.ts";
 import type { MockGenerationConfig } from "./config.ts";
 import { INSTANCES_PER_MODEL } from "./config.ts";
-import { generateMockDocument, generateMockScopeValue } from "./generator.ts";
+import { generateMockDocument } from "./generator.ts";
+import type { CorrelationSession } from "./correlation.ts";
 
 /**
  * When a target collection receives new mock documents (divergence D1).
@@ -62,6 +63,14 @@ export interface MockPopulateContext {
 
   /** Failure collector — appended in place, one entry per aborted target. */
   failures: MockGenerationFailure[];
+
+  /**
+   * Correlated-identity session shared by every call of ONE population run.
+   * It owns the RNG (replayability), the identifier pools (references and
+   * instance names that coincide with real ids), and the findings report the
+   * entry points drain into {@link MockPopulateContext.failures}.
+   */
+  session: CorrelationSession;
 }
 
 function errorMessage(error: unknown): string {
@@ -72,10 +81,13 @@ function errorMessage(error: unknown): string {
  * Draws the per-collection document count from the configured range.
  * Every preset currently has MIN === MAX, so the draw is deterministic —
  * the range is kept so a future spread works without touching call sites.
+ * The draw goes through the session RNG: a bare Math.random here was the
+ * last obstacle to replaying a simulation identically.
  */
-function drawDocCount(config: MockGenerationConfig): number {
+function drawDocCount(ctx: MockPopulateContext): number {
+  const { config } = ctx;
   return Math.floor(
-    Math.random() *
+    ctx.session.random() *
       (config.DOCS_PER_COLLECTION_MAX - config.DOCS_PER_COLLECTION_MIN + 1),
   ) + config.DOCS_PER_COLLECTION_MIN;
 }
@@ -113,9 +125,24 @@ function appendPlainDocs(
   ctx: MockPopulateContext,
   collectionName: string,
 ): void {
+  // Mint every `_id` BEFORE generating any document, so reference fields of
+  // the batch (self-references included) find the pool already filled.
+  const ids = ctx.session.mintIds({
+    bucket: "collections",
+    collection: collectionName,
+    scopes: Array.from({ length: count }, () => null),
+  });
   for (let i = 0; i < count; i++) {
     try {
-      content.push(generateMockDocument(schema));
+      content.push(generateMockDocument(
+        schema,
+        ctx.session.docOptions({
+          bucket: "collections",
+          collection: collectionName,
+          scope: null,
+          assignedId: ids?.[i],
+        }),
+      ));
     } catch (error) {
       ctx.failures.push({
         bucket: "collections",
@@ -125,6 +152,23 @@ function appendPlainDocs(
       return;
     }
   }
+}
+
+/**
+ * The refresh cycling order as data: type names repeated in declaration
+ * order until `count` positions exist. Materializing the sequence lets the
+ * mint phase run per TYPE before any document generates — the same
+ * pools-first rule the batch paths follow.
+ */
+function cycledTypeNames(typeNames: string[], count: number): string[] {
+  const sequence: string[] = [];
+  while (sequence.length < count) {
+    for (const typeName of typeNames) {
+      if (sequence.length >= count) break;
+      sequence.push(typeName);
+    }
+  }
+  return sequence;
 }
 
 /**
@@ -141,11 +185,41 @@ function appendTypedBatches(
   collectionName: string,
   modelType?: string,
 ): void {
+  // The correlation plan is static, so it keys multiModels on the MODEL —
+  // the instance is where the documents land, hence the instance name is the
+  // documents' scope (a reference inside an instance resolves within it).
+  const planCollection = modelType ?? collectionName;
+  const scope = bucket === "multiModels" ? collectionName : null;
+  const typeNames = Object.keys(types);
+
+  const scopes = Array.from({ length: batchCount }, () => scope);
+  const minted = new Map<string, string[] | undefined>();
+  for (const typeName of typeNames) {
+    minted.set(
+      typeName,
+      ctx.session.mintIds({
+        bucket,
+        collection: planCollection,
+        type: typeName,
+        scopes,
+      }),
+    );
+  }
+
   for (let i = 0; i < batchCount; i++) {
-    for (const typeName of Object.keys(types)) {
+    for (const typeName of typeNames) {
       try {
         content.push({
-          ...generateMockDocument(types[typeName]),
+          ...generateMockDocument(
+            types[typeName],
+            ctx.session.docOptions({
+              bucket,
+              collection: planCollection,
+              type: typeName,
+              scope,
+              assignedId: minted.get(typeName)?.[i],
+            }),
+          ),
           _type: typeName,
         });
       } catch (error) {
@@ -177,37 +251,59 @@ function appendTypedDocs(
 ): void {
   const typeNames = Object.keys(types);
   // A typed schema with zero types has nothing to generate; without this
-  // guard the while-loop below could never make progress.
+  // guard the cycling sequence below could never reach `count`.
   if (typeNames.length === 0) return;
 
-  let appended = 0;
-  while (appended < count) {
-    for (const typeName of typeNames) {
-      if (appended >= count) break;
-      try {
-        content.push({
-          ...generateMockDocument(types[typeName]),
-          _type: typeName,
-        });
-        appended++;
-      } catch (error) {
-        ctx.failures.push({
-          bucket,
-          collection: collectionName,
-          modelType,
-          message: `type "${typeName}": ${errorMessage(error)}`,
-        });
-        return;
-      }
+  const planCollection = modelType ?? collectionName;
+  const scope = bucket === "multiModels" ? collectionName : null;
+
+  const sequence = cycledTypeNames(typeNames, count);
+  const minted = new Map<string, string[]>();
+  for (const typeName of typeNames) {
+    const perType = sequence.filter((t) => t === typeName).length;
+    if (perType === 0) continue;
+    const ids = ctx.session.mintIds({
+      bucket,
+      collection: planCollection,
+      type: typeName,
+      scopes: Array.from({ length: perType }, () => scope),
+    });
+    if (ids) minted.set(typeName, ids);
+  }
+
+  for (const typeName of sequence) {
+    try {
+      content.push({
+        ...generateMockDocument(
+          types[typeName],
+          ctx.session.docOptions({
+            bucket,
+            collection: planCollection,
+            type: typeName,
+            scope,
+            assignedId: minted.get(typeName)?.shift(),
+          }),
+        ),
+        _type: typeName,
+      });
+    } catch (error) {
+      ctx.failures.push({
+        bucket,
+        collection: collectionName,
+        modelType,
+        message: `type "${typeName}": ${errorMessage(error)}`,
+      });
+      return;
     }
   }
 }
 
 /**
  * Appends `batchCount` batches to a scoped multi-collection. Each batch
- * shares one mock `_scope` value generated from the `scope` schema, so
- * simulated documents exercise the same envelope (`_type` + `_scope`) the
- * appliers produce.
+ * shares one `_scope` value REALIZED by the session — an existing scope-space
+ * id when the pools hold any, a fresh value from the `scope` schema
+ * otherwise — so simulated documents land in the same scopes real entities
+ * inhabit instead of each batch inventing a parallel universe.
  */
 function appendScopedBatches(
   content: Record<string, unknown>[],
@@ -216,24 +312,52 @@ function appendScopedBatches(
   ctx: MockPopulateContext,
   collectionName: string,
 ): void {
-  for (let i = 0; i < batchCount; i++) {
-    let scopeValue: unknown;
-    try {
-      scopeValue = generateMockScopeValue(scopedSchema.scope);
-    } catch (error) {
-      ctx.failures.push({
+  let scopes: string[];
+  try {
+    scopes = ctx.session.realizeScopes(
+      collectionName,
+      scopedSchema.scope,
+      batchCount,
+    );
+  } catch (error) {
+    ctx.failures.push({
+      bucket: "scopedMultiCollections",
+      collection: collectionName,
+      message: `scope: ${errorMessage(error)}`,
+    });
+    return;
+  }
+
+  const typeNames = Object.keys(scopedSchema.types);
+  const minted = new Map<string, string[] | undefined>();
+  for (const typeName of typeNames) {
+    minted.set(
+      typeName,
+      ctx.session.mintIds({
         bucket: "scopedMultiCollections",
         collection: collectionName,
-        message: `scope: ${errorMessage(error)}`,
-      });
-      return;
-    }
-    for (const typeName of Object.keys(scopedSchema.types)) {
+        type: typeName,
+        scopes,
+      }),
+    );
+  }
+
+  for (let i = 0; i < batchCount; i++) {
+    for (const typeName of typeNames) {
       try {
         content.push({
-          ...generateMockDocument(scopedSchema.types[typeName]),
+          ...generateMockDocument(
+            scopedSchema.types[typeName],
+            ctx.session.docOptions({
+              bucket: "scopedMultiCollections",
+              collection: collectionName,
+              type: typeName,
+              scope: scopes[i],
+              assignedId: minted.get(typeName)?.[i],
+            }),
+          ),
           _type: typeName,
-          _scope: scopeValue,
+          _scope: scopes[i],
         });
       } catch (error) {
         ctx.failures.push({
@@ -249,7 +373,7 @@ function appendScopedBatches(
 
 /**
  * Appends exactly `count` scoped mock documents, cycling through the types;
- * one `_scope` value is generated per cycle (refresh counterpart of
+ * one `_scope` value is realized per cycle (refresh counterpart of
  * {@link appendScopedBatches}).
  */
 function appendScopedDocs(
@@ -262,36 +386,66 @@ function appendScopedDocs(
   const typeNames = Object.keys(scopedSchema.types);
   if (typeNames.length === 0) return;
 
-  let appended = 0;
-  while (appended < count) {
-    let scopeValue: unknown;
+  const cycles = Math.ceil(count / typeNames.length);
+  let scopes: string[];
+  try {
+    scopes = ctx.session.realizeScopes(
+      collectionName,
+      scopedSchema.scope,
+      cycles,
+    );
+  } catch (error) {
+    ctx.failures.push({
+      bucket: "scopedMultiCollections",
+      collection: collectionName,
+      message: `scope: ${errorMessage(error)}`,
+    });
+    return;
+  }
+
+  // Position i of the cycling sequence lives in scope `scopes[floor(i / n)]`
+  // — one scope per cycle, exactly the old shape, with realized values.
+  const sequence = cycledTypeNames(typeNames, count);
+  const minted = new Map<string, string[]>();
+  for (const typeName of typeNames) {
+    const perTypeScopes = sequence
+      .map((t, i) => (t === typeName ? scopes[Math.floor(i / typeNames.length)] : null))
+      .filter((s): s is string => s !== null);
+    if (perTypeScopes.length === 0) continue;
+    const ids = ctx.session.mintIds({
+      bucket: "scopedMultiCollections",
+      collection: collectionName,
+      type: typeName,
+      scopes: perTypeScopes,
+    });
+    if (ids) minted.set(typeName, ids);
+  }
+
+  for (let i = 0; i < sequence.length; i++) {
+    const typeName = sequence[i];
+    const scope = scopes[Math.floor(i / typeNames.length)];
     try {
-      scopeValue = generateMockScopeValue(scopedSchema.scope);
+      content.push({
+        ...generateMockDocument(
+          scopedSchema.types[typeName],
+          ctx.session.docOptions({
+            bucket: "scopedMultiCollections",
+            collection: collectionName,
+            type: typeName,
+            scope,
+            assignedId: minted.get(typeName)?.shift(),
+          }),
+        ),
+        _type: typeName,
+        _scope: scope,
+      });
     } catch (error) {
       ctx.failures.push({
         bucket: "scopedMultiCollections",
         collection: collectionName,
-        message: `scope: ${errorMessage(error)}`,
+        message: `type "${typeName}": ${errorMessage(error)}`,
       });
       return;
-    }
-    for (const typeName of typeNames) {
-      if (appended >= count) break;
-      try {
-        content.push({
-          ...generateMockDocument(scopedSchema.types[typeName]),
-          _type: typeName,
-          _scope: scopeValue,
-        });
-        appended++;
-      } catch (error) {
-        ctx.failures.push({
-          bucket: "scopedMultiCollections",
-          collection: collectionName,
-          message: `type "${typeName}": ${errorMessage(error)}`,
-        });
-        return;
-      }
     }
   }
 }
@@ -316,7 +470,7 @@ export function populateCollections(
     appendPlainDocs(
       collection.content,
       schema,
-      drawDocCount(ctx.config),
+      drawDocCount(ctx),
       ctx,
       collectionName,
     );
@@ -342,7 +496,7 @@ export function populateMultiCollections(
     appendTypedBatches(
       collection.content,
       schema,
-      drawDocCount(ctx.config),
+      drawDocCount(ctx),
       ctx,
       "multiCollections",
       collectionName,
@@ -389,22 +543,29 @@ export function populateSyntheticMultiModelInstances(
       if (modelHasInstance) continue;
     }
 
-    for (let i = 0; i < INSTANCES_PER_MODEL; i++) {
-      // `<model>:<id>`, the real instance-naming convention (see
-      // `discoverMultiCollectionInstances`). A synthetic `@` separator made
-      // the name fail any scope format a migration flows instances into —
-      // `flowToScope` uses `ctx.instanceName` as the scope value.
-      const collectionName = `${modelType}:instance${i + 1}`;
-
-      // No bare `<model>` entry: production has instance collections only
-      // (`<model>:<id>`), so inventing one gives the appliers a phantom
-      // instance whose name is not a valid scope value.
+    // Instance names are REALIZED, not invented: when the model-key space's
+    // pool holds real root ids, the instance takes one of them — production
+    // names instances `<model>:<entity id>`, and that coincidence is what
+    // makes a root↔instance merge branch (`flowToScope` with
+    // `onConflict: "merge"`) executable in simulation. Names never collide
+    // with existing entries, so real instances are never reassigned.
+    //
+    // No bare `<model>` entry: production has instance collections only
+    // (`<model>:<id>`), so inventing one gives the appliers a phantom
+    // instance whose name is not a valid scope value.
+    const taken = new Set(Object.keys(state.multiModels));
+    const names = ctx.session.realizeInstanceNames(
+      modelType,
+      INSTANCES_PER_MODEL,
+      taken,
+    );
+    for (const collectionName of names) {
       state.multiModels[collectionName] ??= { modelType, content: [] };
 
       appendTypedBatches(
         state.multiModels[collectionName].content,
         schema,
-        drawDocCount(ctx.config),
+        drawDocCount(ctx),
         ctx,
         "multiModels",
         collectionName,
@@ -426,6 +587,12 @@ export function populateExistingMultiModelInstances(
   policy: PopulatePolicy,
   ctx: MockPopulateContext,
 ): void {
+  // Existing documents and instance names feed the pools first, so topped-up
+  // documents reference REAL post-migration identities. This entry point is
+  // called standalone (after a migration ran), hence it harvests and drains
+  // like the other two engine entry points.
+  ctx.session.harvest(state);
+
   for (const [instanceName, instance] of Object.entries(state.multiModels)) {
     const schema = multiModels[instance.modelType];
     if (!schema) continue;
@@ -435,13 +602,15 @@ export function populateExistingMultiModelInstances(
     appendTypedBatches(
       instance.content,
       schema,
-      drawDocCount(ctx.config),
+      drawDocCount(ctx),
       ctx,
       "multiModels",
       instanceName,
       instance.modelType,
     );
   }
+
+  ctx.failures.push(...ctx.session.drainFindings());
 }
 
 /**
@@ -456,11 +625,17 @@ export function populateScopedMultiCollections(
   policy: PopulatePolicy,
   ctx: MockPopulateContext,
 ): void {
-  for (
-    const [collectionName, scopedSchema] of Object.entries(
-      scopedMultiCollections,
-    )
-  ) {
+  // A collection holding a root singleton mints its own scope ENTITIES
+  // (`information._id === _scope`), so it must realize its scopes before
+  // sibling scoped collections draw from the same space — otherwise the
+  // siblings draw from an empty pool and invent parallel scopes. The sort is
+  // stable, so declaration order is preserved within each group.
+  const entries = Object.entries(scopedMultiCollections).sort(
+    (a, b) =>
+      Number(ctx.session.realizesOwnScopes(b[0])) -
+      Number(ctx.session.realizesOwnScopes(a[0])),
+  );
+  for (const [collectionName, scopedSchema] of entries) {
     state.scopedMultiCollections[collectionName] ??= { content: [] };
     const collection = state.scopedMultiCollections[collectionName];
     if (!shouldPopulate(collection.content.length, policy, ctx.config)) {
@@ -469,7 +644,7 @@ export function populateScopedMultiCollections(
     appendScopedBatches(
       collection.content,
       scopedSchema,
-      drawDocCount(ctx.config),
+      drawDocCount(ctx),
       ctx,
       collectionName,
     );
@@ -490,6 +665,11 @@ export function populateDeclaredBuckets(
   policy: PopulatePolicy,
   ctx: MockPopulateContext,
 ): void {
+  // Real identities first: parent seeds and pre-existing documents fill the
+  // pools BEFORE anything generates, so fresh references and instance names
+  // can coincide with them (harvest is idempotent — pools deduplicate).
+  ctx.session.harvest(state);
+
   if (schemas.collections) {
     populateCollections(state, schemas.collections, policy, ctx);
   }
@@ -512,6 +692,11 @@ export function populateDeclaredBuckets(
       ctx,
     );
   }
+
+  // The correlation report joins the failure channel the caller already
+  // folds into its validation result — a hole in the correlation is spoken,
+  // never silent.
+  ctx.failures.push(...ctx.session.drainFindings());
 }
 
 /**
@@ -531,6 +716,10 @@ export function populateDeclaredBuckets(
  * Retention applies even when the schema no longer declares the entry;
  * refresh requires a schema to generate against, so schema-less entries only
  * shrink — exactly what a dropped-from-schema collection should do.
+ *
+ * Retention runs over EVERY bucket before any refresh generates: the harvest
+ * in between must only register identities of documents that actually
+ * survive, or fresh references would point at ghosts.
  */
 export function retainAndRefreshBuckets(
   state: DatabaseState,
@@ -538,56 +727,62 @@ export function retainAndRefreshBuckets(
   ratio: number,
   ctx: MockPopulateContext,
 ): void {
-  for (
-    const [collectionName, collection] of Object.entries(state.collections)
-  ) {
-    const originalCount = collection.content.length;
-    const keepCount = Math.floor(originalCount * ratio);
-    collection.content = collection.content.slice(0, keepCount);
+  /** Slices a bucket's entries and returns the per-entry refresh need. */
+  const applyRetention = (
+    entries: Record<string, { content: Record<string, unknown>[] }>,
+  ): Map<string, number> => {
+    const refreshNeeds = new Map<string, number>();
+    for (const [name, entry] of Object.entries(entries)) {
+      const originalCount = entry.content.length;
+      const keepCount = Math.floor(originalCount * ratio);
+      entry.content = entry.content.slice(0, keepCount);
+      refreshNeeds.set(name, originalCount - keepCount);
+    }
+    return refreshNeeds;
+  };
 
+  const collectionNeeds = applyRetention(state.collections);
+  const multiCollectionNeeds = applyRetention(state.multiCollections);
+  const multiModelNeeds = applyRetention(state.multiModels);
+  const scopedNeeds = applyRetention(state.scopedMultiCollections);
+
+  // Surviving documents feed the pools, so refreshed documents reference
+  // retained identities instead of a disjoint fresh universe.
+  ctx.session.harvest(state);
+
+  for (const [collectionName, need] of collectionNeeds) {
     const schema = schemas.collections?.[collectionName];
     if (!schema) continue;
     appendPlainDocs(
-      collection.content,
+      state.collections[collectionName].content,
       schema,
-      originalCount - keepCount,
+      need,
       ctx,
       collectionName,
     );
   }
 
-  for (
-    const [collectionName, collection] of Object.entries(
-      state.multiCollections,
-    )
-  ) {
-    const originalCount = collection.content.length;
-    const keepCount = Math.floor(originalCount * ratio);
-    collection.content = collection.content.slice(0, keepCount);
-
+  for (const [collectionName, need] of multiCollectionNeeds) {
     const schema = schemas.multiCollections?.[collectionName];
     if (!schema) continue;
     appendTypedDocs(
-      collection.content,
+      state.multiCollections[collectionName].content,
       schema,
-      originalCount - keepCount,
+      need,
       ctx,
       "multiCollections",
       collectionName,
     );
   }
 
-  for (const [instanceName, instance] of Object.entries(state.multiModels)) {
-    const originalCount = instance.content.length;
-    const keepCount = Math.floor(originalCount * ratio);
-    instance.content = instance.content.slice(0, keepCount);
-
+  for (const [instanceName, need] of multiModelNeeds) {
+    const instance = state.multiModels[instanceName];
     const schema = schemas.multiModels?.[instance.modelType];
     if (!schema) continue;
     appendTypedDocs(
       instance.content,
       schema,
-      originalCount - keepCount,
+      need,
       ctx,
       "multiModels",
       instanceName,
@@ -595,23 +790,25 @@ export function retainAndRefreshBuckets(
     );
   }
 
-  for (
-    const [collectionName, collection] of Object.entries(
-      state.scopedMultiCollections,
-    )
-  ) {
-    const originalCount = collection.content.length;
-    const keepCount = Math.floor(originalCount * ratio);
-    collection.content = collection.content.slice(0, keepCount);
-
+  // Same ordering rule as populateScopedMultiCollections: collections that
+  // mint their own scope entities refresh first, so siblings draw realized
+  // scopes instead of an empty pool.
+  const orderedScoped = [...scopedNeeds.entries()].sort(
+    (a, b) =>
+      Number(ctx.session.realizesOwnScopes(b[0])) -
+      Number(ctx.session.realizesOwnScopes(a[0])),
+  );
+  for (const [collectionName, need] of orderedScoped) {
     const scopedSchema = schemas.scopedMultiCollections?.[collectionName];
     if (!scopedSchema) continue;
     appendScopedDocs(
-      collection.content,
+      state.scopedMultiCollections[collectionName].content,
       scopedSchema,
-      originalCount - keepCount,
+      need,
       ctx,
       collectionName,
     );
   }
+
+  ctx.failures.push(...ctx.session.drainFindings());
 }
