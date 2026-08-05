@@ -12,6 +12,34 @@
 
 import * as v from "valibot";
 import { createMockGenerator } from "@diister/valibot-mock";
+import type { MockGeneratorOptions } from "@diister/valibot-mock";
+
+/**
+ * Options threaded into ONE generator invocation.
+ *
+ * `seed` makes the invocation deterministic — the correlated engine derives
+ * a distinct seed per document from the migration id, so a simulation can be
+ * replayed identically and diffed between runs. `resolve` is the caller-side
+ * hook implementing the link phase: `_id` injection and reference draws from
+ * the identifier pools (see `correlation.ts`).
+ */
+export interface MockDocumentOptions {
+  seed?: number;
+  resolve?: MockGeneratorOptions["resolve"];
+}
+
+/**
+ * Builds the generator options, including `faker.seed` ONLY when a seed is
+ * given — a spread `{ seed: undefined }` would still be treated as "no seed"
+ * today, but the conditional keeps the intent explicit rather than relying
+ * on the generator's undefined-check.
+ */
+function toGeneratorOptions(options?: MockDocumentOptions): MockGeneratorOptions {
+  const out: MockGeneratorOptions = {};
+  if (options?.seed !== undefined) out.faker = { seed: options.seed };
+  if (options?.resolve !== undefined) out.resolve = options.resolve;
+  return out;
+}
 
 /**
  * Generates a mock document from a Valibot schema for testing purposes
@@ -19,15 +47,18 @@ import { createMockGenerator } from "@diister/valibot-mock";
  *
  * Throws when the generator cannot produce a value for the schema (for
  * example a `v.never()` field, or constraints the generator cannot satisfy
- * within its attempt budget). Callers are expected to record that failure —
- * never to swallow it — because a swallowed generation failure leaves the
- * collection empty and downstream validation loops assert nothing on it.
+ * within its attempt budget), and when a `resolve` hook injects a value the
+ * schema rejects. Callers are expected to record that failure — never to
+ * swallow it — because a swallowed generation failure leaves the collection
+ * empty and downstream validation loops assert nothing on it.
  *
  * @param schema - Valibot schema representing document structure
+ * @param options - Per-invocation seed and resolve hook
  * @returns Mock document matching the schema
  */
 export function generateMockDocument(
   schema: Record<string, unknown>,
+  options?: MockDocumentOptions,
 ): Record<string, unknown> {
   // Wrap the schema in v.object() for valibot-mock
   // deno-lint-ignore no-explicit-any
@@ -37,7 +68,10 @@ export function generateMockDocument(
 
   // Use valibot-mock to generate realistic test data from schema
   // deno-lint-ignore no-explicit-any
-  const generator = createMockGenerator(schemaObject as any);
+  const generator = createMockGenerator(
+    schemaObject as any,
+    toGeneratorOptions(options),
+  );
   const mockData = generator.generate();
 
   // Validate the generated data matches the schema
@@ -60,9 +94,13 @@ export function generateMockDocument(
  */
 export function generateMockScopeValue(
   schema: v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>,
+  options?: MockDocumentOptions,
 ): unknown {
   // deno-lint-ignore no-explicit-any
-  const generator = createMockGenerator(schema as any);
+  const generator = createMockGenerator(
+    schema as any,
+    toGeneratorOptions(options),
+  );
   const mockValue = generator.generate();
 
   const validation = v.safeParse(schema, mockValue);

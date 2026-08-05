@@ -35,10 +35,12 @@ export function extractIdPrefix(
   if (fallbackPrefix) return fallbackPrefix;
   if (!schemaIdField || typeof schemaIdField !== "object") return "";
 
-  // 1. dbId(): default value like "user:<ulid>"
+  // 1. dbId(): default value like "user:<ulid>". The default must LOOK like a
+  // typed id (`prefix:alnum…`) — a mere ":" is not enough, or any defaulted
+  // URL-ish string ("https://…") would masquerade as a "https" id space.
   try {
     const def: unknown = v.getDefault(schemaIdField as v.GenericSchema);
-    if (typeof def === "string" && def.includes(":")) {
+    if (typeof def === "string" && /^[a-zA-Z0-9_-]+:[a-zA-Z0-9]/.test(def)) {
       return def.split(":")[0];
     }
   } catch {
@@ -63,8 +65,12 @@ export function extractIdPrefix(
   return "";
 }
 
-/** FNV-1a 32-bit hash. */
-function fnv1a32(input: string): number {
+/**
+ * FNV-1a 32-bit hash. Exported because the simulation's correlated-data
+ * generation derives its deterministic seeds from the same stable-string
+ * hashing the seed ids use — one hash, not two drifting copies.
+ */
+export function fnv1a32(input: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < input.length; i++) {
     h ^= input.charCodeAt(i);
