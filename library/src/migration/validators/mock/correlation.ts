@@ -464,6 +464,13 @@ export interface CorrelationSession {
   mintIds(request: MintRequest): string[] | undefined;
 
   /**
+   * The identifiers a space currently holds in its global pool, in mint
+   * order — so callers size their volumes on the identities that exist
+   * rather than on a fixed constant.
+   */
+  pooledIds(space: string): readonly string[];
+
+  /**
    * Chooses `count` instance names for a model: real ids drawn from the
    * model-key space's pool when it holds any (production names instances
    * `<model>:<entity id>`), fresh `<model>:<id>` values otherwise. Never
@@ -713,6 +720,11 @@ export function createCorrelationSession(
     return order;
   }
 
+  function pooledIds(space: string): readonly string[] {
+    if (uncorrelated.has(space)) return [];
+    return pools.listOf(space, null);
+  }
+
   function realizeInstanceNames(
     model: string,
     count: number,
@@ -857,6 +869,7 @@ export function createCorrelationSession(
   return {
     harvest,
     mintIds,
+    pooledIds,
     realizeInstanceNames,
     realizeScopes,
     realizesOwnScopes,
