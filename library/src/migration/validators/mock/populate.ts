@@ -83,6 +83,38 @@ function drawDocCount(ctx: MockPopulateContext): number {
   ) + config.DOCS_PER_COLLECTION_MIN;
 }
 
+/**
+ * Production creates one instance per root entity: a lower count orphans
+ * roots, and a consolidation merging root with instance then produces
+ * documents amputated of the fields only the instance carries.
+ */
+function drawInstanceCount(
+  modelType: string,
+  taken: ReadonlySet<string>,
+  ctx: MockPopulateContext,
+): number {
+  const available = ctx.session.pooledIds(modelType)
+    .filter((id) => !taken.has(id)).length;
+  if (available === 0) return INSTANCES_PER_MODEL;
+
+  const capped = Math.min(available, ctx.config.MAX_INSTANCES_PER_MODEL);
+  if (capped < available) {
+    ctx.failures.push({
+      bucket: "multiModels",
+      collection: modelType,
+      modelType,
+      kind: "correlation",
+      space: modelType,
+      message: `Identifier space "${modelType}" holds ${available} entities ` +
+        `without an instance, but the power level caps synthetic instances ` +
+        `at ${capped} — the remaining ${available - capped} entities stay ` +
+        `instance-less, so a consolidation merging them with instance ` +
+        `documents is only simulated on ${capped} of them.`,
+    });
+  }
+  return capped;
+}
+
 function shouldPopulate(
   contentLength: number,
   policy: PopulatePolicy,
@@ -498,8 +530,8 @@ export function populateMultiCollections(
 /**
  * Populates SYNTHETIC multi-model instances for declared models.
  *
- * The decision is taken per MODEL — a model with no instance gets a
- * synthetic one even when other models already have instances; otherwise a
+ * The decision is taken per MODEL — a model with no instance gets synthetic
+ * ones even when other models already have instances; otherwise a
  * newly declared model would ride green on another model's documents, its
  * validation loops iterating nothing. An existing-but-empty instance counts
  * as "the model has an instance"; topping it up is
@@ -542,7 +574,7 @@ export function populateSyntheticMultiModelInstances(
     const taken = new Set(Object.keys(state.multiModels));
     const names = ctx.session.realizeInstanceNames(
       modelType,
-      INSTANCES_PER_MODEL,
+      drawInstanceCount(modelType, taken, ctx),
       taken,
     );
     for (const collectionName of names) {
