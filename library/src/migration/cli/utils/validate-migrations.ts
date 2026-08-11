@@ -98,7 +98,6 @@ export async function validateMigrationsWithSimulation(
   const stateRetentionRatio = options.stateRetentionRatio ?? 0.5;
 
   const validatorOptions: SimulationValidatorOptions = {
-    strictValidation: true,
     maxOperations: 1000,
     stateRetentionRatio,
     powerLevel,

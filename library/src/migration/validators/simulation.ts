@@ -23,6 +23,7 @@
 import type {
   MigrationDefinition,
   MigrationRule,
+  MockGenerationFailure,
   SchemasDefinition,
 } from "../types.ts";
 import {
@@ -31,73 +32,27 @@ import {
 } from "../types.ts";
 import { migrationBuilder } from "../builder.ts";
 import * as v from "valibot";
-import { createMockGenerator } from "@diister/valibot-mock";
 import { dirtyEquivalent } from "../../utils/object.ts";
 import { createMemoryApplier } from "../appliers/memory.ts";
+import {
+  createCorrelationSession,
+  DEFAULT_STATE_RETENTION_RATIO,
+  foldMockGenerationFailures,
+  getMockGenerationConfig,
+  type MockGenerationConfig,
+  type MockPopulateContext,
+  populateDeclaredBuckets,
+  populateExistingMultiModelInstances,
+  retainAndRefreshBuckets,
+  schemasFingerprint,
+  type SimulationPowerLevel,
+} from "./mock/mod.ts";
+import { fnv1a32 } from "../utils/seed-id.ts";
 
-/**
- * Simulation power levels for controlling mock data generation complexity
- *
- * - `quick`: Fast validation with minimal mock data (10-20 docs per collection)
- *   Best for: Quick checks, CI pipelines, development iterations
- *
- * - `normal`: Balanced validation with moderate mock data (100 docs per collection)
- *   Best for: Regular validation, pre-commit checks
- *
- * - `hard`: Comprehensive validation with extensive mock data (500+ docs per collection)
- *   Best for: Pre-release validation, catching edge cases
- */
-export type SimulationPowerLevel = "quick" | "normal" | "hard";
-
-/**
- * Configuration presets for each power level
- */
-const POWER_LEVEL_PRESETS: Record<SimulationPowerLevel, {
-  docsPerCollectionMin: number;
-  docsPerCollectionMax: number;
-  docsPerTypeMin: number;
-  docsPerTypeMax: number;
-}> = {
-  quick: {
-    docsPerCollectionMin: 10,
-    docsPerCollectionMax: 10,
-    docsPerTypeMin: 1,
-    docsPerTypeMax: 1,
-  },
-  normal: {
-    docsPerCollectionMin: 100,
-    docsPerCollectionMax: 100,
-    docsPerTypeMin: 1,
-    docsPerTypeMax: 2,
-  },
-  hard: {
-    docsPerCollectionMin: 500,
-    docsPerCollectionMax: 500,
-    docsPerTypeMin: 2,
-    docsPerTypeMax: 5,
-  },
-};
-
-/**
- * Gets the mock generation constants for a given power level
- *
- * @param powerLevel - The simulation power level
- * @returns Mock generation configuration for the specified level
- */
-export function getMockGenerationConfig(
-  powerLevel: SimulationPowerLevel = "normal",
-) {
-  const preset = POWER_LEVEL_PRESETS[powerLevel];
-  return {
-    DOCS_PER_COLLECTION_MIN: preset.docsPerCollectionMin,
-    DOCS_PER_COLLECTION_MAX: preset.docsPerCollectionMax,
-    DOCS_PER_TYPE_MIN: preset.docsPerTypeMin,
-    DOCS_PER_TYPE_MAX: preset.docsPerTypeMax,
-    MIN_SPARSE_THRESHOLD: MOCK_GENERATION.MIN_SPARSE_THRESHOLD,
-    DEFAULT_STATE_RETENTION_RATIO:
-      MOCK_GENERATION.DEFAULT_STATE_RETENTION_RATIO,
-  };
-}
+// Mock generation lives in ./mock/ — these stay re-exported here because
+// this file is their historical import path.
+export { getMockGenerationConfig } from "./mock/mod.ts";
+export type { SimulationPowerLevel } from "./mock/mod.ts";
 
 /**
  * Validation result from validators
@@ -128,28 +83,9 @@ export type MigrationValidator = {
 };
 
 /**
- * Constants for mock data generation
- */
-const MOCK_GENERATION = {
-  DOCS_PER_COLLECTION_MIN: 100,
-  DOCS_PER_COLLECTION_MAX: 100,
-  DOCS_PER_TYPE_MIN: 1,
-  DOCS_PER_TYPE_MAX: 2,
-  MIN_SPARSE_THRESHOLD: 2,
-  /** Default ratio of documents to keep from previous state (0.0 to 1.0) */
-  DEFAULT_STATE_RETENTION_RATIO: 0.5,
-} as const;
-
-/**
  * Configuration options for the simulation validator
  */
 export interface SimulationValidatorOptions {
-  /** Whether to use strict validation in the simulation applier */
-  strictValidation?: boolean;
-
-  /** Whether to track operation history during simulation */
-  trackHistory?: boolean;
-
   /** Maximum number of operations to validate (for performance) */
   maxOperations?: number;
 
@@ -183,22 +119,20 @@ export interface SimulationValidatorOptions {
  */
 export const DEFAULT_SIMULATION_VALIDATOR_OPTIONS: SimulationValidatorOptions =
   {
-    strictValidation: true,
-    trackHistory: true,
     maxOperations: 1000,
-    stateRetentionRatio: MOCK_GENERATION.DEFAULT_STATE_RETENTION_RATIO,
+    stateRetentionRatio: DEFAULT_STATE_RETENTION_RATIO,
     powerLevel: "normal",
   };
 
 /**
  * Simulation-based migration validator
  *
- * This validator uses the SimulationApplier to validate migrations in an
+ * This validator uses the memory applier to validate migrations in an
  * in-memory environment before they are applied to real databases.
  */
 export class SimulationValidator implements MigrationValidator {
   private readonly options: SimulationValidatorOptions;
-  private readonly mockConfig: ReturnType<typeof getMockGenerationConfig>;
+  private readonly mockConfig: MockGenerationConfig;
 
   constructor(options: SimulationValidatorOptions = {}) {
     this.options = { ...DEFAULT_SIMULATION_VALIDATOR_OPTIONS, ...options };
@@ -249,10 +183,16 @@ export class SimulationValidator implements MigrationValidator {
         );
       }
 
+      // Collects mock-generation failures from the three paths that feed
+      // this validation: state preparation, initial mock state, and the
+      // multi-model top-up below.
+      const generationFailures: MockGenerationFailure[] = [];
+
       // Determine initial state
       let currentState = await this.determineInitialState(
         definition,
         initialState,
+        generationFailures,
       );
 
       // Test forward execution of current migration
@@ -435,11 +375,33 @@ export class SimulationValidator implements MigrationValidator {
       // Populate existing multi-model instances with mock data for validation
       // This ensures that instances created by the migration have data to validate against
       if (definition.schemas.multiModels) {
-        this.populateExistingMultiModelInstancesMock(
+        populateExistingMultiModelInstances(
           stateAfterMigration,
           definition.schemas.multiModels,
+          "ifSparse",
+          {
+            config: this.mockConfig,
+            failures: generationFailures,
+            // Seeded on the migration id like the initial-state session:
+            // stable per migration, different between migrations.
+            session: createCorrelationSession({
+              schemas: definition.schemas,
+              seed: fnv1a32(definition.id),
+            }),
+          },
         );
       }
+
+      // A mock-generation failure must never silently reduce validation
+      // coverage — see foldMockGenerationFailures for the severity rule
+      // (warning, or blocking error when the target ended up empty).
+      const generationIssues = foldMockGenerationFailures(
+        generationFailures,
+        definition.schemas,
+        stateAfterMigration,
+      );
+      errors.push(...generationIssues.errors);
+      warnings.push(...generationIssues.warnings);
 
       // Validate schema changes require transformations for existing data
       const changeStateResult = await this.validateSchemaChanges(
@@ -487,18 +449,27 @@ export class SimulationValidator implements MigrationValidator {
    */
   private async determineInitialState(
     definition: MigrationDefinition,
-    providedState?: SimulationDatabaseState,
+    providedState: SimulationDatabaseState | undefined,
+    failures: MockGenerationFailure[],
   ): Promise<SimulationDatabaseState> {
     if (providedState) {
       // Use provided state (from migrate.ts incremental validation)
       // This avoids O(n²) complexity when validating batches
+      //
+      // Failures recorded while PREPARING this state ride on it — the only
+      // channel the preparation API has — and are consumed here so this
+      // validation reports them exactly once.
+      if (providedState.mockGenerationFailures) {
+        failures.push(...providedState.mockGenerationFailures);
+        delete providedState.mockGenerationFailures;
+      }
       return providedState;
     }
 
     if (definition.parent) {
       // Standalone validation of child migration
       // Build hybrid state: real seeds from parent migrations + mock supplements
-      return await this.buildMockStateFromSchemas(definition.parent);
+      return await this.buildMockStateFromSchemas(definition.parent, failures);
     }
 
     // Root migration with no parent - start with empty state
@@ -1072,65 +1043,6 @@ export class SimulationValidator implements MigrationValidator {
   }
 
   /**
-   * Generates a mock document from a Valibot schema for testing purposes
-   * Uses valibot-mock to generate realistic test data
-   *
-   * @private
-   * @param schema - Valibot schema representing document structure
-   * @returns Mock document matching the schema
-   */
-  private generateMockDocument(
-    schema: Record<string, unknown>,
-  ): Record<string, unknown> {
-    // Wrap the schema in v.object() for valibot-mock
-    // deno-lint-ignore no-explicit-any
-    const schemaObject = v.object(
-      schema as Record<string, v.BaseSchema<any, any, any>>,
-    );
-
-    // Use valibot-mock to generate realistic test data from schema
-    // deno-lint-ignore no-explicit-any
-    const generator = createMockGenerator(schemaObject as any);
-    const mockData = generator.generate();
-
-    // Validate the generated data matches the schema
-    const validation = v.safeParse(schemaObject, mockData);
-    if (validation.success) {
-      return validation.output;
-    }
-    // If validation fails (shouldn't happen), fallback to simple mock
-    console.warn(
-      "/!\\ Generated mock data did not validate against schema, using simple mock instead",
-    );
-    return mockData;
-  }
-
-  /**
-   * Generates a mock scope value from a scoped multi-collection's `scope` schema
-   *
-   * Unlike {@link generateMockDocument}, the scope schema is a bare Valibot
-   * schema (not a record of fields), so it is fed to the mock generator as-is.
-   *
-   * @private
-   */
-  private generateMockScopeValue(
-    schema: v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>,
-  ): unknown {
-    // deno-lint-ignore no-explicit-any
-    const generator = createMockGenerator(schema as any);
-    const mockValue = generator.generate();
-
-    const validation = v.safeParse(schema, mockValue);
-    if (validation.success) {
-      return validation.output;
-    }
-    console.warn(
-      "/!\\ Generated mock scope value did not validate against the scope schema, using raw mock instead",
-    );
-    return mockValue;
-  }
-
-  /**
    * Simulates all parent migrations to get real seed data
    *
    * @private
@@ -1169,247 +1081,6 @@ export class SimulationValidator implements MigrationValidator {
   }
 
   /**
-   * Generates mock documents for empty collections
-   *
-   * @private
-   */
-  private populateCollectionsMock(
-    state: SimulationDatabaseState,
-    collections: Record<string, Record<string, unknown>>,
-  ): SimulationDatabaseState {
-    const currentState = state;
-
-    for (const [collectionName, schema] of Object.entries(collections)) {
-      if (!currentState.collections?.[collectionName]) {
-        currentState.collections[collectionName] = { content: [] };
-      }
-      const collection = currentState.collections?.[collectionName];
-      if (!collection) continue;
-
-      const mockDocs: Record<string, unknown>[] = [];
-      const docCount = Math.floor(
-        Math.random() *
-          (this.mockConfig.DOCS_PER_COLLECTION_MAX -
-            this.mockConfig.DOCS_PER_COLLECTION_MIN + 1),
-      ) + this.mockConfig.DOCS_PER_COLLECTION_MIN;
-
-      for (let i = 0; i < docCount; i++) {
-        try {
-          const mockDoc = this.generateMockDocument(
-            schema as Record<string, unknown>,
-          );
-          mockDocs.push(mockDoc);
-        } catch (_error) {
-          break;
-        }
-      }
-      collection.content.push(...mockDocs);
-    }
-
-    return currentState;
-  }
-
-  /**
-   * Supplements multi-collections with mock data
-   *
-   * @private
-   */
-  private populateMultiCollectionsMock(
-    state: SimulationDatabaseState,
-    multiCollections: NonNullable<SchemasDefinition["multiCollections"]>,
-  ): SimulationDatabaseState {
-    const currentState = state;
-
-    for (const [collectionName, schema] of Object.entries(multiCollections)) {
-      if (!currentState.multiCollections?.[collectionName]) {
-        currentState.multiCollections[collectionName] = { content: [] };
-      }
-      const collection = currentState.multiCollections?.[collectionName];
-
-      // If collection exists but is empty, add some mock data
-      if (!collection) continue;
-
-      const docCount = Math.floor(
-        Math.random() *
-          (this.mockConfig.DOCS_PER_COLLECTION_MAX -
-            this.mockConfig.DOCS_PER_COLLECTION_MIN + 1),
-      ) + this.mockConfig.DOCS_PER_COLLECTION_MIN;
-
-      for (let i = 0; i < docCount; i++) {
-        try {
-          for (const typeName of Object.keys(schema)) {
-            const mockDoc = this.generateMockDocument(
-              schema[typeName] as Record<string, unknown>,
-            );
-            collection.content.push({ ...mockDoc, _type: typeName });
-          }
-        } catch (_error) {
-          break;
-        }
-      }
-    }
-
-    return currentState;
-  }
-
-  /**
-   * Supplements scoped multi-collections with mock data
-   *
-   * Each generated batch shares a mock `_scope` value generated from the
-   * scoped collection's `scope` schema, so simulated documents exercise the
-   * same envelope (`_type` + `_scope`) the appliers produce.
-   *
-   * @private
-   */
-  private populateScopedMultiCollectionsMock(
-    state: SimulationDatabaseState,
-    scopedMultiCollections: NonNullable<
-      SchemasDefinition["scopedMultiCollections"]
-    >,
-  ): SimulationDatabaseState {
-    const currentState = state;
-
-    for (
-      const [collectionName, scopedSchema] of Object.entries(
-        scopedMultiCollections,
-      )
-    ) {
-      if (!currentState.scopedMultiCollections?.[collectionName]) {
-        currentState.scopedMultiCollections[collectionName] = { content: [] };
-      }
-      const collection = currentState.scopedMultiCollections?.[collectionName];
-      if (!collection) continue;
-
-      const docCount = Math.floor(
-        Math.random() *
-          (this.mockConfig.DOCS_PER_COLLECTION_MAX -
-            this.mockConfig.DOCS_PER_COLLECTION_MIN + 1),
-      ) + this.mockConfig.DOCS_PER_COLLECTION_MIN;
-
-      for (let i = 0; i < docCount; i++) {
-        try {
-          const scopeValue = this.generateMockScopeValue(scopedSchema.scope);
-          for (const typeName of Object.keys(scopedSchema.types)) {
-            const mockDoc = this.generateMockDocument(
-              scopedSchema.types[typeName] as Record<string, unknown>,
-            );
-            collection.content.push({
-              ...mockDoc,
-              _type: typeName,
-              _scope: scopeValue,
-            });
-          }
-        } catch (_error) {
-          break;
-        }
-      }
-    }
-
-    return currentState;
-  }
-
-  private populateMultiCollectionsModelMock(
-    state: SimulationDatabaseState,
-    multiModels: NonNullable<SchemasDefinition["multiModels"]>,
-  ): SimulationDatabaseState {
-    const currentState = state;
-
-    for (const [modelType, schema] of Object.entries(multiModels)) {
-      // Generate multiple instances per model type (configurable via constants)
-      const instanceCount = 1; // For simplicity, generate 1 instance per model type
-
-      for (let i = 0; i < instanceCount; i++) {
-        const collectionName = `${modelType}@instance${i + 1}`;
-        currentState.multiModels[collectionName] = {
-          modelType,
-          content: [],
-        };
-        const modelInstances = currentState.multiModels?.[collectionName];
-
-        if (!currentState.multiModels?.[modelType]) {
-          currentState.multiModels[modelType] = {
-            modelType,
-            content: [],
-          };
-        }
-
-        const docCount = Math.floor(
-          Math.random() *
-            (this.mockConfig.DOCS_PER_COLLECTION_MAX -
-              this.mockConfig.DOCS_PER_COLLECTION_MIN + 1),
-        ) + this.mockConfig.DOCS_PER_COLLECTION_MIN;
-
-        for (let j = 0; j < docCount; j++) {
-          try {
-            for (const typeName of Object.keys(schema)) {
-              const mockDoc = this.generateMockDocument(
-                schema[typeName] as Record<string, unknown>,
-              );
-              modelInstances.content.push({ ...mockDoc, _type: typeName });
-            }
-          } catch (_error) {
-            break;
-          }
-        }
-      }
-    }
-
-    return currentState;
-  }
-
-  /**
-   * Populates existing multi-model instances with mock data for validation
-   *
-   * This is used after a migration creates multi-model instances to ensure
-   * the schema validation has data to validate against.
-   *
-   * @private
-   */
-  private populateExistingMultiModelInstancesMock(
-    state: SimulationDatabaseState,
-    multiModels: NonNullable<SchemasDefinition["multiModels"]>,
-  ): SimulationDatabaseState {
-    const currentState = state;
-
-    // Iterate over existing instances in the state
-    for (
-      const [_instanceName, instance] of Object.entries(
-        currentState.multiModels || {},
-      )
-    ) {
-      const { modelType, content } = instance;
-
-      // Get the schema for this model type
-      const schema = multiModels[modelType];
-      if (!schema) continue;
-
-      // Only populate if the instance has no or very few documents
-      if (content.length >= this.mockConfig.DOCS_PER_COLLECTION_MIN) continue;
-
-      const docCount = Math.floor(
-        Math.random() *
-          (this.mockConfig.DOCS_PER_COLLECTION_MAX -
-            this.mockConfig.DOCS_PER_COLLECTION_MIN + 1),
-      ) + this.mockConfig.DOCS_PER_COLLECTION_MIN;
-
-      for (let j = 0; j < docCount; j++) {
-        try {
-          for (const typeName of Object.keys(schema)) {
-            const mockDoc = this.generateMockDocument(
-              schema[typeName] as Record<string, unknown>,
-            );
-            instance.content.push({ ...mockDoc, _type: typeName });
-          }
-        } catch (_error) {
-          break;
-        }
-      }
-    }
-
-    return currentState;
-  }
-
-  /**
    * Builds a hybrid database state from parent migrations
    * Used for standalone validation when no initial state is provided
    *
@@ -1423,40 +1094,26 @@ export class SimulationValidator implements MigrationValidator {
    *
    * @private
    * @param parent - The parent migration definition
+   * @param failures - Collector receiving mock-generation failures
    * @returns Database state with real seeds + mock data supplements
    */
   private async buildMockStateFromSchemas(
     parent: MigrationDefinition,
+    failures: MockGenerationFailure[],
   ): Promise<SimulationDatabaseState> {
-    let currentState = await this.simulateParentMigrations(parent);
+    const currentState = await this.simulateParentMigrations(parent);
 
-    if (parent.schemas.collections) {
-      currentState = this.populateCollectionsMock(
-        currentState,
-        parent.schemas.collections,
-      );
-    }
-
-    if (parent.schemas.multiCollections) {
-      currentState = this.populateMultiCollectionsMock(
-        currentState,
-        parent.schemas.multiCollections,
-      );
-    }
-
-    if (parent.schemas.multiModels) {
-      currentState = this.populateMultiCollectionsModelMock(
-        currentState,
-        parent.schemas.multiModels,
-      );
-    }
-
-    if (parent.schemas.scopedMultiCollections) {
-      currentState = this.populateScopedMultiCollectionsMock(
-        currentState,
-        parent.schemas.scopedMultiCollections,
-      );
-    }
+    // "always": keeps real parent seeds AND adds generated documents, so
+    // both seeded and edge-case data get exercised. Session seed derives
+    // from the migration id, so a simulation replays identically per run.
+    populateDeclaredBuckets(currentState, parent.schemas, "always", {
+      config: this.mockConfig,
+      failures,
+      session: createCorrelationSession({
+        schemas: parent.schemas,
+        seed: fnv1a32(parent.id),
+      }),
+    });
 
     return currentState;
   }
@@ -1466,11 +1123,19 @@ export class SimulationValidator implements MigrationValidator {
    *
    * This method:
    * 1. Keeps a percentage of existing documents (based on stateRetentionRatio)
-   * 2. Generates fresh mock data for the remaining percentage
+   *    and refreshes each entry back to its pre-retention size — never
+   *    beyond it, so propagation cannot compound volume across a chain
+   * 2. Mock-populates every declared-but-empty entry, so the next
+   *    migration's validation has data to test against even when no
+   *    documents were created in migrations
    *
    * This ensures we test both:
    * - Existing data that went through previous migrations (retained)
    * - Fresh edge cases with new mock data (generated)
+   *
+   * Mock-generation failures from preparation ride on the returned state's
+   * `mockGenerationFailures` field (the only channel this locked signature
+   * allows) and are consumed by the next `validateMigration` call.
    *
    * @param currentState - The current database state after migration
    * @param schemas - The schemas to use for generating new mock data
@@ -1484,240 +1149,29 @@ export class SimulationValidator implements MigrationValidator {
       this.mockConfig.DEFAULT_STATE_RETENTION_RATIO;
 
     // Clone the state to avoid mutations
-    const newState = structuredClone(currentState);
+    const newState: SimulationDatabaseState = structuredClone(currentState);
 
-    // Apply retention ratio to collections
-    if (newState.collections) {
-      for (
-        const [collectionName, collection] of Object.entries(
-          newState.collections,
-        )
-      ) {
-        const originalCount = collection.content.length;
-        const keepCount = Math.floor(originalCount * ratio);
+    // Failures riding on the incoming state were already folded into the
+    // previous validation's result — a fresh preparation reports fresh ones.
+    delete newState.mockGenerationFailures;
 
-        // Keep first 'keepCount' documents (the retained portion)
-        collection.content = collection.content.slice(0, keepCount);
+    const ctx: MockPopulateContext = {
+      config: this.mockConfig,
+      failures: [],
+      // The locked `(state, schemas)` signature carries no migration id, so
+      // the seed derives from a stable fingerprint of the schemas — which is
+      // exactly what schemasFingerprint exists for.
+      session: createCorrelationSession({
+        schemas,
+        seed: fnv1a32(schemasFingerprint(schemas)),
+      }),
+    };
 
-        // Generate fresh mock data for the remaining portion
-        const schema = schemas.collections?.[collectionName];
-        if (schema) {
-          const newDocsCount = originalCount - keepCount;
-          for (let i = 0; i < newDocsCount; i++) {
-            try {
-              const mockDoc = this.generateMockDocument(
-                schema as Record<string, unknown>,
-              );
-              collection.content.push(mockDoc);
-            } catch (_error) {
-              break;
-            }
-          }
-        }
-      }
-    }
+    retainAndRefreshBuckets(newState, schemas, ratio, ctx);
+    populateDeclaredBuckets(newState, schemas, "ifEmpty", ctx);
 
-    // Apply retention ratio to multi-collections
-    if (newState.multiCollections) {
-      for (
-        const [collectionName, collection] of Object.entries(
-          newState.multiCollections,
-        )
-      ) {
-        const originalCount = collection.content.length;
-        const keepCount = Math.floor(originalCount * ratio);
-
-        collection.content = collection.content.slice(0, keepCount);
-
-        const schema = schemas.multiCollections?.[collectionName];
-        if (schema) {
-          const newDocsCount = originalCount - keepCount;
-          const typeNames = Object.keys(schema);
-          const docsPerType = Math.ceil(newDocsCount / typeNames.length);
-
-          for (let i = 0; i < docsPerType; i++) {
-            for (const typeName of typeNames) {
-              try {
-                const mockDoc = this.generateMockDocument(
-                  schema[typeName] as Record<string, unknown>,
-                );
-                collection.content.push({ ...mockDoc, _type: typeName });
-              } catch (_error) {
-                break;
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // Apply retention ratio to scoped multi-collections
-    if (newState.scopedMultiCollections) {
-      for (
-        const [collectionName, collection] of Object.entries(
-          newState.scopedMultiCollections,
-        )
-      ) {
-        const originalCount = collection.content.length;
-        const keepCount = Math.floor(originalCount * ratio);
-
-        collection.content = collection.content.slice(0, keepCount);
-
-        const scopedSchema = schemas.scopedMultiCollections?.[collectionName];
-        if (scopedSchema) {
-          const newDocsCount = originalCount - keepCount;
-          const typeNames = Object.keys(scopedSchema.types);
-          const docsPerType = Math.ceil(newDocsCount / typeNames.length);
-
-          for (let i = 0; i < docsPerType; i++) {
-            try {
-              const scopeValue = this.generateMockScopeValue(
-                scopedSchema.scope,
-              );
-              for (const typeName of typeNames) {
-                const mockDoc = this.generateMockDocument(
-                  scopedSchema.types[typeName] as Record<string, unknown>,
-                );
-                collection.content.push({
-                  ...mockDoc,
-                  _type: typeName,
-                  _scope: scopeValue,
-                });
-              }
-            } catch (_error) {
-              break;
-            }
-          }
-        }
-      }
-    }
-
-    // Apply retention ratio to multi-models
-    if (newState.multiModels) {
-      for (
-        const [_instanceName, instance] of Object.entries(newState.multiModels)
-      ) {
-        const originalCount = instance.content.length;
-        const keepCount = Math.floor(originalCount * ratio);
-
-        instance.content = instance.content.slice(0, keepCount);
-
-        const schema = schemas.multiModels?.[instance.modelType];
-        if (schema) {
-          const newDocsCount = originalCount - keepCount;
-          const typeNames = Object.keys(schema);
-          const docsPerType = Math.ceil(newDocsCount / typeNames.length);
-
-          for (let i = 0; i < docsPerType; i++) {
-            for (const typeName of typeNames) {
-              try {
-                const mockDoc = this.generateMockDocument(
-                  schema[typeName] as Record<string, unknown>,
-                );
-                instance.content.push({ ...mockDoc, _type: typeName });
-              } catch (_error) {
-                break;
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // Create mock data for collections/multiCollections/multiModels if none exist but schema defines them
-    // This ensures validation has data to test against even when no instances are created in migrations
-    if (schemas.collections) {
-      newState.collections = newState.collections || {};
-      for (const collectionName of Object.keys(schemas.collections)) {
-        if (!newState.collections[collectionName]) {
-          newState.collections[collectionName] = { content: [] };
-        }
-        // Populate if empty
-        if (newState.collections[collectionName].content.length === 0) {
-          const schema = schemas.collections[collectionName];
-          const docCount = Math.floor(
-            Math.random() *
-              (this.mockConfig.DOCS_PER_COLLECTION_MAX -
-                this.mockConfig.DOCS_PER_COLLECTION_MIN + 1),
-          ) + this.mockConfig.DOCS_PER_COLLECTION_MIN;
-          for (let i = 0; i < docCount; i++) {
-            try {
-              const mockDoc = this.generateMockDocument(
-                schema as Record<string, unknown>,
-              );
-              newState.collections[collectionName].content.push(mockDoc);
-            } catch (_error) {
-              break;
-            }
-          }
-        }
-      }
-    }
-
-    if (schemas.multiCollections) {
-      newState.multiCollections = newState.multiCollections || {};
-      for (const collectionName of Object.keys(schemas.multiCollections)) {
-        if (!newState.multiCollections[collectionName]) {
-          newState.multiCollections[collectionName] = { content: [] };
-        }
-        // Populate if empty
-        if (newState.multiCollections[collectionName].content.length === 0) {
-          const schema = schemas.multiCollections[collectionName];
-          const typeNames = Object.keys(schema);
-          const docCount = Math.floor(
-            Math.random() *
-              (this.mockConfig.DOCS_PER_COLLECTION_MAX -
-                this.mockConfig.DOCS_PER_COLLECTION_MIN + 1),
-          ) + this.mockConfig.DOCS_PER_COLLECTION_MIN;
-          for (let i = 0; i < docCount; i++) {
-            for (const typeName of typeNames) {
-              try {
-                const mockDoc = this.generateMockDocument(
-                  schema[typeName] as Record<string, unknown>,
-                );
-                newState.multiCollections[collectionName].content.push({
-                  ...mockDoc,
-                  _type: typeName,
-                });
-              } catch (_error) {
-                break;
-              }
-            }
-          }
-        }
-      }
-    }
-
-    if (
-      schemas.multiModels &&
-      Object.keys(newState.multiModels || {}).length === 0
-    ) {
-      newState.multiModels = newState.multiModels || {};
-      this.populateMultiCollectionsModelMock(newState, schemas.multiModels);
-    }
-
-    // Create mock data for scoped multi-collections declared in the schema
-    // but absent or empty in the propagated state, so the next migration's
-    // validation has scoped documents to test against. Non-empty scoped
-    // collections are left untouched (retention already handled above).
-    if (schemas.scopedMultiCollections) {
-      newState.scopedMultiCollections = newState.scopedMultiCollections || {};
-      const emptyScoped: NonNullable<
-        SchemasDefinition["scopedMultiCollections"]
-      > = {};
-      for (
-        const [collectionName, scopedSchema] of Object.entries(
-          schemas.scopedMultiCollections,
-        )
-      ) {
-        const existing = newState.scopedMultiCollections[collectionName];
-        if (!existing || existing.content.length === 0) {
-          emptyScoped[collectionName] = scopedSchema;
-        }
-      }
-      if (Object.keys(emptyScoped).length > 0) {
-        this.populateScopedMultiCollectionsMock(newState, emptyScoped);
-      }
+    if (ctx.failures.length > 0) {
+      newState.mockGenerationFailures = ctx.failures;
     }
 
     return newState;
@@ -1735,9 +1189,8 @@ export class SimulationValidator implements MigrationValidator {
  * import { createSimulationValidator } from "@diister/mongodbee/migration/validators";
  *
  * const validator = createSimulationValidator({
- *   validateReversibility: true,
- *   strictValidation: true,
  *   maxOperations: 500,
+ *   powerLevel: "quick",
  *   stateRetentionRatio: 0.5 // Keep 50% of previous state
  * });
  *
@@ -1762,8 +1215,7 @@ export function createSimulationValidator(
  * import { validateMigrationWithSimulation } from "@diister/mongodbee/migration/validators";
  *
  * const result = await validateMigrationWithSimulation(migration, {
- *   validateReversibility: false,
- *   strictValidation: true
+ *   powerLevel: "quick"
  * });
  *
  * if (result.success) {

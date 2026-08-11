@@ -984,15 +984,54 @@ export type DatabaseState = {
 };
 
 /**
- * Extended database state with operation history tracking
+ * A structured record of one mock-data generation failure.
+ *
+ * Generation failures used to be swallowed (`catch { break }`), silently
+ * leaving the collection empty. Downstream schema validation iterates over
+ * `content`, so an empty collection yields zero assertions — the exact
+ * mechanism that let a broken generator produce a green validation gate.
+ * Recording the failure keeps it visible: the validator folds it into its
+ * `ValidationResult` as a warning, or as a blocking error when the
+ * collection ended up empty while its schema declares documents.
+ */
+export type MockGenerationFailure = {
+  /** Which {@link DatabaseState} bucket the failure concerns */
+  bucket: keyof DatabaseState;
+
+  /** Collection name (for multiModels: the instance name) */
+  collection: string;
+
+  /** Multi-model type, when the failure concerns a multiModels instance */
+  modelType?: string;
+
+  /** The underlying generator error message */
+  message: string;
+
+  /**
+   * Absent or `"generation"`: a generator error aborted a target.
+   * `"correlation"`: a finding from the correlated-identity report — never
+   * blocking, always folds as a warning.
+   */
+  kind?: "generation" | "correlation";
+
+  /** Identifier space a correlation finding concerns */
+  space?: string;
+};
+
+/**
+ * Extended database state used by the simulation validator
  */
 export interface SimulationDatabaseState extends DatabaseState {
-  /** History of applied operations (if tracking enabled) */
-  operationHistory?: Array<{
-    operation: MigrationRule;
-    timestamp: Date;
-    type: "apply" | "reverse";
-  }>;
+  /**
+   * Mock generation failures recorded while PREPARING this state
+   * (`prepareStateForNextMigration`). That public API is locked to
+   * `(state, schemas) => state`, so the state itself is the only compatible
+   * channel for surfacing generation failures to the NEXT validation:
+   * `validateMigration` consumes and clears this field, folding the failures
+   * into its `ValidationResult`. Plain data only — the state must remain
+   * `structuredClone`-able.
+   */
+  mockGenerationFailures?: MockGenerationFailure[];
 }
 
 /**
