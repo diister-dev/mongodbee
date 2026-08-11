@@ -1,6 +1,4 @@
 /**
- * THE regression behind correlated identity generation, replayed as a gate.
- *
  * Mirrors the diivento `consolidate_expositions_scoped` migration: root
  * documents in a global collection, a multi-model whose instances are named
  * after those SAME root ids, and a two-step `flowToScope` consolidation —
@@ -8,12 +6,10 @@
  * flow into scope = `ctx.instanceName` with the per-instance `information`
  * singleton re-keyed onto the scope so it MERGES with the root-derived one.
  *
- * Before correlation, mock roots got random ids and mock instances were named
- * `exposition:instance1`: no identity ever coincided, the `onConflict:
- * "merge"` branch never executed, and the simulation gate certified a
- * migration whose riskiest line had never run. The proof here is a document
- * that carries BOTH a root-only field and an instance-only field — it can
- * only exist if the merge branch executed.
+ * Locks correlated identity generation: mock root ids and instance names
+ * must coincide for the `onConflict: "merge"` branch to execute. The proof
+ * is a document carrying BOTH a root-only field and an instance-only field —
+ * it can only exist if the merge branch ran.
  */
 import { assert, assertEquals } from "@std/assert";
 import { migrationDefinition } from "../../src/migration/definition.ts";

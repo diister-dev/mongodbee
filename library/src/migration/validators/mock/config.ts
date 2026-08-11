@@ -1,10 +1,7 @@
 /**
  * @fileoverview Mock generation configuration for the simulation validator
  *
- * Groups the knobs that actually drive mock data generation. Every field
- * declared here is read by the engine in `populate.ts` — configuration that
- * promises behavior nothing implements is worse than no configuration,
- * because it lets a reader believe a lever exists when it does not.
+ * Volume knobs read by the population engine in `populate.ts`.
  *
  * @module
  */
@@ -25,12 +22,6 @@ export type SimulationPowerLevel = "quick" | "normal" | "hard";
 
 /**
  * Resolved mock generation configuration for a power level.
- *
- * Historical note: earlier revisions also exposed `DOCS_PER_TYPE_MIN/MAX`
- * and `MIN_SPARSE_THRESHOLD`. No code path ever read them — the per-type
- * volume is derived from the per-collection count (see `populate.ts`), and
- * sparseness is measured against `DOCS_PER_COLLECTION_MIN`. They were
- * removed rather than kept as decoys.
  */
 export interface MockGenerationConfig {
   DOCS_PER_COLLECTION_MIN: number;
@@ -48,11 +39,7 @@ export const DEFAULT_STATE_RETENTION_RATIO = 0.5;
  * Number of synthetic instances generated per multi-model.
  *
  * One instance is enough to exercise every type schema of a model — extra
- * instances would only duplicate the same assertions. A comment used to
- * claim this was "configurable via constants"; it never was, so the constant
- * now states the real behavior instead of promising a knob that does not
- * exist. The planned correlated-data generation may make this configurable
- * for real.
+ * instances would only duplicate the same assertions.
  */
 export const INSTANCES_PER_MODEL = 1;
 

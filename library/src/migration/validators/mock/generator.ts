@@ -1,11 +1,9 @@
 /**
  * @fileoverview Single-document mock generation for the simulation validator
  *
- * Thin wrappers around `@diister/valibot-mock`. These are the ONLY places the
- * simulation talks to the generator, so both generation paths (initial state
- * building and state propagation) produce documents through the exact same
- * code — a divergence here would mean the two paths validate different data
- * shapes without anyone noticing.
+ * Thin wrappers around `@diister/valibot-mock` — the ONLY places the
+ * simulation talks to the generator, so every generation path produces
+ * documents through the exact same code.
  *
  * @module
  */
@@ -17,11 +15,10 @@ import type { MockGeneratorOptions } from "@diister/valibot-mock";
 /**
  * Options threaded into ONE generator invocation.
  *
- * `seed` makes the invocation deterministic — the correlated engine derives
- * a distinct seed per document from the migration id, so a simulation can be
- * replayed identically and diffed between runs. `resolve` is the caller-side
- * hook implementing the link phase: `_id` injection and reference draws from
- * the identifier pools (see `correlation.ts`).
+ * `seed` makes the invocation deterministic, so a simulation can be replayed
+ * identically. `resolve` is the caller-side hook implementing the link
+ * phase: `_id` injection and reference draws from the identifier pools
+ * (see `correlation.ts`).
  */
 export interface MockDocumentOptions {
   seed?: number;
@@ -29,10 +26,8 @@ export interface MockDocumentOptions {
 }
 
 /**
- * Builds the generator options, including `faker.seed` ONLY when a seed is
- * given — a spread `{ seed: undefined }` would still be treated as "no seed"
- * today, but the conditional keeps the intent explicit rather than relying
- * on the generator's undefined-check.
+ * Builds the generator options, including `faker.seed` only when a seed is
+ * given.
  */
 function toGeneratorOptions(
   options?: MockDocumentOptions,
@@ -50,9 +45,8 @@ function toGeneratorOptions(
  * Throws when the generator cannot produce a value for the schema (for
  * example a `v.never()` field, or constraints the generator cannot satisfy
  * within its attempt budget), and when a `resolve` hook injects a value the
- * schema rejects. Callers are expected to record that failure — never to
- * swallow it — because a swallowed generation failure leaves the collection
- * empty and downstream validation loops assert nothing on it.
+ * schema rejects. Callers are expected to record that failure, never to
+ * swallow it — a silently empty collection asserts nothing downstream.
  *
  * @param schema - Valibot schema representing document structure
  * @param options - Per-invocation seed and resolve hook

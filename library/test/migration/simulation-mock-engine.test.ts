@@ -1,20 +1,16 @@
 /**
  * Locks the semantics of the shared mock population engine
  * (`validators/mock/`) — the single implementation behind both
- * `buildMockStateFromSchemas` and `prepareStateForNextMigration`. The two
- * paths used to carry ~185 duplicated lines with six silent behavioral
- * divergences; each resolution is locked here:
+ * `buildMockStateFromSchemas` and `prepareStateForNextMigration`:
  *
  *  - D1: the emptiness policy is explicit — `always` supplements non-empty
  *    collections, `ifEmpty` only fills empty ones, `ifSparse` tops up below
  *    the configured minimum.
  *  - D2: populate generates docCount BATCHES × all types; refresh (after
  *    retention) restores EXACTLY the pre-retention size — never beyond, so
- *    propagation cannot compound volume across a migration chain (the old
- *    ceil-per-type refresh could overshoot on multi-type collections).
+ *    propagation cannot compound volume across a migration chain.
  *  - D3: a generation failure aborts the target and is RECORDED, never
- *    swallowed — a swallowed failure left the collection empty, and empty
- *    collections assert nothing downstream (the false-green mechanism).
+ *    swallowed — an empty collection asserts nothing downstream.
  *  - D4: multi-model population is decided per MODEL, not per whole bucket —
  *    a newly declared model must not ride green on another model's docs.
  *  - D5: existing state entries are preserved, never reassigned.

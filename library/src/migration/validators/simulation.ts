@@ -84,11 +84,6 @@ export type MigrationValidator = {
 
 /**
  * Configuration options for the simulation validator
- *
- * Historical note: `strictValidation` and `trackHistory` used to be
- * accepted here but were never read by any code path — options promising
- * unimplemented behavior were removed rather than kept as decoys.
- * (`checkMigrationStatus` has its own, real `strictValidation` option.)
  */
 export interface SimulationValidatorOptions {
   /** Maximum number of operations to validate (for performance) */
@@ -188,11 +183,9 @@ export class SimulationValidator implements MigrationValidator {
         );
       }
 
-      // Collects every mock-generation failure that concerns THIS
-      // validation: failures inherited from the state preparation
-      // (propagation path), failures from building the initial mock state
-      // (standalone path), and failures from topping up multi-model
-      // instances below. Folded into errors/warnings after the migration ran.
+      // Collects mock-generation failures from the three paths that feed
+      // this validation: state preparation, initial mock state, and the
+      // multi-model top-up below.
       const generationFailures: MockGenerationFailure[] = [];
 
       // Determine initial state
@@ -463,9 +456,9 @@ export class SimulationValidator implements MigrationValidator {
       // Use provided state (from migrate.ts incremental validation)
       // This avoids O(n²) complexity when validating batches
       //
-      // Failures recorded while PREPARING this state ride on it because the
-      // preparation API has no other channel (see SimulationDatabaseState).
-      // Consume them here so this validation reports them exactly once.
+      // Failures recorded while PREPARING this state ride on it — the only
+      // channel the preparation API has — and are consumed here so this
+      // validation reports them exactly once.
       if (providedState.mockGenerationFailures) {
         failures.push(...providedState.mockGenerationFailures);
         delete providedState.mockGenerationFailures;
@@ -1110,10 +1103,9 @@ export class SimulationValidator implements MigrationValidator {
   ): Promise<SimulationDatabaseState> {
     const currentState = await this.simulateParentMigrations(parent);
 
-    // "always": the state keeps its real parent seeds AND gains generated
-    // documents on top, so both seeded values and edge cases are exercised.
-    // The session seed derives from the migration id: a simulation replays
-    // identically for one migration and differs between migrations.
+    // "always": keeps real parent seeds AND adds generated documents, so
+    // both seeded and edge-case data get exercised. Session seed derives
+    // from the migration id, so a simulation replays identically per run.
     populateDeclaredBuckets(currentState, parent.schemas, "always", {
       config: this.mockConfig,
       failures,
@@ -1141,11 +1133,9 @@ export class SimulationValidator implements MigrationValidator {
    * - Existing data that went through previous migrations (retained)
    * - Fresh edge cases with new mock data (generated)
    *
-   * Mock-generation failures encountered during preparation are recorded on
-   * the returned state (`mockGenerationFailures`) — this signature is the
-   * public propagation API, so the state is the only channel — and are
-   * consumed by the next `validateMigration` call, which folds them into its
-   * result.
+   * Mock-generation failures from preparation ride on the returned state's
+   * `mockGenerationFailures` field (the only channel this locked signature
+   * allows) and are consumed by the next `validateMigration` call.
    *
    * @param currentState - The current database state after migration
    * @param schemas - The schemas to use for generating new mock data

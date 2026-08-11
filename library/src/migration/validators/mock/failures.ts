@@ -82,10 +82,10 @@ const BUCKET_PROBES: {
  *
  * Severity rule: a failure is a BLOCKING error when the schema still declares
  * the collection and the validated state holds zero documents for it — the
- * downstream validation loops iterate `content`, so zero documents means zero
- * assertions, which is precisely the false-green the old `catch { break }`
- * produced. Any other failure (documents survived from seeds or retention)
- * degrades coverage but not the verdict, so it is reported as a warning.
+ * downstream validation loops iterate `content`, so zero documents means
+ * zero assertions and a false-green verdict. Any other failure (documents
+ * survived from seeds or retention) degrades coverage but not the verdict,
+ * so it is reported as a warning.
  *
  * @param failures - Failures recorded by the generation engine
  * @param schemas - The schemas of the migration being validated

@@ -1,16 +1,13 @@
 /**
  * @fileoverview Mock population engine for the simulation validator
  *
- * ONE implementation of mock-state population, shared by the two call paths
- * that historically each had their own copy (`buildMockStateFromSchemas` and
- * `prepareStateForNextMigration`). The duplication had let six behavioral
- * divergences ship silently; each is now a single, documented decision:
+ * The single implementation of mock-state population behind both
+ * `buildMockStateFromSchemas` and `prepareStateForNextMigration`. Its
+ * invariants:
  *
- * - Emptiness policy is an explicit {@link PopulatePolicy} parameter instead
- *   of three implicit behaviors.
+ * - Emptiness policy is an explicit {@link PopulatePolicy} parameter.
  * - Volume arithmetic is two NAMED operations — populate (batches × all
- *   types) vs refresh (restore exactly the pre-retention size) — instead of
- *   two accidental formulas.
+ *   types) vs refresh (restore exactly the pre-retention size).
  * - Generation failures are recorded and surfaced, never swallowed.
  * - Multi-model population is decided per MODEL, not per whole bucket.
  * - Existing state entries are always preserved, never reassigned.
@@ -33,12 +30,7 @@ import { generateMockDocument } from "./generator.ts";
 import type { CorrelationSession } from "./correlation.ts";
 
 /**
- * When a target collection receives new mock documents (divergence D1).
- *
- * Three policies coexisted implicitly — unconditional append, populate only
- * when empty, populate below a minimum. Each is legitimate for its call
- * site, so the policy is now an explicit parameter rather than a hidden
- * property of whichever copy of the code ran:
+ * When a target collection receives new mock documents.
  *
  * - `always`: append regardless of current content. Used when building the
  *   hybrid initial state — real parent seeds PLUS mock supplements, so both
@@ -78,11 +70,10 @@ function errorMessage(error: unknown): string {
 }
 
 /**
- * Draws the per-collection document count from the configured range.
- * Every preset currently has MIN === MAX, so the draw is deterministic —
- * the range is kept so a future spread works without touching call sites.
- * The draw goes through the session RNG: a bare Math.random here was the
- * last obstacle to replaying a simulation identically.
+ * Draws the per-collection document count from the configured range, through
+ * the session RNG so a simulation replays identically. Every preset
+ * currently has MIN === MAX, so the draw is deterministic — the range is
+ * kept so a future spread works without touching call sites.
  */
 function drawDocCount(ctx: MockPopulateContext): number {
   const { config } = ctx;
@@ -110,13 +101,11 @@ function shouldPopulate(
 /**
  * Appends up to `count` mock documents to a plain collection.
  *
- * Failure semantics (divergence D3): on the first generation error the whole
- * target is aborted and ONE structured failure is recorded. A generator that
- * cannot produce a value for a schema is a structural problem — retrying the
- * remaining iterations would fail identically, and the old per-scope
- * `catch { break }` variants only differed in how much wasted work they did
- * before going silent. Nothing is thrown: the caller decides severity when
- * folding the failures into its validation result.
+ * Failure semantics: on the first generation error the whole target is
+ * aborted and ONE structured failure is recorded — a generator that cannot
+ * produce a value for a schema fails identically on every retry. Nothing is
+ * thrown: the caller decides severity when folding the failures into its
+ * validation result.
  */
 function appendPlainDocs(
   content: Record<string, unknown>[],
@@ -157,8 +146,7 @@ function appendPlainDocs(
 /**
  * The refresh cycling order as data: type names repeated in declaration
  * order until `count` positions exist. Materializing the sequence lets the
- * mint phase run per TYPE before any document generates — the same
- * pools-first rule the batch paths follow.
+ * mint phase run per TYPE before any document generates.
  */
 function cycledTypeNames(typeNames: string[], count: number): string[] {
   const sequence: string[] = [];
@@ -174,7 +162,7 @@ function cycledTypeNames(typeNames: string[], count: number): string[] {
 /**
  * Appends `batchCount` batches to a typed collection — a batch is one mock
  * document per declared type, so every type is equally represented
- * (populate semantics of divergence D2: total = batchCount × #types).
+ * (total = batchCount × #types).
  */
 function appendTypedBatches(
   content: Record<string, unknown>[],
@@ -237,7 +225,7 @@ function appendTypedBatches(
 
 /**
  * Appends exactly `count` mock documents to a typed collection, cycling
- * through the declared types (refresh semantics of divergence D2 — see
+ * through the declared types (refresh semantics — see
  * {@link retainAndRefreshBuckets}).
  */
 function appendTypedDocs(
@@ -303,7 +291,7 @@ function appendTypedDocs(
  * shares one `_scope` value REALIZED by the session — an existing scope-space
  * id when the pools hold any, a fresh value from the `scope` schema
  * otherwise — so simulated documents land in the same scopes real entities
- * inhabit instead of each batch inventing a parallel universe.
+ * inhabit.
  */
 function appendScopedBatches(
   content: Record<string, unknown>[],
@@ -404,7 +392,7 @@ function appendScopedDocs(
   }
 
   // Position i of the cycling sequence lives in scope `scopes[floor(i / n)]`
-  // — one scope per cycle, exactly the old shape, with realized values.
+  // — one scope per cycle.
   const sequence = cycledTypeNames(typeNames, count);
   const minted = new Map<string, string[]>();
   for (const typeName of typeNames) {
@@ -456,7 +444,7 @@ function appendScopedDocs(
 /**
  * Populates plain collections declared in the schema.
  * Missing state entries are created; existing content is preserved
- * (divergence D5) and only supplemented when the policy allows it.
+ * and only supplemented when the policy allows it.
  */
 export function populateCollections(
   state: DatabaseState,
@@ -510,17 +498,14 @@ export function populateMultiCollections(
 /**
  * Populates SYNTHETIC multi-model instances for declared models.
  *
- * Granularity (divergence D4): the decision is taken per MODEL — a model
- * with no instance gets a synthetic one even when other models already have
- * instances. The old whole-bucket check let a newly declared model ride
- * green on another model's documents: its validation loops iterated nothing.
- * An existing-but-empty instance counts as "the model has an instance";
- * topping it up is {@link populateExistingMultiModelInstances}'s job at
- * validation time.
+ * The decision is taken per MODEL — a model with no instance gets a
+ * synthetic one even when other models already have instances; otherwise a
+ * newly declared model would ride green on another model's documents, its
+ * validation loops iterating nothing. An existing-but-empty instance counts
+ * as "the model has an instance"; topping it up is
+ * {@link populateExistingMultiModelInstances}'s job at validation time.
  *
- * Preservation (divergence D5): an instance entry that already exists is
- * never reassigned — the old code cleared any real instance whose name
- * collided with the synthetic `<model>:instance<N>` naming.
+ * An instance entry that already exists is never reassigned.
  */
 export function populateSyntheticMultiModelInstances(
   state: DatabaseState,
@@ -530,8 +515,7 @@ export function populateSyntheticMultiModelInstances(
 ): void {
   if (policy === "ifSparse") {
     // Sparseness is a per-instance measure; it has no meaning for deciding
-    // whether a synthetic instance should exist at all. Failing loud beats
-    // guessing a semantic no caller ever defined.
+    // whether a synthetic instance should exist at all.
     throw new Error(
       'Populate policy "ifSparse" is not defined for synthetic multi-model ' +
         "instances — use populateExistingMultiModelInstances for top-ups.",
@@ -548,10 +532,9 @@ export function populateSyntheticMultiModelInstances(
 
     // Instance names are REALIZED, not invented: when the model-key space's
     // pool holds real root ids, the instance takes one of them — production
-    // names instances `<model>:<entity id>`, and that coincidence is what
-    // makes a root↔instance merge branch (`flowToScope` with
-    // `onConflict: "merge"`) executable in simulation. Names never collide
-    // with existing entries, so real instances are never reassigned.
+    // names instances `<model>:<entity id>`, so references and scopes can
+    // coincide with them. Names never collide with existing entries, so
+    // real instances are never reassigned.
     //
     // No bare `<model>` entry: production has instance collections only
     // (`<model>:<id>`), so inventing one gives the appliers a phantom
@@ -657,10 +640,7 @@ export function populateScopedMultiCollections(
 /**
  * Populates every bucket declared in the schemas, in the canonical order —
  * the {@link DatabaseState} declaration order: collections,
- * multiCollections, multiModels, scopedMultiCollections (divergence D6).
- * The two historical copies disagreed on ordering; nothing observable
- * depended on it (only the RNG stream), but a single order means a failure
- * report always lists buckets consistently.
+ * multiCollections, multiModels, scopedMultiCollections.
  */
 export function populateDeclaredBuckets(
   state: DatabaseState,
@@ -696,25 +676,21 @@ export function populateDeclaredBuckets(
     );
   }
 
-  // The correlation report joins the failure channel the caller already
-  // folds into its validation result — a hole in the correlation is spoken,
-  // never silent.
+  // Correlation findings join the failure channel the caller folds into its
+  // validation result.
   ctx.failures.push(...ctx.session.drainFindings());
 }
 
 /**
  * Applies the retention ratio to every bucket, then refreshes each entry
  * back to its pre-retention size with fresh mock data (canonical bucket
- * order — divergence D6).
+ * order).
  *
- * Volume semantics (divergence D2): refresh appends EXACTLY
- * `originalCount - keepCount` documents, cycling through the declared types.
- * This guarantees the invariant the propagation tests state — preparing a
- * state never grows a non-empty collection — for every type count. The old
- * code refreshed `ceil(newDocs / #types)` full batches, which could
- * overshoot the original size for multi-type collections; the last cycle is
- * now truncated instead (a slightly uneven type distribution is harmless,
- * compounding growth across a migration chain is not).
+ * Volume semantics: refresh appends EXACTLY `originalCount - keepCount`
+ * documents, cycling through the declared types — preparing a state never
+ * grows a non-empty collection, so propagation cannot compound volume
+ * across a migration chain. The last cycle is truncated when the count is
+ * not a multiple of the type count.
  *
  * Retention applies even when the schema no longer declares the entry;
  * refresh requires a schema to generate against, so schema-less entries only

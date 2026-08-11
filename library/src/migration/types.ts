@@ -1008,12 +1008,9 @@ export type MockGenerationFailure = {
   message: string;
 
   /**
-   * What the entry records. Absent or `"generation"`: a generator error
-   * aborted a target (may become a blocking error when the target ends up
-   * empty). `"correlation"`: a finding of the correlated-identity report —
-   * a referenced space nobody mints, an ambiguous owner, an empty pool at
-   * draw time. Correlation findings are NEVER blocking; they surface as
-   * warnings so a hole in the correlation is spoken instead of silent.
+   * Absent or `"generation"`: a generator error aborted a target.
+   * `"correlation"`: a finding from the correlated-identity report — never
+   * blocking, always folds as a warning.
    */
   kind?: "generation" | "correlation";
 

@@ -1,25 +1,15 @@
 /**
  * @fileoverview Correlated identity generation for the simulation validator
  *
- * The mock engine used to populate every bucket independently: root documents
- * received random `_id`s, multi-model instances were named `<model>:instance1`,
- * and `_scope` values were invented per batch. No identity was ever SHARED
- * between buckets, so any migration whose riskiest line depends on keys
- * coinciding — `flowToScope` with `onConflict: "merge"` fusing a root document
- * with its per-instance counterpart — sailed through the gate without that
- * line ever executing.
+ * Makes generated identities coincide the way production data does.
+ * `refId(T)` / `dbId(T)` define a nominal identifier SPACE `T`; the bucket
+ * whose `_id` schema is typed in `T` owns it (read from the `_id` SCHEMA,
+ * never from the collection name — the type key and the space name can
+ * differ). Owned identifiers accumulate in pools keyed on (space × scope),
+ * and reference fields, instance names, and `_scope` values draw from those
+ * pools at generation time.
  *
- * This module makes generated identities coincide the way production data
- * does. `refId(T)` / `dbId(T)` define a nominal identifier SPACE `T`; the
- * bucket whose `_id` schema is typed in `T` owns it (read from the `_id`
- * SCHEMA, never from the collection name — the type key and the space name
- * can differ). Owned identifiers accumulate in pools keyed on
- * (space × scope) — a scoped reference must come from the SAME `_scope`,
- * because a syntactically valid but cross-scope id would be semantically
- * absurd — and reference fields draw from those pools at generation time.
- *
- * Five conceptual phases, each a pure step driven by the population engine
- * in `populate.ts`:
+ * Phases, each a pure step driven by the population engine in `populate.ts`:
  *
  *   plan      static read of the schemas — who owns which space, which
  *             fields reference one, which scoped types are root singletons
@@ -29,20 +19,14 @@
  *             need no topological order ({@link CorrelationSession.mintIds})
  *   realize   multi-model instance NAMES and scoped-batch `_scope` values
  *             are DRAWN from the pools instead of invented
- *             ({@link CorrelationSession.realizeInstanceNames} /
- *             {@link CorrelationSession.realizeScopes})
  *   populate  document generation — owned by `populate.ts`
  *   link      reference fields resolve against the pools through the
  *             generator's `resolve` hook
- *             ({@link CorrelationSession.docOptions})
  *
- * The report IS the lock. Every hole in the correlation — a referenced space
- * nobody mints, an ambiguous owner, an empty pool at draw time — surfaces as
- * a warning through the existing failure channel, replacing a silent hole
- * with a spoken one. The escape hatch is INVERTED: one declares what is
- * assumed NOT correlated ({@link CorrelationSessionOptions.uncorrelatedSpaces}),
- * which silences the warning — a forgotten declaration produces noise, never
- * a silent gap.
+ * Every hole in the correlation — a referenced space nobody mints, an
+ * ambiguous owner, an empty pool at draw time — surfaces as a warning
+ * through the failure channel. Declaring a space in
+ * {@link CorrelationSessionOptions.uncorrelatedSpaces} silences its warnings.
  *
  * @module
  */
@@ -91,9 +75,8 @@ interface CorrelationPlan {
 
   /**
    * Space → the ONE target whose minted ids feed the draw pool. When several
-   * targets mint the same space (two real cases in the wild), a deterministic
-   * tie-break picks the first in canonical bucket/name order and a report
-   * line surfaces the ambiguity — no general multi-owner mechanism.
+   * targets mint the same space, a deterministic tie-break picks the first
+   * in canonical bucket/name order and a report line surfaces the ambiguity.
    */
   readonly contributors: Map<string, string>;
 
@@ -254,9 +237,9 @@ function buildCorrelationPlan(
     const scopeSpace = extractIdPrefix(scoped.scope);
     if (scopeSpace && !uncorrelated.has(scopeSpace)) {
       scopeSpaces.set(name, scopeSpace);
-      // The scope schema is itself a stored reference to its space — a
-      // scoped collection whose scope space nobody mints deserves the same
-      // ownerless warning as any dangling reference field.
+      // The scope schema is itself a stored reference to its space, so an
+      // unminted scope space gets the same ownerless warning as any
+      // dangling reference field.
       if (!referenced.has(scopeSpace)) {
         referenced.set(scopeSpace, {
           bucket: "scopedMultiCollections",
@@ -341,12 +324,12 @@ interface PoolEntry {
 }
 
 /**
- * Identifier pools keyed on (space × scope) — NOT on the space alone. A
- * `participantId` inside scope `exposition:X` must come from a participant of
- * the SAME scope; a global pool per space would produce syntactically valid,
- * semantically absurd references and gain nothing. `scope: null` is the
- * global pool; a draw tries the scoped pool first, falls back to the global
- * one, and the caller signals when both are empty.
+ * Identifier pools keyed on (space × scope) — NOT on the space alone: a
+ * `participantId` inside scope `exposition:X` must come from a participant
+ * of the SAME scope, or the reference is syntactically valid but
+ * semantically absurd. `scope: null` is the global pool; a draw tries the
+ * scoped pool first, falls back to the global one, and the caller signals
+ * when both are empty.
  */
 function createIdPools() {
   const pools = new Map<string, Map<string, PoolEntry>>();
@@ -396,7 +379,7 @@ function createIdPools() {
 // Session
 // ---------------------------------------------------------------------------
 
-/** Small deterministic PRNG — replaces the engine's bare Math.random draws. */
+/** Small deterministic PRNG for the session's random decisions. */
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
@@ -415,18 +398,15 @@ export interface CorrelationSessionOptions {
 
   /**
    * Base seed for every random decision of the session — derive it from the
-   * migration id so a simulation is stable per migration and different
-   * between migrations. A simulation that cannot be replayed identically
-   * cannot be diffed between two runs.
+   * migration id so a simulation replays identically per migration.
    */
   seed: number;
 
   /**
-   * Identifier spaces assumed NOT correlated. The escape hatch is inverted
-   * on purpose: declaring what to correlate would reproduce the original bug
-   * the moment a declaration is forgotten, so one declares what is assumed
-   * uncorrelated instead — the silence becomes a written choice, and every
-   * undeclared hole keeps warning.
+   * Identifier spaces assumed NOT correlated. Declaring a space here
+   * silences its correlation warnings; every undeclared hole keeps warning.
+   * The declaration is inverted on purpose so a forgotten one produces
+   * noise, never a silent gap.
    */
   uncorrelatedSpaces?: readonly string[];
 }
@@ -485,9 +465,9 @@ export interface CorrelationSession {
 
   /**
    * Chooses `count` instance names for a model: real ids drawn from the
-   * model-key space's pool when it holds any (that coincidence is what makes
-   * a root↔instance merge branch executable), fresh `<model>:<id>` values
-   * otherwise. Never returns a name in `taken`.
+   * model-key space's pool when it holds any (production names instances
+   * `<model>:<entity id>`), fresh `<model>:<id>` values otherwise. Never
+   * returns a name in `taken`.
    */
   realizeInstanceNames(
     model: string,
@@ -749,8 +729,8 @@ export function createCorrelationSession(
       }
     }
     // Bounded: a degenerate id space (regex admitting a handful of values)
-    // must not spin forever — past the budget, fall back to the historical
-    // synthetic naming, which is always fresh.
+    // must not spin forever — past the budget, fall back to synthetic
+    // `<model>:instanceN` naming, which is always fresh.
     let attempts = 0;
     while (names.length < count && attempts++ < count * 20) {
       const fresh = mintFreshId(model);
