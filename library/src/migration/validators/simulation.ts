@@ -30,7 +30,7 @@ import {
   createEmptyDatabaseState,
   type SimulationDatabaseState,
 } from "../types.ts";
-import { migrationBuilder } from "../builder.ts";
+import { getIrreversibleOperations, migrationBuilder } from "../builder.ts";
 import * as v from "valibot";
 import { dirtyEquivalent } from "../../utils/object.ts";
 import { createMemoryApplier } from "../appliers/memory.ts";
@@ -518,6 +518,12 @@ export class SimulationValidator implements MigrationValidator {
       }
     }
 
+    // The real rollback path refuses a migration containing any irreversible
+    // operation (applier pre-scan), so no rollback state exists to validate.
+    if (getIrreversibleOperations(operations).length > 0) {
+      return { errors, issues };
+    }
+
     let stateBeforeRollback = stateAfter;
     // Apply reverse operations to get back to pre-migration state
     for (let i = operations.length - 1; i >= 0; i--) {
@@ -631,6 +637,11 @@ export class SimulationValidator implements MigrationValidator {
           );
         }
       }
+    }
+
+    // No rollback state exists to validate for an irreversible migration.
+    if (getIrreversibleOperations(operations).length > 0) {
+      return { errors, issues };
     }
 
     let stateBeforeRollback = stateAfter;
@@ -766,6 +777,11 @@ export class SimulationValidator implements MigrationValidator {
           );
         }
       }
+    }
+
+    // No rollback state exists to validate for an irreversible migration.
+    if (getIrreversibleOperations(operations).length > 0) {
+      return { errors, issues };
     }
 
     let stateBeforeRollback = stateAfter;
@@ -908,6 +924,11 @@ export class SimulationValidator implements MigrationValidator {
           );
         }
       }
+    }
+
+    // No rollback state exists to validate for an irreversible migration.
+    if (getIrreversibleOperations(operations).length > 0) {
+      return { errors, issues };
     }
 
     let stateBeforeRollback = stateAfter;
