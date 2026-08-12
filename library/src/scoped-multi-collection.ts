@@ -15,6 +15,13 @@ import { dbId, newId } from "./ids.ts";
 import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
 import { getSessionContext } from "./session.ts";
 import { createDotNotationSchema, getNestedValue } from "./dot-notation.ts";
+import {
+  assertSortResolvableBeforePipeline,
+  buildExprCursorFilter,
+  buildSortMachinery,
+  buildSortPaginateStages,
+  type SortMachinery,
+} from "./paginate-sort.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
 import { dirtyEquivalent } from "./utils/object.ts";
 import { createLogger } from "./utils/logger.ts";
@@ -291,6 +298,17 @@ export type ScopedView<
       sort?: m.Sort | m.SortDirection;
       /** Scope-safe pipeline stages run server-side before pagination (lookups, addFields, …). */
       pipeline?: (stage: ScopedStageBuilder<T>) => AggregationStage[];
+      /**
+       * Scope-safe stages that run BEFORE the cursor match and the `$sort`,
+       * so `sort` may reference fields they compute (e.g. sort by a
+       * `$lookup`ed document's field). Unlike `pipeline` (which runs after
+       * the sort, lazily over ~`limit` docs), these stages run over the
+       * whole scoped+filtered set — keep them lean (join just what the sort
+       * needs). Fields they add survive into the returned docs. Sort keys
+       * must be scalar (arrays keep MongoDB's ambiguous array-sort
+       * semantics — `$first` the lookup result before sorting on it).
+       */
+      sortPipeline?: (stage: ScopedStageBuilder<T>) => AggregationStage[];
       prepare?: (doc: OutputDoc<T, K, S>) => Promise<EN> | EN;
       filter?: (doc: EN) => Promise<boolean> | boolean;
       format?: (doc: EN) => Promise<R> | R;
@@ -1177,6 +1195,7 @@ export async function scopedMultiCollection<
           const customFilter = options?.filter;
           const format = options?.format;
           const pipelineBuilder = options?.pipeline;
+          const sortPipelineBuilder = options?.sortPipeline;
           const sortInput = options?.sort ?? { _id: 1 };
           const session = sessionContext.getSession();
 
@@ -1200,6 +1219,70 @@ export async function scopedMultiCollection<
             { _type: typeName },
           ];
           if (filter) baseQuery.push(filter as Record<string, unknown>);
+
+          // User pipelines (scope-aware builder). `pipeline` is used for BOTH
+          // the count and the data fetch so `total` reflects docs that survive
+          // the WHOLE pipeline (e.g. a $lookup-based JOIN filter), not just
+          // the base scope+type match. `sortPipeline` feeds the sort (and the
+          // cursor), so it participates in every pipeline, counts included.
+          const stageBuilder = buildScopedStageBuilder<T>(collectionName, {
+            kind: "single",
+            id: scopeId,
+          });
+          const userPipeline = pipelineBuilder
+            ? pipelineBuilder(stageBuilder)
+            : [];
+          const sortStages = sortPipelineBuilder
+            ? sortPipelineBuilder(stageBuilder)
+            : [];
+          assertSortResolvableBeforePipeline(
+            Object.keys(sortObj),
+            sortStages,
+            userPipeline,
+          );
+          const sortMachinery = sortStages.length > 0
+            ? buildSortMachinery(sortObj)
+            : null;
+
+          // Resolve the anchor THROUGH the sort pipeline: the sort key may
+          // only exist after those stages run (e.g. a $lookup'ed field), so a
+          // raw findOne would yield `undefined` anchor values and a cursor
+          // that restarts at page 1. Scope+type stay non-bypassable.
+          const resolveSortPipelineAnchor = async (
+            anchorId: string,
+            label: "afterId" | "beforeId",
+          ): Promise<Record<string, unknown>> => {
+            const rows = await collection.aggregate([
+              // deno-lint-ignore no-explicit-any
+              { $match: { _id: anchorId, _scope: scopeId, _type: typeName } },
+              ...sortStages,
+              { $limit: 1 },
+            ] as any, { session }).toArray();
+            if (rows[0]) return rows[0] as Record<string, unknown>;
+            // Fail loud, and say WHY: a dropped anchor (a $match inside
+            // sortPipeline excluded it) is a different caller bug than a
+            // stale/cross-scope id.
+            const exists = await collection.findOne(
+              // deno-lint-ignore no-explicit-any
+              { _id: anchorId, _scope: scopeId, _type: typeName } as any,
+              { session },
+            );
+            if (exists) {
+              throw errorWithSafeMessage(
+                `paginate: ${label} "${anchorId}" was dropped by ` +
+                  `\`sortPipeline\` — cannot anchor the page (the anchor ` +
+                  `must survive the sort pipeline)`,
+                `paginate: ${label} was dropped by \`sortPipeline\` — ` +
+                  `cannot anchor the page`,
+              );
+            }
+            throw errorWithSafeMessage(
+              `paginate: ${label} "${anchorId}" was not found as type ` +
+                `"${typeName}" in scope "${scopeId}" — cannot anchor the page`,
+              `paginate: ${label} was not found as type "${typeName}" in ` +
+                `scope — cannot anchor the page`,
+            );
+          };
 
           // Build a cursor filter from an anchor doc. Single-field `_id` sort
           // uses a simple comparison; a compound sort emits the lexicographic
@@ -1239,26 +1322,42 @@ export async function scopedMultiCollection<
           };
 
           // Resolve the (mutually exclusive) cursor. Backward paging walks the
-          // reversed sort and re-reverses the page below.
+          // reversed sort and re-reverses the page below. With a sortPipeline,
+          // the cursor is an $expr ladder over the hidden normalized sort keys
+          // (see paginate-sort.ts) — query operators would silently drop
+          // parents whose sort key is missing (e.g. no joined doc).
           let cursorFilter: Record<string, unknown> | null = null;
+          let exprCursor: AggregationStage | null = null;
           if (afterId) {
             if (!afterId.startsWith(`${typeName}:`)) {
               throw new Error(
                 `paginate: invalid afterId format — expected "${typeName}:..." prefix`,
               );
             }
-            cursorFilter = await buildCursorFilter(afterId, "after");
-            // Anchor must exist WITHIN this scope+type. This API is new, so we
-            // fail loud rather than silently restart at page 1 with a bogus
-            // position (as the previous impl did) — a stale/cross-scope id is a
-            // caller bug, not "start over".
-            if (cursorFilter === null) {
-              throw errorWithSafeMessage(
-                `paginate: afterId "${afterId}" was not found as type ` +
-                  `"${typeName}" in scope "${scopeId}" — cannot anchor the page`,
-                `paginate: afterId was not found as type "${typeName}" in ` +
-                  `scope — cannot anchor the page`,
+            if (sortMachinery) {
+              const anchor = await resolveSortPipelineAnchor(
+                afterId,
+                "afterId",
               );
+              exprCursor = buildExprCursorFilter(
+                sortMachinery,
+                anchor,
+                "after",
+              );
+            } else {
+              cursorFilter = await buildCursorFilter(afterId, "after");
+              // Anchor must exist WITHIN this scope+type. This API is new, so we
+              // fail loud rather than silently restart at page 1 with a bogus
+              // position (as the previous impl did) — a stale/cross-scope id is a
+              // caller bug, not "start over".
+              if (cursorFilter === null) {
+                throw errorWithSafeMessage(
+                  `paginate: afterId "${afterId}" was not found as type ` +
+                    `"${typeName}" in scope "${scopeId}" — cannot anchor the page`,
+                  `paginate: afterId was not found as type "${typeName}" in ` +
+                    `scope — cannot anchor the page`,
+                );
+              }
             }
           } else if (beforeId) {
             if (!beforeId.startsWith(`${typeName}:`)) {
@@ -1266,14 +1365,26 @@ export async function scopedMultiCollection<
                 `paginate: invalid beforeId format — expected "${typeName}:..." prefix`,
               );
             }
-            cursorFilter = await buildCursorFilter(beforeId, "before");
-            if (cursorFilter === null) {
-              throw errorWithSafeMessage(
-                `paginate: beforeId "${beforeId}" was not found as type ` +
-                  `"${typeName}" in scope "${scopeId}" — cannot anchor the page`,
-                `paginate: beforeId was not found as type "${typeName}" in ` +
-                  `scope — cannot anchor the page`,
+            if (sortMachinery) {
+              const anchor = await resolveSortPipelineAnchor(
+                beforeId,
+                "beforeId",
               );
+              exprCursor = buildExprCursorFilter(
+                sortMachinery,
+                anchor,
+                "before",
+              );
+            } else {
+              cursorFilter = await buildCursorFilter(beforeId, "before");
+              if (cursorFilter === null) {
+                throw errorWithSafeMessage(
+                  `paginate: beforeId "${beforeId}" was not found as type ` +
+                    `"${typeName}" in scope "${scopeId}" — cannot anchor the page`,
+                  `paginate: beforeId was not found as type "${typeName}" in ` +
+                    `scope — cannot anchor the page`,
+                );
+              }
             }
             const reversed: Record<string, 1 | -1> = {};
             for (const [f, d] of Object.entries(sortObj)) {
@@ -1282,17 +1393,28 @@ export async function scopedMultiCollection<
             sort = reversed;
           }
 
-          // User pipeline (scope-aware builder). Used for BOTH the count and the
-          // data fetch so `total` reflects docs that survive the WHOLE pipeline
-          // (e.g. a $lookup-based JOIN filter), not just the base scope+type
-          // match.
-          const stageBuilder = buildScopedStageBuilder<T>(collectionName, {
-            kind: "single",
-            id: scopeId,
-          });
-          const userPipeline = pipelineBuilder
-            ? pipelineBuilder(stageBuilder)
-            : [];
+          // Count helper for the sortPipeline path. Counts MUST mirror the
+          // data assembly (base → sortPipeline → normalize → cursor):
+          // applying the $expr cursor to a pipeline that never ran the sort
+          // stages would compare against fields that don't exist and corrupt
+          // `position`.
+          const countViaSortPipeline = async (
+            machinery: SortMachinery,
+            cursor: AggregationStage | null,
+          ): Promise<number> => {
+            const rows = await collection.aggregate(
+              buildSortPaginateStages({
+                baseMatch: { $and: baseQuery },
+                sortStages,
+                machinery,
+                cursorFilter: cursor,
+                pipeline: userPipeline,
+                count: true,
+              }),
+              { session },
+            ).toArray();
+            return (rows[0]?.total as number | undefined) ?? 0;
+          };
 
           // total + position. `position` is the 0-based count of docs preceding
           // the current page's first row (0 on the first page). `-1` marks the
@@ -1300,7 +1422,17 @@ export async function scopedMultiCollection<
           let total: number | undefined;
           let position: number | undefined;
           if (!skipTotal) {
-            if (userPipeline.length > 0) {
+            if (sortMachinery) {
+              total = await countViaSortPipeline(sortMachinery, null);
+              if (afterId) {
+                position = total -
+                  (await countViaSortPipeline(sortMachinery, exprCursor));
+              } else if (beforeId) {
+                position = -1;
+              } else {
+                position = 0;
+              }
+            } else if (userPipeline.length > 0) {
               const countPipeline: AggregationStage[] = [
                 { $match: { $and: baseQuery } },
                 ...userPipeline,
@@ -1369,20 +1501,32 @@ export async function scopedMultiCollection<
 
           // deno-lint-ignore no-explicit-any
           let cursor: m.FindCursor<any> | m.AggregationCursor<any>;
-          if (userPipeline.length > 0) {
+          if (sortMachinery) {
+            // sortPipeline path: the stages the sort depends on ($lookup, …)
+            // necessarily run over the whole scoped+filtered set — the sort
+            // needs every value. The after-sort `pipeline` stays lazy over
+            // the ~`limit` docs the JS loop consumes.
+            cursor = collection.aggregate(
+              buildSortPaginateStages({
+                baseMatch: { $and: baseQuery },
+                sortStages,
+                machinery: sortMachinery,
+                cursorFilter: exprCursor,
+                pipeline: userPipeline,
+                reverse: Boolean(beforeId),
+              }),
+              { session },
+            );
+          } else if (userPipeline.length > 0) {
             // `$sort` goes BEFORE the user pipeline so it can ride an index, and
             // so the expensive pipeline stages ($lookup, …) run LAZILY — only for
             // the ~`limit` docs the JS loop consumes before it closes the cursor,
             // not for the whole cursor-filtered set. No server-side `$limit` here:
             // a filtering pipeline can shrink the page, so `limit` is enforced
             // JS-side (which is also what lets the cursor close early).
-            //
-            // NOTE: this deliberately DIVERGES from multiCollection.paginate,
-            // which sorts AFTER the user pipeline (so callers can sort on fields
-            // the pipeline adds — e.g. a `$lookup`/`$addFields` result). Here the
-            // sort runs FIRST — mirroring collection.paginate — to keep it
-            // index-backed and the `$lookup` lazy; the trade-off is that sorting
-            // on pipeline-added fields is NOT supported by the scoped view.
+            // Sorting on a field this pipeline computes is impossible in this
+            // slot BY DESIGN (the sort has already run) — that is what
+            // `sortPipeline` is for (the branch above).
             const dataPipeline: AggregationStage[] = [
               { $match: finalQuery },
               { $sort: sort },
@@ -1413,7 +1557,7 @@ export async function scopedMultiCollection<
               if (!parsed.success) continue;
               // Preserve pipeline-added fields ($lookup results) alongside the
               // validated document (parse strips unknown keys).
-              const validatedDoc = pipelineBuilder
+              const validatedDoc = pipelineBuilder || sortPipelineBuilder
                 ? { ...doc, ...parsed.output }
                 : parsed.output;
               const enriched = prepare
@@ -1447,7 +1591,14 @@ export async function scopedMultiCollection<
           if (beforeId) {
             data.reverse();
             if (!skipTotal) {
-              if (cursorFilter) {
+              if (sortMachinery) {
+                // exprCursor is always set here — the anchor resolution above
+                // throws instead of returning null.
+                const beforeCount = exprCursor
+                  ? await countViaSortPipeline(sortMachinery, exprCursor)
+                  : 0;
+                position = Math.max(0, beforeCount - data.length);
+              } else if (cursorFilter) {
                 // The before-count must be computed through the SAME shape as
                 // `total`: when a user pipeline exists, count via the
                 // aggregate($count) form so `position` stays consistent with a

@@ -22,6 +22,13 @@ import { applyMultiCollectionIndexes } from "./indexes-applier.ts";
 import { isSchemaManaged } from "./runtime-config.ts";
 import { createLogger } from "./utils/logger.ts";
 import {
+  assertSortResolvableBeforePipeline,
+  buildExprCursorFilter,
+  buildSortMachinery,
+  buildSortPaginateStages,
+  type SortMachinery,
+} from "./paginate-sort.ts";
+import {
   createOperationTracer,
   filterKeys,
   type OpContext,
@@ -233,6 +240,16 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
       sort?: m.Sort | m.SortDirection;
       /** Pipeline stages to execute server-side before pagination (lookups, addFields, etc.) */
       pipeline?: (stage: StageBuilder<T>) => AggregationStage[];
+      /**
+       * Stages that run BEFORE the cursor match and the `$sort`, so `sort`
+       * may reference fields they compute (e.g. sort by a `$lookup`ed
+       * document's field). Unlike `pipeline` (which runs after the sort,
+       * lazily over ~`limit` docs), these stages run over the whole filtered
+       * set — keep them lean (join just what the sort needs). Fields they
+       * add survive into the returned docs. Sort keys must be scalar
+       * (`$first` a lookup result before sorting on it).
+       */
+      sortPipeline?: (stage: StageBuilder<T>) => AggregationStage[];
       prepare?: (
         doc: v.InferOutput<OutputElementSchema<T, E>>,
       ) => Promise<EN> | EN;
@@ -287,6 +304,8 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
       naturalIdSort?: boolean;
       /** Pipeline stages to execute server-side before pagination (lookups, addFields, etc.) */
       pipeline?: (stage: StageBuilder<T>) => AggregationStage[];
+      /** See the single-type overload. Incompatible with `naturalIdSort`. */
+      sortPipeline?: (stage: StageBuilder<T>) => AggregationStage[];
       prepare?: (
         doc: ExtractByType<T, E[number]>,
       ) => Promise<EN> | EN;
@@ -730,6 +749,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         sort?: m.Sort | m.SortDirection;
         naturalIdSort?: boolean;
         pipeline?: (stage: StageBuilder<T>) => AggregationStage[];
+        sortPipeline?: (stage: StageBuilder<T>) => AggregationStage[];
         prepare?: (doc: any) => Promise<any> | any;
         filter?: (doc: any) => Promise<boolean> | boolean;
         format?: (doc: any) => Promise<any> | any;
@@ -747,10 +767,18 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           sort,
           naturalIdSort,
           pipeline: pipelineBuilder,
+          sortPipeline: sortPipelineBuilder,
           prepare,
           filter: customFilter,
           format,
         } = options || {};
+        // Both features rewrite how the sort key is produced; combining them
+        // is untested territory — refuse rather than risk a silent bad order.
+        if (sortPipelineBuilder && naturalIdSort) {
+          throw new Error(
+            "paginate: `naturalIdSort` and `sortPipeline` cannot be combined",
+          );
+        }
         const session = sessionContext.getSession();
 
         // Support both single key and array of keys for cross-pagination
@@ -884,46 +912,6 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             id.startsWith(`${type as string}:`)
           );
         };
-
-        // Add pagination filters
-        // Keep cursorFilter separate for use in aggregation pipeline with naturalIdSort
-        let cursorFilterResult: Record<string, unknown> | null = null;
-
-        if (afterId) {
-          if (!isValidIdForTypes(afterId, keys)) {
-            const typesStr = keys.map((k) => String(k)).join(", ");
-            throw new Error(`Invalid afterId format for type(s) ${typesStr}`);
-          }
-          cursorFilterResult = await buildCursorFilter(afterId, "after");
-          if (cursorFilterResult) {
-            query = {
-              $and: [
-                ...baseQuery,
-                cursorFilterResult,
-              ],
-            };
-          }
-        } else if (beforeId) {
-          if (!isValidIdForTypes(beforeId, keys)) {
-            const typesStr = keys.map((k) => String(k)).join(", ");
-            throw new Error(`Invalid beforeId format for type(s) ${typesStr}`);
-          }
-          cursorFilterResult = await buildCursorFilter(beforeId, "before");
-          if (cursorFilterResult) {
-            query = {
-              $and: [
-                ...baseQuery,
-                cursorFilterResult,
-              ],
-            };
-          }
-          // Reverse the sort for beforeId to get items in reverse order
-          const reversedSort: Record<string, 1 | -1> = {};
-          for (const [field, dir] of Object.entries(sortObj)) {
-            reversedSort[field] = (dir === 1 ? -1 : 1) as 1 | -1;
-          }
-          sort = reversedSort;
-        }
 
         // Create StageBuilder for pipeline support
         const createStageBuilder = (): StageBuilder<T> => ({
@@ -1114,13 +1102,153 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           },
         };
 
-        // Build user pipeline once — used both for the data fetch
-        // below AND for the count above (so `total` reflects docs
+        // Build user pipelines once — used both for the data fetch
+        // below AND for the counts (so `total` reflects docs
         // that survive the pipeline's $match stages, not just the
         // base type filter).
         const userPipeline = pipelineBuilder
           ? pipelineBuilder(createStageBuilder())
           : [];
+        const sortStages = sortPipelineBuilder
+          ? sortPipelineBuilder(createStageBuilder())
+          : [];
+        assertSortResolvableBeforePipeline(
+          Object.keys(sortObj),
+          sortStages,
+          userPipeline,
+        );
+        const sortMachinery = sortStages.length > 0
+          ? buildSortMachinery(sortObj)
+          : null;
+
+        // Resolve the cursor anchor THROUGH the sort pipeline: the sort key
+        // may only exist after those stages run (e.g. a $lookup'ed field), so
+        // a raw findOne would yield `undefined` anchor values and a cursor
+        // that restarts at page 1. Fail loud on a missing/dropped anchor —
+        // this API is new, no silent page-1 restart to preserve.
+        const resolveSortAnchor = async (
+          anchorId: string,
+          label: "afterId" | "beforeId",
+        ): Promise<Record<string, unknown>> => {
+          const rows = await collection.aggregate(
+            [{ $match: { _id: anchorId } }, ...sortStages, { $limit: 1 }],
+            { session },
+          ).toArray();
+          if (rows[0]) return rows[0] as Record<string, unknown>;
+          const exists = await collection.findOne({ _id: anchorId } as never, {
+            session,
+          });
+          throw new Error(
+            exists
+              ? `paginate: ${label} was dropped by \`sortPipeline\` — cannot ` +
+                `anchor the page (the anchor must survive the sort pipeline)`
+              : `paginate: ${label} was not found — cannot anchor the page`,
+          );
+        };
+
+        // Add pagination filters
+        // Keep cursorFilter separate for use in aggregation pipeline with
+        // naturalIdSort. With a sortPipeline, the cursor is instead an $expr
+        // ladder over the hidden normalized sort keys (see paginate-sort.ts) —
+        // query operators would silently drop docs whose sort key is missing.
+        let cursorFilterResult: Record<string, unknown> | null = null;
+        let exprCursor: AggregationStage | null = null;
+
+        if (afterId) {
+          if (!isValidIdForTypes(afterId, keys)) {
+            const typesStr = keys.map((k) => String(k)).join(", ");
+            throw new Error(`Invalid afterId format for type(s) ${typesStr}`);
+          }
+          if (sortMachinery) {
+            const anchor = await resolveSortAnchor(afterId, "afterId");
+            exprCursor = buildExprCursorFilter(sortMachinery, anchor, "after");
+          } else {
+            cursorFilterResult = await buildCursorFilter(afterId, "after");
+            if (cursorFilterResult) {
+              query = {
+                $and: [
+                  ...baseQuery,
+                  cursorFilterResult,
+                ],
+              };
+            }
+          }
+        } else if (beforeId) {
+          if (!isValidIdForTypes(beforeId, keys)) {
+            const typesStr = keys.map((k) => String(k)).join(", ");
+            throw new Error(`Invalid beforeId format for type(s) ${typesStr}`);
+          }
+          if (sortMachinery) {
+            const anchor = await resolveSortAnchor(beforeId, "beforeId");
+            exprCursor = buildExprCursorFilter(sortMachinery, anchor, "before");
+          } else {
+            cursorFilterResult = await buildCursorFilter(beforeId, "before");
+            if (cursorFilterResult) {
+              query = {
+                $and: [
+                  ...baseQuery,
+                  cursorFilterResult,
+                ],
+              };
+            }
+          }
+          // Reverse the sort for beforeId to get items in reverse order
+          const reversedSort: Record<string, 1 | -1> = {};
+          for (const [field, dir] of Object.entries(sortObj)) {
+            reversedSort[field] = (dir === 1 ? -1 : 1) as 1 | -1;
+          }
+          sort = reversedSort;
+        }
+
+        // Count helper for the sortPipeline path. Counts MUST mirror the data
+        // assembly (base → sortPipeline → normalize → cursor): applying the
+        // $expr cursor to a pipeline that never ran the sort stages would
+        // compare against fields that don't exist and corrupt `position`.
+        const countViaSortPipeline = async (
+          machinery: SortMachinery,
+          cursor: AggregationStage | null,
+        ): Promise<number> => {
+          const rows = await collection.aggregate(
+            buildSortPaginateStages({
+              baseMatch: { $and: baseQuery },
+              sortStages,
+              machinery,
+              cursorFilter: cursor,
+              pipeline: userPipeline,
+              count: true,
+            }),
+            { session },
+          ).toArray();
+          return (rows[0]?.total as number | undefined) ?? 0;
+        };
+
+        // Count helper shared by total/position — MUST mirror the data
+        // assembly. In particular with naturalIdSort the cursor references
+        // `_ulid`, which only exists after `ulidExtractStage` ran: matching
+        // it against raw documents always counted 0 and pushed `position`
+        // to `total` on pages ≥ 2.
+        const countMatching = async (
+          cursor: Record<string, unknown> | null,
+        ): Promise<number> => {
+          if (userPipeline.length > 0 || useNaturalIdSort) {
+            const stages: AggregationStage[] = [
+              { $match: { $and: baseQuery } },
+              ...(useNaturalIdSort ? [ulidExtractStage] : []),
+              ...(cursor ? [{ $match: cursor }] : []),
+              ...userPipeline,
+              { $count: "total" },
+            ];
+            const rows = await collection.aggregate(stages, { session })
+              .toArray();
+            return (rows[0]?.total as number | undefined) ?? 0;
+          }
+          return await collection.countDocuments(
+            (cursor
+              ? { $and: [...baseQuery, cursor] }
+              : { $and: baseQuery }) as never,
+            { session },
+          );
+        };
 
         // Count total + position. When a user pipeline is present,
         // the count must reflect docs that survive the WHOLE
@@ -1130,56 +1258,22 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         let total: number | undefined;
         let position: number | undefined;
         if (!skipTotal) {
-          if (userPipeline.length > 0) {
-            const countPipeline: AggregationStage[] = [
-              { $match: { $and: baseQuery } },
-              ...userPipeline,
-              { $count: "total" },
-            ];
-            const totalResult = await collection.aggregate(countPipeline, {
-              session,
-            }).toArray();
-            total = (totalResult[0]?.total as number | undefined) ?? 0;
-
+          if (sortMachinery) {
+            total = await countViaSortPipeline(sortMachinery, null);
             if (afterId) {
-              const afterFilter = await buildCursorFilter(afterId, "after");
-              if (afterFilter) {
-                const afterPipeline: AggregationStage[] = [
-                  { $match: { $and: [...baseQuery, afterFilter] } },
-                  ...userPipeline,
-                  { $count: "total" },
-                ];
-                const afterResult = await collection.aggregate(afterPipeline, {
-                  session,
-                }).toArray();
-                const afterCount =
-                  (afterResult[0]?.total as number | undefined) ?? 0;
-                position = total - afterCount;
-              } else {
-                position = 1;
-              }
+              position = total -
+                (await countViaSortPipeline(sortMachinery, exprCursor));
             } else if (beforeId) {
               position = -1;
             } else {
               position = 0;
             }
           } else {
-            const baseCountQuery = { $and: baseQuery };
-            total = await collection.countDocuments(baseCountQuery as never, {
-              session,
-            });
-
+            total = await countMatching(null);
             if (afterId) {
-              const afterFilter = await buildCursorFilter(afterId, "after");
-              if (afterFilter) {
-                const afterCount = await collection.countDocuments(
-                  { $and: [...baseQuery, afterFilter] } as never,
-                  { session },
-                );
-                position = total - afterCount;
-              } else {
-                position = 1;
-              }
+              position = cursorFilterResult
+                ? total - (await countMatching(cursorFilterResult))
+                : 1;
             } else if (beforeId) {
               position = -1;
             } else {
@@ -1188,7 +1282,22 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           }
         }
 
-        if (pipelineBuilder || useNaturalIdSort) {
+        if (sortMachinery) {
+          // sortPipeline path: the stages the sort depends on run over the
+          // whole filtered set (the sort needs every value); the after-sort
+          // `pipeline` stays lazy over the ~`limit` docs the loop consumes.
+          cursor = collection.aggregate(
+            buildSortPaginateStages({
+              baseMatch: { $and: baseQuery },
+              sortStages,
+              machinery: sortMachinery,
+              cursorFilter: exprCursor,
+              pipeline: userPipeline,
+              reverse: Boolean(beforeId),
+            }),
+            { session },
+          );
+        } else if (pipelineBuilder || useNaturalIdSort) {
           // For naturalIdSort, we need to add _ulid BEFORE the cursor filter can use it
           // So we split the query: base type filter first, then add _ulid, then cursor filter
           const aggregatePipeline: AggregationStage[] = useNaturalIdSort
@@ -1228,9 +1337,9 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
               continue; // Skip invalid documents
             }
 
-            // When pipeline is used, merge validated doc with original doc to preserve
+            // When a pipeline is used, merge validated doc with original doc to preserve
             // additional fields added by pipeline stages (like $lookup results)
-            const validatedDoc = pipelineBuilder
+            const validatedDoc = pipelineBuilder || sortPipelineBuilder
               ? { ...doc, ...validation.output }
               : validation.output;
 
@@ -1267,36 +1376,19 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         // If paginating backwards (beforeId), reverse to maintain consistent order with forward pagination
         if (beforeId) {
           elements.reverse();
-          // Calculate position: count of elements before the first returned element
+          // Calculate position: count of elements before the first returned
+          // element. Counts run through `countViaSortPipeline`/`countMatching`
+          // so `position` stays consistent with a pipeline-aware `total`.
           if (!skipTotal) {
-            const beforeFilter = await buildCursorFilter(beforeId, "before");
-            if (beforeFilter) {
-              // Mirror the `total` computation: when a user pipeline is present,
-              // the before-count must run through the same aggregate($count)
-              // shape so `position` stays consistent with a pipeline-aware
-              // `total`. A plain countDocuments would ignore the pipeline's
-              // filtering stages and yield an inconsistent position.
-              let beforeCount: number;
-              if (userPipeline.length > 0) {
-                const beforePipeline: AggregationStage[] = [
-                  { $match: { $and: [...baseQuery, beforeFilter] } },
-                  ...userPipeline,
-                  { $count: "total" },
-                ];
-                const beforeResult = await collection.aggregate(
-                  beforePipeline,
-                  {
-                    session,
-                  },
-                ).toArray();
-                beforeCount = (beforeResult[0]?.total as number | undefined) ??
-                  0;
-              } else {
-                beforeCount = await collection.countDocuments(
-                  { $and: [...baseQuery, beforeFilter] } as never,
-                  { session },
-                );
-              }
+            if (sortMachinery) {
+              // exprCursor is always set here — resolveSortAnchor throws
+              // instead of returning null.
+              const beforeCount = exprCursor
+                ? await countViaSortPipeline(sortMachinery, exprCursor)
+                : 0;
+              position = Math.max(0, beforeCount - elements.length);
+            } else if (cursorFilterResult) {
+              const beforeCount = await countMatching(cursorFilterResult);
               position = Math.max(0, beforeCount - elements.length);
             } else {
               position = 0;
