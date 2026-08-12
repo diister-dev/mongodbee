@@ -221,3 +221,54 @@ export function assertSortResolvableBeforePipeline(
     }
   }
 }
+
+/**
+ * One rung of the index-strategy cursor ladder: the condition carried by the
+ * sort field itself, given the anchor's value and the direction the walk moves
+ * in (`$gt` = toward higher ranks, `$lt` = toward lower ones).
+ *
+ * `$sort` ranks a MISSING field equal to null, and both below every real
+ * value. Query operators disagree: `{f: {$gt: null}}` matches nothing, and
+ * `{f: {$lt: v}}` skips null and missing. A ladder built from raw `$gt`/`$lt`
+ * therefore dead-ends at the null boundary — the walk stops the first time its
+ * anchor sits in the null block, while every document that HAS a value is
+ * still unvisited, and `position` makes that look like the end of the list.
+ *
+ * These shapes agree with `$sort` across the boundary while staying query
+ * operators, so the sort index remains usable (unlike the `$expr` ladder the
+ * sortPipeline path needs).
+ *
+ * Returns `null` when nothing can rank beyond the anchor on this field and the
+ * rung must be dropped — going lower than the null block.
+ *
+ * Cross-TYPE boundaries (a field holding both numbers and strings) are NOT
+ * covered: BSON orders types, `$gt` does not compare across them. Sort on a
+ * field of one type plus null/missing, which is what an optional field is.
+ */
+export function cursorRungCondition(
+  field: string,
+  anchorValue: unknown,
+  op: "$gt" | "$lt",
+): Record<string, unknown> | null {
+  const anchorIsNull = anchorValue === undefined || anchorValue === null;
+  if (op === "$gt") {
+    // Above null ranks everything that HAS a value (`$ne: null` excludes
+    // missing too, which is exactly the null block).
+    return anchorIsNull
+      ? { [field]: { $ne: null } }
+      : { [field]: { $gt: anchorValue } };
+  }
+  if (anchorIsNull) return null;
+  // Below a real value: smaller values, then the null block. `{f: null}`
+  // matches missing as well.
+  return { $or: [{ [field]: { $lt: anchorValue } }, { [field]: null }] };
+}
+
+/**
+ * Value to pin a PREVIOUS sort field to in a ladder rung. Missing normalizes
+ * to `null` so the equality matches both the null and the missing documents,
+ * mirroring how `$sort` ranks them together.
+ */
+export function cursorRungEquality(anchorValue: unknown): unknown {
+  return anchorValue === undefined ? null : anchorValue;
+}

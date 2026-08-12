@@ -26,6 +26,8 @@ import {
   buildExprCursorFilter,
   buildSortMachinery,
   buildSortPaginateStages,
+  cursorRungCondition,
+  cursorRungEquality,
   type SortMachinery,
 } from "./paginate-sort.ts";
 import {
@@ -906,20 +908,26 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             // All previous fields must be equal
             for (let j = 0; j < i; j++) {
               const prevField = sortFields[j];
-              condition[prevField] = getNestedValue(
-                enrichedAnchorDoc as Record<string, unknown>,
-                prevField,
+              condition[prevField] = cursorRungEquality(
+                getNestedValue(
+                  enrichedAnchorDoc as Record<string, unknown>,
+                  prevField,
+                ),
               );
             }
 
             // Current field uses comparison based on sort direction and pagination direction
             const isForward = direction === "after";
             const op = (sortDir === 1) === isForward ? "$gt" : "$lt";
-            condition[field] = { [op]: anchorValue };
+            const rung = cursorRungCondition(field, anchorValue, op);
+            // `null` means nothing ranks beyond the anchor on this field.
+            if (!rung) continue;
 
-            conditions.push(condition);
+            conditions.push({ ...condition, ...rung });
           }
 
+          // The `_id` rung always survives, so this is defensive only.
+          if (conditions.length === 0) return { _id: { $in: [] } };
           return { $or: conditions };
         };
 

@@ -20,6 +20,8 @@ import {
   buildExprCursorFilter,
   buildSortMachinery,
   buildSortPaginateStages,
+  cursorRungCondition,
+  cursorRungEquality,
   type SortMachinery,
 } from "./paginate-sort.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
@@ -1312,12 +1314,22 @@ export async function scopedMultiCollection<
               const condition: Record<string, unknown> = {};
               for (let j = 0; j < i; j++) {
                 const prev = sortFields[j];
-                condition[prev] = getNestedValue(anchorDoc, prev);
+                condition[prev] = cursorRungEquality(
+                  getNestedValue(anchorDoc, prev),
+                );
               }
               const op = (dir === 1) === isForward ? "$gt" : "$lt";
-              condition[f] = { [op]: getNestedValue(anchorDoc, f) };
-              conditions.push(condition);
+              const rung = cursorRungCondition(
+                f,
+                getNestedValue(anchorDoc, f),
+                op,
+              );
+              // `null` means nothing ranks beyond the anchor on this field.
+              if (!rung) continue;
+              conditions.push({ ...condition, ...rung });
             }
+            // The `_id` rung always survives, so this is defensive only.
+            if (conditions.length === 0) return { _id: { $in: [] } };
             return { $or: conditions };
           };
 
