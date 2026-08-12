@@ -9,14 +9,14 @@ import { mongoOperationQueue } from "./operation.ts";
 import { applyCollectionIndexes } from "./indexes-applier.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
 import { isSchemaManaged } from "./runtime-config.ts";
-import { getNestedValue } from "./dot-notation.ts";
 import {
   assertSortResolvableBeforePipeline,
+  buildCursorLadderBranches,
   buildExprCursorFilter,
   buildSortMachinery,
   buildSortPaginateStages,
-  cursorRungCondition,
-  cursorRungEquality,
+  composeCursorQuery,
+  normalizePaginateSort,
   type SortMachinery,
 } from "./paginate-sort.ts";
 import {
@@ -34,6 +34,9 @@ import type * as m from "mongodb";
 
 // Type for aggregation pipeline stages in simple collections
 type AggregationStage = Record<string, unknown>;
+
+// `_id` always exists — its cursor rungs stay raw comparisons (no null branch).
+const NON_NULLABLE_SORT_FIELDS: ReadonlySet<string> = new Set(["_id"]);
 
 /**
  * Stage builder for simple collections (not multi-collection)
@@ -834,86 +837,28 @@ export async function collection<
         const baseQuery: m.Filter<TInput> = { ...filter };
         let query: m.Filter<TInput> = { ...filter };
 
-        // Normalize sort to object format
-        sort = sort || { _id: 1 };
-        const sortObj: Record<string, 1 | -1> =
-          typeof sort === "object" && !Array.isArray(sort)
-            ? { ...sort as Record<string, 1 | -1> }
-            : {
-              _id: sort === 1 || sort === "asc" || sort === "ascending"
-                ? 1
-                : -1,
-            };
-
-        // Always add _id as tie-breaker if not already in sort (ensures stable ordering for duplicate values)
-        if (!("_id" in sortObj)) {
-          sortObj._id = 1;
-        }
-        // Update sort to include _id tie-breaker
+        // Normalize sort + direction-following `_id` tie-break (see
+        // normalizePaginateSort for why the tie-break is not a fixed `1`).
+        const sortObj = normalizePaginateSort(sort);
         sort = sortObj;
 
-        // Helper to build cursor-based pagination filter
-        const buildCursorFilter = async (
+        // Resolve the anchor and build the flat cursor DNF branches — see
+        // paginate-sort.ts for the null-boundary and rooted-$or reasoning.
+        const buildCursorBranches = async (
           anchorId: string | m.ObjectId,
           direction: "after" | "before",
-        ) => {
-          // Fetch the anchor document to get its sort field values
+        ): Promise<Record<string, unknown>[] | null> => {
           const anchorDoc = await collection.findOne(
             { _id: anchorId } as m.Filter<TInput>,
             { session },
           );
           if (!anchorDoc) return null;
-
-          const sortFields = Object.keys(sortObj);
-
-          // If sorting only by _id, use simple comparison
-          if (sortFields.length === 1 && sortFields[0] === "_id") {
-            const op = direction === "after"
-              ? (sortObj._id === 1 ? "$gt" : "$lt")
-              : (sortObj._id === 1 ? "$lt" : "$gt");
-            return { _id: { [op]: anchorId } };
-          }
-
-          // Build compound cursor filter for custom sort
-          // For afterId with sort { field: 1 }, we want documents where:
-          // (field > anchorValue) OR (field == anchorValue AND _id > anchorId)
-          const conditions: Record<string, unknown>[] = [];
-
-          for (let i = 0; i < sortFields.length; i++) {
-            const field = sortFields[i];
-            const sortDir = sortObj[field];
-            const anchorValue = getNestedValue(
-              anchorDoc as Record<string, unknown>,
-              field,
-            );
-
-            // Build condition for this level
-            const condition: Record<string, unknown> = {};
-
-            // All previous fields must be equal
-            for (let j = 0; j < i; j++) {
-              const prevField = sortFields[j];
-              condition[prevField] = cursorRungEquality(
-                getNestedValue(
-                  anchorDoc as Record<string, unknown>,
-                  prevField,
-                ),
-              );
-            }
-
-            // Current field uses comparison based on sort direction and pagination direction
-            const isForward = direction === "after";
-            const op = (sortDir === 1) === isForward ? "$gt" : "$lt";
-            const rung = cursorRungCondition(field, anchorValue, op);
-            // `null` means nothing ranks beyond the anchor on this field.
-            if (!rung) continue;
-
-            conditions.push({ ...condition, ...rung });
-          }
-
-          // The `_id` rung always survives, so this is defensive only.
-          if (conditions.length === 0) return { _id: { $in: [] } };
-          return { $or: conditions };
+          return buildCursorLadderBranches({
+            sortObj,
+            anchorDoc: anchorDoc as Record<string, unknown>,
+            direction,
+            nonNullable: NON_NULLABLE_SORT_FIELDS,
+          });
         };
 
         // Stage builder for simple collections
@@ -1042,18 +987,23 @@ export async function collection<
         // Add pagination filters. With a sortPipeline, the cursor is an $expr
         // ladder over the hidden normalized sort keys (see paginate-sort.ts) —
         // query operators would silently drop docs whose sort key is missing.
+        // Otherwise the cursor DNF is composed as a ROOTED $or with the user
+        // filter folded per branch (see composeCursorQuery) — the composed
+        // query REPLACES `query`, never merges into it: a spread once let the
+        // cursor's $or silently overwrite a user filter's own $or.
         let exprCursor: AggregationStage | null = null;
+        let cursorBranches: Record<string, unknown>[] | null = null;
         if (afterId) {
           if (sortMachinery) {
             const anchor = await resolveSortAnchor(afterId, "afterId");
             exprCursor = buildExprCursorFilter(sortMachinery, anchor, "after");
           } else {
-            const cursorFilter = await buildCursorFilter(afterId, "after");
-            if (cursorFilter) {
-              // $and, never object spread: the cursor is `{$or: ...}` (or
-              // `{_id: ...}`), so a spread silently REPLACED a user filter
-              // carrying its own $or / _id constraint from page 2 on.
-              query = { $and: [query, cursorFilter] } as m.Filter<TInput>;
+            cursorBranches = await buildCursorBranches(afterId, "after");
+            if (cursorBranches) {
+              query = composeCursorQuery(
+                [baseQuery as Record<string, unknown>],
+                cursorBranches,
+              ) as m.Filter<TInput>;
             }
           }
         } else if (beforeId) {
@@ -1061,9 +1011,12 @@ export async function collection<
             const anchor = await resolveSortAnchor(beforeId, "beforeId");
             exprCursor = buildExprCursorFilter(sortMachinery, anchor, "before");
           } else {
-            const cursorFilter = await buildCursorFilter(beforeId, "before");
-            if (cursorFilter) {
-              query = { $and: [query, cursorFilter] } as m.Filter<TInput>;
+            cursorBranches = await buildCursorBranches(beforeId, "before");
+            if (cursorBranches) {
+              query = composeCursorQuery(
+                [baseQuery as Record<string, unknown>],
+                cursorBranches,
+              ) as m.Filter<TInput>;
             }
           }
           // Reverse the sort for beforeId to get items in reverse order
@@ -1127,10 +1080,14 @@ export async function collection<
             total = (totalResult[0]?.total as number | undefined) ?? 0;
 
             if (afterId) {
-              const afterFilter = await buildCursorFilter(afterId, "after");
-              if (afterFilter) {
+              if (cursorBranches) {
                 const afterPipeline: m.Document[] = [
-                  { $match: { $and: [baseQuery, afterFilter] } },
+                  {
+                    $match: composeCursorQuery(
+                      [baseQuery as Record<string, unknown>],
+                      cursorBranches,
+                    ),
+                  },
                   ...customPipeline,
                   { $count: "total" },
                 ];
@@ -1153,10 +1110,12 @@ export async function collection<
             total = await collection.countDocuments(baseQuery, { session });
 
             if (afterId) {
-              const afterFilter = await buildCursorFilter(afterId, "after");
-              if (afterFilter) {
+              if (cursorBranches) {
                 const afterCount = await collection.countDocuments(
-                  { $and: [baseQuery, afterFilter] } as m.Filter<TInput>,
+                  composeCursorQuery(
+                    [baseQuery as Record<string, unknown>],
+                    cursorBranches,
+                  ) as m.Filter<TInput>,
                   { session },
                 );
                 position = total - afterCount;
@@ -1298,17 +1257,17 @@ export async function collection<
                 ? await countViaSortPipeline(sortMachinery, exprCursor)
                 : 0;
               position = Math.max(0, beforeCount - elements.length);
+            } else if (cursorBranches) {
+              const beforeCount = await collection.countDocuments(
+                composeCursorQuery(
+                  [baseQuery as Record<string, unknown>],
+                  cursorBranches,
+                ) as m.Filter<TInput>,
+                { session },
+              );
+              position = Math.max(0, beforeCount - elements.length);
             } else {
-              const beforeFilter = await buildCursorFilter(beforeId, "before");
-              if (beforeFilter) {
-                const beforeCount = await collection.countDocuments(
-                  { $and: [baseQuery, beforeFilter] } as m.Filter<TInput>,
-                  { session },
-                );
-                position = Math.max(0, beforeCount - elements.length);
-              } else {
-                position = 0;
-              }
+              position = 0;
             }
           }
         }

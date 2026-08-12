@@ -42,14 +42,17 @@ async function seed(mc: any): Promise<{ ids: string[] }> {
   return { ids };
 }
 
-/** Independent ground truth: raw $sort on the joined field, no paginate. */
+/**
+ * Independent ground truth: raw $sort on the joined field, no paginate. The
+ * `_id` tie-break follows the field's direction (normalizePaginateSort).
+ */
 // deno-lint-ignore no-explicit-any
 async function groundTruth(mc: any, dir: 1 | -1): Promise<string[]> {
   // deno-lint-ignore no-explicit-any
   const rows = await mc.aggregate((s: any) => [
     s.match("participant", {}),
     ...badgeSortPipeline(s),
-    s.sort({ "badgeDoc.generatedAt": dir, _id: 1 }),
+    s.sort({ "badgeDoc.generatedAt": dir, _id: dir }),
   ]);
   return (rows as { _id: string }[]).map((r) => r._id);
 }

@@ -3,7 +3,7 @@ import type * as m from "mongodb";
 import { toMongoValidator } from "./validator.ts";
 import { dbId, newId } from "./ids.ts";
 import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
-import { createDotNotationSchema, getNestedValue } from "./dot-notation.ts";
+import { createDotNotationSchema } from "./dot-notation.ts";
 import { getSessionContext } from "./session.ts";
 import { withIndex } from "./indexes.ts";
 import type { FlatType } from "../types/flat.ts";
@@ -23,11 +23,13 @@ import { isSchemaManaged } from "./runtime-config.ts";
 import { createLogger } from "./utils/logger.ts";
 import {
   assertSortResolvableBeforePipeline,
+  buildCursorLadderBranches,
   buildExprCursorFilter,
   buildSortMachinery,
   buildSortPaginateStages,
-  cursorRungCondition,
-  cursorRungEquality,
+  composeCursorQuery,
+  composeCursorStageMatch,
+  normalizePaginateSort,
   type SortMachinery,
 } from "./paginate-sort.ts";
 import { assertLetDoesNotShadowJoinBinding } from "./stage-builder.ts";
@@ -42,6 +44,15 @@ import {
 } from "./telemetry.ts";
 
 const log = createLogger("multi-collection");
+
+// Structural fields that always exist on every stored/derived doc — their
+// cursor rungs stay raw comparisons (no null branch). `_ulid` is derived from
+// `_id` by naturalIdSort, so it always exists too.
+const NON_NULLABLE_SORT_FIELDS: ReadonlySet<string> = new Set([
+  "_id",
+  "_ulid",
+  "_type",
+]);
 
 // Re-export dbId and refId for backwards compatibility
 export { dbId, refId } from "./ids.ts";
@@ -818,21 +829,9 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         const baseQuery = filter ? [typeChecker, filter] : [typeChecker];
         let query: Record<string, unknown> = { $and: baseQuery };
 
-        // Normalize sort to object format
-        sort = sort || { _id: 1 };
-        const sortObj: Record<string, 1 | -1> =
-          typeof sort === "object" && !Array.isArray(sort)
-            ? { ...sort as Record<string, 1 | -1> }
-            : {
-              _id: sort === 1 || sort === "asc" || sort === "ascending"
-                ? 1
-                : -1,
-            };
-
-        // Always add _id as tie-breaker if not already in sort (ensures stable ordering for duplicate values)
-        if (!("_id" in sortObj)) {
-          sortObj._id = 1;
-        }
+        // Normalize sort + direction-following `_id` tie-break (see
+        // normalizePaginateSort for why the tie-break is not a fixed `1`).
+        const sortObj = normalizePaginateSort(sort);
 
         // For naturalIdSort, replace _id with _ulid in sort (extracts ULID part after "type:")
         // This gives chronological ordering across different types
@@ -854,12 +853,14 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           return colonIndex >= 0 ? id.substring(colonIndex + 1) : id;
         };
 
-        // Helper to build cursor-based pagination filter for multi-collection
-        const buildCursorFilter = async (
+        // Resolve the anchor and build the flat cursor DNF branches — see
+        // paginate-sort.ts for the null-boundary and rooted-$or reasoning.
+        // The anchor is enriched with `_ulid` when naturalIdSort rewired the
+        // sort to it, so the generic ladder covers that path too.
+        const buildCursorBranches = async (
           anchorId: string,
           direction: "after" | "before",
-        ) => {
-          // Fetch the anchor document to get its sort field values
+        ): Promise<Record<string, unknown>[] | null> => {
           const anchorDoc = await collection.findOne(
             { _id: anchorId } as never,
             {
@@ -867,69 +868,15 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             },
           );
           if (!anchorDoc) return null;
-
-          // Add _ulid to anchor doc if using naturalIdSort
           const enrichedAnchorDoc = useNaturalIdSort
             ? { ...anchorDoc, _ulid: extractUlid(anchorId) }
             : anchorDoc;
-
-          const sortFields = Object.keys(effectiveSortObj);
-
-          // If sorting only by _id (or _ulid), use simple comparison
-          if (
-            sortFields.length === 1 &&
-            (sortFields[0] === "_id" || sortFields[0] === "_ulid")
-          ) {
-            const sortField = sortFields[0];
-            const sortDir = effectiveSortObj[sortField];
-            const op = direction === "after"
-              ? (sortDir === 1 ? "$gt" : "$lt")
-              : (sortDir === 1 ? "$lt" : "$gt");
-
-            // For _ulid, we compare the ULID part directly
-            const compareValue = sortField === "_ulid"
-              ? extractUlid(anchorId)
-              : anchorId;
-            return { [sortField]: { [op]: compareValue } };
-          }
-
-          // Build compound cursor filter for custom sort
-          const conditions: Record<string, unknown>[] = [];
-
-          for (let i = 0; i < sortFields.length; i++) {
-            const field = sortFields[i];
-            const sortDir = effectiveSortObj[field];
-            const anchorValue = getNestedValue(
-              enrichedAnchorDoc as Record<string, unknown>,
-              field,
-            );
-
-            const condition: Record<string, unknown> = {};
-
-            // All previous fields must be equal
-            for (let j = 0; j < i; j++) {
-              const prevField = sortFields[j];
-              condition[prevField] = cursorRungEquality(
-                getNestedValue(
-                  enrichedAnchorDoc as Record<string, unknown>,
-                  prevField,
-                ),
-              );
-            }
-
-            // Current field uses comparison based on sort direction and pagination direction
-            const isForward = direction === "after";
-            const op = (sortDir === 1) === isForward ? "$gt" : "$lt";
-            const rung = cursorRungCondition(field, anchorValue, op);
-            // `null` means nothing ranks beyond the anchor on this field.
-            if (!rung) continue;
-
-            conditions.push({ ...condition, ...rung });
-          }
-
-          // The `_id` rung always survives, so this is defensive only.
-          if (conditions.length === 0) return { _id: { $in: [] } };
-          return { $or: conditions };
+          return buildCursorLadderBranches({
+            sortObj: effectiveSortObj,
+            anchorDoc: enrichedAnchorDoc as Record<string, unknown>,
+            direction,
+            nonNullable: NON_NULLABLE_SORT_FIELDS,
+          });
         };
 
         // Helper to validate ID format matches one of the allowed types
@@ -1159,12 +1106,14 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           );
         };
 
-        // Add pagination filters
-        // Keep cursorFilter separate for use in aggregation pipeline with
-        // naturalIdSort. With a sortPipeline, the cursor is instead an $expr
-        // ladder over the hidden normalized sort keys (see paginate-sort.ts) —
-        // query operators would silently drop docs whose sort key is missing.
-        let cursorFilterResult: Record<string, unknown> | null = null;
+        // Add pagination filters. The find path composes the cursor DNF as a
+        // ROOTED $or with the base folded per branch (see composeCursorQuery);
+        // the naturalIdSort path keeps the branches as a staged $match that
+        // runs AFTER `ulidExtractStage` (the cursor references `_ulid`). With
+        // a sortPipeline, the cursor is instead an $expr ladder over the
+        // hidden normalized sort keys (see paginate-sort.ts) — query
+        // operators would silently drop docs whose sort key is missing.
+        let cursorBranches: Record<string, unknown>[] | null = null;
         let exprCursor: AggregationStage | null = null;
 
         if (afterId) {
@@ -1176,14 +1125,9 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             const anchor = await resolveSortAnchor(afterId, "afterId");
             exprCursor = buildExprCursorFilter(sortMachinery, anchor, "after");
           } else {
-            cursorFilterResult = await buildCursorFilter(afterId, "after");
-            if (cursorFilterResult) {
-              query = {
-                $and: [
-                  ...baseQuery,
-                  cursorFilterResult,
-                ],
-              };
+            cursorBranches = await buildCursorBranches(afterId, "after");
+            if (cursorBranches) {
+              query = composeCursorQuery(baseQuery, cursorBranches);
             }
           }
         } else if (beforeId) {
@@ -1195,14 +1139,9 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             const anchor = await resolveSortAnchor(beforeId, "beforeId");
             exprCursor = buildExprCursorFilter(sortMachinery, anchor, "before");
           } else {
-            cursorFilterResult = await buildCursorFilter(beforeId, "before");
-            if (cursorFilterResult) {
-              query = {
-                $and: [
-                  ...baseQuery,
-                  cursorFilterResult,
-                ],
-              };
+            cursorBranches = await buildCursorBranches(beforeId, "before");
+            if (cursorBranches) {
+              query = composeCursorQuery(baseQuery, cursorBranches);
             }
           }
           // Reverse the sort for beforeId to get items in reverse order
@@ -1241,13 +1180,29 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         // it against raw documents always counted 0 and pushed `position`
         // to `total` on pages ≥ 2.
         const countMatching = async (
-          cursor: Record<string, unknown> | null,
+          branches: Record<string, unknown>[] | null,
         ): Promise<number> => {
-          if (userPipeline.length > 0 || useNaturalIdSort) {
+          if (useNaturalIdSort) {
             const stages: AggregationStage[] = [
               { $match: { $and: baseQuery } },
-              ...(useNaturalIdSort ? [ulidExtractStage] : []),
-              ...(cursor ? [{ $match: cursor }] : []),
+              ulidExtractStage,
+              ...(branches
+                ? [{ $match: composeCursorStageMatch(branches) }]
+                : []),
+              ...userPipeline,
+              { $count: "total" },
+            ];
+            const rows = await collection.aggregate(stages, { session })
+              .toArray();
+            return (rows[0]?.total as number | undefined) ?? 0;
+          }
+          if (userPipeline.length > 0) {
+            const stages: AggregationStage[] = [
+              {
+                $match: branches
+                  ? composeCursorQuery(baseQuery, branches)
+                  : { $and: baseQuery },
+              },
               ...userPipeline,
               { $count: "total" },
             ];
@@ -1256,8 +1211,8 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             return (rows[0]?.total as number | undefined) ?? 0;
           }
           return await collection.countDocuments(
-            (cursor
-              ? { $and: [...baseQuery, cursor] }
+            (branches
+              ? composeCursorQuery(baseQuery, branches)
               : { $and: baseQuery }) as never,
             { session },
           );
@@ -1284,8 +1239,8 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           } else {
             total = await countMatching(null);
             if (afterId) {
-              position = cursorFilterResult
-                ? total - (await countMatching(cursorFilterResult))
+              position = cursorBranches
+                ? total - (await countMatching(cursorBranches))
                 : 1;
             } else if (beforeId) {
               position = -1;
@@ -1320,7 +1275,9 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
               // Add _ulid field before cursor filter needs it
               ulidExtractStage,
               // Apply cursor filter if present (afterId/beforeId)
-              ...(cursorFilterResult ? [{ $match: cursorFilterResult }] : []),
+              ...(cursorBranches
+                ? [{ $match: composeCursorStageMatch(cursorBranches) }]
+                : []),
               ...userPipeline,
               { $sort: sort as Record<string, 1 | -1> },
             ]
@@ -1400,8 +1357,8 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 ? await countViaSortPipeline(sortMachinery, exprCursor)
                 : 0;
               position = Math.max(0, beforeCount - elements.length);
-            } else if (cursorFilterResult) {
-              const beforeCount = await countMatching(cursorFilterResult);
+            } else if (cursorBranches) {
+              const beforeCount = await countMatching(cursorBranches);
               position = Math.max(0, beforeCount - elements.length);
             } else {
               position = 0;

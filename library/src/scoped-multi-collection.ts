@@ -14,14 +14,15 @@ import { toMongoValidator } from "./validator.ts";
 import { dbId, newId } from "./ids.ts";
 import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
 import { getSessionContext } from "./session.ts";
-import { createDotNotationSchema, getNestedValue } from "./dot-notation.ts";
+import { createDotNotationSchema } from "./dot-notation.ts";
 import {
   assertSortResolvableBeforePipeline,
+  buildCursorLadderBranches,
   buildExprCursorFilter,
   buildSortMachinery,
   buildSortPaginateStages,
-  cursorRungCondition,
-  cursorRungEquality,
+  composeCursorQuery,
+  normalizePaginateSort,
   type SortMachinery,
 } from "./paginate-sort.ts";
 import { assertLetDoesNotShadowJoinBinding } from "./stage-builder.ts";
@@ -42,6 +43,14 @@ import {
 } from "./telemetry.ts";
 
 const log = createLogger("scoped-multi-collection");
+
+// Structural fields that always exist on every stored doc — their cursor
+// rungs stay raw comparisons (no null branch).
+const NON_NULLABLE_SORT_FIELDS: ReadonlySet<string> = new Set([
+  "_id",
+  "_type",
+  "_scope",
+]);
 
 /** Reserved internal field names — cannot appear in user-defined type schemas. */
 const RESERVED_FIELDS: Set<string> = new Set(["_scope", "_type"]);
@@ -1202,18 +1211,9 @@ export async function scopedMultiCollection<
           const sortInput = options?.sort ?? { _id: 1 };
           const session = sessionContext.getSession();
 
-          // Normalize sort + always add an `_id` tie-breaker so duplicate sort
-          // values keep a stable (cursor-safe) order.
-          const sortObj: Record<string, 1 | -1> =
-            typeof sortInput === "object" && !Array.isArray(sortInput)
-              ? { ...(sortInput as Record<string, 1 | -1>) }
-              : {
-                _id: sortInput === 1 || sortInput === "asc" ||
-                    sortInput === "ascending"
-                  ? 1
-                  : -1,
-              };
-          if (!("_id" in sortObj)) sortObj._id = 1;
+          // Normalize sort + direction-following `_id` tie-break (see
+          // normalizePaginateSort for why the tie-break is not a fixed `1`).
+          const sortObj = normalizePaginateSort(sortInput);
           let sort: Record<string, 1 | -1> = { ...sortObj };
 
           // Scope + type are non-bypassable; the user filter narrows further.
@@ -1287,51 +1287,26 @@ export async function scopedMultiCollection<
             );
           };
 
-          // Build a cursor filter from an anchor doc. Single-field `_id` sort
-          // uses a simple comparison; a compound sort emits the lexicographic
-          // `$or` ladder. The anchor is fetched WITHIN the bound scope, so a
-          // cross-scope id can never seed a cursor.
-          const buildCursorFilter = async (
+          // Resolve the anchor and build the flat cursor DNF branches — see
+          // paginate-sort.ts for the null-boundary and rooted-$or reasoning.
+          // The anchor is fetched WITHIN the bound scope, so a cross-scope id
+          // can never seed a cursor.
+          const buildCursorBranches = async (
             anchorId: string,
             direction: "after" | "before",
-          ): Promise<Record<string, unknown> | null> => {
+          ): Promise<Record<string, unknown>[] | null> => {
             const anchor = await collection.findOne(
               // deno-lint-ignore no-explicit-any
               { _id: anchorId, _scope: scopeId, _type: typeName } as any,
               { session },
             );
             if (!anchor) return null;
-            const anchorDoc = anchor as Record<string, unknown>;
-            const sortFields = Object.keys(sortObj);
-            const isForward = direction === "after";
-            if (sortFields.length === 1 && sortFields[0] === "_id") {
-              const op = (sortObj._id === 1) === isForward ? "$gt" : "$lt";
-              return { _id: { [op]: anchorId } };
-            }
-            const conditions: Record<string, unknown>[] = [];
-            for (let i = 0; i < sortFields.length; i++) {
-              const f = sortFields[i];
-              const dir = sortObj[f];
-              const condition: Record<string, unknown> = {};
-              for (let j = 0; j < i; j++) {
-                const prev = sortFields[j];
-                condition[prev] = cursorRungEquality(
-                  getNestedValue(anchorDoc, prev),
-                );
-              }
-              const op = (dir === 1) === isForward ? "$gt" : "$lt";
-              const rung = cursorRungCondition(
-                f,
-                getNestedValue(anchorDoc, f),
-                op,
-              );
-              // `null` means nothing ranks beyond the anchor on this field.
-              if (!rung) continue;
-              conditions.push({ ...condition, ...rung });
-            }
-            // The `_id` rung always survives, so this is defensive only.
-            if (conditions.length === 0) return { _id: { $in: [] } };
-            return { $or: conditions };
+            return buildCursorLadderBranches({
+              sortObj,
+              anchorDoc: anchor as Record<string, unknown>,
+              direction,
+              nonNullable: NON_NULLABLE_SORT_FIELDS,
+            });
           };
 
           // Resolve the (mutually exclusive) cursor. Backward paging walks the
@@ -1339,7 +1314,7 @@ export async function scopedMultiCollection<
           // the cursor is an $expr ladder over the hidden normalized sort keys
           // (see paginate-sort.ts) — query operators would silently drop
           // parents whose sort key is missing (e.g. no joined doc).
-          let cursorFilter: Record<string, unknown> | null = null;
+          let cursorBranches: Record<string, unknown>[] | null = null;
           let exprCursor: AggregationStage | null = null;
           if (afterId) {
             if (!afterId.startsWith(`${typeName}:`)) {
@@ -1358,12 +1333,12 @@ export async function scopedMultiCollection<
                 "after",
               );
             } else {
-              cursorFilter = await buildCursorFilter(afterId, "after");
+              cursorBranches = await buildCursorBranches(afterId, "after");
               // Anchor must exist WITHIN this scope+type. This API is new, so we
               // fail loud rather than silently restart at page 1 with a bogus
               // position (as the previous impl did) — a stale/cross-scope id is a
               // caller bug, not "start over".
-              if (cursorFilter === null) {
+              if (cursorBranches === null) {
                 throw errorWithSafeMessage(
                   `paginate: afterId "${afterId}" was not found as type ` +
                     `"${typeName}" in scope "${scopeId}" — cannot anchor the page`,
@@ -1389,8 +1364,8 @@ export async function scopedMultiCollection<
                 "before",
               );
             } else {
-              cursorFilter = await buildCursorFilter(beforeId, "before");
-              if (cursorFilter === null) {
+              cursorBranches = await buildCursorBranches(beforeId, "before");
+              if (cursorBranches === null) {
                 throw errorWithSafeMessage(
                   `paginate: beforeId "${beforeId}" was not found as type ` +
                     `"${typeName}" in scope "${scopeId}" — cannot anchor the page`,
@@ -1456,9 +1431,9 @@ export async function scopedMultiCollection<
                 .toArray();
               total = (totalResult[0]?.total as number | undefined) ?? 0;
               if (afterId) {
-                if (cursorFilter) {
+                if (cursorBranches) {
                   const afterPipeline: AggregationStage[] = [
-                    { $match: { $and: [...baseQuery, cursorFilter] } },
+                    { $match: composeCursorQuery(baseQuery, cursorBranches) },
                     ...userPipeline,
                     { $count: "total" },
                   ];
@@ -1483,10 +1458,10 @@ export async function scopedMultiCollection<
                 { session },
               );
               if (afterId) {
-                if (cursorFilter) {
+                if (cursorBranches) {
                   const afterCount = await collection.countDocuments(
                     // deno-lint-ignore no-explicit-any
-                    { $and: [...baseQuery, cursorFilter] } as any,
+                    composeCursorQuery(baseQuery, cursorBranches) as any,
                     { session },
                   );
                   position = total - afterCount;
@@ -1501,8 +1476,8 @@ export async function scopedMultiCollection<
             }
           }
 
-          const finalQuery = cursorFilter
-            ? { $and: [...baseQuery, cursorFilter] }
+          const finalQuery = cursorBranches
+            ? composeCursorQuery(baseQuery, cursorBranches)
             : { $and: baseQuery };
 
           // Find-path server cap: bound the query at `limit` UNLESS a `filter(doc)`
@@ -1611,7 +1586,7 @@ export async function scopedMultiCollection<
                   ? await countViaSortPipeline(sortMachinery, exprCursor)
                   : 0;
                 position = Math.max(0, beforeCount - data.length);
-              } else if (cursorFilter) {
+              } else if (cursorBranches) {
                 // The before-count must be computed through the SAME shape as
                 // `total`: when a user pipeline exists, count via the
                 // aggregate($count) form so `position` stays consistent with a
@@ -1620,7 +1595,7 @@ export async function scopedMultiCollection<
                 let beforeCount: number;
                 if (userPipeline.length > 0) {
                   const beforePipeline: AggregationStage[] = [
-                    { $match: { $and: [...baseQuery, cursorFilter] } },
+                    { $match: composeCursorQuery(baseQuery, cursorBranches) },
                     ...userPipeline,
                     { $count: "total" },
                   ];
@@ -1633,7 +1608,7 @@ export async function scopedMultiCollection<
                 } else {
                   beforeCount = await collection.countDocuments(
                     // deno-lint-ignore no-explicit-any
-                    { $and: [...baseQuery, cursorFilter] } as any,
+                    composeCursorQuery(baseQuery, cursorBranches) as any,
                     { session },
                   );
                 }

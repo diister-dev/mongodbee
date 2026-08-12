@@ -54,7 +54,8 @@ async function groundTruth(db: any, dir: 1 | -1): Promise<string[]> {
       },
     },
     { $addFields: { customer: { $first: "$customerDocs" } } },
-    { $sort: { "customer.tier": dir, _id: 1 } },
+    // `_id` tie-break follows the field's direction (normalizePaginateSort).
+    { $sort: { "customer.tier": dir, _id: dir } },
   ]).toArray();
   return (rows as { _id: string }[]).map((r) => String(r._id));
 }

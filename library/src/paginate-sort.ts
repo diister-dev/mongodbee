@@ -223,9 +223,47 @@ export function assertSortResolvableBeforePipeline(
 }
 
 /**
- * One rung of the index-strategy cursor ladder: the condition carried by the
- * sort field itself, given the anchor's value and the direction the walk moves
- * in (`$gt` = toward higher ranks, `$lt` = toward lower ones).
+ * Normalize a paginate `sort` option into the effective sort spec, appending
+ * the `_id` tie-break when absent so duplicate sort values keep a stable
+ * (cursor-safe) order.
+ *
+ * The tie-break follows the direction of the LAST explicit sort field —
+ * NOT a fixed `1`. An index `{<field>: 1, _id: 1}` serves a sort only in its
+ * own order or its exact reverse; `{field: -1, _id: 1}` matches neither, so a
+ * fixed ascending tie-break silently turned EVERY descending page (cursor or
+ * not) into a full blocking sort of the filtered set (measured: 2000 keys
+ * examined for a page of 25 on a 2k scope, from page 1).
+ */
+export function normalizePaginateSort(sort: unknown): Record<string, 1 | -1> {
+  const input = sort || { _id: 1 };
+  const sortObj: Record<string, 1 | -1> =
+    typeof input === "object" && !Array.isArray(input)
+      ? { ...(input as Record<string, 1 | -1>) }
+      : {
+        _id: input === 1 || input === "asc" || input === "ascending" ? 1 : -1,
+      };
+  if (!("_id" in sortObj)) {
+    const fields = Object.keys(sortObj);
+    sortObj._id = fields.length > 0 ? sortObj[fields[fields.length - 1]] : 1;
+  }
+  return sortObj;
+}
+
+/**
+ * Value to pin a PREVIOUS sort field to in a ladder rung. Missing normalizes
+ * to `null` so the equality matches both the null and the missing documents,
+ * mirroring how `$sort` ranks them together.
+ */
+export function cursorRungEquality(anchorValue: unknown): unknown {
+  return anchorValue === undefined ? null : anchorValue;
+}
+
+/**
+ * FLAT branch conditions for one rung of the index-strategy cursor ladder:
+ * the predicates carried by the sort field itself, given the anchor's value
+ * and the direction the walk moves in (`$gt` = toward higher ranks, `$lt` =
+ * toward lower ones). One rung may contribute several branches; they are
+ * mutually exclusive by construction.
  *
  * `$sort` ranks a MISSING field equal to null, and both below every real
  * value. Query operators disagree: `{f: {$gt: null}}` matches nothing, and
@@ -236,39 +274,117 @@ export function assertSortResolvableBeforePipeline(
  *
  * These shapes agree with `$sort` across the boundary while staying query
  * operators, so the sort index remains usable (unlike the `$expr` ladder the
- * sortPipeline path needs).
+ * sortPipeline path needs):
  *
- * Returns `null` when nothing can rank beyond the anchor on this field and the
- * rung must be dropped — going lower than the null block.
+ *   above null      → {f: {$ne: null}}     (everything that HAS a value)
+ *   above a value   → {f: {$gt: v}}
+ *   below a value   → {f: {$lt: v}} ∪ {f: null}   (…then the null block)
+ *   below null      → nothing — no branch, nothing ranks lower
  *
- * Cross-TYPE boundaries (a field holding both numbers and strings) are NOT
- * covered: BSON orders types, `$gt` does not compare across them. Sort on a
- * field of one type plus null/missing, which is what an optional field is.
+ * `nonNullable` marks fields that structurally always exist (`_id`, `_ulid`,
+ * `_scope`, `_type`): their rungs stay raw comparisons, sparing the planner
+ * a dead `{f: null}` branch.
+ *
+ * Returns an EMPTY array when nothing can rank beyond the anchor on this
+ * field — going lower than the null block.
  */
-export function cursorRungCondition(
+function cursorRungBranches(
   field: string,
   anchorValue: unknown,
   op: "$gt" | "$lt",
-): Record<string, unknown> | null {
+  nonNullable: boolean,
+): Record<string, unknown>[] {
   const anchorIsNull = anchorValue === undefined || anchorValue === null;
-  if (op === "$gt") {
-    // Above null ranks everything that HAS a value (`$ne: null` excludes
-    // missing too, which is exactly the null block).
-    return anchorIsNull
-      ? { [field]: { $ne: null } }
-      : { [field]: { $gt: anchorValue } };
+  if (nonNullable) {
+    return [{ [field]: { [op]: anchorValue } }];
   }
-  if (anchorIsNull) return null;
-  // Below a real value: smaller values, then the null block. `{f: null}`
-  // matches missing as well.
-  return { $or: [{ [field]: { $lt: anchorValue } }, { [field]: null }] };
+  if (op === "$gt") {
+    return anchorIsNull
+      ? [{ [field]: { $ne: null } }]
+      : [{ [field]: { $gt: anchorValue } }];
+  }
+  if (anchorIsNull) return [];
+  return [{ [field]: { $lt: anchorValue } }, { [field]: null }];
 }
 
 /**
- * Value to pin a PREVIOUS sort field to in a ladder rung. Missing normalizes
- * to `null` so the equality matches both the null and the missing documents,
- * mirroring how `$sort` ranks them together.
+ * Build the index-strategy cursor as FLAT disjunction branches (a DNF): each
+ * branch pins every previous sort field to the anchor's value and carries one
+ * rung predicate from {@link cursorRungBranches}. The result must be composed
+ * with {@link composeCursorQuery} — never `$and`ed as one `{$or: ...}` next
+ * to the base match (see there for why).
  */
-export function cursorRungEquality(anchorValue: unknown): unknown {
-  return anchorValue === undefined ? null : anchorValue;
+export function buildCursorLadderBranches(opts: {
+  /** Effective sort spec, tie-break included, in ladder order. */
+  sortObj: Record<string, 1 | -1>;
+  /** Anchor document (already enriched with any computed sort fields). */
+  anchorDoc: Record<string, unknown>;
+  direction: "after" | "before";
+  /** Sort fields that structurally can never be null/missing. */
+  nonNullable?: ReadonlySet<string>;
+}): Record<string, unknown>[] {
+  const fields = Object.keys(opts.sortObj);
+  const isForward = opts.direction === "after";
+  const branches: Record<string, unknown>[] = [];
+  // Pins accumulate: branch i requires fields 0..i-1 equal to the anchor's.
+  const pins: Record<string, unknown> = {};
+  for (const field of fields) {
+    const op = (opts.sortObj[field] === 1) === isForward ? "$gt" : "$lt";
+    const anchorValue = getNestedValue(opts.anchorDoc, field);
+    const rungs = cursorRungBranches(
+      field,
+      anchorValue,
+      op,
+      opts.nonNullable?.has(field) ?? false,
+    );
+    for (const rung of rungs) {
+      branches.push({ ...pins, ...rung });
+    }
+    pins[field] = cursorRungEquality(anchorValue);
+  }
+  return branches;
+}
+
+/**
+ * Compose the cursor DNF with the base filter parts into ONE rooted query:
+ *
+ *   { $or: [ { $and: [...baseParts, branch] }, ... ] }
+ *
+ * WHY rooted, with the base folded into every branch (measured, MongoDB
+ * 8.0, 10k-doc scope, page of 25): only a TOP-LEVEL `$or` goes through the
+ * subplanner, which plans each branch with tight index bounds and merge-sorts
+ * them (totalKeysExamined ≈ 26). The same branches `$and`ed next to the base
+ * (`{$and: [base, {$or: branches}]}`) lost the union bounds on descending
+ * walks — the planner fell back to a full-range scan `[MaxKey, MinKey]` with
+ * the whole `$or` as a residual FETCH filter, examining half the scope on
+ * every page (measured totalKeysExamined 4951). The fold also keeps partial
+ * `partialFilterExpression` indexes eligible per branch, since each branch
+ * carries the `_type`/`_scope` constants as query operators.
+ *
+ * The empty-branch guard can only trigger if every rung was dropped — the
+ * `_id` tie-break always survives, so it is defensive only.
+ */
+export function composeCursorQuery(
+  baseParts: Record<string, unknown>[],
+  branches: Record<string, unknown>[],
+): Record<string, unknown> {
+  if (branches.length === 0) return { _id: { $in: [] } };
+  const parts = baseParts.filter((p) => Object.keys(p).length > 0);
+  const folded = parts.length > 0
+    ? branches.map((b) => ({ $and: [...parts, b] }))
+    : branches;
+  return folded.length === 1 ? folded[0] : { $or: folded };
+}
+
+/**
+ * The cursor DNF as a standalone `$match` filter — for pipelines that must
+ * apply it AFTER a computed stage (naturalIdSort's `_ulid`), where the base
+ * match already ran. Index bounds are moot after an `$addFields`, so no base
+ * folding here.
+ */
+export function composeCursorStageMatch(
+  branches: Record<string, unknown>[],
+): Record<string, unknown> {
+  if (branches.length === 0) return { _id: { $in: [] } };
+  return branches.length === 1 ? branches[0] : { $or: branches };
 }

@@ -94,14 +94,15 @@ async function walkAll(view: any, sort: Record<string, 1 | -1>, limit: number) {
 /**
  * Independent ground truth: raw aggregate with MongoDB's own `$sort` on the
  * joined field — no paginate machinery involved. A correct cursor walk must
- * reproduce this exact id sequence.
+ * reproduce this exact id sequence. The `_id` tie-break follows the field's
+ * direction, mirroring `normalizePaginateSort`.
  */
 // deno-lint-ignore no-explicit-any
 async function groundTruth(view: any, dir: 1 | -1): Promise<string[]> {
   const rows = await view.aggregate((s: ScopedStageBuilder<typeof types>) => [
     s.match("participant", {}),
     ...badgeSortPipeline(s),
-    s.sort({ "badgeDoc.generatedAt": dir, _id: 1 }),
+    s.sort({ "badgeDoc.generatedAt": dir, _id: dir }),
   ]);
   return (rows as { _id: string }[]).map((r) => r._id);
 }
