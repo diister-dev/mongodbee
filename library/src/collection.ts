@@ -1258,13 +1258,28 @@ export async function collection<
                 : 0;
               position = Math.max(0, beforeCount - elements.length);
             } else if (cursorBranches) {
-              const beforeCount = await collection.countDocuments(
-                composeCursorQuery(
-                  [baseQuery as Record<string, unknown>],
-                  cursorBranches,
-                ) as m.Filter<TInput>,
-                { session },
+              // Counted through the SAME shape as `total`: with a filtering
+              // `pipeline`, a bare countDocuments would count dropped docs
+              // too and `position` would overshoot (multi and scoped already
+              // count through the pipeline).
+              const beforeQuery = composeCursorQuery(
+                [baseQuery as Record<string, unknown>],
+                cursorBranches,
               );
+              let beforeCount: number;
+              if (customPipeline.length > 0) {
+                const rows = await collection.aggregate([
+                  { $match: beforeQuery },
+                  ...customPipeline,
+                  { $count: "total" },
+                ], { session }).toArray();
+                beforeCount = (rows[0]?.total as number | undefined) ?? 0;
+              } else {
+                beforeCount = await collection.countDocuments(
+                  beforeQuery as m.Filter<TInput>,
+                  { session },
+                );
+              }
               position = Math.max(0, beforeCount - elements.length);
             } else {
               position = 0;
