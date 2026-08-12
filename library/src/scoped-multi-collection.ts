@@ -24,6 +24,7 @@ import {
   cursorRungEquality,
   type SortMachinery,
 } from "./paginate-sort.ts";
+import { assertLetDoesNotShadowJoinBinding } from "./stage-builder.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
 import { dirtyEquivalent } from "./utils/object.ts";
 import { createLogger } from "./utils/logger.ts";
@@ -2058,6 +2059,7 @@ function buildScopedStageBuilder<T extends ScopedMultiCollectionTypes>(
       }
       const options = asOrOptions || {};
       const as = options.as || localField;
+      assertLetDoesNotShadowJoinBinding(options.let);
       const basePipeline: AggregationStage[] = [
         lookupBaseMatch(foreignField, typeName),
       ];
@@ -2067,7 +2069,8 @@ function buildScopedStageBuilder<T extends ScopedMultiCollectionTypes>(
       return {
         $lookup: {
           from: collectionName,
-          let: { localValue: `$${localField}`, ...(options.let || {}) },
+          // Join binding spread LAST so it can never be shadowed.
+          let: { ...(options.let || {}), localValue: `$${localField}` },
           pipeline: basePipeline,
           as,
         },
@@ -2086,6 +2089,7 @@ function buildScopedStageBuilder<T extends ScopedMultiCollectionTypes>(
       }
       const options = asOrOptions || {};
       const as = options.as || localField;
+      assertLetDoesNotShadowJoinBinding(options.let);
       const basePipeline: AggregationStage[] = [
         lookupBaseMatch(foreignField),
       ];
@@ -2095,7 +2099,8 @@ function buildScopedStageBuilder<T extends ScopedMultiCollectionTypes>(
       return {
         $lookup: {
           from: collectionName,
-          let: { localValue: `$${localField}`, ...(options.let || {}) },
+          // Join binding spread LAST so it can never be shadowed.
+          let: { ...(options.let || {}), localValue: `$${localField}` },
           pipeline: basePipeline,
           as,
         },

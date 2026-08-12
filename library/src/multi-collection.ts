@@ -30,6 +30,7 @@ import {
   cursorRungEquality,
   type SortMachinery,
 } from "./paginate-sort.ts";
+import { assertLetDoesNotShadowJoinBinding } from "./stage-builder.ts";
 import {
   createOperationTracer,
   filterKeys,
@@ -971,13 +972,15 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             // Advanced case: object with options
             const lookupOptions = asOrOptions || {};
             const as = lookupOptions.as || localField;
+            assertLetDoesNotShadowJoinBinding(lookupOptions.let);
 
-            // Build the lookup with automatic _type filter
+            // Build the lookup with automatic _type filter. The join binding
+            // is spread LAST so it can never be shadowed.
             const lookupStage: Record<string, unknown> = {
               from: collectionName,
               let: {
-                localValue: `$${localField}`,
                 ...(lookupOptions.let || {}),
+                localValue: `$${localField}`,
               },
               as,
             };
@@ -1802,11 +1805,13 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             // Advanced case: object with options
             const options = asOrOptions || {};
             const as = options.as || localField;
+            assertLetDoesNotShadowJoinBinding(options.let);
 
-            // Build the lookup with automatic _type filter
+            // Build the lookup with automatic _type filter. The join binding
+            // is spread LAST so it can never be shadowed.
             const lookupStage: Record<string, unknown> = {
               from: collectionName,
-              let: { localValue: `$${localField}`, ...(options.let || {}) },
+              let: { ...(options.let || {}), localValue: `$${localField}` },
               as,
             };
 
