@@ -1975,9 +1975,10 @@ export async function scopedMultiCollection<
 // -------- Stage builder (aggregate) -------------------------------------
 
 /**
- * Build the `_scope` constraint to inject into lookup sub-pipelines.
+ * Build the `_scope` constraint to inject into lookup sub-pipelines, as a
+ * query-operator VALUE for the `_scope` key.
  * - `null` means no scope filter (unscoped admin view)
- * - single id → `$eq` on `_scope`
+ * - single id → direct equality on `_scope`
  * - multiple ids → `$in` on `_scope`
  */
 type ScopeFilterShape =
@@ -1985,12 +1986,10 @@ type ScopeFilterShape =
   | { kind: "single"; id: string }
   | { kind: "multi"; ids: string[] };
 
-function scopeExpr(filter: ScopeFilterShape): AggregationStage | null {
+function scopeQueryValue(filter: ScopeFilterShape): unknown {
   if (!filter) return null;
-  if (filter.kind === "single") {
-    return { $eq: ["$_scope", filter.id] };
-  }
-  return { $in: ["$_scope", filter.ids] };
+  if (filter.kind === "single") return filter.id;
+  return { $in: filter.ids };
 }
 
 /**
@@ -2006,7 +2005,25 @@ function buildScopedStageBuilder<T extends ScopedMultiCollectionTypes>(
   collectionName: string,
   scopeFilter: ScopeFilterShape,
 ): ScopedStageBuilder<T> {
-  const scopeMatchExpr = scopeExpr(scopeFilter);
+  const scopeValue = scopeQueryValue(scopeFilter);
+  // First $match of a lookup sub-pipeline. Constants (_type, _scope) are
+  // emitted as query operators and only the correlated join key stays in
+  // $expr: the planner does not accept an $expr equality as subsuming a
+  // partialFilterExpression, so an $expr-only match hides the partial
+  // indexes withIndex creates and every lookup degrades to scanning the
+  // whole scope. The object is library-built and user sub-pipeline stages
+  // are appended AFTER it, so the `_scope` constraint can only be narrowed,
+  // never dropped or overridden.
+  const lookupBaseMatch = (
+    foreignField: string,
+    typeName?: string,
+  ): AggregationStage => ({
+    $match: {
+      ...(typeName !== undefined ? { _type: typeName } : {}),
+      ...(scopeValue !== null ? { _scope: scopeValue } : {}),
+      $expr: { $eq: [`$${foreignField}`, "$$localValue"] },
+    },
+  });
   const stage: ScopedStageBuilder<T> = {
     match: (type, filter) => ({
       $match: {
@@ -2017,18 +2034,12 @@ function buildScopedStageBuilder<T extends ScopedMultiCollectionTypes>(
     unwind: (_type, field) => ({ $unwind: `$${field}` }),
     lookup: (type, localField, foreignField, asOrOptions) => {
       const typeName = type as string;
-      const exprs: AggregationStage[] = [
-        { $eq: [`$${foreignField}`, "$$localValue"] },
-        { $eq: ["$_type", typeName] },
-      ];
-      if (scopeMatchExpr) exprs.push(scopeMatchExpr);
-
       if (typeof asOrOptions === "string") {
         return {
           $lookup: {
             from: collectionName,
             let: { localValue: `$${localField}` },
-            pipeline: [{ $match: { $expr: { $and: exprs } } }],
+            pipeline: [lookupBaseMatch(foreignField, typeName)],
             as: asOrOptions,
           },
         };
@@ -2036,7 +2047,7 @@ function buildScopedStageBuilder<T extends ScopedMultiCollectionTypes>(
       const options = asOrOptions || {};
       const as = options.as || localField;
       const basePipeline: AggregationStage[] = [
-        { $match: { $expr: { $and: exprs } } },
+        lookupBaseMatch(foreignField, typeName),
       ];
       if (options.pipeline) {
         basePipeline.push(...options.pipeline(stage));
@@ -2051,17 +2062,12 @@ function buildScopedStageBuilder<T extends ScopedMultiCollectionTypes>(
       };
     },
     anyLookup: (localField, foreignField, asOrOptions) => {
-      const exprs: AggregationStage[] = [
-        { $eq: [`$${foreignField}`, "$$localValue"] },
-      ];
-      if (scopeMatchExpr) exprs.push(scopeMatchExpr);
-
       if (typeof asOrOptions === "string") {
         return {
           $lookup: {
             from: collectionName,
             let: { localValue: `$${localField}` },
-            pipeline: [{ $match: { $expr: { $and: exprs } } }],
+            pipeline: [lookupBaseMatch(foreignField)],
             as: asOrOptions,
           },
         };
@@ -2069,7 +2075,7 @@ function buildScopedStageBuilder<T extends ScopedMultiCollectionTypes>(
       const options = asOrOptions || {};
       const as = options.as || localField;
       const basePipeline: AggregationStage[] = [
-        { $match: { $expr: { $and: exprs } } },
+        lookupBaseMatch(foreignField),
       ];
       if (options.pipeline) {
         basePipeline.push(...options.pipeline(stage));

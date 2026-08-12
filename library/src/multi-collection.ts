@@ -163,6 +163,26 @@ type StageBuilder<T extends MultiCollectionSchema> = {
   skip: (skip: number) => AggregationStage;
 };
 
+/**
+ * First `$match` of a `lookup` sub-pipeline. The `_type` constant is emitted
+ * as a query operator and only the correlated join key stays in `$expr`: the
+ * planner does not accept an `$expr` equality as subsuming a
+ * `partialFilterExpression`, so an `$expr`-only match hides the partial
+ * indexes `withIndex` creates and the lookup degrades to scanning every doc
+ * of the type on every input row.
+ */
+function lookupBaseMatch(
+  foreignField: string,
+  typeName: string,
+): AggregationStage {
+  return {
+    $match: {
+      _type: typeName,
+      $expr: { $eq: [`$${foreignField}`, "$$localValue"] },
+    },
+  };
+}
+
 type Input<T extends MultiCollectionSchema> = v.InferInput<
   v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>
 >;
@@ -933,16 +953,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                   from: collectionName,
                   let: { localValue: `$${localField}` },
                   pipeline: [
-                    {
-                      $match: {
-                        $expr: {
-                          $and: [
-                            { $eq: [`$${foreignField}`, "$$localValue"] },
-                            { $eq: ["$_type", lookupKey as string] },
-                          ],
-                        },
-                      },
-                    },
+                    lookupBaseMatch(foreignField, lookupKey as string),
                   ],
                   as: asOrOptions,
                 },
@@ -965,16 +976,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
             // Build pipeline: start with _type match, then add user pipeline if provided
             const basePipeline: AggregationStage[] = [
-              {
-                $match: {
-                  $expr: {
-                    $and: [
-                      { $eq: [`$${foreignField}`, "$$localValue"] },
-                      { $eq: ["$_type", lookupKey as string] },
-                    ],
-                  },
-                },
-              },
+              lookupBaseMatch(foreignField, lookupKey as string),
             ];
 
             // Add user-provided pipeline stages after the base filter
@@ -1782,16 +1784,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                   from: collectionName,
                   let: { localValue: `$${localField}` },
                   pipeline: [
-                    {
-                      $match: {
-                        $expr: {
-                          $and: [
-                            { $eq: [`$${foreignField}`, "$$localValue"] },
-                            { $eq: ["$_type", lookupKey as string] },
-                          ],
-                        },
-                      },
-                    },
+                    lookupBaseMatch(foreignField, lookupKey as string),
                   ],
                   as: asOrOptions,
                 },
@@ -1811,16 +1804,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
             // Build pipeline: start with _type match, then add user pipeline if provided
             const basePipeline: AggregationStage[] = [
-              {
-                $match: {
-                  $expr: {
-                    $and: [
-                      { $eq: [`$${foreignField}`, "$$localValue"] },
-                      { $eq: ["$_type", lookupKey as string] },
-                    ],
-                  },
-                },
-              },
+              lookupBaseMatch(foreignField, lookupKey as string),
             ];
 
             // Add user-provided pipeline stages after the base filter
