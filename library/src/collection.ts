@@ -1050,7 +1050,10 @@ export async function collection<
           } else {
             const cursorFilter = await buildCursorFilter(afterId, "after");
             if (cursorFilter) {
-              query = { ...query, ...cursorFilter } as m.Filter<TInput>;
+              // $and, never object spread: the cursor is `{$or: ...}` (or
+              // `{_id: ...}`), so a spread silently REPLACED a user filter
+              // carrying its own $or / _id constraint from page 2 on.
+              query = { $and: [query, cursorFilter] } as m.Filter<TInput>;
             }
           }
         } else if (beforeId) {
@@ -1060,7 +1063,7 @@ export async function collection<
           } else {
             const cursorFilter = await buildCursorFilter(beforeId, "before");
             if (cursorFilter) {
-              query = { ...query, ...cursorFilter } as m.Filter<TInput>;
+              query = { $and: [query, cursorFilter] } as m.Filter<TInput>;
             }
           }
           // Reverse the sort for beforeId to get items in reverse order
@@ -1127,7 +1130,7 @@ export async function collection<
               const afterFilter = await buildCursorFilter(afterId, "after");
               if (afterFilter) {
                 const afterPipeline: m.Document[] = [
-                  { $match: { ...baseQuery, ...afterFilter } },
+                  { $match: { $and: [baseQuery, afterFilter] } },
                   ...customPipeline,
                   { $count: "total" },
                 ];
@@ -1153,7 +1156,7 @@ export async function collection<
               const afterFilter = await buildCursorFilter(afterId, "after");
               if (afterFilter) {
                 const afterCount = await collection.countDocuments(
-                  { ...baseQuery, ...afterFilter } as m.Filter<TInput>,
+                  { $and: [baseQuery, afterFilter] } as m.Filter<TInput>,
                   { session },
                 );
                 position = total - afterCount;
@@ -1299,7 +1302,7 @@ export async function collection<
               const beforeFilter = await buildCursorFilter(beforeId, "before");
               if (beforeFilter) {
                 const beforeCount = await collection.countDocuments(
-                  { ...baseQuery, ...beforeFilter } as m.Filter<TInput>,
+                  { $and: [baseQuery, beforeFilter] } as m.Filter<TInput>,
                   { session },
                 );
                 position = Math.max(0, beforeCount - elements.length);
