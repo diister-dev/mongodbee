@@ -971,6 +971,28 @@ export function createMemoryApplier(migration: MigrationDefinition) {
         );
       },
     },
+    delete_scoped_multicollection_type: {
+      apply: (state, operation) => {
+        const coll = state.scopedMultiCollections[operation.collectionName];
+        if (!coll) {
+          throw new Error(
+            `Scoped multi-collection ${operation.collectionName} does not exist`,
+          );
+        }
+        // One physical collection holds every scope: dropping the type is a
+        // single filter across all scopes.
+        coll.content = coll.content.filter(
+          (doc) => doc._type !== operation.documentType,
+        );
+        return state;
+      },
+      reverse: (_state, _operation) => {
+        // Cannot restore deleted documents - this is irreversible
+        throw new Error(
+          `Cannot reverse delete_scoped_multicollection_type: operation is irreversible`,
+        );
+      },
+    },
     rename_multicollection_type: {
       apply: (state, operation) => {
         const multiCollection =

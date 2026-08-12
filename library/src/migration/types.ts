@@ -257,6 +257,18 @@ export type DeleteMultiModelInstancesTypeRule = {
 };
 
 /**
+ * Rule for deleting every document of a type from a scoped multi-collection,
+ * across all scopes. Irreversible — the documents cannot be restored.
+ */
+export type DeleteScopedMultiCollectionTypeRule = {
+  type: "delete_scoped_multicollection_type";
+  collectionName: string;
+  documentType: string;
+  /** Parent schema for the deleted type (needed for down migration) */
+  parentSchema?: SchemaContent;
+};
+
+/**
  * Rule for renaming a type in a multi-collection or multi-model
  *
  * This changes the _type field of all documents from oldTypeName to newTypeName.
@@ -406,6 +418,7 @@ export type MigrationRule =
   // Delete type
   | DeleteMultiCollectionTypeRule
   | DeleteMultiModelInstancesTypeRule
+  | DeleteScopedMultiCollectionTypeRule
   // Rename type
   | RenameMultiCollectionTypeRule
   | RenameMultiModelInstancesTypeRule
@@ -650,6 +663,11 @@ export interface ScopedMultiCollectionBuilder {
    * Configures a specific document-type within the scoped multi-collection.
    */
   type(typeName: string): ScopedMultiCollectionTypeBuilder;
+
+  /**
+   * Deletes every document of a type across all scopes. Irreversible.
+   */
+  deleteType(typeName: string): ScopedMultiCollectionBuilder;
 
   /**
    * Finishes configuring this scoped multi-collection and returns to the

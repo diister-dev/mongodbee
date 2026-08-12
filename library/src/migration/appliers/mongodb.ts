@@ -2067,6 +2067,31 @@ export function createMongodbApplier(
       },
     },
 
+    delete_scoped_multicollection_type: {
+      apply: async (operation) => {
+        if (
+          opts.strictValidation &&
+          !await collectionExists(operation.collectionName)
+        ) {
+          throw new Error(
+            `Scoped multi-collection ${operation.collectionName} does not exist`,
+          );
+        }
+        // One physical collection holds every scope: dropping the type is a
+        // single deleteMany across all scopes.
+        const collection = db.collection(operation.collectionName);
+        await collection.deleteMany(
+          { _type: operation.documentType } as Record<string, unknown>,
+        );
+      },
+      reverse: async (_operation) => {
+        // Cannot restore deleted documents - this is irreversible
+        throw new Error(
+          `Cannot reverse delete_scoped_multicollection_type: operation is irreversible`,
+        );
+      },
+    },
+
     rename_multicollection_type: {
       apply: async (operation) => {
         if (

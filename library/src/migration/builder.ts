@@ -618,6 +618,22 @@ function createScopedMultiCollectionBuilder(
         options,
       );
     },
+    deleteType(typeName) {
+      const parentTypeSchema = options.parentSchemas?.scopedMultiCollections
+        ?.[collectionName]?.types?.[typeName];
+
+      state.operations.push({
+        type: "delete_scoped_multicollection_type",
+        collectionName,
+        documentType: typeName,
+        parentSchema: parentTypeSchema,
+      });
+
+      // Deleting a type is irreversible (we can't restore the data)
+      state.mark({ type: "irreversible" });
+
+      return builder;
+    },
     end() {
       return mainBuilder;
     },
@@ -926,7 +942,8 @@ export function getIrreversibleOperations(
   return operations.filter((op) =>
     ("irreversible" in op && op.irreversible === true) ||
     op.type === "delete_multicollection_type" ||
-    op.type === "delete_multimodel_instances_type"
+    op.type === "delete_multimodel_instances_type" ||
+    op.type === "delete_scoped_multicollection_type"
   );
 }
 
