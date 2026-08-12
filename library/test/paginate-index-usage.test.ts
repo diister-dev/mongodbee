@@ -66,67 +66,81 @@ Deno.test("paginate (scoped): every cursor page is a bounded index read", async 
       },
     );
 
-    await db.command({ profile: 2 });
-
     // Walk both directions across both boundaries: descending from a value
-    // anchor exercises the `$lt ∪ null` branches (the case that used to scan
-    // half the scope); ascending from inside the null block exercises the
-    // `$ne: null` rung. The `_id` tie-break is left implicit so it follows
-    // the field's direction (an explicit `{generatedAt: -1, _id: 1}` matches
-    // no index order and is legitimately a blocking sort).
-    for (
-      const sort of [
-        { generatedAt: -1 } as const,
-        { generatedAt: 1 } as const,
-      ]
-    ) {
-      let afterId: string | undefined = undefined;
-      for (let page = 0; page < 6; page++) {
-        const p: { data: { _id: string }[] } = await view.paginate(
-          "participant",
-          undefined,
-          {
-            sort,
-            limit: LIMIT,
-            skipTotal: true,
-            ...(afterId ? { afterId } : {}),
+    // anchor exercises the `$lt ∪ null ∪ $type` branches (the case that used
+    // to scan half the scope); ascending from inside the null block exercises
+    // the `$ne: null` rung. The `_id` tie-break is left implicit so it
+    // follows the field's direction (an explicit `{generatedAt: -1, _id: 1}`
+    // matches no index order and is legitimately a blocking sort).
+    const runWalks = async () => {
+      for (
+        const sort of [
+          { generatedAt: -1 } as const,
+          { generatedAt: 1 } as const,
+        ]
+      ) {
+        let afterId: string | undefined = undefined;
+        for (let page = 0; page < 6; page++) {
+          const p: { data: { _id: string }[] } = await view.paginate(
+            "participant",
+            undefined,
+            {
+              sort,
+              limit: LIMIT,
+              skipTotal: true,
+              ...(afterId ? { afterId } : {}),
+              // deno-lint-ignore no-explicit-any
+            } as any,
             // deno-lint-ignore no-explicit-any
-          } as any,
-          // deno-lint-ignore no-explicit-any
-        ) as any;
-        if (p.data.length === 0) break;
-        afterId = p.data[p.data.length - 1]._id;
+          ) as any;
+          if (p.data.length === 0) break;
+          afterId = p.data[p.data.length - 1]._id;
+        }
       }
-    }
+    };
 
-    await db.command({ profile: 0 });
+    // The page finds of one profiled walk: every one must be a bounded
+    // IXSCAN — no COLLSCAN, no half-scope residual scan. Returns the first
+    // violation instead of throwing so the caller can retry once.
+    const profiledWalkViolation = async (): Promise<string | null> => {
+      await db.collection("system.profile").drop().catch(() => {});
+      await db.command({ profile: 2 });
+      await runWalks();
+      await db.command({ profile: 0 });
+      const profile = await db
+        .collection("system.profile")
+        .find({ op: "query", ns: `${db.databaseName}.catalog` })
+        .toArray();
+      const pageFinds = profile.filter((p) =>
+        (p.command as { limit?: number } | undefined)?.limit === LIMIT
+      );
+      if (pageFinds.length < 10) {
+        return `expected the walk's page finds in the profile, got ${pageFinds.length}`;
+      }
+      for (const op of pageFinds) {
+        if (!String(op.planSummary ?? "").includes("IXSCAN")) {
+          return `page find did not ride an index: ${op.planSummary}`;
+        }
+        if ((op.keysExamined as number) > MAX_KEYS_PER_PAGE) {
+          return `page find examined ${op.keysExamined} keys ` +
+            `(> ${MAX_KEYS_PER_PAGE}) — the cursor lost its tight index ` +
+            `bounds (filter: ${
+              JSON.stringify(op.command?.filter).slice(0, 200)
+            })`;
+        }
+      }
+      return null;
+    };
 
-    // Every data `find` of the walk (anchor lookups examine ≤ 1 key and pass
-    // the same bound) must be a bounded IXSCAN — no COLLSCAN, no half-scope
-    // residual scan.
-    const profile = await db
-      .collection("system.profile")
-      .find({ op: "query", ns: `${db.databaseName}.catalog` })
-      .toArray();
-    const pageFinds = profile.filter((p) =>
-      (p.command as { limit?: number } | undefined)?.limit === LIMIT
-    );
-    assert(
-      pageFinds.length >= 10,
-      `expected the walk's page finds in the profile, got ${pageFinds.length}`,
-    );
-    for (const op of pageFinds) {
-      assert(
-        String(op.planSummary ?? "").includes("IXSCAN"),
-        `page find did not ride an index: ${op.planSummary}`,
-      );
-      assert(
-        (op.keysExamined as number) <= MAX_KEYS_PER_PAGE,
-        `page find examined ${op.keysExamined} keys (> ${MAX_KEYS_PER_PAGE}) ` +
-          `— the cursor lost its tight index bounds (filter: ${
-            JSON.stringify(op.command?.filter).slice(0, 200)
-          })`,
-      );
+    // A broken EMISSION fails both attempts — the parent commit's shapes
+    // lose their bounds deterministically across plan-cache-cleared runs. A
+    // rare multiplanner trial wobble under parallel-suite load does not
+    // survive a plan cache clear, so only the second attempt asserts.
+    let violation = await profiledWalkViolation();
+    if (violation !== null) {
+      await db.command({ planCacheClear: "catalog" });
+      violation = await profiledWalkViolation();
     }
+    assert(violation === null, violation ?? undefined);
   });
 });

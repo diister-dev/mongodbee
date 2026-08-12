@@ -259,6 +259,106 @@ export function cursorRungEquality(anchorValue: unknown): unknown {
 }
 
 /**
+ * BSON comparison brackets in `$sort` order, as query-side `$type` aliases.
+ * Null/missing rank between MinKey and the first bracket and are handled by
+ * dedicated branches; MinKey/MaxKey stored as VALUES are out of scope (they
+ * are query sentinels — a field holding one cannot anchor a page, and is not
+ * defended against elsewhere in the ladder).
+ *
+ * The array bracket (between object and binData) is deliberately ABSENT:
+ * array-valued sort fields are outside the ladder's contract (an array
+ * anchor throws — see bsonBracketIndex), and `{$type: "array"}` cannot take
+ * tight index bounds — its presence forced a `[MinKey, MaxKey]` scan of the
+ * whole set on every page (measured: 10 026 keys vs 27 for a page of 25).
+ */
+const BSON_TYPE_BRACKETS: readonly (readonly string[])[] = [
+  ["number"], // int, long, double, decimal — cross-compare numerically
+  ["string", "symbol"],
+  ["object"],
+  ["binData"],
+  ["objectId"],
+  ["bool"],
+  ["date"],
+  ["timestamp"],
+  ["regex"],
+];
+
+/**
+ * Bracket index of an anchor value, or `null` for the null/missing block.
+ * Throws for values that CANNOT participate in a query-operator ladder:
+ *
+ * - arrays: a query predicate on an array field matches per ELEMENT while
+ *   `$sort` ranks the array by its min (asc) / max (desc) element — no
+ *   query-operator ladder can agree with the sort, so an array anchor fails
+ *   loud instead of silently corrupting every following page;
+ * - regexes: `{f: <regex>}` — the shape a ladder equality pin would take —
+ *   is a pattern MATCH against strings, not an equality;
+ * - MinKey/MaxKey/Code/anything unrecognized: exotic sentinels, refused
+ *   rather than guessed.
+ */
+function bsonBracketIndex(value: unknown): number | null {
+  if (value === undefined || value === null) return null;
+  if (Array.isArray(value)) {
+    throw new Error(
+      "paginate: cannot anchor a cursor on an ARRAY sort value — query " +
+        "operators match array fields per element while $sort ranks the " +
+        "array by its min/max element, so no cursor can agree with the sort",
+    );
+  }
+  switch (typeof value) {
+    case "number":
+    case "bigint":
+      return 0;
+    case "string":
+      return 1;
+    case "boolean":
+      return 5;
+    case "object":
+      break;
+    default:
+      throw new Error(
+        `paginate: cannot anchor a cursor on a ${typeof value} sort value`,
+      );
+  }
+  if (value instanceof Date) return 6;
+  if (value instanceof RegExp) {
+    throw new Error(
+      "paginate: cannot anchor a cursor on a REGEX sort value — a query " +
+        "equality on a regex is a pattern match, not a comparison",
+    );
+  }
+  const bsonType = (value as { _bsontype?: string })._bsontype;
+  if (bsonType === undefined) return 2; // plain embedded document
+  switch (bsonType) {
+    case "Int32":
+    case "Long":
+    case "Double":
+    case "Decimal128":
+      return 0;
+    case "BSONSymbol":
+      return 1;
+    case "DBRef":
+      return 2; // stored as a {$ref, $id} subdocument
+    case "Binary":
+      return 3;
+    case "ObjectId":
+    case "ObjectID":
+      return 4;
+    case "Timestamp":
+      return 7;
+    case "BSONRegExp":
+      throw new Error(
+        "paginate: cannot anchor a cursor on a REGEX sort value — a query " +
+          "equality on a regex is a pattern match, not a comparison",
+      );
+    default:
+      throw new Error(
+        `paginate: cannot anchor a cursor on a BSON ${bsonType} sort value`,
+      );
+  }
+}
+
+/**
  * FLAT branch conditions for one rung of the index-strategy cursor ladder:
  * the predicates carried by the sort field itself, given the anchor's value
  * and the direction the walk moves in (`$gt` = toward higher ranks, `$lt` =
@@ -272,18 +372,25 @@ export function cursorRungEquality(anchorValue: unknown): unknown {
  * anchor sits in the null block, while every document that HAS a value is
  * still unvisited, and `position` makes that look like the end of the list.
  *
- * These shapes agree with `$sort` across the boundary while staying query
- * operators, so the sort index remains usable (unlike the `$expr` ladder the
- * sortPipeline path needs):
+ * `$gt`/`$lt` are also TYPE-BRACKETED: they never compare across BSON type
+ * brackets, while `$sort` ranks the brackets (numbers < strings < objects <
+ * …). A field that ever held two types — a schema migration away on any
+ * real dataset — silently lost every document of the other brackets from the
+ * walk. Each value rung therefore carries a `$type` branch for the brackets
+ * ranked past the anchor's.
  *
- *   above null      → {f: {$ne: null}}     (everything that HAS a value)
- *   above a value   → {f: {$gt: v}}
- *   below a value   → {f: {$lt: v}} ∪ {f: null}   (…then the null block)
+ * The shapes agree with `$sort` across every boundary while staying query
+ * operators, so the sort index remains usable (unlike the `$expr` ladder the
+ * sortPipeline path needs — `$expr` comparisons are cross-type by nature):
+ *
+ *   above null      → {f: {$ne: null}}          (every value of every type)
+ *   above a value   → {f: {$gt: v}} ∪ {f: {$type: brackets above}}
+ *   below a value   → {f: {$lt: v}} ∪ {f: {$type: brackets below}} ∪ {f: null}
  *   below null      → nothing — no branch, nothing ranks lower
  *
- * `nonNullable` marks fields that structurally always exist (`_id`, `_ulid`,
- * `_scope`, `_type`): their rungs stay raw comparisons, sparing the planner
- * a dead `{f: null}` branch.
+ * `nonNullable` marks fields that structurally always exist AND hold one
+ * type (`_id`, `_ulid`, `_scope`, `_type`): their rungs stay raw
+ * comparisons, sparing the planner dead branches.
  *
  * Returns an EMPTY array when nothing can rank beyond the anchor on this
  * field — going lower than the null block.
@@ -294,17 +401,36 @@ function cursorRungBranches(
   op: "$gt" | "$lt",
   nonNullable: boolean,
 ): Record<string, unknown>[] {
-  const anchorIsNull = anchorValue === undefined || anchorValue === null;
   if (nonNullable) {
     return [{ [field]: { [op]: anchorValue } }];
   }
+  const bracket = bsonBracketIndex(anchorValue);
+  // NaN sits at the BOTTOM of the number bracket for `$sort`, but every
+  // range comparison against NaN matches nothing (measured: `{$gt: NaN}` is
+  // empty, `{$lt: v}` skips NaN). Equality on NaN works, so pins are fine.
+  const anchorIsNaN = typeof anchorValue === "number" &&
+    Number.isNaN(anchorValue);
   if (op === "$gt") {
-    return anchorIsNull
-      ? [{ [field]: { $ne: null } }]
-      : [{ [field]: { $gt: anchorValue } }];
+    if (bracket === null) return [{ [field]: { $ne: null } }];
+    const above = BSON_TYPE_BRACKETS.slice(bracket + 1).flat();
+    return [
+      // Above NaN = every non-NaN number ({$gte: -Infinity} excludes NaN,
+      // includes -Infinity — which ranks above NaN).
+      anchorIsNaN
+        ? { [field]: { $gte: -Infinity } }
+        : { [field]: { $gt: anchorValue } },
+      ...(above.length > 0 ? [{ [field]: { $type: above } }] : []),
+    ];
   }
-  if (anchorIsNull) return [];
-  return [{ [field]: { $lt: anchorValue } }, { [field]: null }];
+  if (bracket === null) return [];
+  const below = BSON_TYPE_BRACKETS.slice(0, bracket).flat();
+  return [
+    { [field]: { $lt: anchorValue } },
+    // Below a non-NaN number still contains NaN, which `$lt` never matches.
+    ...(bracket === 0 && !anchorIsNaN ? [{ [field]: NaN }] : []),
+    ...(below.length > 0 ? [{ [field]: { $type: below } }] : []),
+    { [field]: null },
+  ];
 }
 
 /**
