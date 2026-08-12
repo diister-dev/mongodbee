@@ -84,35 +84,19 @@ function drawDocCount(ctx: MockPopulateContext): number {
 }
 
 /**
- * Production creates one instance per root entity: a lower count orphans
- * roots, and a consolidation merging root with instance then produces
- * documents amputated of the fields only the instance carries.
+ * Batches per instance under the per-MODEL volume budget: instances follow
+ * the entity pool, so giving each one a full per-collection batch count made
+ * the bucket quadratic in the pool size. The budget divides the collection
+ * document count across the model's instances, floored at one full batch.
  */
-function drawInstanceCount(
-  modelType: string,
-  taken: ReadonlySet<string>,
+function drawInstanceBatchCount(
+  instanceCount: number,
   ctx: MockPopulateContext,
 ): number {
-  const available = ctx.session.pooledIds(modelType)
-    .filter((id) => !taken.has(id)).length;
-  if (available === 0) return INSTANCES_PER_MODEL;
-
-  const capped = Math.min(available, ctx.config.MAX_INSTANCES_PER_MODEL);
-  if (capped < available) {
-    ctx.failures.push({
-      bucket: "multiModels",
-      collection: modelType,
-      modelType,
-      kind: "correlation",
-      space: modelType,
-      message: `Identifier space "${modelType}" holds ${available} entities ` +
-        `without an instance, but the power level caps synthetic instances ` +
-        `at ${capped} — the remaining ${available - capped} entities stay ` +
-        `instance-less, so a consolidation merging them with instance ` +
-        `documents is only simulated on ${capped} of them.`,
-    });
-  }
-  return capped;
+  return Math.max(
+    1,
+    Math.round(drawDocCount(ctx) / Math.max(1, instanceCount)),
+  );
 }
 
 function shouldPopulate(
@@ -530,11 +514,12 @@ export function populateMultiCollections(
 /**
  * Populates SYNTHETIC multi-model instances for declared models.
  *
- * The decision is taken per MODEL — a model with no instance gets synthetic
- * ones even when other models already have instances; otherwise a
- * newly declared model would ride green on another model's documents, its
- * validation loops iterating nothing. An existing-but-empty instance counts
- * as "the model has an instance"; topping it up is
+ * The decision is taken per MODEL, on entity COVERAGE: every pooled id of
+ * the model-key space without an instance gets one, so the instance set
+ * follows the entity set the other buckets mint. A model whose space pools
+ * nothing gets the single-instance fallback when it has no instance at all —
+ * a newly declared model must not ride green on another model's documents.
+ * An existing-but-empty instance counts as covered; topping it up is
  * {@link populateExistingMultiModelInstances}'s job at validation time.
  *
  * An instance entry that already exists is never reassigned.
@@ -555,11 +540,28 @@ export function populateSyntheticMultiModelInstances(
   }
 
   for (const [modelType, schema] of Object.entries(multiModels)) {
-    if (policy === "ifEmpty") {
-      const modelHasInstance = Object.values(state.multiModels).some(
-        (instance) => instance.modelType === modelType,
-      );
-      if (modelHasInstance) continue;
+    // Entity coverage IS the population decision: production creates one
+    // instance per root entity, so every pooled id lacking an instance gets
+    // one — under EVERY policy, because a preparation step that refreshed the
+    // root collection minted fresh entities the instance set must follow.
+    // The single-instance fallback only remains for a model whose space
+    // pools nothing.
+    const taken = new Set(Object.keys(state.multiModels));
+    const uncovered = ctx.session.pooledIds(modelType)
+      .filter((id) => !taken.has(id));
+    const existing = Object.values(state.multiModels).filter(
+      (instance) => instance.modelType === modelType,
+    ).length;
+
+    let count: number;
+    if (uncovered.length > 0) {
+      count = uncovered.length;
+    } else if (
+      existing === 0 && ctx.session.pooledIds(modelType).length === 0
+    ) {
+      count = INSTANCES_PER_MODEL;
+    } else {
+      continue;
     }
 
     // Instance names are REALIZED, not invented: when the model-key space's
@@ -571,19 +573,15 @@ export function populateSyntheticMultiModelInstances(
     // No bare `<model>` entry: production has instance collections only
     // (`<model>:<id>`), so inventing one gives the appliers a phantom
     // instance whose name is not a valid scope value.
-    const taken = new Set(Object.keys(state.multiModels));
-    const names = ctx.session.realizeInstanceNames(
-      modelType,
-      drawInstanceCount(modelType, taken, ctx),
-      taken,
-    );
+    const names = ctx.session.realizeInstanceNames(modelType, count, taken);
+    const batchCount = drawInstanceBatchCount(existing + names.length, ctx);
     for (const collectionName of names) {
       state.multiModels[collectionName] ??= { modelType, content: [] };
 
       appendTypedBatches(
         state.multiModels[collectionName].content,
         schema,
-        drawDocCount(ctx),
+        batchCount,
         ctx,
         "multiModels",
         collectionName,
@@ -611,16 +609,30 @@ export function populateExistingMultiModelInstances(
   // like the other two engine entry points.
   ctx.session.harvest(state);
 
+  const modelCounts = new Map<string, number>();
+  for (const instance of Object.values(state.multiModels)) {
+    modelCounts.set(
+      instance.modelType,
+      (modelCounts.get(instance.modelType) ?? 0) + 1,
+    );
+  }
+
   for (const [instanceName, instance] of Object.entries(state.multiModels)) {
     const schema = multiModels[instance.modelType];
     if (!schema) continue;
-    if (!shouldPopulate(instance.content.length, policy, ctx.config)) {
-      continue;
-    }
+    const typeCount = Object.keys(schema).length;
+    if (typeCount === 0) continue;
+    // Sparse for an instance = below one full batch (every type once): the
+    // volume budget is per MODEL, so the per-collection minimum would top
+    // every instance of a large pool up to a quadratic total.
+    const sparse = policy === "ifSparse"
+      ? instance.content.length < typeCount
+      : shouldPopulate(instance.content.length, policy, ctx.config);
+    if (!sparse) continue;
     appendTypedBatches(
       instance.content,
       schema,
-      drawDocCount(ctx),
+      drawInstanceBatchCount(modelCounts.get(instance.modelType) ?? 1, ctx),
       ctx,
       "multiModels",
       instanceName,
@@ -752,7 +764,41 @@ export function retainAndRefreshBuckets(
     return refreshNeeds;
   };
 
+  // A root and its instance are one entity: retention that drops the root
+  // document must take the instance along, or orphan instances later
+  // consolidate into scopes no root record backs. Captured BEFORE slicing so
+  // an instance that never had a root is not this pass's to judge.
+  const preRetentionRoots = new Map<string, Set<string>>();
+  for (const modelType of Object.keys(schemas.multiModels ?? {})) {
+    const rootCollection = ctx.session.contributorCollection(modelType);
+    if (!rootCollection) continue;
+    preRetentionRoots.set(
+      modelType,
+      new Set(
+        (state.collections[rootCollection]?.content ?? []).map((doc) =>
+          String(doc._id)
+        ),
+      ),
+    );
+  }
+
   const collectionNeeds = applyRetention(state.collections);
+
+  for (const [modelType, before] of preRetentionRoots) {
+    const rootCollection = ctx.session.contributorCollection(modelType)!;
+    const surviving = new Set(
+      (state.collections[rootCollection]?.content ?? []).map((doc) =>
+        String(doc._id)
+      ),
+    );
+    for (const [name, instance] of Object.entries(state.multiModels)) {
+      if (instance.modelType !== modelType) continue;
+      if (before.has(name) && !surviving.has(name)) {
+        delete state.multiModels[name];
+      }
+    }
+  }
+
   const multiCollectionNeeds = applyRetention(state.multiCollections);
   const multiModelNeeds = applyRetention(state.multiModels);
   const scopedNeeds = applyRetention(state.scopedMultiCollections);

@@ -4,8 +4,8 @@
  * `buildMockStateFromSchemas` and `prepareStateForNextMigration`:
  *
  *  - D1: the emptiness policy is explicit — `always` supplements non-empty
- *    collections, `ifEmpty` only fills empty ones, `ifSparse` tops up below
- *    the configured minimum.
+ *    collections, `ifEmpty` only fills empty ones, `ifSparse` tops up an
+ *    instance below one full batch (every type once).
  *  - D2: populate generates docCount BATCHES × all types; refresh (after
  *    retention) restores EXACTLY the pre-retention size — never beyond, so
  *    propagation cannot compound volume across a migration chain.
@@ -28,6 +28,7 @@ import {
 } from "../../src/migration/types.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import { createSimulationValidator } from "../../src/migration/validators/simulation.ts";
+import { refId } from "../../src/ids.ts";
 import {
   createCorrelationSession,
   getMockGenerationConfig,
@@ -87,18 +88,13 @@ Deno.test("D1: policy 'ifEmpty' fills empty collections and leaves non-empty one
   assertEquals(ctx.failures, []);
 });
 
-Deno.test("D1: policy 'ifSparse' tops up instances below the minimum and skips full ones", () => {
+Deno.test("D1: policy 'ifSparse' tops up instances below one full batch and skips covered ones", () => {
   const state = createEmptyDatabaseState();
-  const fullDocs = Array.from({ length: 10 }, (_, i) => ({
-    _id: `doc:${i}`,
-    _type: "t",
-    name: `d${i}`,
-  }));
-  state.multiModels["m:full"] = { modelType: "m", content: [...fullDocs] };
-  state.multiModels["m:sparse"] = {
+  state.multiModels["m:covered"] = {
     modelType: "m",
-    content: [{ _id: "doc:s", _type: "t", name: "s" }],
+    content: [{ _id: "doc:c", _type: "t", name: "c" }],
   };
+  state.multiModels["m:empty"] = { modelType: "m", content: [] };
   const ctx = quickCtx();
 
   populateExistingMultiModelInstances(
@@ -108,10 +104,11 @@ Deno.test("D1: policy 'ifSparse' tops up instances below the minimum and skips f
     ctx,
   );
 
-  // At the quick minimum (10) the instance is full — untouched.
-  assertEquals(state.multiModels["m:full"].content.length, 10);
-  // Below the minimum: 10 batches × 1 type appended on top of the existing doc.
-  assertEquals(state.multiModels["m:sparse"].content.length, 11);
+  // One doc of the single type = one full batch — covered, untouched.
+  assertEquals(state.multiModels["m:covered"].content.length, 1);
+  // Below one batch: topped up with the per-MODEL budget split across the
+  // model's instances (quick: 10 docs / 2 instances = 5 batches × 1 type).
+  assertEquals(state.multiModels["m:empty"].content.length, 5);
   assertEquals(ctx.failures, []);
 });
 
@@ -245,7 +242,10 @@ Deno.test("D4: 'ifEmpty' populates a model without instances even when the bucke
 // D5 — existing entries are preserved, never reassigned
 // ============================================================================
 
-Deno.test("D5: an existing instance is never reassigned — synthetic names avoid taken ones", () => {
+Deno.test("D5: an existing instance is never reassigned — coverage adds siblings only for uncovered entities", () => {
+  // Full coverage (the instance IS the pool's only entity): nothing to add,
+  // the real instance survives byte-identical — no phantom sibling whose
+  // entity no root ever minted.
   const state = createEmptyDatabaseState();
   state.multiModels["m:real1"] = {
     modelType: "m",
@@ -260,16 +260,53 @@ Deno.test("D5: an existing instance is never reassigned — synthetic names avoi
     ctx,
   );
 
-  // Realized names exclude existing entries, so the real instance survives
-  // byte-identical and the synthetic documents land in a fresh sibling.
   const real = state.multiModels["m:real1"].content;
   assertEquals(real.length, 1, "existing instance must stay untouched");
   assertEquals(real[0]._id, "keep-me", "existing docs must survive");
-  const synthetic = Object.keys(state.multiModels).filter(
-    (name) => name !== "m:real1" && state.multiModels[name].modelType === "m",
+  assertEquals(
+    Object.keys(state.multiModels),
+    ["m:real1"],
+    "full coverage invents no synthetic sibling",
   );
-  assertEquals(synthetic.length, 1, "one synthetic sibling instance");
-  assertEquals(state.multiModels[synthetic[0]].content.length, 10);
+
+  // Uncovered pooled entities: exactly one sibling each, named after them —
+  // realized names exclude taken ones, so the real instance is never reused.
+  const seeded = createEmptyDatabaseState();
+  seeded.collections["+ms"] = {
+    content: [{ _id: "m:real1", name: "a" }, { _id: "m:other", name: "b" }],
+  };
+  seeded.multiModels["m:real1"] = {
+    modelType: "m",
+    content: [{ _id: "keep-me", _type: "t", name: "original" }],
+  };
+  const schemas = {
+    collections: { "+ms": { _id: refId("m"), name: v.string() } },
+    multiModels: { m: { t: GOOD } },
+  };
+  const seededCtx: MockPopulateContext = {
+    config: getMockGenerationConfig("quick"),
+    failures: [],
+    session: createCorrelationSession({ schemas, seed: 42 }),
+  };
+
+  populateDeclaredBuckets(seeded, schemas, "ifEmpty", seededCtx);
+
+  assertEquals(
+    seeded.multiModels["m:real1"].content.length,
+    1,
+    "covered instance must stay untouched",
+  );
+  assert(
+    seeded.multiModels["m:other"] !== undefined,
+    "the uncovered entity gets its instance",
+  );
+  assertEquals(
+    Object.keys(seeded.multiModels).filter(
+      (name) => seeded.multiModels[name].modelType === "m",
+    ).length,
+    2,
+    "one instance per pooled entity, none invented",
+  );
 });
 
 Deno.test("D5: 'ifSparse' has no defined meaning for synthetic instances and fails loud", () => {

@@ -38,6 +38,7 @@ import type {
   SchemasDefinition,
 } from "../../types.ts";
 import { extractIdPrefix, fnv1a32 } from "../../utils/seed-id.ts";
+import { simplifySchema } from "../../schema-validation.ts";
 import { refId } from "../../../ids.ts";
 import {
   generateMockScopeValue,
@@ -471,6 +472,13 @@ export interface CorrelationSession {
   pooledIds(space: string): readonly string[];
 
   /**
+   * The plain collection whose `_id`s mint the space, when the space's pool
+   * contributor is one — the root store an entity-coupled retention keeps
+   * instances aligned with. Undefined for typed-bucket contributors.
+   */
+  contributorCollection(space: string): string | undefined;
+
+  /**
    * Chooses `count` instance names for a model: real ids drawn from the
    * model-key space's pool when it holds any (production names instances
    * `<model>:<entity id>`), fresh `<model>:<id>` values otherwise. Never
@@ -521,11 +529,31 @@ export interface CorrelationSession {
 }
 
 /**
+ * A field map's structural hash. Consecutive migrations routinely keep
+ * identical bucket/type keys while reshaping fields, and a colliding seed
+ * makes retention+refresh regenerate byte-identical documents — silently
+ * cancelling the churn coverage — so field structure must join the
+ * fingerprint. Falls back to field names when a schema resists serialization.
+ */
+function fieldsHash(content: SchemaContent): string {
+  try {
+    const simplified = Object.fromEntries(
+      Object.keys(content).sort().map((
+        field,
+      ) => [field, simplifySchema(content[field])]),
+    );
+    return fnv1a32(JSON.stringify(simplified)).toString(36);
+  } catch {
+    return Object.keys(content).sort().join(",");
+  }
+}
+
+/**
  * Stable fingerprint of a schemas definition — the seed input for
  * `prepareStateForNextMigration`, whose locked `(state, schemas)` signature
- * carries no migration id. Stable per migration; two migrations only collide
- * when they declare the exact same target keys, which consecutive migrations
- * in practice never do.
+ * carries no migration id. Covers target keys AND field structure, so two
+ * migrations only collide when their schemas are structurally identical —
+ * in which case identical churn is the correct replay.
  */
 export function schemasFingerprint(schemas: SchemasDefinition): string {
   const parts: string[] = [];
@@ -533,7 +561,9 @@ export function schemasFingerprint(schemas: SchemasDefinition): string {
     const entries = schemas[bucket] ?? {};
     for (const name of Object.keys(entries).sort()) {
       if (bucket === "collections") {
-        parts.push(`${bucket}:${name}`);
+        const content =
+          (entries as NonNullable<SchemasDefinition["collections"]>)[name];
+        parts.push(`${bucket}:${name}@${fieldsHash(content)}`);
         continue;
       }
       const types = bucket === "scopedMultiCollections"
@@ -541,7 +571,10 @@ export function schemasFingerprint(schemas: SchemasDefinition): string {
           name
         ].types
         : (entries as NonNullable<SchemasDefinition["multiCollections"]>)[name];
-      parts.push(`${bucket}:${name}(${Object.keys(types).sort().join(",")})`);
+      const typed = Object.keys(types).sort().map((type) =>
+        `${type}@${fieldsHash(types[type])}`
+      );
+      parts.push(`${bucket}:${name}(${typed.join(",")})`);
     }
   }
   return parts.join("|");
@@ -725,6 +758,13 @@ export function createCorrelationSession(
     return pools.listOf(space, null);
   }
 
+  function contributorCollection(space: string): string | undefined {
+    const key = plan.contributors.get(space);
+    if (!key) return undefined;
+    const target = plan.targets.get(key);
+    return target?.bucket === "collections" ? target.collection : undefined;
+  }
+
   function realizeInstanceNames(
     model: string,
     count: number,
@@ -870,6 +910,7 @@ export function createCorrelationSession(
     harvest,
     mintIds,
     pooledIds,
+    contributorCollection,
     realizeInstanceNames,
     realizeScopes,
     realizesOwnScopes,

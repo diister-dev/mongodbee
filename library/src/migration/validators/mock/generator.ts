@@ -39,6 +39,30 @@ function toGeneratorOptions(
 }
 
 /**
+ * Removes object keys holding explicit `undefined`, recursively. A BSON
+ * document cannot store `undefined` — a real document either has the field
+ * or lacks the key — so a mock carrying one is unfaithful: spread-based
+ * merge migrations would let it clobber a real value.
+ */
+function stripUndefinedKeys(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stripUndefinedKeys);
+  }
+  if (value !== null && typeof value === "object") {
+    const proto = Object.getPrototypeOf(value);
+    if (proto === Object.prototype || proto === null) {
+      const out: Record<string, unknown> = {};
+      for (const [key, entry] of Object.entries(value)) {
+        if (entry === undefined) continue;
+        out[key] = stripUndefinedKeys(entry);
+      }
+      return out;
+    }
+  }
+  return value;
+}
+
+/**
  * Generates a mock document from a Valibot schema for testing purposes
  * Uses valibot-mock to generate realistic test data
  *
@@ -68,7 +92,9 @@ export function generateMockDocument(
     schemaObject as any,
     toGeneratorOptions(options),
   );
-  const mockData = generator.generate();
+  const mockData = stripUndefinedKeys(
+    generator.generate(),
+  ) as Record<string, unknown>;
 
   // Validate the generated data matches the schema
   const validation = v.safeParse(schemaObject, mockData);

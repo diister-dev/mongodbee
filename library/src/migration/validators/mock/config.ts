@@ -27,7 +27,6 @@ export interface MockGenerationConfig {
   DOCS_PER_COLLECTION_MIN: number;
   DOCS_PER_COLLECTION_MAX: number;
   DEFAULT_STATE_RETENTION_RATIO: number;
-  MAX_INSTANCES_PER_MODEL: number;
 }
 
 /**
@@ -46,29 +45,25 @@ export const INSTANCES_PER_MODEL = 1;
 /**
  * Configuration presets for each power level.
  *
- * `maxInstancesPerModel` bounds an otherwise quadratic volume — instances
- * follow the entity pool (N) and each holds N batches. At `quick` it equals
- * the document count, so the CI preset is never truncated.
+ * Multi-model volume stays linear without a cap: instances follow the entity
+ * pool (N), and the per-model batch budget divides the document count across
+ * them (see `drawInstanceBatchCount` in `populate.ts`).
  */
 const POWER_LEVEL_PRESETS: Record<SimulationPowerLevel, {
   docsPerCollectionMin: number;
   docsPerCollectionMax: number;
-  maxInstancesPerModel: number;
 }> = {
   quick: {
     docsPerCollectionMin: 10,
     docsPerCollectionMax: 10,
-    maxInstancesPerModel: 10,
   },
   normal: {
     docsPerCollectionMin: 100,
     docsPerCollectionMax: 100,
-    maxInstancesPerModel: 25,
   },
   hard: {
     docsPerCollectionMin: 500,
     docsPerCollectionMax: 500,
-    maxInstancesPerModel: 25,
   },
 };
 
@@ -86,6 +81,5 @@ export function getMockGenerationConfig(
     DOCS_PER_COLLECTION_MIN: preset.docsPerCollectionMin,
     DOCS_PER_COLLECTION_MAX: preset.docsPerCollectionMax,
     DEFAULT_STATE_RETENTION_RATIO,
-    MAX_INSTANCES_PER_MODEL: preset.maxInstancesPerModel,
   };
 }

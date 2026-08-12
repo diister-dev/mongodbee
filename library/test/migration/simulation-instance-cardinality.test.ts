@@ -5,9 +5,10 @@
  * merged one scope — every other scope produced a document amputated of the
  * fields only the instance carries.
  *
- * Locks the cardinality: instances follow the entity pool, one per pooled id,
- * none invented; an empty pool keeps the single-instance fallback; and any
- * truncation by the power-level cap is reported, never silent.
+ * Locks the cardinality AND its volume model: instances follow the entity
+ * pool, one per pooled id, none invented; an empty pool keeps the
+ * single-instance fallback; and the batch budget is per MODEL — divided
+ * across instances — so multi-model volume stays linear in the pool size.
  */
 import { assert, assertEquals } from "@std/assert";
 import { migrationDefinition } from "../../src/migration/definition.ts";
@@ -19,7 +20,6 @@ import {
 } from "../../src/migration/types.ts";
 import {
   createCorrelationSession,
-  foldMockGenerationFailures,
   getMockGenerationConfig,
   type MockPopulateContext,
   populateDeclaredBuckets,
@@ -48,13 +48,9 @@ const ORPHANED = {
 
 function contextFor(
   schemas: Parameters<typeof createCorrelationSession>[0]["schemas"],
-  maxInstances?: number,
 ): MockPopulateContext {
-  const config = getMockGenerationConfig("quick");
   return {
-    config: maxInstances === undefined
-      ? config
-      : { ...config, MAX_INSTANCES_PER_MODEL: maxInstances },
+    config: getMockGenerationConfig("quick"),
     failures: [] as MockGenerationFailure[],
     session: createCorrelationSession({ schemas, seed: 7 }),
   };
@@ -99,7 +95,7 @@ Deno.test("cardinality: every minted root id gets its own instance, none invente
   assertEquals(
     ctx.failures.filter((f) => f.kind === "correlation"),
     [],
-    "the quick cap equals the root count — nothing to report",
+    "full coverage — nothing to report",
   );
 });
 
@@ -117,33 +113,45 @@ Deno.test("cardinality: an empty entity pool keeps the single synthetic instance
   );
 });
 
-Deno.test("cardinality: the instance cap truncates loudly and never blocks", () => {
+Deno.test("cardinality: the batch budget is per model — volume stays linear in the pool size", () => {
   const state = createEmptyDatabaseState();
-  const ctx = contextFor(OWNED, 3);
+  const ctx = contextFor(OWNED);
 
   populateDeclaredBuckets(state, OWNED, "always", ctx);
 
-  const rootCount = state.collections["+expositions"].content.length;
-  assertEquals(instanceNames(state, "exposition").length, 3);
-
-  const capFindings = ctx.failures.filter(
-    (f) => f.kind === "correlation" && f.space === "exposition",
+  const names = instanceNames(state, "exposition");
+  const config = getMockGenerationConfig("quick");
+  const typeCount = Object.keys(OWNED.multiModels.exposition).length;
+  const total = names.reduce(
+    (sum, name) => sum + state.multiModels[name].content.length,
+    0,
   );
-  assertEquals(capFindings.length, 1, "a truncated cardinality must be told");
+
+  // Each instance carries at least one full batch, and the model total stays
+  // within one collection budget (+ the per-instance floor), never N batches
+  // per instance — the quadratic shape the budget replaced.
+  for (const name of names) {
+    assert(
+      state.multiModels[name].content.length >= typeCount,
+      `instance "${name}" holds less than one full batch`,
+    );
+  }
   assert(
-    capFindings[0].message.includes(String(rootCount - 3)),
-    `the finding must name the entities left instance-less: ${
-      capFindings[0].message
-    }`,
+    total <= config.DOCS_PER_COLLECTION_MAX * typeCount + names.length,
+    `model volume must stay linear: ${total} docs across ${names.length} instances`,
   );
 
-  const { errors, warnings } = foldMockGenerationFailures(
-    ctx.failures,
-    OWNED,
-    state,
+  // The single-instance fallback keeps the full budget — one instance, all
+  // the batches.
+  const orphanState = createEmptyDatabaseState();
+  const orphanCtx = contextFor(ORPHANED);
+  populateDeclaredBuckets(orphanState, ORPHANED, "always", orphanCtx);
+  const [fallback] = instanceNames(orphanState, "widget");
+  assertEquals(
+    orphanState.multiModels[fallback].content.length,
+    config.DOCS_PER_COLLECTION_MIN,
+    "a lone instance receives the whole per-collection budget",
   );
-  assertEquals(errors, [], "a cap finding is never blocking");
-  assert(warnings.some((w) => w.includes("caps synthetic instances")));
 });
 
 // ---------------------------------------------------------------------------
