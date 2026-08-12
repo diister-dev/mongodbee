@@ -19,6 +19,7 @@ import { assert } from "@std/assert";
 import { withDatabase } from "./+shared.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";
+import { withIndex } from "../src/indexes.ts";
 import { newId, refId } from "../src/ids.ts";
 
 const EXPO = "exposition:expoaaaaa01";
@@ -31,10 +32,17 @@ const MAX_KEYS_PER_PAGE = 150;
 
 Deno.test("paginate (scoped): every cursor page is a bounded index read", async () => {
   await withDatabase("paginate-index-usage", async (db) => {
+    // The index is the one `withIndex` itself creates —
+    // {_scope, _type, generatedAt, _id} partial on _type (see
+    // paginationKeySuffix): this locks the whole chain, applier shape
+    // included, not just the cursor emission.
     const catalog = await scopedMultiCollection(db, "catalog", {
       scope: refId("exposition"),
       types: {
-        participant: { name: v.string(), generatedAt: v.optional(v.date()) },
+        participant: {
+          name: v.string(),
+          generatedAt: v.optional(withIndex(v.date())),
+        },
       },
     });
     const view = catalog.scope(EXPO);
@@ -55,16 +63,6 @@ Deno.test("paginate (scoped): every cursor page is a bounded index read", async 
       });
     }
     await raw.insertMany(docs as never[]);
-
-    // The pagination-friendly shape withIndex creates: field + trailing _id
-    // so the (field, _id) sort AND the cursor branches resolve in the index.
-    await raw.createIndex(
-      { _scope: 1, _type: 1, generatedAt: 1, _id: 1 },
-      {
-        name: "pagination_idx",
-        partialFilterExpression: { _type: { $eq: "participant" } },
-      },
-    );
 
     // Walk both directions across both boundaries: descending from a value
     // anchor exercises the `$lt ∪ null ∪ $type` branches (the case that used

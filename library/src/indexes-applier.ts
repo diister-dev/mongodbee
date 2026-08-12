@@ -32,6 +32,28 @@ function stripIndexSentinels<T extends Record<string, unknown>>(
   return rest;
 }
 
+/**
+ * Trailing `_id` key appended to every plain per-field index. The paginate
+ * cursor sorts by `(field, _id)` and emits `$or` branches over both fields:
+ * without the tie-break in the key, the index can serve neither the sort nor
+ * the cursor, and every SORTED page degrades to fetching + blocking-sorting
+ * the whole filtered set — measured: 10 000 keys AND docs examined per page
+ * of 25 on a 10k scope, on every page, versus ~26 keys with the suffix.
+ *
+ * Two carve-outs keep their bare shape:
+ * - `unique`: appending `_id` would make the constraint vacuous (every
+ *   (field, _id) pair is unique by construction);
+ * - TTL (`expireAfterSeconds`): the server only honors TTL on the shapes it
+ *   already accepts — changing them is not this concern.
+ */
+function paginationKeySuffix(
+  metadata: { unique?: boolean; expireAfterSeconds?: number },
+): Record<string, number> {
+  return metadata.unique === true || metadata.expireAfterSeconds !== undefined
+    ? {}
+    : { _id: 1 };
+}
+
 export interface ApplyIndexesOptions {
   /**
    * Optional queue for managing concurrent MongoDB operations.
@@ -120,7 +142,7 @@ export async function applyCollectionIndexes(
   }
 
   for (const index of indexes) {
-    const keySpec = { [index.path]: 1 };
+    const keySpec = { [index.path]: 1, ...paginationKeySuffix(index.metadata) };
     const indexPath = sanitizePathName(index.path);
 
     // Try to find an existing index: prefer exact name, fallback to key match
@@ -144,7 +166,11 @@ export async function applyCollectionIndexes(
         existingNorm.collation === desiredNorm.collation &&
         existingNorm.partialFilterExpression ===
           desiredNorm.partialFilterExpression &&
-        existingNorm.expireAfterSeconds === desiredNorm.expireAfterSeconds
+        existingNorm.expireAfterSeconds === desiredNorm.expireAfterSeconds &&
+        // Key drift (e.g. the pagination `_id` suffix rollout) must rebuild:
+        // an index found by NAME with a stale key would otherwise be kept
+        // forever, and a same-name createIndex with a new key errors.
+        keyEqual(existingIndex.key || {}, keySpec)
       ) {
         needsRecreate = false;
       }
@@ -284,11 +310,16 @@ function partialFilterPinsType(pfe: unknown, typeName: string): boolean {
  *   would COLLSCAN against the `_scope`-leading base index. The name matches
  *   `applyMultiCollectionIndexes` so a collection converted from a plain
  *   `multiCollection` adopts its existing `_type_1` instead of duplicating it.
+ * - `withIndex()` (plain) → compound `{_scope: 1, _type: 1, <field>: 1, _id: 1}`
+ *   with `partialFilterExpression: {_type: <typeName>}`. The trailing `_id`
+ *   is what lets `paginate`'s `(field, _id)` sort and cursor branches ride
+ *   the index (see paginationKeySuffix).
  * - `withIndex({unique: true})` → compound `{_scope: 1, _type: 1, <field>: 1}`
  *   with `unique` + `partialFilterExpression: {_type: <typeName>}`. The
  *   `_type` partial filter prevents inter-type collisions ; the `_scope`
  *   leading key turns the constraint into "(scope, type, field) is unique",
- *   which is the natural per-scope uniqueness.
+ *   which is the natural per-scope uniqueness. No `_id` suffix — it would
+ *   make the constraint vacuous.
  * - `withIndex({unique: true, global: true})` → compound `{_type: 1, <field>: 1}`
  *   with `unique` + `partialFilterExpression: {_type: <typeName>}`. No
  *   `_scope` involved, so the constraint spans every scope (slugs, public
@@ -460,11 +491,14 @@ export async function applyScopedMultiCollectionIndexes(
         ? `__type_${typeName}_${sanitizePathName(idx.path)}`
         : `_scope__type_${typeName}_${sanitizePathName(idx.path)}`;
 
-      // Key shape : { _scope:1, _type:1, <field>:1 } (scoped)
-      // or       { _type:1, <field>:1 } (global)
+      // Key shape : { _scope:1, _type:1, <field>:1[, _id:1] } (scoped)
+      // or       { _type:1, <field>:1[, _id:1] } (global) — the trailing
+      // `_id` (plain indexes only, see paginationKeySuffix) is what lets
+      // paginate's (field, _id) sort and cursor ride the index.
+      const suffix = paginationKeySuffix(idx.metadata);
       const key: Record<string, number> = isGlobal
-        ? { _type: 1, [idx.path]: 1 }
-        : { _scope: 1, _type: 1, [idx.path]: 1 };
+        ? { _type: 1, [idx.path]: 1, ...suffix }
+        : { _scope: 1, _type: 1, [idx.path]: 1, ...suffix };
 
       // Partial filter : _type pinned to typeName ; AND-merge user filter.
       const typeFilter = { _type: { $eq: typeName } };
@@ -631,7 +665,10 @@ export async function applyMultiCollectionIndexes(
   // Process indexes for each type
   for (const { type, indexes } of allIndexes) {
     for (const index of indexes) {
-      const keySpec = { [index.path]: 1 };
+      const keySpec = {
+        [index.path]: 1,
+        ...paginationKeySuffix(index.metadata),
+      };
       const indexName = sanitizePathName(`${type}_${index.path}`);
 
       // Fallback by key must only adopt indexes that are NOT one of our own
@@ -671,7 +708,12 @@ export async function applyMultiCollectionIndexes(
           existingNorm.collation === desiredNorm.collation &&
           existingNorm.partialFilterExpression ===
             desiredNorm.partialFilterExpression &&
-          existingNorm.expireAfterSeconds === desiredNorm.expireAfterSeconds
+          existingNorm.expireAfterSeconds === desiredNorm.expireAfterSeconds &&
+          // Key drift (e.g. the pagination `_id` suffix rollout) must
+          // rebuild: an index found by NAME with a stale key would otherwise
+          // be kept forever, and a same-name createIndex with a new key
+          // errors.
+          keyEqual(existingIndex.key || {}, keySpec)
         ) {
           needsRecreate = false;
         }
