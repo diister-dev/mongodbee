@@ -163,6 +163,48 @@ Deno.test("check progress: state propagation gets its own in-flight line", async
   );
 });
 
+// Verrou — a `--last N` fast-forward is not a skip.
+//
+// It runs the FULL simulation — that is how the state reaches the window —
+// but it was drawn as a one-shot label on the premise that it "lands
+// immediately". It does not: `check --last 2` on the owner's chain froze for
+// 16.2s at a stretch, the same defect as the main loop, one call site over.
+Deno.test("check progress: fast-forwarded migrations report progress too", async () => {
+  const chunks: string[] = [];
+  await validateMigrationsWithSimulation(chain(4), {
+    tty: true,
+    write: (chunk) => void chunks.push(chunk),
+    powerLevel: "quick",
+    lastN: 1,
+  });
+
+  const fastForward = chunks.filter((c) =>
+    stripAnsiCode(c).includes("fast-forward")
+  );
+  assert(fastForward.length > 0, "no fast-forward line was drawn");
+  assert(
+    fastForward.some((c) => stripAnsiCode(c).includes(" · ")),
+    `the fast-forward line says nothing while it works: ${
+      JSON.stringify(fastForward.map(stripAnsiCode))
+    }`,
+  );
+  // The collapsed summary stays the only committed trace of the window.
+  assertEquals(
+    chunks.filter((c) =>
+      isCommitted(c) && stripAnsiCode(c).includes("fast-forward [")
+    ),
+    [],
+    "a per-migration fast-forward step must stay transient",
+  );
+  assert(
+    chunks.some((c) =>
+      isCommitted(c) &&
+      stripAnsiCode(c).includes("3 migration(s) fast-forwarded")
+    ),
+    "the collapsed summary must survive",
+  );
+});
+
 // Verrou — progress is REPORTING. Adding it may not move a single verdict.
 Deno.test("check progress: reporting progress changes nothing that is detected", async () => {
   const silent: string[] = [];

@@ -207,15 +207,16 @@ export async function validateMigrationsWithSimulation(
     let skippedIndex = 0;
     for (const migration of skippedMigrations) {
       skippedIndex++;
+      // A fast-forward is NOT a skip: it runs the full simulation, because
+      // that is how the state reaches the --last N window. Drawing it as a
+      // one-shot label left `--last 2` frozen for 16.2s at a stretch — the
+      // very defect this reporter exists to answer, one call site over.
       steps.start(
         dim(
           `  ⏭  fast-forward ${
             counter(skippedIndex, skippedMigrations.length)
           } ${migration.name}`,
         ),
-        // The label is the whole line for a fast-forward: the collapsed
-        // `--last N` summary is what follows, not a per-step verdict.
-        { live: false },
       );
       try {
         const validationResult = await simulationValidator.validateMigration(
