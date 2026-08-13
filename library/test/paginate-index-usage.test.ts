@@ -131,9 +131,29 @@ Deno.test("paginate (scoped): every cursor page is a bounded index read", async 
     };
 
     // A broken EMISSION fails both attempts — the parent commit's shapes
-    // lose their bounds deterministically across plan-cache-cleared runs. A
-    // rare multiplanner trial wobble under parallel-suite load does not
-    // survive a plan cache clear, so only the second attempt asserts.
+    // lose their bounds deterministically across plan-cache-cleared runs.
+    //
+    // Why the retry exists — the plan IS ambiguous at the branch level, by
+    // measurement: in a no-sort trial the null-block branches
+    // ({generatedAt: null} and {generatedAt: null, _id: {$lt}}) tie EXACTLY
+    // (score 3.0002, identical keys/docs/nReturned) between this pagination
+    // index, the {_scope,_type,_id} base index and _type_1 — the rivals are
+    // legitimate indexes and branch-level planning cannot see that only one
+    // candidate feeds SORT_MERGE. Nothing in the emission can break that
+    // tie. With the sort attached the pagination index wins decisively
+    // (3.0002 vs 1.0001 — blocking-sort rivals return 0 during the trial).
+    //
+    // Measured resolution (2026-08): the whole-$or SUBPLAN chose SORT_MERGE
+    // on the pagination index in every observed run — 6 index-catalog
+    // creation orders × {6.0.28, 7.0.34, 8.0.28}, 30 rounds of cache
+    // poisoning (a same-shape no-sort query cached first), 230 dedicated
+    // cold-cache walks (with and without parallel load), and 50+
+    // instrumented full-suite runs across the three versions with ZERO
+    // first-attempt violations. One first-attempt violation was seen
+    // historically (~1 in 5 suite runs during this verrou's development,
+    // never since); the tie is real and the planner is server code we do
+    // not control, so the second, cache-cleared attempt stays as the
+    // defensive gate.
     let violation = await profiledWalkViolation();
     if (violation !== null) {
       await db.command({ planCacheClear: "catalog" });
