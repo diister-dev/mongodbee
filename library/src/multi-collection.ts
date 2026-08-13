@@ -996,8 +996,17 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         const sortObj = normalizePaginateSort(sort);
 
         // For naturalIdSort, replace _id with _ulid in sort (extracts ULID part after "type:")
-        // This gives chronological ordering across different types
-        const useNaturalIdSort = naturalIdSort && "_id" in sortObj;
+        // This gives chronological ordering across different types.
+        // SINGLE-type naturalIdSort is exactly the `_id` sort: every _id of
+        // one type shares the `${type}:` prefix, and comparing `P+x` with
+        // `P+y` is comparing `x` with `y`, so sorting by the extracted
+        // suffix cannot reorder anything. Skipping the rewrite spares the
+        // computed-field pipeline that $addFields + blocking-sorts the WHOLE
+        // filtered set on every page (measured at 10k docs, page of 25:
+        // 10 000 docsExamined + hasSortStage per page) and lets the walk use
+        // the find path like any `_id` sort.
+        const useNaturalIdSort = Boolean(naturalIdSort) && "_id" in sortObj &&
+          keys.length > 1;
         const effectiveSortObj = useNaturalIdSort
           ? Object.fromEntries(
             Object.entries(sortObj).map((
