@@ -18,6 +18,7 @@ import {
   markMigrationAsReverted,
 } from "../../state.ts";
 import { createMongodbApplier } from "../../appliers/mongodb.ts";
+import { createProgressReporter } from "../utils/progress.ts";
 import {
   getIrreversibleOperations,
   getLossyOperations,
@@ -29,6 +30,11 @@ export interface RollbackCommandOptions {
   configPath?: string;
   force?: boolean;
   cwd?: string;
+  /**
+   * Render the live progress line. Defaults to whether stdout is a TTY, same
+   * tri-state as `migrate`: `--progress` forces it on, `--no-progress` off.
+   */
+  progress?: boolean;
 }
 
 /**
@@ -157,8 +163,17 @@ export async function rollbackCommand(
 
     try {
       // Create applier with migration context
+      // A rollback rewrites a real database and can run for minutes on a large
+      // collection — the one command where being left blind is worst. `migrate`
+      // has surfaced these events since it landed; rollback shared the applier
+      // and its `onProgress` seam but passed nothing, so it ran silent.
+      const progress = createProgressReporter({
+        enabled: options.progress ?? process.stdout.isTTY,
+      });
+
       const applier = createMongodbApplier(db, migrationToRollback, {
         currentMigrationId: migrationToRollback.id,
+        onProgress: progress.onProgress,
       });
 
       // Reverse operations and synchronize with parent schemas.
@@ -167,7 +182,12 @@ export async function rollbackCommand(
       // - Collections
       // - Multi-collections
       // - Multi-model instances (with automatic history recording)
-      await applier.applyMigration(state.operations, "down");
+      // `finally` closes the progress line so the next log starts on a clean row.
+      try {
+        await applier.applyMigration(state.operations, "down");
+      } finally {
+        progress.finish();
+      }
 
       // Mark as reverted in global history
       await markMigrationAsReverted(db, migrationToRollback.id);

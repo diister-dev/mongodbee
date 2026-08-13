@@ -121,6 +121,10 @@ ${yellow("MIGRATE OPTIONS:")}
   -m, --mode        Simulation mode: quick, normal, hard (default: normal)
   -l, --last        Only validate the last N migrations
 
+${yellow("ROLLBACK OPTIONS:")}
+  --force           Skip all confirmations (use with caution!)
+  --progress        Force the live progress line (auto-detected on a TTY; use --no-progress to disable)
+
 ${yellow("SYNC OPTIONS:")}
   --force           Sync even if pending migrations exist (not recommended)
   --verbose         Show detailed schema information

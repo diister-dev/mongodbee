@@ -11,7 +11,7 @@
  * @module
  */
 
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { MongoClient } from "../../../src/mongodb.ts";
 import { initCommand } from "../../../src/migration/cli/commands/init.ts";
 import { generateCommand } from "../../../src/migration/cli/commands/generate.ts";
@@ -369,4 +369,36 @@ Deno.test("rollback - maintains migration order", async () => {
       assertEquals(afterRollback[1], initialIds[1]);
     });
   });
+});
+
+// Verrou — rollback must surface the applier's progress events.
+//
+// Regression it guards: rollback rewrites a REAL database and can run for
+// minutes on a large collection, yet it built its applier without an
+// `onProgress` callback and ran completely silent. `migrate` had surfaced the
+// same events since it landed, from the same seam, one call site over — the
+// most stressful command to run was the only blind one.
+Deno.test("rollback - the live progress line is wired and documented", async () => {
+  const src = await Deno.readTextFile(
+    new URL("../../../src/migration/cli/commands/rollback.ts", import.meta.url),
+  );
+  assertStringIncludes(
+    src,
+    "onProgress: progress.onProgress",
+    "rollback built its applier without the progress callback",
+  );
+  assertStringIncludes(
+    src,
+    "progress.finish()",
+    "the progress line is never closed",
+  );
+
+  const help = await Deno.readTextFile(
+    new URL("../../../src/migration/cli/main.ts", import.meta.url),
+  );
+  assertStringIncludes(
+    help,
+    "ROLLBACK OPTIONS:",
+    "rollback options are undocumented",
+  );
 });
