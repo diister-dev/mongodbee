@@ -27,7 +27,8 @@ export interface StepReporter {
  * Builds a {@link StepReporter}.
  *
  * @param options.tty - Render transient lines. Defaults to
- *   `Deno.stdout.isTerminal()`, falling back to `false` outside Deno.
+ *   `Deno.stdout.isTerminal()`, falling back to `process.stdout.isTTY` so the
+ *   CLI behaves the same when the published package runs under Node.
  * @param options.write - Sink for rendered chunks; defaults to stdout.
  *   Injectable so both branches are testable without a real terminal.
  */
@@ -35,7 +36,9 @@ export function createStepReporter(
   options: { tty?: boolean; write?: (chunk: string) => void } = {},
 ): StepReporter {
   const tty = options.tty ??
-    (typeof Deno !== "undefined" && Deno.stdout?.isTerminal?.() === true);
+    (typeof Deno !== "undefined"
+      ? Deno.stdout?.isTerminal?.() === true
+      : process.stdout.isTTY === true);
   const write = options.write ??
     ((chunk: string) => {
       process.stdout.write(chunk);
