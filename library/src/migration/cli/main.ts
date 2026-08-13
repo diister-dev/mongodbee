@@ -103,6 +103,8 @@ ${yellow("GLOBAL OPTIONS:")}
 ${yellow("CHECK OPTIONS:")}
   -m, --mode        Simulation mode: quick, normal, hard (default: normal)
   -l, --last        Only validate the last N migrations
+  --verbose         Print every warning under the migration that raised it
+                    (default: warnings are deduplicated into a single digest)
   --check-indexes   Check database indexes against schema (requires database connection)
 
 ${yellow("STATUS OPTIONS:")}

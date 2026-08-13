@@ -4,7 +4,7 @@
  * @module
  */
 
-import { blue, bold, dim, green, red, yellow } from "@std/fmt/colors";
+import { bold, dim, green, red, yellow } from "@std/fmt/colors";
 import type { MigrationDefinition } from "../../types.ts";
 import {
   createEmptyDatabaseState,
@@ -15,6 +15,12 @@ import {
   type SimulationPowerLevel,
   type SimulationValidatorOptions,
 } from "../../validators/simulation.ts";
+import {
+  digestWarnings,
+  formatWarningDigest,
+  type WarningSource,
+} from "./warning-digest.ts";
+import { createStepReporter, type StepReporter } from "./step-reporter.ts";
 
 export interface MigrationValidationResult {
   migration: MigrationDefinition;
@@ -50,6 +56,75 @@ export interface ValidateMigrationsOptions {
    * If not provided, all migrations are validated
    */
   lastN?: number;
+
+  /**
+   * Render transient "in flight" step lines. Defaults to
+   * `Deno.stdout.isTerminal()` — off in CI, pipes and the in-process test
+   * harness, where `\r` would be garbage.
+   */
+  tty?: boolean;
+
+  /**
+   * Sink for every rendered chunk. Defaults to stdout; injectable so the
+   * reporting can be asserted without a terminal.
+   */
+  write?: (chunk: string) => void;
+}
+
+/** Formats a step counter as a right-aligned `[ 3/12]`. */
+function counter(index: number, total: number): string {
+  const width = String(total).length;
+  return `[${String(index).padStart(width)}/${total}]`;
+}
+
+/**
+ * Display-only annotation for a migration that failed outside the `--last N`
+ * window. It never enters `MigrationValidationResult.errors` — that array is
+ * part of the consumed return contract.
+ */
+const SKIPPED_RANGE_NOTE = "outside the --last N window";
+
+/** A failing migration plus an optional display-only annotation. */
+interface ReportedFailure {
+  result: MigrationValidationResult;
+  note?: string;
+}
+
+/**
+ * Prints the failing migrations and their errors.
+ *
+ * Errors are deferred to the very end of the run on purpose: with a
+ * deduplicated warning digest the tail is short, so the last thing on screen
+ * is the verdict — the complaint that started this was an `✗ Invalid` buried
+ * under ~150 repeated warning lines.
+ */
+function reportFailures(
+  steps: StepReporter,
+  failures: ReportedFailure[],
+  total: number,
+): void {
+  steps.log(
+    red(
+      bold(
+        `✗ Validation FAILED — ${failures.length} of ${total} migration(s) have errors`,
+      ),
+    ),
+  );
+  steps.log("");
+  for (const { result, note } of failures) {
+    const suffix = note ? ` ${dim(`— ${note}`)}` : "";
+    steps.log(
+      red(
+        `  ✗ ${result.migration.name} ${
+          dim(`(${result.migration.id})`)
+        }${suffix}`,
+      ),
+    );
+    for (const error of result.errors) {
+      steps.log(red(`      ${error}`));
+    }
+  }
+  steps.log("");
 }
 
 /**
@@ -88,12 +163,14 @@ export async function validateMigrationsWithSimulation(
     ? ` (last ${Math.min(lastN, migrations.length)})`
     : "";
 
-  console.log(
+  const steps = createStepReporter({ tty: options.tty, write: options.write });
+
+  steps.log(
     bold(
       `🧪 Validating migrations with simulation [${modeLabel}]${lastNLabel}...`,
     ),
   );
-  console.log();
+  steps.log("");
 
   const stateRetentionRatio = options.stateRetentionRatio ?? 0.5;
 
@@ -108,6 +185,11 @@ export async function validateMigrationsWithSimulation(
   let allValid = true;
   const results: MigrationValidationResult[] = [];
 
+  // Reporting accumulators. Warnings are folded chain-wide and errors are held
+  // back to the verdict block, so neither can bury the other.
+  const warningSources: WarningSource[] = [];
+  const failures: ReportedFailure[] = [];
+
   // Track current state to propagate between migrations (O(n) instead of O(n²))
   let currentState: SimulationDatabaseState = createEmptyDatabaseState();
 
@@ -117,8 +199,16 @@ export async function validateMigrationsWithSimulation(
   // be hidden behind a green "all valid" banner. Only the *reporting detail*
   // is reduced for skipped migrations, never the correctness gate.
   if (skippedMigrations.length > 0) {
-    console.log(dim(`  Skipping ${skippedMigrations.length} migration(s)...`));
+    let skippedIndex = 0;
     for (const migration of skippedMigrations) {
+      skippedIndex++;
+      steps.start(
+        dim(
+          `  ⏭  fast-forward ${
+            counter(skippedIndex, skippedMigrations.length)
+          } ${migration.name}`,
+        ),
+      );
       try {
         const validationResult = await simulationValidator.validateMigration(
           migration,
@@ -140,20 +230,16 @@ export async function validateMigrationsWithSimulation(
           });
         } else {
           allValid = false;
-          console.log(
-            red(
-              `  ✗ ${migration.name} ${
-                dim(`(${migration.id})`)
-              } is invalid (in skipped --last N range)`,
-            ),
-          );
-          for (const error of validationResult.errors) {
-            console.log(red(`      ${error}`));
-          }
-          results.push({
+          const result: MigrationValidationResult = {
             migration,
             valid: false,
             errors: validationResult.errors,
+            warnings: validationResult.warnings,
+          };
+          results.push(result);
+          failures.push({ result, note: SKIPPED_RANGE_NOTE });
+          warningSources.push({
+            migrationId: migration.id,
             warnings: validationResult.warnings,
           });
         }
@@ -162,28 +248,28 @@ export async function validateMigrationsWithSimulation(
         const errorMessage = error instanceof Error
           ? error.message
           : String(error);
-        console.log(
-          red(
-            `  ✗ ${migration.name} ${
-              dim(`(${migration.id})`)
-            } validation error (in skipped --last N range): ${errorMessage}`,
-          ),
-        );
-        results.push({
+        const result: MigrationValidationResult = {
           migration,
           valid: false,
           errors: [errorMessage],
           warnings: [],
-        });
+        };
+        results.push(result);
+        failures.push({ result, note: SKIPPED_RANGE_NOTE });
       }
     }
-    console.log();
+    steps.log(
+      dim(`  ⏭  ${skippedMigrations.length} migration(s) fast-forwarded`),
+    );
   }
 
+  let index = 0;
   for (const migration of migrationsToValidate) {
-    console.log(
-      `  ${blue("→")} ${bold(migration.name)} ${dim(`(${migration.id})`)}`,
-    );
+    index++;
+    const step = `${counter(index, migrationsToValidate.length)} ${
+      bold(migration.name)
+    } ${dim(`(${migration.id})`)}`;
+    steps.start(`  ${dim("…")} ${step}`);
 
     try {
       // Pass the current state to avoid re-simulating all parent migrations
@@ -192,30 +278,35 @@ export async function validateMigrationsWithSimulation(
         currentState,
       );
 
-      results.push({
+      const result: MigrationValidationResult = {
         migration,
         valid: validationResult.success,
         errors: validationResult.errors,
         warnings: validationResult.warnings,
+      };
+      results.push(result);
+      warningSources.push({
+        migrationId: migration.id,
+        warnings: validationResult.warnings,
       });
+
+      const warned = validationResult.warnings.length > 0
+        ? ` ${yellow(`⚠ ${validationResult.warnings.length}`)}`
+        : "";
 
       if (validationResult.success) {
         const operationCount = validationResult.data?.operationCount || 0;
         const isReversible = !validationResult.data?.hasIrreversibleProperty;
 
-        console.log(
-          green(
-            `    ✓ Valid (${operationCount} operation${
-              operationCount !== 1 ? "s" : ""
-            }, ${isReversible ? "reversible" : "irreversible"})`,
-          ),
+        steps.done(
+          `  ${green("✓")} ${step} ${
+            dim(
+              `${operationCount} operation${operationCount !== 1 ? "s" : ""}, ${
+                isReversible ? "reversible" : "irreversible"
+              }`,
+            )
+          }${warned}`,
         );
-
-        if (validationResult.warnings.length > 0) {
-          for (const warning of validationResult.warnings) {
-            console.log(yellow(`      ⚠ ${warning}`));
-          }
-        }
 
         // Update state for next migration: apply retention ratio (keep X%, generate fresh X%)
         if (validationResult.data?.stateAfterMigration) {
@@ -227,15 +318,23 @@ export async function validateMigrationsWithSimulation(
         }
       } else {
         allValid = false;
-        console.log(red(`    ✗ Invalid`));
-        for (const error of validationResult.errors) {
-          console.log(red(`      ${error}`));
-        }
+        failures.push({ result });
+        steps.done(
+          `  ${red("✗")} ${step} ${
+            red(
+              `${validationResult.errors.length} error${
+                validationResult.errors.length !== 1 ? "s" : ""
+              }`,
+            )
+          }${warned}`,
+        );
       }
 
-      if (options.verbose && validationResult.warnings.length > 0) {
+      // `--verbose` restores the pre-digest firehose: every warning under the
+      // migration that produced it, uncorrelated and uncapped.
+      if (options.verbose) {
         for (const warning of validationResult.warnings) {
-          console.log(yellow(`      ⚠ ${warning}`));
+          steps.log(yellow(`      ⚠ ${warning}`));
         }
       }
     } catch (error) {
@@ -243,44 +342,60 @@ export async function validateMigrationsWithSimulation(
       const errorMessage = error instanceof Error
         ? error.message
         : String(error);
-      console.log(red(`    ✗ Validation error: ${errorMessage}`));
-
-      results.push({
+      const result: MigrationValidationResult = {
         migration,
         valid: false,
         errors: [errorMessage],
         warnings: [],
-      });
+      };
+      results.push(result);
+      failures.push({ result });
+      steps.done(`  ${red("✗")} ${step} ${red("validation error")}`);
     }
-
-    console.log();
   }
 
-  // Summary
-  console.log(bold("📊 Summary:"));
-  console.log();
+  steps.finish();
+  steps.log("");
 
   const validCount = results.filter((r) => r.valid).length;
   const invalidCount = results.filter((r) => !r.valid).length;
 
-  console.log(`  Total migrations: ${bold(String(results.length))}`);
-  console.log(`  Valid: ${green(bold(String(validCount)))}`);
+  steps.log(bold("📊 Summary:"));
+  steps.log("");
+  steps.log(`  Total migrations: ${bold(String(results.length))}`);
+  steps.log(`  Valid: ${green(bold(String(validCount)))}`);
   if (invalidCount > 0) {
-    console.log(`  Invalid: ${red(bold(String(invalidCount)))}`);
+    steps.log(`  Invalid: ${red(bold(String(invalidCount)))}`);
+  }
+  steps.log("");
+
+  // Chain-invariant findings (an ambiguous identifier space, a reference
+  // nobody mints) are properties of the MODEL, so the simulation re-reports
+  // them under every migration. Fold them once here instead.
+  const digest = digestWarnings(warningSources);
+  const digestLines = formatWarningDigest(digest, {
+    totalMigrations: migrationsToValidate.length,
+    verbose: options.verbose,
+  });
+  if (digestLines.length > 0) {
+    for (const line of digestLines) steps.log(line ? yellow(line) : "");
+    if (!options.verbose && digest.occurrences > digest.groups.length) {
+      steps.log("");
+      steps.log(
+        dim(
+          "  Run with --verbose to see every warning under the migration that raised it.",
+        ),
+      );
+    }
+    steps.log("");
   }
 
-  console.log();
-
   if (!allValid) {
-    console.log(
-      red(
-        bold("✗ Some migrations have errors. Please fix them before applying."),
-      ),
-    );
+    reportFailures(steps, failures, results.length);
     throw new Error("Migration validation failed");
   }
 
-  console.log(
+  steps.log(
     green(bold("✓ All migrations are valid and ready to apply!")),
   );
 
