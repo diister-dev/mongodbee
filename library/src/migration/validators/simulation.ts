@@ -35,6 +35,7 @@ import * as v from "valibot";
 import { dirtyEquivalent } from "../../utils/object.ts";
 import { createMemoryApplier } from "../appliers/memory.ts";
 import {
+  type CorrelationSession,
   createCorrelationSession,
   DEFAULT_STATE_RETENTION_RATIO,
   foldMockGenerationFailures,
@@ -112,6 +113,24 @@ export interface SimulationValidatorOptions {
    * @default "normal"
    */
   powerLevel?: SimulationPowerLevel;
+
+  /**
+   * Called as the simulation advances, with a short note naming what it is
+   * doing right now ("applying operation 7/19", "mocking +expositions
+   * 40/100"). Purely observational: the validator never reads it back, and a
+   * run with and without it reaches byte-identical verdicts.
+   *
+   * It exists because this class is where a `check` spends its minutes and
+   * none of that time yields to the event loop — every `await` here resolves
+   * synchronously, so a caller cannot animate anything on a timer. Reporting
+   * from the work is the only channel that reaches the screen.
+   *
+   * The callback runs inside the hot loops (per document, per operation), so
+   * it must be cheap and must not throw; throttling is the caller's job.
+   *
+   * @default undefined - nothing is reported
+   */
+  onProgress?: (note: string) => void;
 }
 
 /**
@@ -133,10 +152,26 @@ export const DEFAULT_SIMULATION_VALIDATOR_OPTIONS: SimulationValidatorOptions =
 export class SimulationValidator implements MigrationValidator {
   private readonly options: SimulationValidatorOptions;
   private readonly mockConfig: MockGenerationConfig;
+  /** {@link SimulationValidatorOptions.onProgress}, defaulted to a no-op. */
+  private readonly report: (note: string) => void;
 
   constructor(options: SimulationValidatorOptions = {}) {
     this.options = { ...DEFAULT_SIMULATION_VALIDATOR_OPTIONS, ...options };
     this.mockConfig = getMockGenerationConfig(this.options.powerLevel);
+    this.report = options.onProgress ?? (() => {});
+  }
+
+  /** Population context carrying the progress channel into the mock engine. */
+  private mockContext(
+    failures: MockGenerationFailure[],
+    session: CorrelationSession,
+  ): MockPopulateContext {
+    return {
+      config: this.mockConfig,
+      failures,
+      session,
+      onProgress: this.options.onProgress,
+    };
   }
 
   /**
@@ -202,6 +237,7 @@ export class SimulationValidator implements MigrationValidator {
       // Apply operations in sequence
       let appliedOperations = 0;
       for (let i = 0; i < operations.length; i++) {
+        this.report(`applying operation ${i + 1}/${operations.length}`);
         const operation = operations[i];
         try {
           currentState = await applier.applyOperation(currentState, operation);
@@ -379,16 +415,15 @@ export class SimulationValidator implements MigrationValidator {
           stateAfterMigration,
           definition.schemas.multiModels,
           "ifSparse",
-          {
-            config: this.mockConfig,
-            failures: generationFailures,
+          this.mockContext(
+            generationFailures,
             // Seeded on the migration id like the initial-state session:
             // stable per migration, different between migrations.
-            session: createCorrelationSession({
+            createCorrelationSession({
               schemas: definition.schemas,
               seed: fnv1a32(definition.id),
             }),
-          },
+          ),
         );
       }
 
@@ -500,11 +535,14 @@ export class SimulationValidator implements MigrationValidator {
     for (
       const [collectionName, currentCollSchema] of Object.entries(currentSchema)
     ) {
-      for (
-        const [_docIndex, doc]
-          of ((stateAfter.collections || {})[collectionName]?.content || [])
-            .entries()
-      ) {
+      const content = (stateAfter.collections || {})[collectionName]?.content ||
+        [];
+      for (const [docIndex, doc] of content.entries()) {
+        this.report(
+          `checking collections/${collectionName} ${
+            docIndex + 1
+          }/${content.length}`,
+        );
         const valid = v.safeParse(v.object(currentCollSchema), doc);
         if (!valid.success) {
           errors.push(
@@ -527,6 +565,11 @@ export class SimulationValidator implements MigrationValidator {
     let stateBeforeRollback = stateAfter;
     // Apply reverse operations to get back to pre-migration state
     for (let i = operations.length - 1; i >= 0; i--) {
+      this.report(
+        `rolling back collections operation ${
+          operations.length - i
+        }/${operations.length}`,
+      );
       const operation = operations[i];
       try {
         stateBeforeRollback = await applier.reverseOperation(
@@ -546,11 +589,14 @@ export class SimulationValidator implements MigrationValidator {
       // New collection, no validation needed
       if (!parentCollSchema) continue;
       // Check if schema has changed
-      for (
-        const [docIndex, doc]
-          of ((stateAfterRollback.collections || {})[collectionName]?.content ||
-            []).entries()
-      ) {
+      const rolledBack =
+        (stateAfterRollback.collections || {})[collectionName]?.content || [];
+      for (const [docIndex, doc] of rolledBack.entries()) {
+        this.report(
+          `checking rolled-back collections/${collectionName} ${
+            docIndex + 1
+          }/${rolledBack.length}`,
+        );
         const valid = v.safeParse(v.object(parentCollSchema), doc);
         if (!valid.success) {
           errors.push(
@@ -609,7 +655,12 @@ export class SimulationValidator implements MigrationValidator {
       // Never created in state: the creation check already reports it.
       if (!currentCollState) continue;
       const allCollTypes = Object.keys(currentMultiCollSchema);
-      for (const element of currentCollState.content) {
+      for (const [docIndex, element] of currentCollState.content.entries()) {
+        this.report(
+          `checking multiCollections/${multiCollectionName} ${
+            docIndex + 1
+          }/${currentCollState.content.length}`,
+        );
         const elementType = element._type as string;
         if (!allCollTypes.includes(elementType)) {
           errors.push(
@@ -647,6 +698,11 @@ export class SimulationValidator implements MigrationValidator {
     let stateBeforeRollback = stateAfter;
     // Apply reverse operations to get back to pre-migration state
     for (let i = operations.length - 1; i >= 0; i--) {
+      this.report(
+        `rolling back multi-collections operation ${
+          operations.length - i
+        }/${operations.length}`,
+      );
       const operation = operations[i];
       try {
         stateBeforeRollback = await applier.reverseOperation(
@@ -668,11 +724,15 @@ export class SimulationValidator implements MigrationValidator {
       // New multi-collection, no validation needed
       if (!parentMultiCollSchema) continue;
       // Check if schema has changed
-      for (
-        const [docIndex, doc]
-          of ((stateAfterRollback.multiCollections || {})[multiCollectionName]
-            ?.content || []).entries()
-      ) {
+      const rolledBack =
+        (stateAfterRollback.multiCollections || {})[multiCollectionName]
+          ?.content || [];
+      for (const [docIndex, doc] of rolledBack.entries()) {
+        this.report(
+          `checking rolled-back multiCollections/${multiCollectionName} ${
+            docIndex + 1
+          }/${rolledBack.length}`,
+        );
         const docType = doc._type as string;
         const parentTypeSchema = parentMultiCollSchema[docType];
         if (!parentTypeSchema) continue; // Type was added, no validation needed
@@ -735,6 +795,7 @@ export class SimulationValidator implements MigrationValidator {
         stateAfter.multiModels || {},
       )
     ) {
+      this.report(`checking multiModels/${collectionName}`);
       const { modelType, content } = instance;
       if (!allModelType.includes(modelType)) {
         errors.push(
@@ -750,7 +811,12 @@ export class SimulationValidator implements MigrationValidator {
         continue;
       }
 
-      for (const element of content) {
+      for (const [docIndex, element] of content.entries()) {
+        this.report(
+          `checking multiModels/${collectionName} ${
+            docIndex + 1
+          }/${content.length}`,
+        );
         const elementType = element._type as string;
         const allTypes = Object.keys(modelSchema);
         if (!allTypes.includes(elementType)) {
@@ -787,6 +853,11 @@ export class SimulationValidator implements MigrationValidator {
     let stateBeforeRollback = stateAfter;
     // Apply reverse operations to get back to pre-migration state
     for (let i = operations.length - 1; i >= 0; i--) {
+      this.report(
+        `rolling back models operation ${
+          operations.length - i
+        }/${operations.length}`,
+      );
       const operation = operations[i];
       try {
         stateBeforeRollback = await applier.reverseOperation(
@@ -810,6 +881,11 @@ export class SimulationValidator implements MigrationValidator {
       ) {
         if (instance.modelType !== modelType) continue;
         for (const [docIndex, doc] of instance.content.entries()) {
+          this.report(
+            `checking rolled-back multiModels/${collectionName} ${
+              docIndex + 1
+            }/${instance.content.length}`,
+          );
           const docType = doc._type as string;
           const parentTypeSchema = parentModelSchema[docType];
           if (!parentTypeSchema) continue; // Type was added, no validation needed
@@ -884,7 +960,12 @@ export class SimulationValidator implements MigrationValidator {
       // Never created in state: the creation check already reports it.
       if (!currentCollState) continue;
       const allCollTypes = Object.keys(currentScopedSchema.types);
-      for (const element of currentCollState.content) {
+      for (const [docIndex, element] of currentCollState.content.entries()) {
+        this.report(
+          `checking scopedMultiCollections/${scopedName} ${
+            docIndex + 1
+          }/${currentCollState.content.length}`,
+        );
         const elementType = element._type as string;
         if (!allCollTypes.includes(elementType)) {
           errors.push(
@@ -934,6 +1015,11 @@ export class SimulationValidator implements MigrationValidator {
     let stateBeforeRollback = stateAfter;
     // Apply reverse operations to get back to pre-migration state
     for (let i = operations.length - 1; i >= 0; i--) {
+      this.report(
+        `rolling back scoped multi-collections operation ${
+          operations.length - i
+        }/${operations.length}`,
+      );
       const operation = operations[i];
       try {
         stateBeforeRollback = await applier.reverseOperation(
@@ -952,11 +1038,15 @@ export class SimulationValidator implements MigrationValidator {
     ) {
       // New scoped multi-collection, no validation needed
       if (!parentScopedSchema) continue;
-      for (
-        const [docIndex, doc]
-          of ((stateAfterRollback.scopedMultiCollections || {})[scopedName]
-            ?.content || []).entries()
-      ) {
+      const rolledBackScoped =
+        (stateAfterRollback.scopedMultiCollections || {})[scopedName]
+          ?.content || [];
+      for (const [docIndex, doc] of rolledBackScoped.entries()) {
+        this.report(
+          `checking rolled-back scopedMultiCollections/${scopedName} ${
+            docIndex + 1
+          }/${rolledBackScoped.length}`,
+        );
         const docType = doc._type as string;
         const parentTypeSchema = parentScopedSchema.types[docType];
         if (!parentTypeSchema) continue; // Type was added, no validation needed
@@ -1016,40 +1106,55 @@ export class SimulationValidator implements MigrationValidator {
   ): Promise<string[]> {
     const errors: string[] = [];
 
+    // Each sub-validator gets its OWN clones because it rolls the state back
+    // in place. A clone of a chain-sized state is a third of a second of
+    // blocked thread, hence a note before each pair.
+    const clones = (phase: string): [
+      SimulationDatabaseState,
+      SimulationDatabaseState,
+    ] => {
+      this.report(`cloning state for ${phase}`);
+      return [structuredClone(stateBefore), structuredClone(stateAfter)];
+    };
+
     // Validate collection schema changes
+    const collectionClones = clones("collections");
     const collectionChangeResult = await this.validateCollectionSchemaChanges(
       definition,
       applier,
-      structuredClone(stateBefore),
-      structuredClone(stateAfter),
+      collectionClones[0],
+      collectionClones[1],
       operations,
     );
 
     // Validate multi-collection schema changes
+    const multiCollectionClones = clones("multi-collections");
     const multiCollectionChangeResult = await this
       .validateMultiCollectionSchemaChanges(
         definition,
         applier,
-        structuredClone(stateBefore),
-        structuredClone(stateAfter),
+        multiCollectionClones[0],
+        multiCollectionClones[1],
         operations,
       );
 
+    const multiModelClones = clones("models");
     const multiModelsChangeResult = await this.validateMultiModelSchemaChanges(
       definition,
       applier,
-      structuredClone(stateBefore),
-      structuredClone(stateAfter),
+      multiModelClones[0],
+      multiModelClones[1],
       operations,
     );
 
     // Validate scoped multi-collection schema changes
+    const scopedClones = clones("scoped multi-collections");
     const scopedChangeResult = await this
       .validateScopedMultiCollectionSchemaChanges(
         definition,
         applier,
-        structuredClone(stateBefore),
-        structuredClone(stateAfter),
+        scopedClones[0],
+        scopedClones[1],
         operations,
       );
 
@@ -1127,14 +1232,18 @@ export class SimulationValidator implements MigrationValidator {
     // "always": keeps real parent seeds AND adds generated documents, so
     // both seeded and edge-case data get exercised. Session seed derives
     // from the migration id, so a simulation replays identically per run.
-    populateDeclaredBuckets(currentState, parent.schemas, "always", {
-      config: this.mockConfig,
-      failures,
-      session: createCorrelationSession({
-        schemas: parent.schemas,
-        seed: fnv1a32(parent.id),
-      }),
-    });
+    populateDeclaredBuckets(
+      currentState,
+      parent.schemas,
+      "always",
+      this.mockContext(
+        failures,
+        createCorrelationSession({
+          schemas: parent.schemas,
+          seed: fnv1a32(parent.id),
+        }),
+      ),
+    );
 
     return currentState;
   }
@@ -1170,23 +1279,23 @@ export class SimulationValidator implements MigrationValidator {
       this.mockConfig.DEFAULT_STATE_RETENTION_RATIO;
 
     // Clone the state to avoid mutations
+    this.report("cloning state");
     const newState: SimulationDatabaseState = structuredClone(currentState);
 
     // Failures riding on the incoming state were already folded into the
     // previous validation's result — a fresh preparation reports fresh ones.
     delete newState.mockGenerationFailures;
 
-    const ctx: MockPopulateContext = {
-      config: this.mockConfig,
-      failures: [],
+    const ctx: MockPopulateContext = this.mockContext(
+      [],
       // The locked `(state, schemas)` signature carries no migration id, so
       // the seed derives from a stable fingerprint of the schemas — which is
       // exactly what schemasFingerprint exists for.
-      session: createCorrelationSession({
+      createCorrelationSession({
         schemas,
         seed: fnv1a32(schemasFingerprint(schemas)),
       }),
-    };
+    );
 
     retainAndRefreshBuckets(newState, schemas, ratio, ctx);
     populateDeclaredBuckets(newState, schemas, "ifEmpty", ctx);
