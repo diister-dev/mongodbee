@@ -163,10 +163,8 @@ export async function rollbackCommand(
 
     try {
       // Create applier with migration context
-      // A rollback rewrites a real database and can run for minutes on a large
-      // collection — the one command where being left blind is worst. `migrate`
-      // has surfaced these events since it landed; rollback shared the applier
-      // and its `onProgress` seam but passed nothing, so it ran silent.
+      // A rollback rewrites a real database and can run for minutes on a
+      // large collection; the applier emits the events, they just need a sink.
       const progress = createProgressReporter({
         enabled: options.progress ?? process.stdout.isTTY,
       });

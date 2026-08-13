@@ -93,10 +93,9 @@ interface ReportedFailure {
 /**
  * Prints the failing migrations and their errors.
  *
- * Errors are deferred to the very end of the run on purpose: with a
- * deduplicated warning digest the tail is short, so the last thing on screen
- * is the verdict — the complaint that started this was an `✗ Invalid` buried
- * under ~150 repeated warning lines.
+ * Errors are deferred to the very end on purpose: with the warning digest
+ * deduplicated the tail is short, so the verdict is the last thing on screen
+ * rather than buried under repeated warning lines.
  */
 function reportFailures(
   steps: StepReporter,

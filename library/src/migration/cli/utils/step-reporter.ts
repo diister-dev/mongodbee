@@ -8,15 +8,11 @@
  * CI logs, pipes and the in-process test harness never receive `\r` or ANSI
  * cursor escapes.
  *
- * The line is driven by {@link StepReporter.update}, never by a timer. Two
- * shipped attempts animated it with `setInterval`, and both were verified
- * against a demo that awaited a real `setTimeout`. The validator does not:
- * `SimulationValidator.validateMigration` is `await`-heavy but every one of
- * its promises resolves synchronously, so draining microtasks never reaches
- * the timer phase and the callback fired exactly zero times in a 17-second
- * window. A render is a synchronous stdout write, so it paints even while the
- * loop holds the thread — and the note says what the loop is doing, which a
- * glyph never could.
+ * Driven by {@link StepReporter.update}, never by a timer:
+ * `SimulationValidator.validateMigration` is `await`-heavy but its promises
+ * resolve synchronously, so draining microtasks never reaches the timer phase
+ * and a `setInterval` callback fires zero times across a 17s step. A render is
+ * a synchronous write, so it paints even while the loop holds the thread.
  *
  * @module
  */
@@ -30,14 +26,9 @@ import process from "node:process";
 const MIN_REDRAW_MS = 80;
 
 /**
- * In-flight marker, advanced one frame per RENDER — never on a timer.
- *
- * The note already proves the work is moving, but only to someone reading it;
- * a rotating glyph is what the eye picks up without reading, and it is what
- * makes a step that reports the same note twice still look alive. Driving it
- * from renders keeps the timer-free property that this whole reporter exists
- * for: the validator blocks the thread, so a clock-driven frame would sit
- * frozen exactly when motion matters most.
+ * In-flight marker, advanced one frame per render — never on a timer (see the
+ * module doc). Motion the eye catches without reading, so a step reporting the
+ * same note twice still looks alive.
  */
 const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 
