@@ -208,6 +208,8 @@ export async function validateMigrationsWithSimulation(
             counter(skippedIndex, skippedMigrations.length)
           } ${migration.name}`,
         ),
+        // A fast-forward lands immediately; a spinner would only flicker.
+        { spinner: false },
       );
       try {
         const validationResult = await simulationValidator.validateMigration(
@@ -269,7 +271,8 @@ export async function validateMigrationsWithSimulation(
     const step = `${counter(index, migrationsToValidate.length)} ${
       bold(migration.name)
     } ${dim(`(${migration.id})`)}`;
-    steps.start(`  ${dim("…")} ${step}`);
+    // The spinner IS the in-flight marker; a static `…` alongside it reads as two.
+    steps.start(`  ${step}`);
 
     try {
       // Pass the current state to avoid re-simulating all parent migrations
