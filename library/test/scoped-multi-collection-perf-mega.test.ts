@@ -23,6 +23,7 @@ import * as v from "../src/schema.ts";
 import { refId } from "../src/ids.ts";
 import { closeAllWatchers } from "../src/change-stream.ts";
 import { MongoClient } from "../src/mongodb.ts";
+import { TEST_URI } from "./+shared.ts";
 
 const SCOPES = 5000;
 const DOCS_PER_SCOPE = 5000;
@@ -97,7 +98,7 @@ Deno.test({
     console.log("=".repeat(78));
     console.log("");
 
-    const client = new MongoClient("mongodb://localhost:27017");
+    const client = new MongoClient(TEST_URI);
     const db = client.db(dbName);
 
     // Keep the schema minimal — no withIndex on user fields. We want to

@@ -29,6 +29,7 @@ import {
 
 // MongoDB test connection
 const TEST_MONGODB_URI = Deno.env.get("TEST_MONGODB_URI") ||
+  Deno.env.get("MONGODBEE_TEST_URI") ||
   "mongodb://localhost:27017";
 
 /**

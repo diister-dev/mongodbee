@@ -14,6 +14,7 @@ import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";
 import { refId } from "../src/ids.ts";
 import { MongoClient } from "../src/mongodb.ts";
+import { TEST_URI } from "./+shared.ts";
 
 const DOCS = Number(Deno.env.get("DOCS") ?? "50000");
 const ITERS = Number(Deno.env.get("ITERS") ?? "10");
@@ -34,7 +35,7 @@ Deno.test({
     const dbName = `${DB_PREFIX}${
       crypto.randomUUID().replace(/-/g, "").substring(0, 8)
     }`;
-    const client = new MongoClient("mongodb://localhost:27017");
+    const client = new MongoClient(TEST_URI);
     const db = client.db(dbName);
 
     console.log("");

@@ -25,6 +25,7 @@ import {
 } from "../../src/migration/appliers/mongodb.ts";
 import { MongoClient } from "../../src/mongodb.ts";
 import * as v from "../../src/schema.ts";
+import { TEST_URI } from "../+shared.ts";
 
 const DOCS = Number(Deno.env.get("DOCS") ?? "20000");
 const SCOPES = Number(Deno.env.get("SCOPES") ?? "200");
@@ -44,7 +45,7 @@ Deno.test({
     const dbName = `${DB_PREFIX}${
       crypto.randomUUID().replace(/-/g, "").substring(0, 8)
     }`;
-    const client = new MongoClient("mongodb://localhost:27017");
+    const client = new MongoClient(TEST_URI);
     const db = client.db(dbName);
 
     console.log("");

@@ -3,13 +3,14 @@ import { multiCollection } from "../src/multi-collection.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { MongoClient } from "../src/mongodb.ts";
 import { defineModel } from "../src/multi-collection-model.ts";
+import { TEST_URI } from "./+shared.ts";
 
 // Mock MongoDB setup for testing
 let client: MongoClient;
 let db: ReturnType<MongoClient["db"]>;
 
 async function setupTestDb() {
-  const mongoUrl = Deno.env.get("MONGODB_URL") || "mongodb://localhost:27017";
+  const mongoUrl = Deno.env.get("MONGODB_URL") || TEST_URI;
   client = new MongoClient(mongoUrl);
   await client.connect();
   db = client.db("test_multi_collection_undefined");

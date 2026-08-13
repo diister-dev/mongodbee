@@ -26,7 +26,8 @@ Deno.test("check - validates all migrations successfully", async () => {
         database: {
           name: "test_check",
           connection: {
-            uri: "mongodb://localhost:27017",
+            uri: Deno.env.get("MONGODBEE_TEST_URI") ??
+              "mongodb://localhost:27017",
           },
         },
       }),
@@ -101,7 +102,8 @@ Deno.test("check - detects invalid migration", async () => {
         database: {
           name: "test_check",
           connection: {
-            uri: "mongodb://localhost:27017",
+            uri: Deno.env.get("MONGODBEE_TEST_URI") ??
+              "mongodb://localhost:27017",
           },
         },
       }),
@@ -215,7 +217,8 @@ Deno.test("check - detects schema mismatch", async () => {
         database: {
           name: "test_check",
           connection: {
-            uri: "mongodb://localhost:27017",
+            uri: Deno.env.get("MONGODBEE_TEST_URI") ??
+              "mongodb://localhost:27017",
           },
         },
       }),
@@ -302,7 +305,8 @@ Deno.test("check - handles empty migrations directory", async () => {
         database: {
           name: "test_check",
           connection: {
-            uri: "mongodb://localhost:27017",
+            uri: Deno.env.get("MONGODBEE_TEST_URI") ??
+              "mongodb://localhost:27017",
           },
         },
       }),

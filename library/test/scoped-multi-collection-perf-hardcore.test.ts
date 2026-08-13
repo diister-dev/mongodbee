@@ -24,6 +24,7 @@ import { refId } from "../src/ids.ts";
 import { withIndex } from "../src/indexes.ts";
 import { closeAllWatchers } from "../src/change-stream.ts";
 import { MongoClient } from "../src/mongodb.ts";
+import { TEST_URI } from "./+shared.ts";
 
 const SCOPES = 5000;
 const DOCS_PER_SCOPE = 5; // 25_000 docs total
@@ -75,7 +76,7 @@ Deno.test({
     console.log("=".repeat(78));
     console.log("");
 
-    const client = new MongoClient("mongodb://localhost:27017");
+    const client = new MongoClient(TEST_URI);
     const db = client.db(dbName);
 
     const typesShape = {

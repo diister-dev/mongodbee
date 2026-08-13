@@ -30,11 +30,20 @@ async function deleteTestDatabase(client: MongoClient, prefix = "UNKNOWN") {
   }
 }
 
+/**
+ * Test server URI — overridable so the suite can run against other MongoDB
+ * versions (e.g. a dockerized 6.0/7.0 on another port). Planner-dependent
+ * verrous are only MEASURED claims on the version they ran against; this is
+ * the knob that lets them run elsewhere.
+ */
+export const TEST_URI = Deno.env.get("MONGODBEE_TEST_URI") ??
+  "mongodb://localhost:27017";
+
 export async function withDatabase(
   prefix: string,
   work: (db: Db) => Promise<void>,
 ) {
-  const client = new MongoClient("mongodb://localhost:27017");
+  const client = new MongoClient(TEST_URI);
   await deleteTestDatabase(client, prefix);
   const db = client.db(randomDBName(prefix));
   try {
