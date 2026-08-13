@@ -1005,6 +1005,15 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             ) => [k === "_id" ? "_ulid" : k, v]),
           ) as Record<string, 1 | -1>
           : sortObj;
+        // `_ulid` is a SUBSTRING of `_id` and not unique across types: two
+        // types can carry the same suffix (custom ids are legal). `$sort`
+        // over the tie is unstable AND the cursor rung `{_ulid: {$gt: v}}`
+        // skips equals entirely — a 5-doc walk with twin suffixes returned 3
+        // (measured). Re-append `_id` (which embeds the type, so it is a
+        // total order) as the final tie-break, following `_ulid`'s direction.
+        if (useNaturalIdSort) {
+          effectiveSortObj._id = effectiveSortObj._ulid;
+        }
 
         // Update sort to include _id tie-breaker (or _ulid for naturalIdSort)
         sort = effectiveSortObj;
@@ -1153,9 +1162,14 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
               query = composeCursorQuery(baseQuery, cursorBranches);
             }
           }
-          // Reverse the sort for beforeId to get items in reverse order
+          // Reverse the sort for beforeId to get items in reverse order.
+          // MUST reverse the EFFECTIVE sort: with naturalIdSort the walk
+          // sorts on `_ulid`, and reversing the raw `sortObj` used to emit
+          // `{_id: -1}` — backward cross-type pages came back in type-prefix
+          // order instead of ULID order, skipping documents at every twin
+          // boundary (measured on the tie-break verrou's backward walk).
           const reversedSort: Record<string, 1 | -1> = {};
-          for (const [field, dir] of Object.entries(sortObj)) {
+          for (const [field, dir] of Object.entries(effectiveSortObj)) {
             reversedSort[field] = (dir === 1 ? -1 : 1) as 1 | -1;
           }
           sort = reversedSort;
