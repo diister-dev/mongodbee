@@ -222,10 +222,50 @@ export function assertSortResolvableBeforePipeline(
   }
 }
 
+const ASCENDING_DIRECTIONS: readonly unknown[] = [1, "asc", "ascending"];
+const DESCENDING_DIRECTIONS: readonly unknown[] = [-1, "desc", "descending"];
+
+/** A scalar the driver accepts as a sort direction. */
+function isSortDirection(value: unknown): boolean {
+  return ASCENDING_DIRECTIONS.includes(value) ||
+    DESCENDING_DIRECTIONS.includes(value);
+}
+
+/**
+ * A direction value to `1 | -1`, or a LOUD error. Anything else used to fall
+ * through an `input === 1 ? 1 : -1` ternary: `{name: "asc"}` became a
+ * DESCENDING ladder while the find path sorted ascending — from page 2 the
+ * walk ran backward and dead-ended (measured: a 5-doc walk returned
+ * `alpha, bravo, alpha`). `$meta` sorts are refused explicitly: the cursor
+ * ladder needs comparable stored values, which a computed relevance score is
+ * not.
+ */
+function normalizeSortDirection(value: unknown, field: string): 1 | -1 {
+  if (ASCENDING_DIRECTIONS.includes(value)) return 1;
+  if (DESCENDING_DIRECTIONS.includes(value)) return -1;
+  if (value !== null && typeof value === "object" && "$meta" in value) {
+    throw new Error(
+      `paginate: cannot sort on a $meta expression (field "${field}") — ` +
+        `the cursor ladder needs comparable stored values`,
+    );
+  }
+  throw new Error(
+    `paginate: invalid sort direction ${JSON.stringify(value)} for field ` +
+      `"${field}" — expected 1, -1, "asc", "ascending", "desc" or "descending"`,
+  );
+}
+
 /**
  * Normalize a paginate `sort` option into the effective sort spec, appending
  * the `_id` tie-break when absent so duplicate sort values keep a stable
  * (cursor-safe) order.
+ *
+ * Accepts every `m.Sort` form the option's type admits, mirroring the
+ * driver's `formatSort`. This used to accept only plain `{field: 1|-1}`
+ * objects and misread everything else as an `_id` direction: `sort: "name"`
+ * (a legal m.Sort meaning `{name: 1}`) silently paginated by `{_id: -1}` —
+ * the requested order ignored, no error anywhere. Unrecognized forms now
+ * fail loud instead of walking a wrong-but-believable order.
  *
  * The tie-break follows the direction of the LAST explicit sort field —
  * NOT a fixed `1`. An index `{<field>: 1, _id: 1}` serves a sort only in its
@@ -235,13 +275,48 @@ export function assertSortResolvableBeforePipeline(
  * examined for a page of 25 on a 2k scope, from page 1).
  */
 export function normalizePaginateSort(sort: unknown): Record<string, 1 | -1> {
+  const sortObj: Record<string, 1 | -1> = {};
+  // Falsy (`undefined`, `0`, `""`) keeps its historical "unspecified" meaning.
   const input = sort || { _id: 1 };
-  const sortObj: Record<string, 1 | -1> =
-    typeof input === "object" && !Array.isArray(input)
-      ? { ...(input as Record<string, 1 | -1>) }
-      : {
-        _id: input === 1 || input === "asc" || input === "ascending" ? 1 : -1,
-      };
+  if (typeof input === "string" && !isSortDirection(input)) {
+    // Driver semantics: a bare field name sorts ascending.
+    sortObj[input] = 1;
+  } else if (isSortDirection(input)) {
+    sortObj._id = normalizeSortDirection(input, "_id");
+  } else if (input instanceof Map) {
+    for (const [field, dir] of input.entries()) {
+      sortObj[String(field)] = normalizeSortDirection(dir, String(field));
+    }
+  } else if (Array.isArray(input)) {
+    if (
+      input.length === 2 && typeof input[0] === "string" &&
+      isSortDirection(input[1])
+    ) {
+      // Single `[field, direction]` pair (driver disambiguates exactly so).
+      sortObj[input[0]] = normalizeSortDirection(input[1], input[0]);
+    } else {
+      for (const entry of input) {
+        if (typeof entry === "string") {
+          sortObj[entry] = 1;
+        } else if (Array.isArray(entry) && typeof entry[0] === "string") {
+          sortObj[entry[0]] = normalizeSortDirection(entry[1], entry[0]);
+        } else {
+          throw new Error(
+            `paginate: invalid sort entry ${JSON.stringify(entry)} — ` +
+              `expected a field name or a [field, direction] pair`,
+          );
+        }
+      }
+    }
+  } else if (typeof input === "object") {
+    for (const [field, dir] of Object.entries(input)) {
+      sortObj[field] = normalizeSortDirection(dir, field);
+    }
+  } else {
+    throw new Error(
+      `paginate: invalid sort ${JSON.stringify(input)}`,
+    );
+  }
   if (!("_id" in sortObj)) {
     const fields = Object.keys(sortObj);
     sortObj._id = fields.length > 0 ? sortObj[fields[fields.length - 1]] : 1;
