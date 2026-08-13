@@ -195,6 +195,13 @@ async function main(): Promise<void> {
         console.error(red(` - ${err}`));
       }
     }
+    // A failing subcommand MUST fail the process. This catch printed the error
+    // and returned normally, so `main()` resolved, the outer handler never ran,
+    // and EVERY subcommand exited 0 — `check` reported "Migration chain
+    // validation failed" and returned success, `migrate` the same. No pipeline
+    // step could gate on either. `exitCode` rather than `exit()`: the latter
+    // would cut short an in-flight client teardown.
+    process.exitCode = 1;
   }
 }
 
