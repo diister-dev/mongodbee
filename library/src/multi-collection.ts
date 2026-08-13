@@ -1131,6 +1131,11 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         // a sortPipeline, the cursor is instead an $expr ladder over the
         // hidden normalized sort keys (see paginate-sort.ts) — query
         // operators would silently drop docs whose sort key is missing.
+        // Anchor-not-found is a DIVERGENT contract, deliberately: a ghost
+        // anchor with a valid type prefix silently RESTARTS (page 1 /
+        // last page) like `collection`, while scopedMultiCollection throws
+        // and the sortPipeline path throws on every surface. Pinned by
+        // paginate-anchor-not-found.test — see there before changing this.
         let cursorBranches: Record<string, unknown>[] | null = null;
         let exprCursor: AggregationStage | null = null;
 

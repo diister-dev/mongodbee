@@ -991,6 +991,12 @@ export async function collection<
         // filter folded per branch (see composeCursorQuery) — the composed
         // query REPLACES `query`, never merges into it: a spread once let the
         // cursor's $or silently overwrite a user filter's own $or.
+        // Anchor-not-found is a DIVERGENT contract, deliberately: here (and
+        // on multiCollection) a ghost anchor silently RESTARTS — afterId
+        // yields page 1 with position 1, beforeId yields the LAST page with
+        // position 0 — because the pinned consumer relies on the restart.
+        // scopedMultiCollection throws instead, and the sortPipeline path
+        // throws on every surface. Pinned by paginate-anchor-not-found.test.
         let exprCursor: AggregationStage | null = null;
         let cursorBranches: Record<string, unknown>[] | null = null;
         if (afterId) {
