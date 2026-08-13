@@ -178,6 +178,11 @@ export async function validateMigrationsWithSimulation(
     maxOperations: 1000,
     stateRetentionRatio,
     powerLevel,
+    // The in-flight line is driven by the work, not by a clock: the validator
+    // never yields to the event loop, so a timer-based animation cannot fire
+    // (it did not, for 17 seconds at a stretch). The reporter throttles the
+    // redraws; this callback stays a plain function call.
+    onProgress: (note) => steps.update(note),
   };
 
   const simulationValidator = createSimulationValidator(validatorOptions);
@@ -208,8 +213,9 @@ export async function validateMigrationsWithSimulation(
             counter(skippedIndex, skippedMigrations.length)
           } ${migration.name}`,
         ),
-        // A fast-forward lands immediately; a spinner would only flicker.
-        { spinner: false },
+        // The label is the whole line for a fast-forward: the collapsed
+        // `--last N` summary is what follows, not a per-step verdict.
+        { live: false },
       );
       try {
         const validationResult = await simulationValidator.validateMigration(
@@ -271,7 +277,7 @@ export async function validateMigrationsWithSimulation(
     const step = `${counter(index, migrationsToValidate.length)} ${
       bold(migration.name)
     } ${dim(`(${migration.id})`)}`;
-    // The spinner IS the in-flight marker; a static `…` alongside it reads as two.
+    // The reporter adds its own in-flight marker; a static `…` here reads as two.
     steps.start(`  ${step}`);
 
     try {
@@ -313,11 +319,18 @@ export async function validateMigrationsWithSimulation(
 
         // Update state for next migration: apply retention ratio (keep X%, generate fresh X%)
         if (validationResult.data?.stateAfterMigration) {
+          // This phase runs AFTER the verdict landed, so it owned no line —
+          // and it is the slowest of the whole loop (retention + mock refill
+          // measured at 5-16s per migration). That silence was the longest
+          // window on screen; it now gets a transient line of its own,
+          // dropped again before the next migration opens its.
+          steps.start(dim(`  ⤷ propagating state to the next migration`));
           currentState = simulationValidator.prepareStateForNextMigration(
             validationResult.data
               .stateAfterMigration as SimulationDatabaseState,
             migration.schemas,
           );
+          steps.finish();
         }
       } else {
         allValid = false;
