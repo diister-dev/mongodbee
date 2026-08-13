@@ -256,3 +256,32 @@ Deno.test("step reporter: a note outside any step writes nothing", () => {
     [],
   );
 });
+
+// Verrou — the in-flight marker must MOVE between renders.
+//
+// Regression it guards: the marker was a fixed "⋯". The note underneath it
+// changes, but a reader scanning the screen without reading the text had no
+// motion to lock onto — and a phase that reports the SAME note twice looked
+// frozen even though work was landing. The frame advances per render, never on
+// a clock: the validator blocks the thread, so a timer-driven frame would sit
+// still exactly when motion matters.
+Deno.test("step reporter: the in-flight marker advances frame on each render", () => {
+  const { chunks, steps } = capture(true, { minRedrawMs: 0 });
+
+  steps.start("[1/1] alpha");
+  for (const note of ["mocking a", "mocking b", "mocking c", "mocking d"]) {
+    steps.update(note);
+  }
+  steps.finish();
+
+  const markers = chunks
+    .filter((c) => c.startsWith("\r\x1b[K") && c.length > 4)
+    .map((c) => c.replace("\r\x1b[K", "").charAt(0));
+  assert(markers.length >= 5, `expected renders, saw ${markers.length}`);
+  assert(
+    new Set(markers).size > 1,
+    `the marker never changed (${
+      markers.join("")
+    }) — a static glyph reads as frozen`,
+  );
+});

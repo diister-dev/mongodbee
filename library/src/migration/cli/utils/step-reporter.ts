@@ -29,8 +29,17 @@ import process from "node:process";
  */
 const MIN_REDRAW_MS = 80;
 
-/** Marks the line as still in flight; the verdict replaces it with ✓ / ✗. */
-const IN_FLIGHT = "⋯";
+/**
+ * In-flight marker, advanced one frame per RENDER — never on a timer.
+ *
+ * The note already proves the work is moving, but only to someone reading it;
+ * a rotating glyph is what the eye picks up without reading, and it is what
+ * makes a step that reports the same note twice still look alive. Driving it
+ * from renders keeps the timer-free property that this whole reporter exists
+ * for: the validator blocks the thread, so a clock-driven frame would sit
+ * frozen exactly when motion matters most.
+ */
+const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 
 /** A step-oriented console writer. See {@link createStepReporter}. */
 export interface StepReporter {
@@ -147,6 +156,7 @@ export function createStepReporter(
   let lastRenderAt = 0;
   let label = "";
   let note = "";
+  let frame = 0;
 
   const clearTransient = () => {
     if (!transientOpen) return;
@@ -163,9 +173,9 @@ export function createStepReporter(
     lastRenderAt = Date.now();
     // Clamp the payload only: `\x1b[K` is not an SGR sequence, so folding it
     // into the measured string would spend three columns on the erase itself.
-    const body = `${IN_FLIGHT} ${label}${note ? ` · ${note}` : ""}${
-      secs > 0 ? ` ${secs}s` : ""
-    }`;
+    const body = `${FRAMES[frame++ % FRAMES.length]} ${label}${
+      note ? ` · ${note}` : ""
+    }${secs > 0 ? ` ${secs}s` : ""}`;
     write(`\r\x1b[K${clamp(body, columns)}`);
   };
 
@@ -181,6 +191,7 @@ export function createStepReporter(
       live = true;
       label = stepLabel;
       note = "";
+      frame = 0;
       startedAt = Date.now();
       render();
       // Disarm the floor: the first note names the phase that just began, and
