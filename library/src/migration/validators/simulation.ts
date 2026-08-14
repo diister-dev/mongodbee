@@ -1229,21 +1229,34 @@ export class SimulationValidator implements MigrationValidator {
   ): Promise<SimulationDatabaseState> {
     const currentState = await this.simulateParentMigrations(parent);
 
+    const ctx = this.mockContext(
+      failures,
+      createCorrelationSession({
+        schemas: parent.schemas,
+        seed: fnv1a32(parent.id),
+      }),
+    );
+
     // "always": keeps real parent seeds AND adds generated documents, so
     // both seeded and edge-case data get exercised. Session seed derives
     // from the migration id, so a simulation replays identically per run.
-    populateDeclaredBuckets(
-      currentState,
-      parent.schemas,
-      "always",
-      this.mockContext(
-        failures,
-        createCorrelationSession({
-          schemas: parent.schemas,
-          seed: fnv1a32(parent.id),
-        }),
-      ),
-    );
+    populateDeclaredBuckets(currentState, parent.schemas, "always", ctx);
+
+    // Instances MINTED BY the replayed ancestor operations are already
+    // "covered" for synthetic population — which only decides whether an
+    // instance should exist, never fills one. Without this top-up they reach
+    // the migration under validation empty, and every transform over an
+    // instance type validates zero documents. The propagated path gets this
+    // for free (validateMigration tops instances up after each ancestor);
+    // the standalone path has to ask.
+    if (parent.schemas.multiModels) {
+      populateExistingMultiModelInstances(
+        currentState,
+        parent.schemas.multiModels,
+        "ifSparse",
+        ctx,
+      );
+    }
 
     return currentState;
   }
