@@ -60,8 +60,14 @@ export interface ValidateMigrationsOptions {
   powerLevel?: SimulationPowerLevel;
 
   /**
-   * Only validate the last N migrations
-   * If not provided, all migrations are validated
+   * Only validate the last N migrations. If not provided, all migrations are
+   * validated.
+   *
+   * Literally only those N: the window is seeded from its first migration's
+   * PARENT SCHEMAS, and the earlier migrations are neither simulated nor
+   * reported on. A caller that then ACTS on the chain (applying it, say)
+   * owns the gap — see `migrateCommand`, which widens the window to cover
+   * every migration it is about to apply.
    */
   lastN?: number;
 
