@@ -686,7 +686,34 @@ export async function migrateCommand(
 
     // STEP 1: Validate ALL pending migrations BEFORE applying any
     const powerLevel = parseSimulationMode(opts.mode);
-    const lastN = opts.last && opts.last > 0 ? opts.last : undefined;
+    const requestedLastN = opts.last && opts.last > 0 ? opts.last : undefined;
+
+    // `--last N` narrows what gets validated, never what gets applied: STEP 4
+    // below applies every pending migration regardless. So the window is
+    // widened to cover them — nothing is ever applied to a real database
+    // without having been simulated first. Above that floor the flag still
+    // does its job: the migrations already in history stay out of the run,
+    // which is the whole point of asking for a window while iterating on a
+    // chantier migration.
+    // Measured from the EARLIEST pending migration, not from their count:
+    // `getPendingMigrations` filters rather than slices, so a hole in the
+    // history (a migration applied out of order) would leave a pending
+    // migration outside a count-sized window.
+    const pendingIds = new Set(pendingMigrations.map((m) => m.id));
+    const firstPendingIndex = allMigrations.findIndex((m) =>
+      pendingIds.has(m.id)
+    );
+    const lastN = requestedLastN !== undefined
+      ? Math.max(requestedLastN, allMigrations.length - firstPendingIndex)
+      : undefined;
+
+    if (lastN !== undefined && lastN !== requestedLastN) {
+      console.log(
+        dim(
+          `  --last ${requestedLastN} widened to ${lastN}: every pending migration is validated before it is applied`,
+        ),
+      );
+    }
 
     await validateMigrationsWithSimulation(allMigrations, {
       verbose: opts.verbose,
