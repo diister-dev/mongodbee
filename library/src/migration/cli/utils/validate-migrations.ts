@@ -22,6 +22,14 @@ import {
 } from "./warning-digest.ts";
 import { createStepReporter, type StepReporter } from "./step-reporter.ts";
 
+/**
+ * Result of simulating ONE migration.
+ *
+ * Only simulated migrations get one: a migration outside the `--last N`
+ * window is absent from the returned array rather than carried as a green
+ * entry, so "nothing was found" can never be read off something where
+ * nothing was looked for.
+ */
 export interface MigrationValidationResult {
   migration: MigrationDefinition;
   valid: boolean;
@@ -77,17 +85,24 @@ function counter(index: number, total: number): string {
   return `[${String(index).padStart(width)}/${total}]`;
 }
 
-/**
- * Display-only annotation for a migration that failed outside the `--last N`
- * window. It never enters `MigrationValidationResult.errors` — that array is
- * part of the consumed return contract.
- */
-const SKIPPED_RANGE_NOTE = "outside the --last N window";
-
 /** A failing migration plus an optional display-only annotation. */
 interface ReportedFailure {
   result: MigrationValidationResult;
   note?: string;
+}
+
+/**
+ * Thrown when a validated migration is invalid.
+ *
+ * Carries the per-migration results, which the run has already computed: a
+ * caller that catches the throw would otherwise be left with the message and
+ * no way to see WHICH migration failed on WHAT without re-running everything.
+ */
+export class MigrationValidationFailedError extends Error {
+  constructor(readonly results: MigrationValidationResult[]) {
+    super("Migration validation failed");
+    this.name = "MigrationValidationFailedError";
+  }
 }
 
 /**
@@ -135,8 +150,8 @@ function reportFailures(
  *
  * @param migrations - Migrations to validate
  * @param options - Validation options
- * @returns Array of validation results
- * @throws Error if any migration is invalid
+ * @returns Validation results for the migrations that were simulated
+ * @throws Error if any validated migration is invalid
  */
 export async function validateMigrationsWithSimulation(
   migrations: MigrationDefinition[],
@@ -145,13 +160,12 @@ export async function validateMigrationsWithSimulation(
   const { lastN, powerLevel = "normal" } = options;
 
   // Determine which migrations to validate based on lastN option
-  const migrationsToValidate = lastN && lastN > 0 && lastN < migrations.length
-    ? migrations.slice(-lastN)
+  const windowed = Boolean(lastN && lastN > 0 && lastN < migrations.length);
+  const migrationsToValidate = windowed
+    ? migrations.slice(-lastN!)
     : migrations;
 
-  const skippedMigrations = lastN && lastN > 0 && lastN < migrations.length
-    ? migrations.slice(0, -lastN)
-    : [];
+  const notValidated = windowed ? migrations.slice(0, -lastN!) : [];
 
   const modeLabel = powerLevel === "quick"
     ? "quick"
@@ -194,82 +208,25 @@ export async function validateMigrationsWithSimulation(
   const warningSources: WarningSource[] = [];
   const failures: ReportedFailure[] = [];
 
-  // Track current state to propagate between migrations (O(n) instead of O(n²))
-  let currentState: SimulationDatabaseState = createEmptyDatabaseState();
-
-  // Fast-forward through skipped migrations. We still run the full simulation
-  // (it is needed to propagate state), so its verdict is authoritative: a
-  // broken migration outside the --last N window is still broken and must NOT
-  // be hidden behind a green "all valid" banner. Only the *reporting detail*
-  // is reduced for skipped migrations, never the correctness gate.
-  if (skippedMigrations.length > 0) {
-    let skippedIndex = 0;
-    for (const migration of skippedMigrations) {
-      skippedIndex++;
-      // A fast-forward is NOT a skip: it runs the full simulation, because
-      // that is how the state reaches the --last N window. Drawing it as a
-      // one-shot label left `--last 2` frozen for 16.2s at a stretch — the
-      // very defect this reporter exists to answer, one call site over.
-      steps.start(
-        dim(
-          `  ⏭  fast-forward ${
-            counter(skippedIndex, skippedMigrations.length)
-          } ${migration.name}`,
-        ),
-      );
-      try {
-        const validationResult = await simulationValidator.validateMigration(
-          migration,
-          currentState,
-        );
-        if (validationResult.success) {
-          if (validationResult.data?.stateAfterMigration) {
-            currentState = simulationValidator.prepareStateForNextMigration(
-              validationResult.data
-                .stateAfterMigration as SimulationDatabaseState,
-              migration.schemas,
-            );
-          }
-          results.push({
-            migration,
-            valid: true,
-            errors: [],
-            warnings: ["Skipped (--last N mode)"],
-          });
-        } else {
-          allValid = false;
-          const result: MigrationValidationResult = {
-            migration,
-            valid: false,
-            errors: validationResult.errors,
-            warnings: validationResult.warnings,
-          };
-          results.push(result);
-          failures.push({ result, note: SKIPPED_RANGE_NOTE });
-          warningSources.push({
-            migrationId: migration.id,
-            warnings: validationResult.warnings,
-          });
-        }
-      } catch (error) {
-        allValid = false;
-        const errorMessage = error instanceof Error
-          ? error.message
-          : String(error);
-        const result: MigrationValidationResult = {
-          migration,
-          valid: false,
-          errors: [errorMessage],
-          warnings: [],
-        };
-        results.push(result);
-        failures.push({ result, note: SKIPPED_RANGE_NOTE });
-      }
-    }
-    steps.log(
-      dim(`  ⏭  ${skippedMigrations.length} migration(s) fast-forwarded`),
-    );
-  }
+  // The state the first validated migration starts from.
+  //
+  // Full chain: the empty database the root migration builds on.
+  //
+  // `--last N`: `undefined`, which sends `validateMigration` down
+  // SimulationValidator's standalone path — it reaches the window's entry
+  // state from the parent's DECLARED SCHEMAS (ancestor operations replayed on
+  // an empty database for the real seeds, then mock-populated) instead of
+  // running a full simulation per migration just to hand a state forward.
+  // Those simulations were the entire cost of the flag: `--last 1` used to be
+  // SLOWER than the full check it was meant to shortcut.
+  //
+  // The trade is the one the flag advertises: migrations outside the window
+  // are not validated at all, so they can no longer be reported either way —
+  // see `notValidated` below, and `migrate`, which never narrows the window
+  // below the set of migrations it is about to apply.
+  let currentState: SimulationDatabaseState | undefined = windowed
+    ? undefined
+    : createEmptyDatabaseState();
 
   let index = 0;
   for (const migration of migrationsToValidate) {
@@ -383,6 +340,9 @@ export async function validateMigrationsWithSimulation(
   if (invalidCount > 0) {
     steps.log(`  Invalid: ${red(bold(String(invalidCount)))}`);
   }
+  if (notValidated.length > 0) {
+    steps.log(`  Not validated: ${yellow(bold(String(notValidated.length)))}`);
+  }
   steps.log("");
 
   // Chain-invariant findings (an ambiguous identifier space, a reference
@@ -408,12 +368,30 @@ export async function validateMigrationsWithSimulation(
 
   if (!allValid) {
     reportFailures(steps, failures, results.length);
-    throw new Error("Migration validation failed");
+    throw new MigrationValidationFailedError(results);
   }
 
-  steps.log(
-    green(bold("✓ All migrations are valid and ready to apply!")),
-  );
+  // A windowed run has no opinion on the migrations it never simulated, so it
+  // must not borrow the full check's all-clear. Saying which ones were left
+  // out is the whole difference between a shortcut and a blind spot.
+  if (notValidated.length > 0) {
+    steps.log(
+      green(
+        bold(
+          `✓ The last ${results.length} migration(s) are valid and ready to apply!`,
+        ),
+      ),
+    );
+    steps.log(
+      yellow(
+        `  ${notValidated.length} earlier migration(s) were NOT validated — run without --last for the full chain.`,
+      ),
+    );
+  } else {
+    steps.log(
+      green(bold("✓ All migrations are valid and ready to apply!")),
+    );
+  }
 
   return results;
 }

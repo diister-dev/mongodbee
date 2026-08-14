@@ -163,13 +163,14 @@ Deno.test("check progress: state propagation gets its own in-flight line", async
   );
 });
 
-// Verrou — a `--last N` fast-forward is not a skip.
+// Verrou — a `--last N` run must not open silent.
 //
-// It runs the FULL simulation — that is how the state reaches the window —
-// but it was drawn as a one-shot label on the premise that it "lands
-// immediately". It does not: `check --last 2` on the owner's chain froze for
-// 16.2s at a stretch, the same defect as the main loop, one call site over.
-Deno.test("check progress: fast-forwarded migrations report progress too", async () => {
+// The per-migration fast-forward that used to precede the window is gone: the
+// window is seeded from the parent's schemas instead. That seeding runs INSIDE
+// the first migration's `validateMigration`, before its first operation — so
+// the only line on screen is that migration's own, and the mock engine has to
+// keep it fed or the command looks hung exactly where it used to.
+Deno.test("check progress: the --last N window reports while it seeds itself", async () => {
   const chunks: string[] = [];
   await validateMigrationsWithSimulation(chain(4), {
     tty: true,
@@ -178,30 +179,35 @@ Deno.test("check progress: fast-forwarded migrations report progress too", async
     lastN: 1,
   });
 
-  const fastForward = chunks.filter((c) =>
-    stripAnsiCode(c).includes("fast-forward")
-  );
-  assert(fastForward.length > 0, "no fast-forward line was drawn");
+  // Everything the reporter drew before the first verdict landed: on a
+  // windowed run that span IS the seeding, and it must not be silent.
+  const beforeFirstVerdict: string[] = [];
+  for (const chunk of chunks) {
+    const text = stripAnsiCode(chunk);
+    if (isCommitted(chunk) && /[✓✗]/.test(text)) break;
+    beforeFirstVerdict.push(text);
+  }
+  const seedNotes = beforeFirstVerdict
+    .map((c) => c.match(/ · ([^\r\n]+)/)?.[1]?.trim())
+    .filter((note): note is string => note !== undefined);
+
   assert(
-    fastForward.some((c) => stripAnsiCode(c).includes(" · ")),
-    `the fast-forward line says nothing while it works: ${
-      JSON.stringify(fastForward.map(stripAnsiCode))
+    seedNotes.length > 0,
+    `seeding the window says nothing while it works: ${
+      JSON.stringify(beforeFirstVerdict)
     }`,
   );
-  // The collapsed summary stays the only committed trace of the window.
-  assertEquals(
-    chunks.filter((c) =>
-      isCommitted(c) && stripAnsiCode(c).includes("fast-forward [")
-    ),
-    [],
-    "a per-migration fast-forward step must stay transient",
-  );
   assert(
-    chunks.some((c) =>
-      isCommitted(c) &&
-      stripAnsiCode(c).includes("3 migration(s) fast-forwarded")
+    seedNotes.some((n) =>
+      /^(harvesting|minting|mocking|covering|realizing)/.test(n)
     ),
-    "the collapsed summary must survive",
+    `the notes must name the seeding, got: ${JSON.stringify(seedNotes)}`,
+  );
+  // Nothing about the skipped migrations may be reported as work done.
+  assertEquals(
+    chunks.filter((c) => stripAnsiCode(c).includes("fast-forward")),
+    [],
+    "a fast-forward must not be reported — nothing is fast-forwarded any more",
   );
 });
 
