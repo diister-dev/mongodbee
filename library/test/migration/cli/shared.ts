@@ -188,3 +188,33 @@ export function extractMigrationName(fileName: string): string {
   const parts = withoutExt.split("@");
   return parts[1] || "";
 }
+
+/**
+ * Runs the migration CLI as a real subprocess.
+ *
+ * Some behaviour only exists in `main.ts` (exit codes, global option mapping)
+ * and is invisible to a test that calls a command function directly.
+ */
+export async function runCli(
+  cwd: string,
+  args: string[],
+): Promise<{ code: number; stderr: string; stdout: string }> {
+  // `--no-check`: these tests assert CLI wiring, not the type-health of the
+  // (possibly in-flight) tree.
+  const command = new Deno.Command("deno", {
+    args: [
+      "run",
+      "--no-check",
+      "-A",
+      `--config=${new URL("../../../deno.json", import.meta.url).pathname}`,
+      new URL("../../../src/migration/cli/main.ts", import.meta.url).href,
+      ...args,
+    ],
+    cwd,
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const { code, stdout, stderr } = await command.output();
+  const dec = new TextDecoder();
+  return { code, stdout: dec.decode(stdout), stderr: dec.decode(stderr) };
+}

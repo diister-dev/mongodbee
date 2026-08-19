@@ -19,6 +19,7 @@ import { historyCommand } from "./commands/history.ts";
 import { initCommand } from "./commands/init.ts";
 import { checkCommand } from "./commands/check.ts";
 import { syncCommand } from "./commands/sync.ts";
+import { baselineCommand } from "./commands/baseline.ts";
 
 import packageInfo from "../../../deno.json" with { type: "json" };
 
@@ -68,6 +69,11 @@ const commands = [
     handler: rollbackCommand,
   },
   {
+    name: "baseline",
+    description: "Record migrations as applied without running them",
+    handler: baselineCommand,
+  },
+  {
     name: "history",
     description: "Show migration operation history",
     handler: historyCommand,
@@ -93,6 +99,7 @@ ${yellow("COMMANDS:")}
   ${green("status")}    Show migration status
   ${green("history")}   Show migration operation history
   ${green("rollback")}  Rollback the last applied migration
+  ${green("baseline")}  Record migrations as applied without running them
 
 ${yellow("GLOBAL OPTIONS:")}
   -h, --help        Show this help message
@@ -120,6 +127,13 @@ ${yellow("MIGRATE OPTIONS:")}
   --progress        Force the live progress line (auto-detected on a TTY; use --no-progress to disable)
   -m, --mode        Simulation mode: quick, normal, hard (default: normal)
   -l, --last        Only validate the last N migrations
+  --target          Stop after this migration (id, name, or unambiguous
+                    substring); the later ones stay pending
+
+${yellow("BASELINE OPTIONS:")}
+  --target          Migration the database is already at, inclusive
+                    (default: the last one in the chain)
+  --force           Skip the confirmation
 
 ${yellow("ROLLBACK OPTIONS:")}
   --force           Skip all confirmations (use with caution!)
@@ -159,7 +173,7 @@ async function main(): Promise<void> {
     // command falls back to TTY auto-detection.
     negatable: ["progress"],
     default: { progress: undefined },
-    string: ["config", "env", "name", "mode"],
+    string: ["config", "env", "name", "mode", "target"],
     alias: {
       v: "version",
       h: "help",
@@ -186,8 +200,14 @@ async function main(): Promise<void> {
   }
 
   try {
+    // The flag is spelled `--config` but every command reads `configPath`.
+    // Mapping it here is what makes it a GLOBAL option: each command used to
+    // do the mapping itself, and only `migrate` actually did, so `--config`
+    // was silently ignored by the six others and they ran against whichever
+    // configuration file auto-discovery happened to find.
+    const commandOptions = { ...args, configPath: args.config };
     // deno-lint-ignore no-explicit-any
-    await cmd.handler(args as any);
+    await cmd.handler(commandOptions as any);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(red(bold("Error:")), message);

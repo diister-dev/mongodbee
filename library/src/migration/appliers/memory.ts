@@ -5,6 +5,7 @@ import type {
 } from "../types.ts";
 import {
   extractIdPrefix,
+  flowDocumentPrefix,
   flowScopeTargetId,
   flowTargetId,
   resolveSeedId,
@@ -20,6 +21,29 @@ const SUPPORTED_OPERATORS =
  * nested field access matches the same documents the MongoDB applier would.
  * Returns `undefined` for any missing segment.
  */
+/**
+ * The simulation bucket holding `name`, whichever kind of collection it is.
+ *
+ * A migration addresses a collection by its physical name, and MongoDB stores
+ * every kind in one namespace; the simulation splits them into three buckets.
+ * Resolving that in one place is what stops an operation from silently
+ * supporting only the first kind: `flow` looked its endpoints up in
+ * `collections` alone, so a target the builder had just accepted as "a plain
+ * collection, a multi-collection, or a scoped multi-collection" was refused by
+ * the validator while the mongodb applier wrote it without trouble.
+ *
+ * Returns `undefined` when the name is unknown, so each caller keeps deciding
+ * whether that is an error or a collection to create.
+ */
+function resolveStateCollection(
+  state: DatabaseState,
+  name: string,
+): { content: Record<string, unknown>[] } | undefined {
+  return state.collections[name] ??
+    state.multiCollections[name] ??
+    state.scopedMultiCollections[name];
+}
+
 function getFieldByPath(doc: Record<string, unknown>, path: string): unknown {
   if (!path.includes(".")) return doc[path];
   let current: unknown = doc;
@@ -640,13 +664,13 @@ export function createMemoryApplier(migration: MigrationDefinition) {
     },
     flow: {
       apply: (state, operation) => {
-        const src = state.collections[operation.from.collection];
+        const src = resolveStateCollection(state, operation.from.collection);
         if (!src) {
           throw new Error(
             `Flow source collection ${operation.from.collection} does not exist`,
           );
         }
-        const tgt = state.collections[operation.into.collection];
+        const tgt = resolveStateCollection(state, operation.into.collection);
         if (!tgt) {
           throw new Error(
             `Flow target collection ${operation.into.collection} does not exist`,
@@ -661,7 +685,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
         for (const doc of matched) {
           const mapped = operation.map({ ...doc }) as Record<string, unknown>;
           mapped._id = flowTargetId(
-            prefix,
+            flowDocumentPrefix(operation.targetIsTyped, prefix, mapped),
             migrationId,
             operation.from.collection,
             String(doc._id),
@@ -682,8 +706,8 @@ export function createMemoryApplier(migration: MigrationDefinition) {
             "Flow with source: 'consume' (move) is irreversible — cannot roll back",
           );
         }
-        const src = state.collections[operation.from.collection];
-        const tgt = state.collections[operation.into.collection];
+        const src = resolveStateCollection(state, operation.from.collection);
+        const tgt = resolveStateCollection(state, operation.into.collection);
         if (!src || !tgt) {
           throw new Error(`Flow collections missing for reverse`);
         }
@@ -694,7 +718,11 @@ export function createMemoryApplier(migration: MigrationDefinition) {
             .filter((doc) => matchesWhere(doc, operation.from.where))
             .map((doc) =>
               flowTargetId(
-                prefix,
+                flowDocumentPrefix(
+                  operation.targetIsTyped,
+                  prefix,
+                  operation.map({ ...doc }) as Record<string, unknown>,
+                ),
                 migrationId,
                 operation.from.collection,
                 String(doc._id),

@@ -32,6 +32,7 @@ import {
 } from "../multicollection-registry.ts";
 import {
   extractIdPrefix,
+  flowDocumentPrefix,
   flowScopeTargetId,
   flowTargetId,
   resolveSeedId,
@@ -1664,7 +1665,7 @@ export function createMongodbApplier(
           const mapped = docs.map((doc) => {
             const out = operation.map({ ...doc }) as Record<string, unknown>;
             out._id = flowTargetId(
-              prefix,
+              flowDocumentPrefix(operation.targetIsTyped, prefix, out),
               migration.id,
               operation.from.collection,
               String(doc._id),
@@ -1721,14 +1722,15 @@ export function createMongodbApplier(
             .toArray();
           if (docs.length === 0) break;
 
-          const ids = docs.map((doc) =>
-            flowTargetId(
-              prefix,
+          const ids = docs.map((doc) => {
+            const out = operation.map({ ...doc }) as Record<string, unknown>;
+            return flowTargetId(
+              flowDocumentPrefix(operation.targetIsTyped, prefix, out),
               migration.id,
               operation.from.collection,
               String(doc._id),
-            )
-          );
+            );
+          });
           await target.deleteMany(
             { _id: { $in: ids } } as Record<string, unknown>,
           );

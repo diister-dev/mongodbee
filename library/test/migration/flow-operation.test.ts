@@ -173,3 +173,242 @@ Deno.test("mongodb flow COPY: copies + reverses cleanly on a real DB", async () 
     assertEquals(await db.collection("users").countDocuments(), 3);
   });
 });
+
+// A flow whose TARGET is a multi-collection.
+//
+// The builder resolves the target's `_id` schema across plain, multi and scoped
+// buckets and documents all three as supported, but the simulation used to look
+// the target up in `collections` alone. A migration consolidating a standalone
+// collection into a sub-type of a multi-collection was therefore impossible to
+// validate, even though the mongodb applier writes it without trouble: it
+// addresses the physical collection, which is the same one in every case.
+//
+// Setting `_type` is the caller's job, through `map`, exactly as `flowToScope`
+// leaves it to `toType`.
+
+const MULTI_SCHEMAS = {
+  collections: {
+    legacy_passwords: {
+      _id: dbId("legacy_password"),
+      userId: v.string(),
+      hash: v.string(),
+    },
+  },
+  multiCollections: {
+    "+auth": {
+      auth_password: { userId: v.string(), hash: v.string() },
+    },
+  },
+};
+
+function intoMultiCollection(source: "keep" | "consume") {
+  return migrationDefinition("002", "passwords-into-auth", {
+    parent: migrationDefinition("001", "init", {
+      parent: null,
+      schemas: MULTI_SCHEMAS,
+      migrate: (b) => {
+        b.createCollection("legacy_passwords").end();
+        b.createMultiCollection("+auth");
+        return b.compile();
+      },
+    }),
+    schemas: MULTI_SCHEMAS,
+    migrate: (b) => {
+      return b.flow({
+        from: { collection: "legacy_passwords" },
+        into: { collection: "+auth" },
+        map: (doc) => ({ ...doc, _type: "auth_password" }),
+        source,
+      }).compile();
+    },
+  });
+}
+
+Deno.test("memory flow into a multi-collection: lands under the target's own bucket", async () => {
+  const state = createEmptyDatabaseState();
+  state.multiCollections["+auth"] = { content: [] };
+  state.collections.legacy_passwords = {
+    content: [
+      { _id: "legacy_password:1", userId: "user:1", hash: "h1" },
+      { _id: "legacy_password:2", userId: "user:2", hash: "h2" },
+    ],
+  };
+
+  const m = intoMultiCollection("consume");
+  const ops =
+    m.migrate(migrationBuilder({ schemas: MULTI_SCHEMAS })).operations;
+  const applier = createMemoryApplier(m);
+
+  await applier.applyMigration(state, ops, "up");
+
+  const landed = state.multiCollections["+auth"].content;
+  assertEquals(
+    landed.length,
+    2,
+    "both documents must reach the multi-collection",
+  );
+  assert(
+    landed.every((doc) => doc._type === "auth_password"),
+    "the discriminator the map set must survive the flow",
+  );
+  assertEquals(
+    state.collections.legacy_passwords.content.length,
+    0,
+    "a consume must empty the source",
+  );
+});
+
+Deno.test("memory flow into a multi-collection: a copy stays reversible", async () => {
+  const state = createEmptyDatabaseState();
+  state.multiCollections["+auth"] = { content: [] };
+  state.collections.legacy_passwords = {
+    content: [{ _id: "legacy_password:1", userId: "user:1", hash: "h1" }],
+  };
+
+  const m = intoMultiCollection("keep");
+  const ops =
+    m.migrate(migrationBuilder({ schemas: MULTI_SCHEMAS })).operations;
+  const applier = createMemoryApplier(m);
+
+  await applier.applyMigration(state, ops, "up");
+  assertEquals(state.multiCollections["+auth"].content.length, 1);
+
+  await applier.applyMigration(state, ops, "down");
+  assertEquals(
+    state.multiCollections["+auth"].content.length,
+    0,
+    "rolling back a copy must remove it from the multi-collection too",
+  );
+  assertEquals(state.collections.legacy_passwords.content.length, 1);
+});
+
+Deno.test("memory flow FROM a multi-collection: the source resolves the same way", async () => {
+  // The mirror of the target bug, and the reason the lookup is one named
+  // function rather than a chain repeated at each endpoint: the simulation read
+  // the SOURCE from `collections` alone too, so a flow out of a multi-collection
+  // was refused here while the mongodb applier read it fine.
+  const state = createEmptyDatabaseState();
+  state.multiCollections["+auth"] = {
+    content: [
+      {
+        _id: "auth_password:1",
+        _type: "auth_password",
+        userId: "user:1",
+        hash: "h1",
+      },
+    ],
+  };
+  state.collections.legacy_passwords = { content: [] };
+
+  const m = migrationDefinition("002", "auth-back-out", {
+    parent: migrationDefinition("001", "init", {
+      parent: null,
+      schemas: MULTI_SCHEMAS,
+      migrate: (b) => {
+        b.createCollection("legacy_passwords").end();
+        b.createMultiCollection("+auth");
+        return b.compile();
+      },
+    }),
+    schemas: MULTI_SCHEMAS,
+    migrate: (b) =>
+      b.flow({
+        from: { collection: "+auth" },
+        into: { collection: "legacy_passwords" },
+        map: ({ _type: _dropped, ...rest }) => rest,
+        source: "consume",
+      }).compile(),
+  });
+
+  const ops =
+    m.migrate(migrationBuilder({ schemas: MULTI_SCHEMAS })).operations;
+  await createMemoryApplier(m).applyMigration(state, ops, "up");
+
+  assertEquals(state.collections.legacy_passwords.content.length, 1);
+  assertEquals(state.multiCollections["+auth"].content.length, 0);
+});
+
+Deno.test("flow into a multi-collection: the minted _id carries the sub-type prefix", async () => {
+  // The regression this guards produced ids the WRITE accepted and every later
+  // READ rejected: a multi-collection derives `_id` from the sub-type name, so
+  // the sub-type entries declare no `_id` of their own, and the lookup that
+  // asked them for one silently yielded no prefix at all.
+  const state = createEmptyDatabaseState();
+  state.collections.legacy_passwords = {
+    content: [{ _id: "auth_password:01ABC", userId: "user:1", hash: "h1" }],
+  };
+
+  const m = migrationDefinition("002", "auth-consolidation", {
+    parent: migrationDefinition("001", "init", {
+      parent: null,
+      schemas: MULTI_SCHEMAS,
+      migrate: (b) => {
+        b.createCollection("legacy_passwords").end();
+        return b.compile();
+      },
+    }),
+    schemas: MULTI_SCHEMAS,
+    migrate: (b) => {
+      b.createMultiCollection("+auth");
+      return b.flow({
+        from: { collection: "legacy_passwords" },
+        into: { collection: "+auth" },
+        map: (doc: Record<string, unknown>) => ({
+          ...doc,
+          _type: "auth_password",
+        }),
+        source: "consume",
+      }).compile();
+    },
+  });
+
+  const ops =
+    m.migrate(migrationBuilder({ schemas: MULTI_SCHEMAS })).operations;
+  await createMemoryApplier(m).applyMigration(state, ops, "up");
+
+  const [moved] = state.multiCollections["+auth"].content;
+  assertEquals(moved._type, "auth_password");
+  assertEquals(
+    String(moved._id).startsWith("auth_password:"),
+    true,
+    `minted id must be namespaced by its sub-type, got ${moved._id}`,
+  );
+});
+
+Deno.test("flow into a multi-collection: a map that forgets _type is refused", async () => {
+  // Loudly, and before anything is written. Minting a bare id instead would put
+  // documents in place that only fail when something reads them back.
+  const state = createEmptyDatabaseState();
+  state.collections.legacy_passwords = {
+    content: [{ _id: "auth_password:01ABC", userId: "user:1", hash: "h1" }],
+  };
+
+  const m = migrationDefinition("002", "auth-untyped", {
+    parent: migrationDefinition("001", "init", {
+      parent: null,
+      schemas: MULTI_SCHEMAS,
+      migrate: (b) => {
+        b.createCollection("legacy_passwords").end();
+        return b.compile();
+      },
+    }),
+    schemas: MULTI_SCHEMAS,
+    migrate: (b) => {
+      b.createMultiCollection("+auth");
+      return b.flow({
+        from: { collection: "legacy_passwords" },
+        into: { collection: "+auth" },
+        map: (doc: Record<string, unknown>) => ({ ...doc }),
+        source: "keep",
+      }).compile();
+    },
+  });
+
+  const ops =
+    m.migrate(migrationBuilder({ schemas: MULTI_SCHEMAS })).operations;
+  await assertRejects(
+    () => createMemoryApplier(m).applyMigration(state, ops, "up"),
+    Error,
+    "_type",
+  );
+});

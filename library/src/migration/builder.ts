@@ -775,15 +775,21 @@ function createMigrationBuilder(
       const sourceDisposition = config.source ?? "keep";
       const irreversible = sourceDisposition === "consume";
       // The target may be a plain collection, a multi-collection, or a scoped
-      // multi-collection. Multi/scoped schemas are keyed by document type, so
-      // fall back to the first type's `_id` as the representative prefix source.
+      // multi-collection. Only a plain collection has ONE id prefix: a typed
+      // collection mints `<_type>:<id>` per sub-type, and the sub-type is a
+      // property of each mapped document. Reading the first sub-type's `_id`
+      // here answered for the whole operation and was wrong twice over: sub-type
+      // entries carry no `_id` (a multi-collection derives it from the type
+      // name), so the lookup yielded `undefined` and every flowed document was
+      // written with a bare, prefix-less id that the read validator then
+      // rejects. The applier derives the prefix per document instead.
       const targetName = config.into.collection;
-      const multiSchema = options.schemas?.multiCollections?.[targetName];
-      const scopedTypes = options.schemas?.scopedMultiCollections?.[targetName]
-        ?.types;
-      const targetIdSchema = options.schemas?.collections?.[targetName]?._id ??
-        (multiSchema ? Object.values(multiSchema)[0]?._id : undefined) ??
-        (scopedTypes ? Object.values(scopedTypes)[0]?._id : undefined);
+      const targetIsTyped = options.schemas?.multiCollections?.[targetName] !==
+          undefined ||
+        options.schemas?.scopedMultiCollections?.[targetName] !== undefined;
+      const targetIdSchema = targetIsTyped
+        ? undefined
+        : options.schemas?.collections?.[targetName]?._id;
 
       state.operations.push({
         type: "flow",
@@ -792,6 +798,7 @@ function createMigrationBuilder(
         map: config.map,
         sourceDisposition,
         targetIdSchema,
+        targetIsTyped,
         irreversible,
       });
 

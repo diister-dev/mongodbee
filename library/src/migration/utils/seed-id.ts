@@ -214,3 +214,33 @@ export function resolveSeedId(
   const prefix = extractIdPrefix(schemaIdField, fallbackPrefix);
   return deterministicSeedId(prefix, migrationId, opSignature, docIndex);
 }
+
+/**
+ * The id prefix a flowed document must carry, for either kind of target.
+ *
+ * A plain collection has one prefix for the whole operation; a multi-collection
+ * mints one id space per sub-type, so the prefix is the document's own `_type`.
+ * Refusing an untyped document rather than minting a bare id is deliberate: a
+ * prefix-less id is accepted by the write and rejected by every later read, so
+ * the damage only surfaces once the data is already in place.
+ *
+ * @param targetIsTyped - Whether the target discriminates documents by `_type`
+ * @param operationPrefix - Prefix derived from a plain target's `_id` schema
+ * @param doc - The mapped document about to be written
+ */
+export function flowDocumentPrefix(
+  targetIsTyped: boolean | undefined,
+  operationPrefix: string,
+  doc: Record<string, unknown>,
+): string {
+  if (!targetIsTyped) return operationPrefix;
+  const type = doc._type;
+  if (typeof type !== "string" || type === "") {
+    throw new Error(
+      "flow into a typed collection requires `map` to set `_type` on every " +
+        "document: the id prefix is the sub-type, and there is nothing to fall " +
+        "back to.",
+    );
+  }
+  return type;
+}

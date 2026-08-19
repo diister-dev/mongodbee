@@ -160,6 +160,31 @@ export async function markMigrationAsApplied(
 }
 
 /**
+ * Records a migration as applied WITHOUT it having been executed here.
+ *
+ * The operation an existing database needs when it is brought under migration
+ * control: its schema already sits at some point of the chain, and replaying
+ * the chain from the start against it would fail or corrupt it.
+ */
+export async function markMigrationAsAdopted(
+  db: Db,
+  migrationId: string,
+  name: string,
+): Promise<void> {
+  await recordOperation(
+    db,
+    migrationId,
+    name,
+    "applied",
+    undefined,
+    undefined,
+    {
+      adopted: true,
+    },
+  );
+}
+
+/**
  * Marks a migration as failed
  */
 export async function markMigrationAsFailed(

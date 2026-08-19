@@ -313,6 +313,14 @@ export type FlowRule = {
   sourceDisposition: "keep" | "consume";
   /** Target `_id` schema — used to derive the id prefix for generated ids. */
   targetIdSchema?: unknown;
+  /**
+   * Set when the target is a multi-collection or a scoped one, where the id
+   * prefix is the document's own `_type` rather than anything declarable per
+   * operation. A single `targetIdSchema` cannot answer for such a target: its
+   * sub-types each mint their own id space, and the sub-type is only known once
+   * `map` has run on a given document.
+   */
+  targetIsTyped?: boolean;
   irreversible?: boolean;
   lossy?: boolean;
 };

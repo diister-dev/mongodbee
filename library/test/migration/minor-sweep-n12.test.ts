@@ -58,7 +58,14 @@ Deno.test("N12c: no-prefix id is deterministic across calls", () => {
 // N12e — flow targetIdSchema resolution across schema buckets
 // ============================================================================
 
-Deno.test("N12e: flow into a multi-collection resolves targetIdSchema from multiCollections", () => {
+// These two used to assert that a typed target resolves ONE `targetIdSchema`,
+// taken from its first sub-type. That answer was only ever right by accident: a
+// multi-collection derives each sub-type's `_id` from the type name, so a
+// sub-type that declares none (the normal case) yielded `undefined` and every
+// flowed document was written with a bare, prefix-less id. The contract is now
+// that a typed target carries NO operation-wide id schema, and the applier reads
+// the prefix off each mapped document's `_type`.
+Deno.test("N12e: flow into a multi-collection defers the id prefix to each document", () => {
   const schemas = {
     collections: {
       source: { _id: v.string(), name: v.string() },
@@ -80,12 +87,15 @@ Deno.test("N12e: flow into a multi-collection resolves targetIdSchema from multi
 
   const op = state.operations.find((o) => o.type === "flow");
   assert(op && op.type === "flow", "expected a flow operation");
-  // The id schema must be found in the multiCollections bucket, so its prefix
-  // resolves to the (first) document type's `_id` prefix.
-  assertEquals(extractIdPrefix(op.targetIdSchema), "note");
+  assertEquals(op.targetIsTyped, true);
+  assertEquals(
+    op.targetIdSchema,
+    undefined,
+    "one schema cannot answer for a target whose sub-types each mint their own id space",
+  );
 });
 
-Deno.test("N12e: flow into a scoped multi-collection resolves targetIdSchema from scopedMultiCollections", () => {
+Deno.test("N12e: flow into a scoped multi-collection defers the id prefix too", () => {
   const schemas = {
     collections: {
       source: { _id: v.string(), name: v.string() },
@@ -110,10 +120,11 @@ Deno.test("N12e: flow into a scoped multi-collection resolves targetIdSchema fro
 
   const op = state.operations.find((o) => o.type === "flow");
   assert(op && op.type === "flow", "expected a flow operation");
-  assertEquals(extractIdPrefix(op.targetIdSchema), "scan");
+  assertEquals(op.targetIsTyped, true);
+  assertEquals(op.targetIdSchema, undefined);
 });
 
-Deno.test("N12e: flow into a plain collection still resolves from collections", () => {
+Deno.test("N12e: flow into a plain collection still resolves one prefix for the operation", () => {
   const schemas = {
     collections: {
       source: { _id: v.string() },

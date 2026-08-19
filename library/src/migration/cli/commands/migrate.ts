@@ -28,6 +28,7 @@ import { validateMigrationsWithSimulation } from "../utils/validate-migrations.t
 import type { SimulationPowerLevel } from "../../validators/simulation.ts";
 import { migrationBuilder } from "../../builder.ts";
 import { confirm } from "../utils/confirm.ts";
+import { resolveMigrationRef } from "../utils/resolve-ref.ts";
 import { createProgressReporter } from "../utils/progress.ts";
 import {
   detectInstancesNeedingCatchUp,
@@ -44,6 +45,7 @@ interface CliArgs {
   "auto-sync"?: boolean;
   mode?: string;
   last?: number;
+  target?: string;
   [key: string]: unknown;
 }
 
@@ -66,6 +68,11 @@ export interface MigrateCommandOptions {
    * Only validate the last N migrations
    */
   last?: number;
+  /**
+   * Stop after applying this migration, leaving the rest pending.
+   * Accepts an id, a name, or an unambiguous substring of either.
+   */
+  target?: string;
   /**
    * Render a live progress line during each migration's execution.
    * Defaults to auto-detection (on when stdout is a TTY).
@@ -111,6 +118,7 @@ export async function migrateCommand(
       autoSync: options.autoSync || cliArgs["auto-sync"],
       mode: options.mode || cliArgs.mode,
       last: options.last || cliArgs.last,
+      target: options.target || cliArgs.target,
     };
 
     // Load configuration
@@ -184,7 +192,29 @@ export async function migrateCommand(
     console.log(dim(`Applied migrations: ${appliedIds.length}`));
 
     // Calculate pending migrations
-    const pendingMigrations = getPendingMigrations(allMigrations, appliedIds);
+    let pendingMigrations = getPendingMigrations(allMigrations, appliedIds);
+
+    // `--target` stops the run part-way through the pending chain. Only ever a
+    // PREFIX of it: applying a migration while an earlier one stays pending
+    // would leave the database in a state that matches no point of the chain,
+    // and nothing downstream could describe where it stands. Validation is
+    // deliberately left untouched, so the deferred migrations are still
+    // simulated before anything is written.
+    let deferredCount = 0;
+    if (opts.target) {
+      const target = resolveMigrationRef(allMigrations, opts.target);
+      const targetIndex = pendingMigrations.findIndex((m) =>
+        m.id === target.id
+      );
+      if (targetIndex === -1) {
+        throw new Error(
+          `Migration ${target.id} (${target.name}) is not pending, it is already applied. ` +
+            `Nothing to do for --target ${opts.target}.`,
+        );
+      }
+      deferredCount = pendingMigrations.length - (targetIndex + 1);
+      pendingMigrations = pendingMigrations.slice(0, targetIndex + 1);
+    }
 
     if (pendingMigrations.length === 0) {
       console.log(green("✓ No pending migrations. Database is up to date."));
@@ -358,6 +388,13 @@ export async function migrateCommand(
     }
 
     console.log(yellow(`⚡ Pending migrations: ${pendingMigrations.length}`));
+    if (deferredCount > 0) {
+      console.log(
+        dim(
+          `  --target ${opts.target}: ${deferredCount} later migration(s) stay pending`,
+        ),
+      );
+    }
     console.log();
 
     // STEP 0: Check for multi-model instances needing catch-up

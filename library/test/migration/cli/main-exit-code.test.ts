@@ -11,10 +11,7 @@
 // would be just as useless as the bug.
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
-import { withTempDir } from "./shared.ts";
-
-const MAIN_URL = new URL("../../../src/migration/cli/main.ts", import.meta.url);
-const DENO_CONFIG = new URL("../../../deno.json", import.meta.url);
+import { runCli, withTempDir } from "./shared.ts";
 
 /** A chain whose declared schema contradicts `schemas.ts` — check must reject it. */
 async function writeDivergentChain(dir: string): Promise<void> {
@@ -41,30 +38,6 @@ async function writeDivergentChain(dir: string): Promise<void> {
       `  migrate(m) { m.createCollection("+t"); },\n` +
       `});\n`,
   );
-}
-
-async function runCli(
-  cwd: string,
-  args: string[],
-): Promise<{ code: number; stderr: string; stdout: string }> {
-  // `--no-check`: this asserts CLI exit wiring, not the type-health of the
-  // (possibly in-flight) tree.
-  const command = new Deno.Command("deno", {
-    args: [
-      "run",
-      "--no-check",
-      "-A",
-      `--config=${DENO_CONFIG.pathname}`,
-      MAIN_URL.href,
-      ...args,
-    ],
-    cwd,
-    stdout: "piped",
-    stderr: "piped",
-  });
-  const { code, stdout, stderr } = await command.output();
-  const dec = new TextDecoder();
-  return { code, stdout: dec.decode(stdout), stderr: dec.decode(stderr) };
 }
 
 Deno.test("cli: a failing `check` exits non-zero", async () => {
