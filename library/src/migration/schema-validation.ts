@@ -9,6 +9,7 @@
 
 import * as path from "@std/path";
 import { INDEX_SYMBOL } from "../indexes.ts";
+import { PRIVACY_SYMBOL } from "../privacy/metadata.ts";
 import type { MigrationDefinition, SchemasDefinition } from "./types.ts";
 import { pathToFileUrl } from "./utils/platform.ts";
 
@@ -147,13 +148,13 @@ export function simplifySchema(schema: any): any {
   // so it is structural and must survive simplification to participate in
   // snapshot comparisons. Other metadata (title, description, i18n) stays noise.
   if (CLEANUP_KINDS.includes(schema.kind)) {
+    const kept: Record<PropertyKey, unknown> = {};
     const indexMetadata = schema.metadata?.[INDEX_SYMBOL];
-    if (indexMetadata !== undefined) {
-      return {
-        kind: schema.kind,
-        type: schema.type,
-        metadata: { [INDEX_SYMBOL]: indexMetadata },
-      };
+    if (indexMetadata !== undefined) kept[INDEX_SYMBOL] = indexMetadata;
+    const privacyMetadata = schema.metadata?.[PRIVACY_SYMBOL];
+    if (privacyMetadata !== undefined) kept[PRIVACY_SYMBOL] = privacyMetadata;
+    if (Object.getOwnPropertySymbols(kept).length > 0) {
+      return { kind: schema.kind, type: schema.type, metadata: kept };
     }
     return undefined;
   }
@@ -201,6 +202,12 @@ function flattenSchema(schema: any): Record<string, any> {
   const indexMetadata = (schema as Record<PropertyKey, any>)[INDEX_SYMBOL];
   if (indexMetadata !== undefined) {
     result["@index"] = indexMetadata;
+  }
+  const privacyMetadata = (schema as Record<PropertyKey, any>)[PRIVACY_SYMBOL];
+  if (privacyMetadata !== undefined) {
+    for (const [k, val] of Object.entries(flattenSchema(privacyMetadata))) {
+      result[`@privacy.${k}`] = val;
+    }
   }
 
   const keys = Object.keys(schema);

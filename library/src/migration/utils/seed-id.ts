@@ -48,11 +48,19 @@ export function extractIdPrefix(
   }
 
   // 2. refId()/dbId(): parse the leading `^prefix:` of a regex validation.
-  const schema = schemaIdField as Record<string, unknown>;
   const pipes: unknown[] = [];
-  if (Array.isArray(schema.pipe)) pipes.push(...schema.pipe);
-  const wrapped = schema.wrapped as Record<string, unknown> | undefined;
-  if (wrapped && Array.isArray(wrapped.pipe)) pipes.push(...wrapped.pipe);
+  const collect = (node: unknown, depth: number) => {
+    if (depth > 6 || !node || typeof node !== "object") return;
+    const record = node as Record<string, unknown>;
+    if (Array.isArray(record.pipe)) {
+      for (const item of record.pipe) {
+        pipes.push(item);
+        if (item !== node) collect(item, depth + 1);
+      }
+    }
+    if (record.wrapped !== undefined) collect(record.wrapped, depth + 1);
+  };
+  collect(schemaIdField, 0);
 
   for (const entry of pipes) {
     const action = entry as Record<string, unknown>;
