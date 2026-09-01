@@ -49,6 +49,11 @@ import {
   type SimulationPowerLevel,
 } from "./mock/mod.ts";
 import { fnv1a32 } from "../utils/seed-id.ts";
+import {
+  deleteWarnings,
+  isDocumentDelete,
+  snapshotIds,
+} from "./delete-checks.ts";
 
 // Mock generation lives in ./mock/ — these stay re-exported here because
 // this file is their historical import path.
@@ -239,9 +244,17 @@ export class SimulationValidator implements MigrationValidator {
       for (let i = 0; i < operations.length; i++) {
         this.report(`applying operation ${i + 1}/${operations.length}`);
         const operation = operations[i];
+        const idsBefore = isDocumentDelete(operation)
+          ? snapshotIds(currentState)
+          : undefined;
         try {
           currentState = await applier.applyOperation(currentState, operation);
           appliedOperations++;
+          if (idsBefore) {
+            warnings.push(
+              ...deleteWarnings(i, operation, idsBefore, currentState),
+            );
+          }
         } catch (error) {
           const errorMessage = error instanceof Error
             ? error.message

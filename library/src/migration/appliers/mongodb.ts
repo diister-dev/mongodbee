@@ -573,6 +573,24 @@ export function createMongodbApplier(
    * transform uses `replaceOne` (the `_id` never changes), the `_id` cursor
    * advances monotonically and each document is processed exactly once.
    */
+  async function deleteDocuments(
+    collectionName: string,
+    filter: Record<string, unknown>,
+    operationType: MigrationRule["type"],
+  ): Promise<number> {
+    const reporter = makeReporter(
+      operationType,
+      collectionName,
+      await countForProgress(collectionName, filter),
+    );
+    const result = await db.collection(collectionName).deleteMany(
+      filter as Record<string, unknown>,
+    );
+    reporter.add(result.deletedCount);
+    reporter.done();
+    return result.deletedCount;
+  }
+
   async function transformDocuments(
     collectionName: string,
     filter: Record<string, unknown>,
@@ -2036,6 +2054,129 @@ export function createMongodbApplier(
         // Cannot restore deleted documents - this is irreversible
         throw new Error(
           `Cannot reverse delete_multicollection_type: operation is irreversible`,
+        );
+      },
+    },
+
+    delete_multicollection_documents: {
+      apply: async (operation) => {
+        if (
+          opts.strictValidation &&
+          !await collectionExists(operation.collectionName)
+        ) {
+          throw new Error(
+            `Multi-collection ${operation.collectionName} does not exist`,
+          );
+        }
+        await deleteDocuments(
+          operation.collectionName,
+          { $and: [operation.where, { _type: operation.documentType }] },
+          operation.type,
+        );
+      },
+      reverse: async (_operation) => {
+        throw new Error(
+          `Cannot reverse delete_multicollection_documents: operation is irreversible`,
+        );
+      },
+    },
+
+    delete_collection_documents: {
+      apply: async (operation) => {
+        if (
+          opts.strictValidation &&
+          !await collectionExists(operation.collectionName)
+        ) {
+          throw new Error(
+            `Collection ${operation.collectionName} does not exist`,
+          );
+        }
+        await deleteDocuments(
+          operation.collectionName,
+          operation.where,
+          operation.type,
+        );
+      },
+      reverse: async (_operation) => {
+        throw new Error(
+          `Cannot reverse delete_collection_documents: operation is irreversible`,
+        );
+      },
+    },
+
+    delete_multimodel_instance_documents: {
+      apply: async (operation) => {
+        if (
+          opts.strictValidation &&
+          !await multiCollectionInstanceExists(db, operation.collectionName)
+        ) {
+          throw new Error(
+            `Multi-model instance ${operation.collectionName} does not exist`,
+          );
+        }
+        await deleteDocuments(
+          operation.collectionName,
+          { $and: [operation.where, { _type: operation.documentType }] },
+          operation.type,
+        );
+      },
+      reverse: async (_operation) => {
+        throw new Error(
+          `Cannot reverse delete_multimodel_instance_documents: operation is irreversible`,
+        );
+      },
+    },
+
+    delete_multimodel_instances_documents: {
+      apply: async (operation) => {
+        const instances = await discoverMultiCollectionInstances(
+          db,
+          operation.modelType,
+        );
+        if (instances.length === 0) {
+          console.warn(
+            `No instances found for model type ${operation.modelType}`,
+          );
+          return;
+        }
+        for (const collectionName of instances) {
+          await deleteDocuments(
+            collectionName,
+            { $and: [operation.where, { _type: operation.documentType }] },
+            operation.type,
+          );
+        }
+      },
+      reverse: async (_operation) => {
+        throw new Error(
+          `Cannot reverse delete_multimodel_instances_documents: operation is irreversible`,
+        );
+      },
+    },
+
+    delete_scoped_multicollection_documents: {
+      apply: async (operation) => {
+        if (
+          opts.strictValidation &&
+          !await collectionExists(operation.collectionName)
+        ) {
+          throw new Error(
+            `Scoped multi-collection ${operation.collectionName} does not exist`,
+          );
+        }
+        const clauses: Record<string, unknown>[] = [
+          operation.where,
+          { _type: operation.documentType },
+        ];
+        if (operation.scopeFilter && operation.scopeFilter.length > 0) {
+          clauses.push({ _scope: { $in: [...operation.scopeFilter] } });
+        }
+        const filter: Record<string, unknown> = { $and: clauses };
+        await deleteDocuments(operation.collectionName, filter, operation.type);
+      },
+      reverse: async (_operation) => {
+        throw new Error(
+          `Cannot reverse delete_scoped_multicollection_documents: operation is irreversible`,
         );
       },
     },

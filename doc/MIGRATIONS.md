@@ -591,7 +591,20 @@ migrate(migration) {
 
 3. `MultiCollectionTypeBuilder`
    - `.transform({ up, down })` → transform documents (with version tracking)
+   - `.deleteWhere(where)` → delete the documents of the type matching `where` (irreversible)
    - `.end()` → back to `MultiCollectionBuilder`
+
+**Deleting documents by filter**: every builder that can `.transform()` documents can also `.deleteWhere(where)` them. The filter uses the same field operators the simulation supports (`$eq`, `$ne`, `$in`, `$nin`, `$gt`, `$gte`, `$lt`, `$lte`, `$exists`); the type discriminator (and the scope, for scoped multi-collections) is always added by the applier as an extra `$and` clause, so a filter cannot reach outside its type, and `_type` / `_scope` are refused inside `where` (restrict scopes with `scopeFilter`).
+
+| Builder | Operation |
+|---|---|
+| `.collection(name).deleteWhere(where)` | `delete_collection_documents` |
+| `.multiCollection(name).type(t).deleteWhere(where)` | `delete_multicollection_documents` |
+| `.scopedMultiCollection(name).type(t).deleteWhere(where, { scopeFilter })` | `delete_scoped_multicollection_documents` |
+| `.multiModelInstance(name, model).type(t).deleteWhere(where)` | `delete_multimodel_instance_documents` |
+| `.multiModelInstances(model).type(t).deleteWhere(where)` | `delete_multimodel_instances_documents` |
+
+A document deletion is irreversible: it marks the migration as such and rollback refuses it. The simulation adds two warnings around it: when the filter matched no simulated document (the deletion was not exercised), and when the deleted documents are still referenced elsewhere in the simulated state (the migration leaves dangling references).
 
 4. `MultiCollectionInstanceBuilder`
    - `.seedType(typeName, docs)` → seed data for a specific type

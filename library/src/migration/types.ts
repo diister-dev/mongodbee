@@ -268,6 +268,42 @@ export type DeleteScopedMultiCollectionTypeRule = {
   parentSchema?: SchemaContent;
 };
 
+export type DeleteMultiCollectionDocumentsRule = {
+  type: "delete_multicollection_documents";
+  collectionName: string;
+  documentType: string;
+  where: Record<string, unknown>;
+};
+
+export type DeleteCollectionDocumentsRule = {
+  type: "delete_collection_documents";
+  collectionName: string;
+  where: Record<string, unknown>;
+};
+
+export type DeleteMultiModelInstanceDocumentsRule = {
+  type: "delete_multimodel_instance_documents";
+  collectionName: string;
+  modelType: string;
+  documentType: string;
+  where: Record<string, unknown>;
+};
+
+export type DeleteMultiModelInstancesDocumentsRule = {
+  type: "delete_multimodel_instances_documents";
+  modelType: string;
+  documentType: string;
+  where: Record<string, unknown>;
+};
+
+export type DeleteScopedMultiCollectionDocumentsRule = {
+  type: "delete_scoped_multicollection_documents";
+  collectionName: string;
+  documentType: string;
+  where: Record<string, unknown>;
+  scopeFilter?: readonly string[];
+};
+
 /**
  * Rule for renaming a type in a multi-collection or multi-model
  *
@@ -427,6 +463,11 @@ export type MigrationRule =
   | DeleteMultiCollectionTypeRule
   | DeleteMultiModelInstancesTypeRule
   | DeleteScopedMultiCollectionTypeRule
+  | DeleteMultiCollectionDocumentsRule
+  | DeleteCollectionDocumentsRule
+  | DeleteMultiModelInstanceDocumentsRule
+  | DeleteMultiModelInstancesDocumentsRule
+  | DeleteScopedMultiCollectionDocumentsRule
   // Rename type
   | RenameMultiCollectionTypeRule
   | RenameMultiModelInstancesTypeRule
@@ -515,6 +556,7 @@ export interface CollectionBuilder {
    * @returns The collection builder for method chaining
    */
   transform(rule: TransformRule): CollectionBuilder;
+  deleteWhere(where: Record<string, unknown>): CollectionBuilder;
 
   /**
    * Finishes configuring this collection and returns to the main builder
@@ -559,6 +601,8 @@ export interface MultiCollectionTypeBuilder {
    */
   transform(rule: TransformRule): MultiCollectionTypeBuilder;
 
+  deleteWhere(where: Record<string, unknown>): MultiCollectionTypeBuilder;
+
   /**
    * Finishes configuring this type and returns to the multi-collection builder
    * @returns The multi-collection builder
@@ -580,6 +624,7 @@ export interface MultiModelInstanceTypeBuilder {
    * @returns The type builder for method chaining
    */
   transform(rule: TransformRule): MultiModelInstanceTypeBuilder;
+  deleteWhere(where: Record<string, unknown>): MultiModelInstanceTypeBuilder;
 
   /**
    * Finishes configuring this type and returns to the instance builder
@@ -602,6 +647,7 @@ export interface MultiModelInstancesTypeBuilder {
    * @returns The type builder for method chaining
    */
   transform(rule: TransformRule): MultiModelInstancesTypeBuilder;
+  deleteWhere(where: Record<string, unknown>): MultiModelInstancesTypeBuilder;
 
   /**
    * Finishes configuring this type and returns to the main builder
@@ -707,6 +753,10 @@ export interface ScopedMultiCollectionTypeBuilder {
    */
   transform(
     rule: TransformRule & { readonly scopeFilter?: readonly string[] },
+  ): ScopedMultiCollectionTypeBuilder;
+  deleteWhere(
+    where: Record<string, unknown>,
+    options?: { readonly scopeFilter?: readonly string[] },
   ): ScopedMultiCollectionTypeBuilder;
 
   /** Finishes configuring this type and returns to the scoped builder. */

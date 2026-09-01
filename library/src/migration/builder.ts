@@ -94,6 +94,21 @@ function createMigrationState(
 /**
  * Creates a collection builder with functional operations
  */
+function assertWhereKeys(
+  where: Record<string, unknown>,
+  reserved: readonly string[],
+  context: string,
+): void {
+  for (const key of reserved) {
+    if (key in where) {
+      throw new Error(
+        `${context}: "${key}" is not allowed in a deleteWhere filter; ` +
+          `the applier sets it from the builder (use scopeFilter to restrict scopes)`,
+      );
+    }
+  }
+}
+
 function createCollectionBuilder(
   state: MigrationState,
   collectionName: string,
@@ -150,6 +165,16 @@ function createCollectionBuilder(
         state.mark({ type: "lossy" });
       }
 
+      return builder;
+    },
+
+    deleteWhere(where) {
+      state.operations.push({
+        type: "delete_collection_documents",
+        collectionName,
+        where,
+      });
+      state.mark({ type: "irreversible" });
       return builder;
     },
 
@@ -230,6 +255,22 @@ function createMultiCollectionTypeBuilder(
         state.mark({ type: "lossy" });
       }
 
+      return builder;
+    },
+
+    deleteWhere(where) {
+      assertWhereKeys(
+        where,
+        ["_type"],
+        `multiCollection "${collectionName}" type "${documentType}"`,
+      );
+      state.operations.push({
+        type: "delete_multicollection_documents",
+        collectionName,
+        documentType,
+        where,
+      });
+      state.mark({ type: "irreversible" });
       return builder;
     },
 
@@ -447,6 +488,23 @@ function createMultiModelInstanceTypeBuilder(
       return builder;
     },
 
+    deleteWhere(where) {
+      assertWhereKeys(
+        where,
+        ["_type"],
+        `multiModelInstance "${collectionName}" type "${documentType}"`,
+      );
+      state.operations.push({
+        type: "delete_multimodel_instance_documents",
+        collectionName,
+        modelType,
+        documentType,
+        where,
+      });
+      state.mark({ type: "irreversible" });
+      return builder;
+    },
+
     end() {
       return parentBuilder;
     },
@@ -523,6 +581,22 @@ function createMultiModelInstancesTypeBuilder(
 
       return builder;
     },
+    deleteWhere(where) {
+      assertWhereKeys(
+        where,
+        ["_type"],
+        `multiModelInstances "${modelType}" type "${documentType}"`,
+      );
+      state.operations.push({
+        type: "delete_multimodel_instances_documents",
+        modelType,
+        documentType,
+        where,
+      });
+      state.mark({ type: "irreversible" });
+      return builder;
+    },
+
     end() {
       return parentBuilder;
     },
@@ -588,6 +662,23 @@ function createScopedMultiCollectionTypeBuilder(
       if (rule.irreversible) state.mark({ type: "irreversible" });
       if (rule.lossy) state.mark({ type: "lossy" });
 
+      return builder;
+    },
+
+    deleteWhere(where, options) {
+      assertWhereKeys(
+        where,
+        ["_type", "_scope"],
+        `scopedMultiCollection "${collectionName}" type "${documentType}"`,
+      );
+      state.operations.push({
+        type: "delete_scoped_multicollection_documents",
+        collectionName,
+        documentType,
+        where,
+        scopeFilter: options?.scopeFilter,
+      });
+      state.mark({ type: "irreversible" });
       return builder;
     },
 
@@ -950,7 +1041,12 @@ export function getIrreversibleOperations(
     ("irreversible" in op && op.irreversible === true) ||
     op.type === "delete_multicollection_type" ||
     op.type === "delete_multimodel_instances_type" ||
-    op.type === "delete_scoped_multicollection_type"
+    op.type === "delete_scoped_multicollection_type" ||
+    op.type === "delete_multicollection_documents" ||
+    op.type === "delete_collection_documents" ||
+    op.type === "delete_multimodel_instance_documents" ||
+    op.type === "delete_multimodel_instances_documents" ||
+    op.type === "delete_scoped_multicollection_documents"
   );
 }
 
@@ -1022,6 +1118,7 @@ export function getMigrationSummary(state: MigrationState): {
   creates: number;
   seeds: number;
   transforms: number;
+  deletes: number;
   totalOperations: number;
   isIrreversible: boolean;
   properties: Array<MigrationProperty["type"]>;
@@ -1030,6 +1127,7 @@ export function getMigrationSummary(state: MigrationState): {
     creates: 0,
     seeds: 0,
     transforms: 0,
+    deletes: 0,
     totalOperations: state.operations.length,
     isIrreversible: state.hasProperty("irreversible"),
     properties: state.properties.map((p) => p.type),
@@ -1045,6 +1143,16 @@ export function getMigrationSummary(state: MigrationState): {
         break;
       case "transform_collection":
         summary.transforms++;
+        break;
+      case "delete_collection_documents":
+      case "delete_multicollection_documents":
+      case "delete_multimodel_instance_documents":
+      case "delete_multimodel_instances_documents":
+      case "delete_scoped_multicollection_documents":
+      case "delete_multicollection_type":
+      case "delete_multimodel_instances_type":
+      case "delete_scoped_multicollection_type":
+        summary.deletes++;
         break;
     }
   }

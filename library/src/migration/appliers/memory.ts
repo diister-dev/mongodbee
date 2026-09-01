@@ -977,6 +977,112 @@ export function createMemoryApplier(migration: MigrationDefinition) {
         );
       },
     },
+    delete_multicollection_documents: {
+      apply: (state, operation) => {
+        const multiCollection =
+          state.multiCollections[operation.collectionName];
+        if (!multiCollection) {
+          throw new Error(
+            `Multi-collection ${operation.collectionName} does not exist`,
+          );
+        }
+        multiCollection.content = multiCollection.content.filter(
+          (doc) =>
+            doc._type !== operation.documentType ||
+            !matchesWhere(doc, operation.where),
+        );
+        return state;
+      },
+      reverse: (_state, _operation) => {
+        throw new Error(
+          `Cannot reverse delete_multicollection_documents: operation is irreversible`,
+        );
+      },
+    },
+    delete_collection_documents: {
+      apply: (state, operation) => {
+        const collection = state.collections[operation.collectionName];
+        if (!collection) {
+          throw new Error(
+            `Collection ${operation.collectionName} does not exist`,
+          );
+        }
+        collection.content = collection.content.filter(
+          (doc) => !matchesWhere(doc, operation.where),
+        );
+        return state;
+      },
+      reverse: (_state, _operation) => {
+        throw new Error(
+          `Cannot reverse delete_collection_documents: operation is irreversible`,
+        );
+      },
+    },
+    delete_multimodel_instance_documents: {
+      apply: (state, operation) => {
+        const instance = state.multiModels[operation.collectionName];
+        if (!instance) {
+          throw new Error(
+            `Multi-model instance ${operation.collectionName} does not exist`,
+          );
+        }
+        instance.content = instance.content.filter(
+          (doc) =>
+            doc._type !== operation.documentType ||
+            !matchesWhere(doc, operation.where),
+        );
+        return state;
+      },
+      reverse: (_state, _operation) => {
+        throw new Error(
+          `Cannot reverse delete_multimodel_instance_documents: operation is irreversible`,
+        );
+      },
+    },
+    delete_multimodel_instances_documents: {
+      apply: (state, operation) => {
+        for (const instance of Object.values(state.multiModels)) {
+          if (instance.modelType !== operation.modelType) continue;
+          instance.content = instance.content.filter(
+            (doc) =>
+              doc._type !== operation.documentType ||
+              !matchesWhere(doc, operation.where),
+          );
+        }
+        return state;
+      },
+      reverse: (_state, _operation) => {
+        throw new Error(
+          `Cannot reverse delete_multimodel_instances_documents: operation is irreversible`,
+        );
+      },
+    },
+    delete_scoped_multicollection_documents: {
+      apply: (state, operation) => {
+        const coll = state.scopedMultiCollections[operation.collectionName];
+        if (!coll) {
+          throw new Error(
+            `Scoped multi-collection ${operation.collectionName} does not exist`,
+          );
+        }
+        const scopeSet =
+          operation.scopeFilter && operation.scopeFilter.length > 0
+            ? new Set(operation.scopeFilter)
+            : null;
+        coll.content = coll.content.filter(
+          (doc) =>
+            doc._type !== operation.documentType ||
+            (scopeSet !== null && !scopeSet.has(doc._scope as string)) ||
+            !matchesWhere(doc, operation.where),
+        );
+        return state;
+      },
+      reverse: (_state, _operation) => {
+        throw new Error(
+          `Cannot reverse delete_scoped_multicollection_documents: operation is irreversible`,
+        );
+      },
+    },
     delete_multimodel_instances_type: {
       apply: (state, operation) => {
         const modelType = operation.modelType;
