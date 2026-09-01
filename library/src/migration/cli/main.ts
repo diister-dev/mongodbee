@@ -20,6 +20,9 @@ import { initCommand } from "./commands/init.ts";
 import { checkCommand } from "./commands/check.ts";
 import { syncCommand } from "./commands/sync.ts";
 import { baselineCommand } from "./commands/baseline.ts";
+import { classifyCommand } from "./commands/classify.ts";
+import { seedCommand } from "./commands/seed.ts";
+import { extractCommand } from "./commands/extract.ts";
 
 import packageInfo from "../../../deno.json" with { type: "json" };
 
@@ -78,6 +81,21 @@ const commands = [
     description: "Show migration operation history",
     handler: historyCommand,
   },
+  {
+    name: "classify",
+    description: "Report how the schemas classify personal data",
+    handler: classifyCommand,
+  },
+  {
+    name: "seed",
+    description: "Generate a scenario world at a migration step and write it",
+    handler: seedCommand,
+  },
+  {
+    name: "extract",
+    description: "Copy a database with personal data pseudonymised",
+    handler: extractCommand,
+  },
 ];
 
 /**
@@ -100,6 +118,11 @@ ${yellow("COMMANDS:")}
   ${green("history")}   Show migration operation history
   ${green("rollback")}  Rollback the last applied migration
   ${green("baseline")}  Record migrations as applied without running them
+  ${green("classify")}  Report how the schemas classify personal data
+  ${
+    green("seed")
+  }      Generate a scenario world at a migration step and write it
+  ${green("extract")}   Copy a database with personal data pseudonymised
 
 ${yellow("GLOBAL OPTIONS:")}
   -h, --help        Show this help message
@@ -139,6 +162,30 @@ ${yellow("ROLLBACK OPTIONS:")}
   --force           Skip all confirmations (use with caution!)
   --progress        Force the live progress line (auto-detected on a TTY; use --no-progress to disable)
 
+${yellow("CLASSIFY OPTIONS:")}
+  --at              Classify the schemas frozen in this migration instead of schemas.ts
+  --json            Print the plan as JSON
+
+${yellow("SEED OPTIONS:")}
+  --scenario        Scenario module exporting "scenario" (required)
+  --at              Migration step to seed at (default: the last one)
+  --uri, --db       Target database (default: the configured one); must be empty
+  --dry-run         Generate and check the world without writing
+  --force           Write even if the oracle fails or the database is not empty
+  --json            Print the report as JSON
+
+${yellow("EXTRACT OPTIONS:")}
+  --from, --from-db Source database (default: the configured one)
+  --to, --to-db     Target database; must be empty and differ from the source
+  --from-migration  Migration the source is at; later ones are replayed in memory first
+  --secret          Pseudonymisation secret, or env:NAME (default: random, discarded)
+  --consistency     person | relationship | transaction (default: relationship)
+  --shift-days      Shift every date and ulid timestamp by N days
+  --scope           Only extract this scope of the scoped collections
+  --allow-unknown   Proceed with UNKNOWN paths (they are dropped)
+  --dry-run         Read and transform without writing
+  --json            Print the summary as JSON
+
 ${yellow("SYNC OPTIONS:")}
   --force           Sync even if pending migrations exist (not recommended)
   --verbose         Show detailed schema information
@@ -167,13 +214,34 @@ async function main(): Promise<void> {
       "check-indexes",
       "validate",
       "progress",
+      "json",
+      "allow-unknown",
     ],
     // `progress` stays tri-state: `--progress` forces the live line on,
     // `--no-progress` forces it off, and omitting it leaves `undefined` so the
     // command falls back to TTY auto-detection.
     negatable: ["progress"],
     default: { progress: undefined },
-    string: ["config", "env", "name", "mode", "target"],
+    string: [
+      "config",
+      "env",
+      "name",
+      "mode",
+      "target",
+      "scenario",
+      "at",
+      "uri",
+      "db",
+      "from",
+      "from-db",
+      "to",
+      "to-db",
+      "secret",
+      "consistency",
+      "shift-days",
+      "scope",
+      "from-migration",
+    ],
     alias: {
       v: "version",
       h: "help",
