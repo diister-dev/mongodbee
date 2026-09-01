@@ -23,6 +23,8 @@
     "./ids": "./src/ids.ts",
     "./indexes": "./src/indexes.ts",
     "./schema-navigator": "./src/schema-navigator.ts",
+    "./privacy": "./src/privacy/mod.ts",
+    "./scenario": "./src/scenario/mod.ts",
     "./types": "./src/types.ts",
     "./migration": "./src/migration/mod.ts",
     "./migration/cli": "./src/migration/cli/mod.ts",
@@ -41,7 +43,7 @@
     }
   },
   "tasks": {
-    "check": "deno check mod.ts schema.ts session.ts telemetry.ts src/ids.ts src/indexes.ts src/schema-navigator.ts src/types.ts src/migration/mod.ts src/migration/cli/mod.ts src/migration/cli/bin.ts",
+    "check": "deno check mod.ts schema.ts session.ts telemetry.ts src/ids.ts src/indexes.ts src/schema-navigator.ts src/privacy/mod.ts src/scenario/mod.ts src/types.ts src/migration/mod.ts src/migration/cli/mod.ts src/migration/cli/bin.ts",
     "lint": "deno lint",
     "fmt:check": "deno fmt --check",
     "test": "deno test -A --parallel --quiet",

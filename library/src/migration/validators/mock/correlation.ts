@@ -362,13 +362,30 @@ function createIdPools() {
     return pools.get(space)?.get(scope ?? GLOBAL)?.list ?? [];
   }
 
+  function anyScope(space: string): readonly string[] {
+    const scopes = pools.get(space);
+    if (!scopes) return [];
+    const merged: string[] = [];
+    for (const [key, e] of scopes) {
+      if (key !== GLOBAL) merged.push(...e.list);
+    }
+    return merged;
+  }
+
   function draw(
     space: string,
     scope: string | null,
     pickIndex: (length: number) => number,
   ): string | undefined {
     const scoped = scope !== null ? listOf(space, scope) : [];
-    const list = scoped.length > 0 ? scoped : listOf(space, null);
+    const global = listOf(space, null);
+    const list = scoped.length > 0
+      ? scoped
+      : global.length > 0
+      ? global
+      : scope === null
+      ? anyScope(space)
+      : [];
     if (list.length === 0) return undefined;
     return list[pickIndex(list.length)];
   }
@@ -410,6 +427,8 @@ export interface CorrelationSessionOptions {
    * noise, never a silent gap.
    */
   uncorrelatedSpaces?: readonly string[];
+
+  mintId?: (space: string, index: number, attempt: number) => string;
 }
 
 /** A mint request for one populate target (see {@link CorrelationSession.mintIds}). */
@@ -624,8 +643,12 @@ export function createCorrelationSession(
     const n = bump(`mint:${space}`);
     let value = "";
     for (let attempt = 0; attempt < 8; attempt++) {
-      const seed = fnv1a32(`${baseSeed}|mint|${space}|${n}|${attempt}`);
-      value = String(generateMockScopeValue(refId(space), { seed }));
+      if (options.mintId) {
+        value = options.mintId(space, n, attempt);
+      } else {
+        const seed = fnv1a32(`${baseSeed}|mint|${space}|${n}|${attempt}`);
+        value = String(generateMockScopeValue(refId(space), { seed }));
+      }
       if (!set.has(value)) break;
     }
     set.add(value);
@@ -821,6 +844,10 @@ export function createCorrelationSession(
       }
     }
     while (scopes.length < count) {
+      if (space && options.mintId) {
+        scopes.push(mintFreshId(space));
+        continue;
+      }
       const n = bump(`scope:${collection}`);
       let value = "";
       for (let attempt = 0; attempt < 8; attempt++) {
