@@ -37,6 +37,7 @@ import {
   flowTargetId,
   resolveSeedId,
 } from "../utils/seed-id.ts";
+import { createLiveTransformContext } from "../utils/transform-context.ts";
 import { getIrreversibleOperations } from "../builder.ts";
 import { scopedMultiCollection } from "../../scoped-multi-collection.ts";
 import { getSessionContext } from "../../session.ts";
@@ -147,6 +148,7 @@ export function createMongodbApplier(
   setCurrentMigrationId: (migrationId: string) => void;
 } {
   const opts = { ...DEFAULT_OPTIONS, ...options };
+  const context = createLiveTransformContext(migration.id);
 
   // Track which multi-model instances have been recorded for this migration
   // to avoid duplicate recordings when multiple operations target the same instance
@@ -1434,9 +1436,7 @@ export function createMongodbApplier(
         await transformDocuments(
           operation.collectionName,
           {},
-          operation.up as (
-            doc: Record<string, unknown>,
-          ) => Record<string, unknown>,
+          (doc: Record<string, unknown>) => operation.up(doc, context),
           operation.type,
         );
       },
@@ -1455,9 +1455,7 @@ export function createMongodbApplier(
         await transformDocuments(
           operation.collectionName,
           {},
-          operation.down as (
-            doc: Record<string, unknown>,
-          ) => Record<string, unknown>,
+          (doc: Record<string, unknown>) => operation.down(doc, context),
         );
       },
     },
@@ -1475,9 +1473,7 @@ export function createMongodbApplier(
         await transformDocuments(
           operation.collectionName,
           { _type: operation.documentType } as Record<string, unknown>,
-          operation.up as (
-            doc: Record<string, unknown>,
-          ) => Record<string, unknown>,
+          (doc: Record<string, unknown>) => operation.up(doc, context),
           operation.type,
         );
       },
@@ -1496,9 +1492,7 @@ export function createMongodbApplier(
         await transformDocuments(
           operation.collectionName,
           { _type: operation.documentType } as Record<string, unknown>,
-          operation.down as (
-            doc: Record<string, unknown>,
-          ) => Record<string, unknown>,
+          (doc: Record<string, unknown>) => operation.down(doc, context),
         );
       },
     },
@@ -1516,9 +1510,7 @@ export function createMongodbApplier(
         await transformDocuments(
           operation.collectionName,
           { _type: operation.documentType } as Record<string, unknown>,
-          operation.up as (
-            doc: Record<string, unknown>,
-          ) => Record<string, unknown>,
+          (doc: Record<string, unknown>) => operation.up(doc, context),
           operation.type,
         );
       },
@@ -1537,9 +1529,7 @@ export function createMongodbApplier(
         await transformDocuments(
           operation.collectionName,
           { _type: operation.documentType } as Record<string, unknown>,
-          operation.down as (
-            doc: Record<string, unknown>,
-          ) => Record<string, unknown>,
+          (doc: Record<string, unknown>) => operation.down(doc, context),
         );
       },
     },
@@ -1578,9 +1568,7 @@ export function createMongodbApplier(
           await transformDocuments(
             collectionName,
             { _type: operation.documentType } as Record<string, unknown>,
-            operation.up as (
-              doc: Record<string, unknown>,
-            ) => Record<string, unknown>,
+            (doc: Record<string, unknown>) => operation.up(doc, context),
             operation.type,
           );
 
@@ -1612,9 +1600,7 @@ export function createMongodbApplier(
           await transformDocuments(
             collectionName,
             { _type: operation.documentType } as Record<string, unknown>,
-            operation.down as (
-              doc: Record<string, unknown>,
-            ) => Record<string, unknown>,
+            (doc: Record<string, unknown>) => operation.down(doc, context),
           );
 
           // Record rollback for this instance (only once per migration, even if multiple operations)
@@ -2219,9 +2205,7 @@ export function createMongodbApplier(
           operation.collectionName,
           filter,
           repinScopedDiscriminators(
-            operation.up as (
-              doc: Record<string, unknown>,
-            ) => Record<string, unknown>,
+            (doc: Record<string, unknown>) => operation.up(doc, context),
           ),
           operation.type,
         );
@@ -2240,9 +2224,7 @@ export function createMongodbApplier(
           operation.collectionName,
           filter,
           repinScopedDiscriminators(
-            operation.down as (
-              doc: Record<string, unknown>,
-            ) => Record<string, unknown>,
+            (doc: Record<string, unknown>) => operation.down(doc, context),
           ),
         );
       },

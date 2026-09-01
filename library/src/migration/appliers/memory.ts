@@ -10,6 +10,7 @@ import {
   flowTargetId,
   resolveSeedId,
 } from "../utils/seed-id.ts";
+import { createDeterministicTransformContext } from "../utils/transform-context.ts";
 import { getIrreversibleOperations } from "../builder.ts";
 
 /** Field-level `where` operators the simulation understands. */
@@ -182,6 +183,7 @@ function matchesWhere(
 
 export function createMemoryApplier(migration: MigrationDefinition) {
   const migrationId = migration?.id ?? "unknown";
+  const context = createDeterministicTransformContext(migrationId);
 
   /**
    * Resolve the `_id` for a seed document: honour an explicit `_id`,
@@ -528,10 +530,8 @@ export function createMemoryApplier(migration: MigrationDefinition) {
             `Collection ${operation.collectionName} does not exist`,
           );
         }
-        collection.content = collection.content.map(
-          operation.up as (
-            doc: Record<string, unknown>,
-          ) => Record<string, unknown>,
+        collection.content = collection.content.map((doc) =>
+          operation.up(doc, context)
         );
         return state;
       },
@@ -545,10 +545,8 @@ export function createMemoryApplier(migration: MigrationDefinition) {
             `Collection ${operation.collectionName} does not exist`,
           );
         }
-        collection.content = collection.content.map(
-          operation.down as (
-            doc: Record<string, unknown>,
-          ) => Record<string, unknown>,
+        collection.content = collection.content.map((doc) =>
+          operation.down(doc, context)
         );
         return state;
       },
@@ -564,7 +562,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
         }
         multiCollection.content = multiCollection.content.map((doc) => {
           if (doc._type === operation.documentType) {
-            return operation.up(doc as Record<string, unknown>);
+            return operation.up(doc as Record<string, unknown>, context);
           }
           return doc;
         });
@@ -583,7 +581,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
         }
         multiCollection.content = multiCollection.content.map((doc) => {
           if (doc._type === operation.documentType) {
-            return operation.down(doc as Record<string, unknown>);
+            return operation.down(doc as Record<string, unknown>, context);
           }
           return doc;
         });
@@ -600,7 +598,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
         }
         multiCollection.content = multiCollection.content.map((doc) => {
           if (doc._type === operation.documentType) {
-            return operation.up(doc as Record<string, unknown>);
+            return operation.up(doc as Record<string, unknown>, context);
           }
           return doc;
         });
@@ -618,7 +616,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
         }
         multiCollection.content = multiCollection.content.map((doc) => {
           if (doc._type === operation.documentType) {
-            return operation.down(doc as Record<string, unknown>);
+            return operation.down(doc as Record<string, unknown>, context);
           }
           return doc;
         });
@@ -634,7 +632,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           if (instance.modelType === modelType) {
             instance.content = instance.content.map((doc) => {
               if (doc._type === operation.documentType) {
-                return operation.up(doc as Record<string, unknown>);
+                return operation.up(doc as Record<string, unknown>, context);
               }
               return doc;
             });
@@ -653,7 +651,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           if (instance.modelType === modelType) {
             instance.content = instance.content.map((doc) => {
               if (doc._type === operation.documentType) {
-                return operation.down(doc as Record<string, unknown>);
+                return operation.down(doc as Record<string, unknown>, context);
               }
               return doc;
             });
@@ -1140,7 +1138,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
             (!scopeSet || scopeSet.has(doc._scope as string))
           ) {
             return {
-              ...operation.up(doc as Record<string, unknown>),
+              ...operation.up(doc as Record<string, unknown>, context),
               _type: doc._type,
               _scope: doc._scope,
               _id: doc._id,
@@ -1170,7 +1168,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
             (!scopeSet || scopeSet.has(doc._scope as string))
           ) {
             return {
-              ...operation.down(doc as Record<string, unknown>),
+              ...operation.down(doc as Record<string, unknown>, context),
               _type: doc._type,
               _scope: doc._scope,
               _id: doc._id,

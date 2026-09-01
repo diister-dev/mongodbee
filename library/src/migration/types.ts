@@ -122,8 +122,8 @@ export type TransformCollectionRule<
 > = {
   type: "transform_collection";
   collectionName: string;
-  up: (doc: T) => U;
-  down: (doc: U) => T;
+  up: (doc: T, context: MigrationTransformContext) => U;
+  down: (doc: U, context: MigrationTransformContext) => T;
   schema: SchemaContent;
   parentSchema?: SchemaContent;
   /** Marks this transformation as irreversible (cannot be rolled back) */
@@ -139,8 +139,8 @@ export type TransformMultiCollectionTypeRule<
   type: "transform_multicollection_type";
   collectionName: string;
   documentType: string;
-  up: (doc: T) => U;
-  down: (doc: U) => T;
+  up: (doc: T, context: MigrationTransformContext) => U;
+  down: (doc: U, context: MigrationTransformContext) => T;
   schema: SchemaContent;
   parentSchema?: SchemaContent;
   /** Marks this transformation as irreversible (cannot be rolled back) */
@@ -164,8 +164,8 @@ export type TransformScopedMultiCollectionTypeRule<
   type: "transform_scoped_multicollection_type";
   collectionName: string;
   documentType: string;
-  up: (doc: T) => U;
-  down: (doc: U) => T;
+  up: (doc: T, context: MigrationTransformContext) => U;
+  down: (doc: U, context: MigrationTransformContext) => T;
   schema: SchemaContent;
   parentSchema?: SchemaContent;
   /** Restrict the transform to a subset of scope values. Empty/absent = all scopes. */
@@ -184,8 +184,8 @@ export type TransformMultiModelInstanceTypeRule<
   collectionName: string;
   modelType: string;
   documentType: string;
-  up: (doc: T) => U;
-  down: (doc: U) => T;
+  up: (doc: T, context: MigrationTransformContext) => U;
+  down: (doc: U, context: MigrationTransformContext) => T;
   schema: SchemaContent;
   parentSchema?: SchemaContent;
   /** Marks this transformation as irreversible (cannot be rolled back) */
@@ -201,8 +201,8 @@ export type TransformMultiModelInstancesTypeRule<
   type: "transform_multimodel_instances_type";
   modelType: string;
   documentType: string;
-  up: (doc: T) => U;
-  down: (doc: U) => T;
+  up: (doc: T, context: MigrationTransformContext) => U;
+  down: (doc: U, context: MigrationTransformContext) => T;
   schema: SchemaContent;
   parentSchema?: SchemaContent;
   /** Marks this transformation as irreversible (cannot be rolled back) */
@@ -449,9 +449,9 @@ export type TransformRule<
   U = Record<string, any>,
 > = {
   /** Function to transform from old to new format */
-  readonly up: (doc: T) => U;
+  readonly up: (doc: T, context: MigrationTransformContext) => U;
   /** Function to transform from new to old format */
-  readonly down: (doc: U) => T;
+  readonly down: (doc: U, context: MigrationTransformContext) => T;
   /**
    * Marks this transformation as irreversible
    * Use when the migration cannot be rolled back (no valid down() function)
@@ -981,6 +981,12 @@ export interface MigrationApplier {
    * @param operation - The migration operation to reverse
    */
   applyReverseOperation(operation: MigrationRule): Promise<void> | void;
+}
+
+export interface MigrationTransformContext {
+  readonly migrationId: string;
+  newId(): string;
+  now(): Date;
 }
 
 type StateCollectionContent = { content: Record<string, unknown>[] };
