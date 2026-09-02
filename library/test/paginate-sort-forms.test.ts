@@ -122,6 +122,7 @@ Deno.test("paginate sort forms: every m.Sort shape orders as the driver would", 
 Deno.test("paginate sort forms: shared normalization reaches the scoped surface", async () => {
   await withDatabase("paginate-sort-forms-scoped", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: { item: { name: v.string() } },
     });

@@ -121,6 +121,7 @@ Deno.test("anchor not found: multiCollection silently restarts (valid prefix, gh
 Deno.test("anchor not found: scoped throws — the one surface that fails loud", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: { item: { n: v.number() } },
     });

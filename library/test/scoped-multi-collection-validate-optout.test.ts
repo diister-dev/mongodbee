@@ -13,6 +13,7 @@ const EXPO = "exposition:validateoptout";
 Deno.test("validate:false returns the same docs as the validated read (transform-free schema)", async () => {
   await withDatabase("smc-validate-optout", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: { artwork: { title: v.string(), year: v.number() } },
       allowUnscoped: true,
@@ -43,6 +44,7 @@ Deno.test("validate:false returns the same docs as the validated read (transform
 Deno.test("validate:false works on findAny and the multi-scope view", async () => {
   await withDatabase("smc-validate-optout-any", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: { artwork: { title: v.string() }, artist: { name: v.string() } },
       allowUnscoped: true,

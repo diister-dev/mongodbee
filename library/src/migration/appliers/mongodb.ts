@@ -516,6 +516,7 @@ export function createMongodbApplier(
             scope: scopedSchema.scope,
             // deno-lint-ignore no-explicit-any
             types: scopedSchema.types as any,
+            schemaManagement: "auto",
           });
         }
       }
@@ -2276,6 +2277,7 @@ export function createMongodbApplier(
           scope: operation.schema.scope,
           // deno-lint-ignore no-explicit-any
           types: operation.schema.types as any,
+          schemaManagement: "auto",
         });
       },
       reverse: async (operation) => {

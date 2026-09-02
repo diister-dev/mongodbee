@@ -220,6 +220,7 @@ Deno.test("paginate conformance (multiCollection): mixed-direction multi-key, bo
 Deno.test("paginate conformance (scoped): mixed-direction multi-key, both directions, positions exact", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         participant: {
@@ -250,6 +251,7 @@ Deno.test("paginate conformance (scoped): mixed-direction multi-key, both direct
 Deno.test("paginate conformance (scoped sortPipeline): mixed-direction joined+own keys, positions exact, backward round-trip", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         participant: {

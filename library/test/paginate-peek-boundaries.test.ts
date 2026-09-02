@@ -263,6 +263,7 @@ Deno.test("peek: multi surface, two _types sharing an optional field", async (t)
 Deno.test("peek: scoped surface across the null boundary", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: { item: { w: v.optional(v.number()) } },
     });

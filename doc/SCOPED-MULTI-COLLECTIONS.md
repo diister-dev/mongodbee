@@ -347,6 +347,24 @@ detected (by name prefix _and_ the `_type` partial-filter signature) and
 dropped, while user-created custom indexes and the bare `_type_1` index are
 preserved.
 
+## Schema management
+
+`scopedMultiCollection()` follows the same `runtime.schemaManagement` setting as
+`collection()` and `multiCollection()`:
+
+- `"managed"` (the default): initialisation never issues DDL. The validator and
+  the scoped indexes are owned by migrations, which apply them through the
+  migration applier. The application account only needs `readWrite`; in
+  particular it never runs `collMod`, an action the built-in `readWrite` role
+  does not grant.
+- `"auto"`: initialisation creates the collection with its validator, or updates
+  the validator when the stored one differs, and reconciles the scoped indexes.
+  Meant for development, where no migration is written yet.
+
+The per-collection `schemaManagement` option overrides the global setting for
+one catalog (`"auto"`, `"managed"`, or `"inherit"`, the default). Initialisation
+inside an active session never issues DDL, whatever the mode.
+
 ## See also
 
 - [README — Scoped Multi-Collections](../README.md#-scoped-multi-collections) —

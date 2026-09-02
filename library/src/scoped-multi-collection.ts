@@ -31,6 +31,7 @@ import { dirtyEquivalent } from "./utils/object.ts";
 import { createLogger } from "./utils/logger.ts";
 import { applyScopedMultiCollectionIndexes } from "./indexes-applier.ts";
 import { mongoOperationQueue } from "./operation.ts";
+import { isSchemaManaged } from "./runtime-config.ts";
 import {
   createOperationTracer,
   errorWithSafeMessage,
@@ -94,6 +95,13 @@ export type ScopedMultiCollectionConfig<
   allowUnscoped?: boolean;
   /** Opt-in OpenTelemetry tracing for this collection's operations. */
   telemetry?: TelemetryOptions;
+  /**
+   * Override global schema management for this collection
+   * - "auto": Apply validators/indexes automatically
+   * - "managed": Skip auto-apply (migrations handle this)
+   * - "inherit": Use global runtime config (default)
+   */
+  schemaManagement?: "auto" | "managed" | "inherit";
 };
 
 // -------- Per-type schema augmentation -----------------------------------
@@ -608,11 +616,19 @@ export async function scopedMultiCollection<
     {} as Record<string, v.BaseSchema<any, any, any>>,
   );
 
-  await applyValidator(db, collectionName, storageUnion);
-
   // deno-lint-ignore no-explicit-any
   const collection = db.collection<any>(collectionName);
   const sessionContext = getSessionContext(db.client);
+
+  const shouldAutoApply = config.schemaManagement === "auto" ||
+    (config.schemaManagement !== "managed" && !isSchemaManaged());
+  const insideSession = !!sessionContext.getSession();
+  if (shouldAutoApply && !insideSession) {
+    await applyValidator(db, collectionName, storageUnion);
+    await applyScopedMultiCollectionIndexes(collection, storageSchemas, {
+      queue: mongoOperationQueue,
+    });
+  }
 
   const tele = createOperationTracer(config.telemetry, {
     dbName: db.databaseName,
@@ -626,10 +642,6 @@ export async function scopedMultiCollection<
   // `false`, every scope attribute is set to `undefined`, which `prune()`
   // drops before the value ever reaches the SDK.
   const recordScope = config.telemetry?.recordScope !== false;
-
-  await applyScopedMultiCollectionIndexes(collection, storageSchemas, {
-    queue: mongoOperationQueue,
-  });
 
   function assertScopeValue(id: unknown): string {
     if (id === null || id === undefined || id === "") {

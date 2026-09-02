@@ -107,6 +107,7 @@ Deno.test({
         "setup 1 scopedMultiCollection",
         () =>
           scopedMultiCollection(db, "catalog", {
+            schemaManagement: "auto",
             scope: refId("exposition"),
             types: typesShape,
           }),

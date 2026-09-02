@@ -7,6 +7,7 @@ import { refId } from "../src/ids.ts";
 Deno.test("scopedMultiCollection: creates the underlying MongoDB collection", async () => {
   await withDatabase("smc-factory-basic", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         artwork: { title: v.string() },
@@ -28,6 +29,7 @@ Deno.test("scopedMultiCollection: auto-mints _id for a refId-typed _id when omit
   // matching the multiCollection contract (auto-mint `type:<ulid>`).
   await withDatabase("smc-factory-autoid", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         security: { _id: refId("security"), token: v.string() },
@@ -64,6 +66,7 @@ Deno.test("scopedMultiCollection: auto-mints _id for a refId-typed _id when omit
 Deno.test("scopedMultiCollection: applies a MongoDB JSON Schema validator", async () => {
   await withDatabase("smc-factory-validator", async (db) => {
     await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         artwork: { title: v.string() },
@@ -85,6 +88,7 @@ Deno.test("scopedMultiCollection: rejects _scope as a user field name", async ()
     await assertRejects(
       () =>
         scopedMultiCollection(db, "catalog", {
+          schemaManagement: "auto",
           scope: refId("exposition"),
           types: {
             // deno-lint-ignore no-explicit-any
@@ -102,6 +106,7 @@ Deno.test("scopedMultiCollection: rejects _type as a user field name", async () 
     await assertRejects(
       () =>
         scopedMultiCollection(db, "catalog", {
+          schemaManagement: "auto",
           scope: refId("exposition"),
           types: {
             // deno-lint-ignore no-explicit-any
@@ -120,6 +125,7 @@ Deno.test("scopedMultiCollection: rejects _id with wrong shape as a user field n
   // when _id is absent (which is the documented happy path).
   await withDatabase("smc-factory-no-id", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         artwork: { title: v.string() },
@@ -134,6 +140,7 @@ Deno.test("scopedMultiCollection: rejects empty types record", async () => {
     await assertRejects(
       () =>
         scopedMultiCollection(db, "catalog", {
+          schemaManagement: "auto",
           scope: refId("exposition"),
           types: {},
         }),

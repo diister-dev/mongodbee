@@ -10,6 +10,7 @@ const EXPO = "exposition:expoaaaaa01";
 Deno.test("updateOne: removeField() unsets a field (parity with multiCollection)", async () => {
   await withDatabase("smc-removefield", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         user: {
@@ -34,6 +35,7 @@ Deno.test("updateOne: removeField() unsets a field (parity with multiCollection)
 Deno.test("updateMany: removeField() works across docs", async () => {
   await withDatabase("smc-removefield-many", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         user: { name: v.string(), nickname: v.optional(v.string()) },

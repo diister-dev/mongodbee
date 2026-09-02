@@ -47,6 +47,7 @@ Deno.test({
     try {
       // Moderately rich schema so per-doc parse cost is realistic.
       const catalog = await scopedMultiCollection(db, "readbench", {
+        schemaManagement: "auto",
         scope: refId("exposition"),
         types: {
           artwork: {

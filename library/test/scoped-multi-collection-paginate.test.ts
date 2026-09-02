@@ -21,6 +21,7 @@ async function makeCatalog(
   db: Parameters<Parameters<typeof withDatabase>[1]>[0],
 ) {
   return await scopedMultiCollection(db, "catalog", {
+    schemaManagement: "auto",
     scope: refId("exposition"),
     types: {
       participant: {

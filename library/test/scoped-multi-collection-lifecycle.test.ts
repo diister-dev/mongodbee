@@ -10,6 +10,7 @@ const EXPO_C = "exposition:expoccccc03";
 
 async function seed(db: Parameters<Parameters<typeof withDatabase>[1]>[0]) {
   const catalog = await scopedMultiCollection(db, "catalog", {
+    schemaManagement: "auto",
     scope: refId("exposition"),
     types: {
       artwork: { title: v.string(), year: v.number() },
@@ -40,6 +41,7 @@ Deno.test("listScopes returns distinct scope values", async () => {
 Deno.test("listScopes returns empty array when no docs exist", async () => {
   await withDatabase("smc-life-list-empty", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: { artwork: { title: v.string() } },
     });

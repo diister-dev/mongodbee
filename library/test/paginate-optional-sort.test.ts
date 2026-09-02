@@ -73,6 +73,7 @@ function assertWalkedAll(seen: string[], expected: string[], label: string) {
 Deno.test("paginate (scoped): an optional sort field walks the whole set", async () => {
   await withDatabase("paginate-optsort-scoped", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         participant: { name: v.string(), generatedAt: v.optional(v.date()) },

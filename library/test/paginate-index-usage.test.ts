@@ -37,6 +37,7 @@ Deno.test("paginate (scoped): every cursor page is a bounded index read", async 
     // paginationKeySuffix): this locks the whole chain, applier shape
     // included, not just the cursor emission.
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         participant: {

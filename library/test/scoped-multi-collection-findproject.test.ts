@@ -11,6 +11,7 @@ import { refId } from "../src/ids.ts";
 Deno.test("findProject returns only the listed fields + meta, omits the rest", async () => {
   await withDatabase("smc-findproject", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         artwork: {
@@ -48,6 +49,7 @@ Deno.test("findProject returns only the listed fields + meta, omits the rest", a
 Deno.test("findProject honours the filter and works on the multi-scope view", async () => {
   await withDatabase("smc-findproject-scopes", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: { artwork: { title: v.string(), year: v.number() } },
       allowUnscoped: true,

@@ -18,6 +18,7 @@ const EXPO_B = "exposition:expobbbbb02";
 Deno.test("auto-index: { _scope: 1, _type: 1 } is created at init", async () => {
   await withDatabase("smc-idx-base", async (db) => {
     await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: { artwork: { title: v.string() } },
     });
@@ -38,6 +39,7 @@ Deno.test(
   async () => {
     await withDatabase("smc-idx-scoped-unique", async (db) => {
       const catalog = await scopedMultiCollection(db, "catalog", {
+        schemaManagement: "auto",
         scope: refId("exposition"),
         types: {
           user: {
@@ -65,6 +67,7 @@ Deno.test(
   async () => {
     await withDatabase("smc-idx-scoped-dup", async (db) => {
       const catalog = await scopedMultiCollection(db, "catalog", {
+        schemaManagement: "auto",
         scope: refId("exposition"),
         types: {
           user: {
@@ -86,6 +89,7 @@ Deno.test(
 Deno.test("global uniqueness: same field across scopes is rejected", async () => {
   await withDatabase("smc-idx-global", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         catalog: {
@@ -110,6 +114,7 @@ Deno.test(
   async () => {
     await withDatabase("smc-idx-per-type", async (db) => {
       const catalog = await scopedMultiCollection(db, "catalog", {
+        schemaManagement: "auto",
         scope: refId("exposition"),
         types: {
           user: {
@@ -139,6 +144,7 @@ Deno.test(
   async () => {
     await withDatabase("smc-idx-shape-scoped", async (db) => {
       await scopedMultiCollection(db, "catalog", {
+        schemaManagement: "auto",
         scope: refId("exposition"),
         types: {
           user: {
@@ -166,6 +172,7 @@ Deno.test(
   async () => {
     await withDatabase("smc-idx-shape-global", async (db) => {
       await scopedMultiCollection(db, "catalog", {
+        schemaManagement: "auto",
         scope: refId("exposition"),
         types: {
           catalog: {
@@ -198,6 +205,7 @@ Deno.test(
     await withDatabase("smc-idx-double-init", async (db) => {
       // First init : only `user`.
       await scopedMultiCollection(db, "catalog", {
+        schemaManagement: "auto",
         scope: refId("exposition"),
         types: {
           user: {
@@ -217,6 +225,7 @@ Deno.test(
 
       // Second init : same collection, now with `admin` sharing `email`.
       const catalog = await scopedMultiCollection(db, "catalog", {
+        schemaManagement: "auto",
         scope: refId("exposition"),
         types: {
           user: {
@@ -299,6 +308,7 @@ Deno.test(
       // 2. Re-open the same collection name as a scoped multi-collection with
       //    the same types.
       const catalog = await scopedMultiCollection(db, "catalog", {
+        schemaManagement: "auto",
         scope: refId("exposition"),
         types: {
           user: {
@@ -355,6 +365,7 @@ Deno.test(
       const cfg = {
         scope: refId("exposition"),
         types: { artwork: { title: v.string() } },
+        schemaManagement: "auto" as const,
       };
 
       await scopedMultiCollection(db, "catalog", cfg);
@@ -406,6 +417,7 @@ Deno.test(
       const cfg = {
         scope: refId("exposition"),
         types: { artwork: { title: v.string() } },
+        schemaManagement: "auto" as const,
       };
 
       // First (migrating) init.
@@ -448,6 +460,7 @@ Deno.test(
   async () => {
     await withDatabase("smc-idx-type-index", async (db) => {
       await scopedMultiCollection(db, "catalog", {
+        schemaManagement: "auto",
         scope: refId("exposition"),
         types: {
           artwork: { title: v.string() },

@@ -58,6 +58,7 @@ Deno.test("withIndex: plain fields get the _id suffix; unique and TTL stay bare"
     );
 
     await scopedMultiCollection(db, "scoped", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         participant: {
@@ -105,6 +106,7 @@ Deno.test("withIndex: a pre-suffix bare index migrates to the new shape, then re
         participant: { badge: withIndex(v.string()) },
       }, { schemaManagement: "auto" });
       await scopedMultiCollection(db, "scoped", {
+        schemaManagement: "auto",
         scope: refId("exposition"),
         types: { participant: { generatedAt: withIndex(v.date()) } },
       });

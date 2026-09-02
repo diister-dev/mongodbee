@@ -11,6 +11,7 @@ async function makeCatalog(
   db: Parameters<Parameters<typeof withDatabase>[1]>[0],
 ) {
   return await scopedMultiCollection(db, "catalog", {
+    schemaManagement: "auto",
     scope: refId("exposition"),
     types: {
       artwork: {
@@ -249,6 +250,7 @@ Deno.test(".scope(id) cross-scope isolation: insert into A, never visible from B
 Deno.test(".scope(id) applies the scope schema transform so inserts stay visible (N1)", async () => {
   await withDatabase("smc-scope-transform", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: v.pipe(v.string(), v.trim(), v.toLowerCase()),
       types: { artwork: { title: v.string() } },
     });
@@ -281,6 +283,7 @@ Deno.test(".scope(id) applies the scope schema transform so inserts stay visible
 Deno.test(".scope(id).updateOne validates $set values with Valibot (N2)", async () => {
   await withDatabase("smc-update-validate", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         item: {
@@ -328,6 +331,7 @@ Deno.test(".scope(id).updateOne validates $set values with Valibot (N2)", async 
 Deno.test(".scope(id).updateMany validates $set values with Valibot (N2)", async () => {
   await withDatabase("smc-update-many-validate", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         item: {

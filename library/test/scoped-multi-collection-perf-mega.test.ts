@@ -258,6 +258,7 @@ Deno.test({
           "setup 1 scopedMultiCollection",
           () =>
             scopedMultiCollection(db, SCOPED_COLLECTION_NAME, {
+              schemaManagement: "auto",
               scope: refId("exposition"),
               types: typesShape,
               allowUnscoped: true, // needed for the unscoped read bench

@@ -123,6 +123,7 @@ Deno.test("telemetry scoped: scope + doc_type attributes on views", async () => 
   await withDatabase("telemetry-scoped-attrs", async (db) => {
     const t = makeTestTelemetry();
     const catalog = await scopedMultiCollection(db, "catalog2", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         artwork: {
@@ -196,6 +197,7 @@ Deno.test("telemetry scoped: not-found error keeps the id caller-side but strips
   await withDatabase("telemetry-scoped-notfound", async (db) => {
     const t = makeTestTelemetry();
     const catalog = await scopedMultiCollection(db, "catalog3", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         artwork: {
@@ -371,6 +373,7 @@ Deno.test("telemetry scoped: drop emits a CLIENT span", async () => {
   await withDatabase("telemetry-scoped-drop", async (db) => {
     const t = makeTestTelemetry();
     const catalog = await scopedMultiCollection(db, "catalog5", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         artwork: {
@@ -400,6 +403,7 @@ Deno.test("telemetry scoped: invalid scope value in a handle op inside a transac
   await withDatabase("telemetry-scoped-invalid-scope-tx", async (db) => {
     const t = makeTestTelemetry();
     const catalog = await scopedMultiCollection(db, "catalog7", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         artwork: {
@@ -456,6 +460,7 @@ Deno.test("telemetry scoped: recordScope false omits mongodbee.scope everywhere"
     const SENTINEL_SCOPE_A = "exposition:norecordscopeaaa01";
     const SENTINEL_SCOPE_B = "exposition:norecordscopebbb02";
     const catalog = await scopedMultiCollection(db, "catalog6", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         artwork: {

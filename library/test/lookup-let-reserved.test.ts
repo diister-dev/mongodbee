@@ -66,6 +66,7 @@ Deno.test("lookup: let.localValue is refused (multi paginate builder)", async ()
 Deno.test("lookup: let.localValue is refused (scoped builder, lookup + anyLookup)", async () => {
   await withDatabase("lookup-let-reserved-scoped", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         participant: { name: v.string() },
