@@ -16,12 +16,18 @@ import { loadConfig } from "../../config/loader.ts";
 import { buildMigrationChain, loadAllMigrations } from "../../discovery.ts";
 import { getAppliedMigrationIds } from "../../state.ts";
 import { createMongodbApplier } from "../../appliers/mongodb.ts";
+import { ensureMigrationPrivileges } from "../utils/privileges.ts";
 
 export interface SyncCommandOptions {
   configPath?: string;
   cwd?: string;
   force?: boolean;
   verbose?: boolean;
+  /**
+   * Skip the pre-flight check of the account's privileges (`connectionStatus`).
+   * Sync rewrites validators (`collMod`) and indexes on every collection.
+   */
+  skipPrivilegeCheck?: boolean;
 }
 
 /**
@@ -57,6 +63,13 @@ export async function syncCommand(
     await client.connect();
 
     const db = client.db(dbName);
+
+    // Pre-flight: sync is nothing BUT validator and index DDL, so an account
+    // without `collMod` fails on the first collection. Refuse it up-front.
+    await ensureMigrationPrivileges(db, {
+      skip: options.skipPrivilegeCheck ??
+        (options as Record<string, unknown>)["skip-privilege-check"] === true,
+    });
 
     // Load migrations from filesystem
     const migrationsWithFiles = await loadAllMigrations(migrationsDir);

@@ -129,6 +129,10 @@ ${yellow("MIGRATE OPTIONS:")}
   -l, --last        Only validate the last N migrations
   --target          Stop after this migration (id, name, or unambiguous
                     substring); the later ones stay pending
+  --skip-privilege-check
+                    Do not verify the account's privileges before starting
+                    (by default the run is refused when the account lacks an
+                    action migrations need, e.g. collMod from dbAdmin)
 
 ${yellow("BASELINE OPTIONS:")}
   --target          Migration the database is already at, inclusive
@@ -138,10 +142,14 @@ ${yellow("BASELINE OPTIONS:")}
 ${yellow("ROLLBACK OPTIONS:")}
   --force           Skip all confirmations (use with caution!)
   --progress        Force the live progress line (auto-detected on a TTY; use --no-progress to disable)
+  --skip-privilege-check
+                    Do not verify the account's privileges before starting
 
 ${yellow("SYNC OPTIONS:")}
   --force           Sync even if pending migrations exist (not recommended)
   --verbose         Show detailed schema information
+  --skip-privilege-check
+                    Do not verify the account's privileges before starting
 `);
 }
 
@@ -167,6 +175,7 @@ async function main(): Promise<void> {
       "check-indexes",
       "validate",
       "progress",
+      "skip-privilege-check",
     ],
     // `progress` stays tri-state: `--progress` forces the live line on,
     // `--no-progress` forces it off, and omitting it leaves `undefined` so the

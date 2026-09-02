@@ -25,6 +25,7 @@ import {
   migrationBuilder,
 } from "../../builder.ts";
 import { confirm } from "../utils/confirm.ts";
+import { ensureMigrationPrivileges } from "../utils/privileges.ts";
 
 export interface RollbackCommandOptions {
   configPath?: string;
@@ -35,6 +36,11 @@ export interface RollbackCommandOptions {
    * tri-state as `migrate`: `--progress` forces it on, `--no-progress` off.
    */
   progress?: boolean;
+  /**
+   * Skip the pre-flight check of the account's privileges (`connectionStatus`).
+   * A rollback needs the same DDL actions as a migration (`collMod`, ...).
+   */
+  skipPrivilegeCheck?: boolean;
 }
 
 /**
@@ -70,6 +76,14 @@ export async function rollbackCommand(
     await client.connect();
 
     const db = client.db(dbName);
+
+    // Pre-flight: a rollback disables and restores validators exactly like a
+    // migration does, so refuse it up-front when the account lacks the DDL
+    // actions rather than half-way through.
+    await ensureMigrationPrivileges(db, {
+      skip: options.skipPrivilegeCheck ??
+        (options as Record<string, unknown>)["skip-privilege-check"] === true,
+    });
     console.log();
 
     // Get last applied migration

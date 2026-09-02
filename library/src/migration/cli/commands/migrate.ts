@@ -28,6 +28,7 @@ import { validateMigrationsWithSimulation } from "../utils/validate-migrations.t
 import type { SimulationPowerLevel } from "../../validators/simulation.ts";
 import { migrationBuilder } from "../../builder.ts";
 import { confirm } from "../utils/confirm.ts";
+import { ensureMigrationPrivileges } from "../utils/privileges.ts";
 import { resolveMigrationRef } from "../utils/resolve-ref.ts";
 import { createProgressReporter } from "../utils/progress.ts";
 import {
@@ -46,6 +47,7 @@ interface CliArgs {
   mode?: string;
   last?: number;
   target?: string;
+  "skip-privilege-check"?: boolean;
   [key: string]: unknown;
 }
 
@@ -78,6 +80,12 @@ export interface MigrateCommandOptions {
    * Defaults to auto-detection (on when stdout is a TTY).
    */
   progress?: boolean;
+  /**
+   * Skip the pre-flight check of the account's privileges (`connectionStatus`).
+   * The check refuses to start when the account lacks an action a migration
+   * needs — typically `collMod`, granted by `dbAdmin` but not by `readWrite`.
+   */
+  skipPrivilegeCheck?: boolean;
 }
 
 /**
@@ -119,6 +127,8 @@ export async function migrateCommand(
       mode: options.mode || cliArgs.mode,
       last: options.last || cliArgs.last,
       target: options.target || cliArgs.target,
+      skipPrivilegeCheck: options.skipPrivilegeCheck ||
+        cliArgs["skip-privilege-check"],
     };
 
     // Load configuration
@@ -141,6 +151,15 @@ export async function migrateCommand(
     await client.connect();
 
     const db = client.db(dbName);
+
+    // Pre-flight: refuse to start when the account cannot finish. Every
+    // migration disables and restores validators with `collMod`, an action
+    // `readWrite` does NOT grant — without this check the failure surfaces
+    // half-way through, after documents were rewritten.
+    await ensureMigrationPrivileges(db, {
+      skip: opts.skipPrivilegeCheck,
+      dryRun: opts.dryRun,
+    });
 
     // Discover and load migrations
     const migrationsWithFiles = await loadAllMigrations(migrationsDir);

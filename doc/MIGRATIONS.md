@@ -415,6 +415,73 @@ deno task mongodbee rollback
 deno task mongodbee status
 ```
 
+### Required Database Privileges
+
+A migration run is not just reads and writes. Around every migration the applier issues DDL commands: `collMod` to disable and restore validators, `create` for new collections, `createIndexes` / `dropIndexes` to synchronize indexes, `drop` and `renameCollection` for the operations that need them.
+
+The built-in `readWrite` role does **not** grant `collMod` — that action lives in `dbAdmin`. An account that can read and write every collection therefore fails half-way through a migration with `not authorized on <db> to execute command { collMod: ... }`.
+
+The actions `migrate`, `rollback` and `sync` can need on the target database:
+
+| Action                   | Built-in role | Used for                                                |
+|--------------------------|---------------|---------------------------------------------------------|
+| `find`                   | `readWrite`   | history, registries, documents to transform             |
+| `insert`                 | `readWrite`   | history records, seeds, transformed documents           |
+| `update`                 | `readWrite`   | bulk rewrites, multi-collection registry updates        |
+| `remove`                 | `readWrite`   | consumed sources, deleted types, deleted documents      |
+| `listCollections`        | `readWrite`   | collection existence, current validator                 |
+| `listIndexes`            | `readWrite`   | index diff                                              |
+| `createCollection`       | `readWrite`   | `create*` operations (created with their validator)     |
+| `dropCollection`         | `readWrite`   | drops, deleted instances, rollback of a create          |
+| `renameCollectionSameDB` | `readWrite`   | `rename_collection`                                     |
+| `createIndex`            | `readWrite`   | index synchronization                                   |
+| `dropIndex`              | `readWrite`   | index synchronization                                   |
+| `collMod`                | `dbAdmin`     | validators off/on around **every** migration            |
+
+Grant the migration account `readWrite` **and** `dbAdmin` on the database (or `dbOwner`, which bundles both):
+
+```javascript
+// mongosh, on the database the user authenticates against
+db.grantRolesToUser("migrator", [
+  { role: "readWrite", db: "myapp" },
+  { role: "dbAdmin", db: "myapp" },
+]);
+```
+
+On MongoDB Atlas, the *Read and write to any database* built-in privilege is `readWriteAnyDatabase` and lacks `collMod` too — use *Atlas admin* or a custom role that includes `dbAdmin` on the database.
+
+#### Pre-flight check
+
+`migrate`, `rollback` and `sync` verify the account before touching anything, through `connectionStatus { showPrivileges: true }` (a command every authenticated connection may run). When an action is missing the command stops **before** any write and prints the missing actions and the exact `grantRolesToUser` call to run:
+
+```
+✗ Insufficient privileges: this account cannot run migrations
+  Account:  migrator@myapp
+  Roles:    readWrite@myapp
+  Database: myapp
+  Missing actions on the database:
+    - collMod
+
+  Grant the built-in role(s) dbAdmin on "myapp" (or dbOwner), e.g. in mongosh:
+    use myapp
+    db.grantRolesToUser("migrator", [{ role: "dbAdmin", db: "myapp" }])
+```
+
+- With `--dry-run` the problem is reported but the preview continues.
+- When access control is disabled (no authenticated user) or the server does not implement `connectionStatus`, nothing can be verified: the command says so and proceeds.
+- `--skip-privilege-check` disables the verification entirely.
+
+The same check is available programmatically:
+
+```typescript
+import { checkMigrationPrivileges } from "@diister/mongodbee/migration";
+
+const check = await checkMigrationPrivileges(db);
+if (check.status === "missing") {
+  throw new Error(`Missing ${check.missing.join(", ")} on ${check.database}`);
+}
+```
+
 ### deno.json Configuration
 
 ```json
