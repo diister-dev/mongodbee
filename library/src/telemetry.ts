@@ -39,7 +39,7 @@ import {
   type TracerProvider,
 } from "@opentelemetry/api";
 import type { ClientSession, MongoClient } from "mongodb";
-import denoJson from "../deno.json" with { type: "json" };
+import { VERSION } from "./version.ts";
 
 /**
  * Opt-in tracing configuration accepted by `collection()`,
@@ -192,7 +192,7 @@ const transactionRetryCounters = new WeakMap<
 
 function resolveTracer(telemetry: TelemetryOptions): Tracer {
   const provider = telemetry.tracerProvider ?? trace.getTracerProvider();
-  return provider.getTracer(TRACER_NAME, denoJson.version);
+  return provider.getTracer(TRACER_NAME, VERSION);
 }
 
 /** Drops `undefined` entries so they never reach the SDK. */
@@ -209,8 +209,11 @@ function isValidationError(error: unknown): boolean {
   if (error instanceof Error) return error.name === "ValiError";
   // MongoDBee validation failures are thrown as plain objects:
   // `{ message: "Validation error", errors, result }`
-  return typeof error === "object" && error !== null &&
-    (error as { message?: unknown }).message === "Validation error";
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { message?: unknown }).message === "Validation error"
+  );
 }
 
 /**

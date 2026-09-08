@@ -1,10 +1,11 @@
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals, assertRejects } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";
 import { refId } from "../src/ids.ts";
 
-Deno.test("scopedMultiCollection: creates the underlying MongoDB collection", async () => {
+test("scopedMultiCollection: creates the underlying MongoDB collection", async () => {
   await withDatabase("smc-factory-basic", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
       schemaManagement: "auto",
@@ -23,7 +24,7 @@ Deno.test("scopedMultiCollection: creates the underlying MongoDB collection", as
   });
 });
 
-Deno.test("scopedMultiCollection: auto-mints _id for a refId-typed _id when omitted", async () => {
+test("scopedMultiCollection: auto-mints _id for a refId-typed _id when omitted", async () => {
   // A per-type `_id` declared as a bare `refId(type)` is required with no
   // default — but inserts must still work without the caller supplying `_id`,
   // matching the multiCollection contract (auto-mint `type:<ulid>`).
@@ -55,15 +56,17 @@ Deno.test("scopedMultiCollection: auto-mints _id for a refId-typed _id when omit
     // treats a refId `_id` as auto-generated (so callers omit it); passing one
     // explicitly — as the exposition `information` singleton does to pin
     // `_id == expositionId` — goes through a cast, exactly like the app.
-    await (view as unknown as {
-      insertOne(t: string, d: Record<string, unknown>): Promise<string>;
-    }).insertOne("security", { _id: "security:custom", token: "k4" });
+    await (
+      view as unknown as {
+        insertOne(t: string, d: Record<string, unknown>): Promise<string>;
+      }
+    ).insertOne("security", { _id: "security:custom", token: "k4" });
     const custom = await view.findOne("security", { token: "k4" });
     assertEquals(custom?._id, "security:custom");
   });
 });
 
-Deno.test("scopedMultiCollection: applies a MongoDB JSON Schema validator", async () => {
+test("scopedMultiCollection: applies a MongoDB JSON Schema validator", async () => {
   await withDatabase("smc-factory-validator", async (db) => {
     await scopedMultiCollection(db, "catalog", {
       schemaManagement: "auto",
@@ -83,7 +86,7 @@ Deno.test("scopedMultiCollection: applies a MongoDB JSON Schema validator", asyn
   });
 });
 
-Deno.test("scopedMultiCollection: rejects _scope as a user field name", async () => {
+test("scopedMultiCollection: rejects _scope as a user field name", async () => {
   await withDatabase("smc-factory-reserved-scope", async (db) => {
     await assertRejects(
       () =>
@@ -91,7 +94,6 @@ Deno.test("scopedMultiCollection: rejects _scope as a user field name", async ()
           schemaManagement: "auto",
           scope: refId("exposition"),
           types: {
-            // deno-lint-ignore no-explicit-any
             artwork: { _scope: v.string(), title: v.string() } as any,
           },
         }),
@@ -101,7 +103,7 @@ Deno.test("scopedMultiCollection: rejects _scope as a user field name", async ()
   });
 });
 
-Deno.test("scopedMultiCollection: rejects _type as a user field name", async () => {
+test("scopedMultiCollection: rejects _type as a user field name", async () => {
   await withDatabase("smc-factory-reserved-type", async (db) => {
     await assertRejects(
       () =>
@@ -109,7 +111,6 @@ Deno.test("scopedMultiCollection: rejects _type as a user field name", async () 
           schemaManagement: "auto",
           scope: refId("exposition"),
           types: {
-            // deno-lint-ignore no-explicit-any
             artwork: { _type: v.string(), title: v.string() } as any,
           },
         }),
@@ -119,7 +120,7 @@ Deno.test("scopedMultiCollection: rejects _type as a user field name", async () 
   });
 });
 
-Deno.test("scopedMultiCollection: rejects _id with wrong shape as a user field name", async () => {
+test("scopedMultiCollection: rejects _id with wrong shape as a user field name", async () => {
   // _id is allowed if it's a dbId/refId-shaped schema (consistent with multiCollection),
   // but we still need to refuse blatant misuse. For now, just ensure the factory works
   // when _id is absent (which is the documented happy path).
@@ -135,7 +136,7 @@ Deno.test("scopedMultiCollection: rejects _id with wrong shape as a user field n
   });
 });
 
-Deno.test("scopedMultiCollection: rejects empty types record", async () => {
+test("scopedMultiCollection: rejects empty types record", async () => {
   await withDatabase("smc-factory-empty-types", async (db) => {
     await assertRejects(
       () =>

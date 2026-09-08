@@ -10,13 +10,14 @@
 // same spread) went inconsistent. multiCollection and scopedMultiCollection
 // already composed with `$and`; collection was the diverging copy.
 
-import { assert, assertEquals } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { collection } from "../src/collection.ts";
 import * as v from "../src/schema.ts";
 import { dbId } from "../src/ids.ts";
 
-Deno.test("paginate (collection): a user filter with $or survives the page-2 cursor", async () => {
+test("paginate (collection): a user filter with $or survives the page-2 cursor", async () => {
   await withDatabase("paginate-filter-or-merge", async (db) => {
     const people = await collection(db, "people", {
       _id: dbId("person"),
@@ -27,14 +28,16 @@ Deno.test("paginate (collection): a user filter with $or survives the page-2 cur
     const wanted: string[] = [];
     for (let i = 0; i < 6; i++) {
       wanted.push(
-        await people.insertOne(
-          { name: `a-${i}`, group: "a" } as never,
-        ) as string,
+        (await people.insertOne({
+          name: `a-${i}`,
+          group: "a",
+        } as never)) as string,
       );
       wanted.push(
-        await people.insertOne(
-          { name: `b-${i}`, group: "b" } as never,
-        ) as string,
+        (await people.insertOne({
+          name: `b-${i}`,
+          group: "b",
+        } as never)) as string,
       );
       // Excluded by the filter — must never appear on any page.
       await people.insertOne({ name: `c-${i}`, group: "c" } as never);
@@ -73,7 +76,7 @@ Deno.test("paginate (collection): a user filter with $or survives the page-2 cur
   });
 });
 
-Deno.test("paginate (collection): a user filter on _id survives the _id fast-path cursor", async () => {
+test("paginate (collection): a user filter on _id survives the _id fast-path cursor", async () => {
   await withDatabase("paginate-filter-id-merge", async (db) => {
     const people = await collection(db, "people", {
       _id: dbId("person"),
@@ -82,9 +85,7 @@ Deno.test("paginate (collection): a user filter on _id survives the _id fast-pat
 
     const all: string[] = [];
     for (let i = 0; i < 10; i++) {
-      all.push(
-        await people.insertOne({ name: `p-${i}` } as never) as string,
-      );
+      all.push((await people.insertOne({ name: `p-${i}` } as never)) as string);
     }
     all.sort();
     // Filter to a strict subset by _id: the page-2 cursor {_id: {$gt}} used
@@ -97,9 +98,11 @@ Deno.test("paginate (collection): a user filter on _id survives the _id fast-pat
       limit: 4,
     });
     assertEquals(page1.total, subset.length);
-    const lastId = (page1.data[page1.data.length - 1] as unknown as {
-      _id: string;
-    })._id;
+    const lastId = (
+      page1.data[page1.data.length - 1] as unknown as {
+        _id: string;
+      }
+    )._id;
     const page2 = await people.paginate(filter as never, {
       sort: { _id: 1 },
       limit: 4,

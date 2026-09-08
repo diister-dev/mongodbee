@@ -1,0 +1,27 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+
+    "outDir": "dist",
+    "rootDir": ".",
+    "noEmit": false,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+
+    "allowImportingTsExtensions": false,
+    "rewriteRelativeImportExtensions": true
+  },
+  "include": [
+    "mod.ts",
+    "schema.ts",
+    "session.ts",
+    "telemetry.ts",
+    "src",
+    "types"
+  ],
+  "exclude": ["test", "scripts", "**/*.test.ts"]
+}

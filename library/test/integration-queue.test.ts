@@ -1,7 +1,8 @@
-import { assertEquals } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assertEquals } from "./+assert.ts";
 import { createQueueSystem } from "../src/utils/queue.ts";
 
-Deno.test("Integration test - MongoDB queue system usage example", async () => {
+test("Integration test - MongoDB queue system usage example", async () => {
   const mongoOperationQueue = createQueueSystem({ maxConcurrent: 2 });
 
   // Simulate multiple index creation operations

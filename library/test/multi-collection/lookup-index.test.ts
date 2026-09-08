@@ -8,7 +8,8 @@
  * indexes created by `withIndex` invisible and the lookup scans every doc of
  * the type on every input row.
  */
-import { assert, assertEquals } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals } from "../+assert.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { defineModel } from "../../src/multi-collection-model.ts";
 import { withDatabase } from "../+shared.ts";
@@ -34,7 +35,7 @@ function subMatch(stage: Stage): Record<string, unknown> {
   return lookup.pipeline[0].$match as Record<string, unknown>;
 }
 
-Deno.test("lookup: aggregate + paginate builders keep _type OUT of $expr", async (t) => {
+test("lookup: aggregate + paginate builders keep _type OUT of $expr", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "registry", badgeModel, {
       schemaManagement: "auto",
@@ -56,30 +57,32 @@ Deno.test("lookup: aggregate + paginate builders keep _type OUT of $expr", async
     });
 
     let viaPaginate: Stage[] = [];
-    await mc.paginate("participant", {}, {
-      limit: 10,
-      pipeline: (stage) => {
-        viaPaginate = [
-          stage.lookup("badge", "_id", "participantId", "badges"),
-        ];
-        return viaPaginate;
+    await mc.paginate(
+      "participant",
+      {},
+      {
+        limit: 10,
+        pipeline: (stage) => {
+          viaPaginate = [
+            stage.lookup("badge", "_id", "participantId", "badges"),
+          ];
+          return viaPaginate;
+        },
       },
-    });
+    );
 
-    for (
-      const match of [
-        subMatch(viaAggregate[1]),
-        subMatch(viaAggregate[2]),
-        subMatch(viaPaginate[0]),
-      ]
-    ) {
+    for (const match of [
+      subMatch(viaAggregate[1]),
+      subMatch(viaAggregate[2]),
+      subMatch(viaPaginate[0]),
+    ]) {
       assertEquals(match._type, "badge");
       assertEquals(match.$expr, { $eq: ["$participantId", "$$localValue"] });
     }
   });
 });
 
-Deno.test("lookup: planner uses the withIndex-created partial index", async (t) => {
+test("lookup: planner uses the withIndex-created partial index", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "registry", badgeModel, {
       schemaManagement: "auto",
@@ -100,16 +103,17 @@ Deno.test("lookup: planner uses the withIndex-created partial index", async (t) 
       return captured;
     });
 
-    const explain = await db.collection("registry").aggregate(captured)
+    const explain = await db
+      .collection("registry")
+      .aggregate(captured)
       .explain("executionStats");
-    // deno-lint-ignore no-explicit-any
     const stage = (explain as any).stages?.find((s: any) => s.$lookup);
     assert(stage, "expected a $lookup stage in explain output");
     assert(
       (stage.indexesUsed ?? []).includes("badge_participantId"),
-      `expected the withIndex partial index to be used, got ${
-        JSON.stringify(stage.indexesUsed)
-      }`,
+      `expected the withIndex partial index to be used, got ${JSON.stringify(
+        stage.indexesUsed,
+      )}`,
     );
     assertEquals(stage.collectionScans ?? 0, 0);
     // Each of the N sub-plans should examine ~1 key; the $expr-only shape

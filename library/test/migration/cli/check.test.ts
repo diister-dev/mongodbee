@@ -4,19 +4,25 @@
  * @module
  */
 
-import { assertEquals } from "@std/assert";
+import { test } from "../../+harness.ts";
+import process from "node:process";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { assertEquals } from "../../+assert.ts";
 import { checkCommand } from "../../../src/migration/cli/commands/check.ts";
-import * as path from "@std/path";
+import * as path from "node:path";
+import { installLibrary } from "./shared.ts";
 
-Deno.test("check - validates all migrations successfully", async () => {
-  const testDir = await Deno.makeTempDir();
+test("check - validates all migrations successfully", async () => {
+  const testDir = await mkdtemp(path.join(tmpdir(), "mongodbee_"));
+  await installLibrary(testDir);
 
   try {
     // Create test directory structure
-    await Deno.mkdir(path.join(testDir, "migrations"), { recursive: true });
+    await mkdir(path.join(testDir, "migrations"), { recursive: true });
 
     // Create config
-    await Deno.writeTextFile(
+    await writeFile(
       path.join(testDir, "mongodbee.config.json"),
       JSON.stringify({
         paths: {
@@ -26,15 +32,14 @@ Deno.test("check - validates all migrations successfully", async () => {
         database: {
           name: "test_check",
           connection: {
-            uri: Deno.env.get("MONGODBEE_TEST_URI") ??
-              "mongodb://localhost:27017",
+            uri: process.env.MONGODBEE_TEST_URI ?? "mongodb://localhost:27017",
           },
         },
       }),
     );
 
     // Create schemas
-    await Deno.writeTextFile(
+    await writeFile(
       path.join(testDir, "schemas.ts"),
       `import * as v from "valibot";
 
@@ -52,9 +57,9 @@ export const schemas = {
     );
 
     // Create valid migration
-    await Deno.writeTextFile(
+    await writeFile(
       path.join(testDir, "migrations", "2025_01_01_000000_create_users.ts"),
-      `import { migrationDefinition } from "@diister/mongodbee/migration";
+      `import { migrationDefinition } from "mongodbee/migration";
 import * as v from "valibot";
 
 export default migrationDefinition("2025_01_01_000000", "create_users", {
@@ -80,19 +85,20 @@ export default migrationDefinition("2025_01_01_000000", "create_users", {
     // Run check command
     await checkCommand({ cwd: testDir });
   } finally {
-    await Deno.remove(testDir, { recursive: true });
+    await rm(testDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("check - detects invalid migration", async () => {
-  const testDir = await Deno.makeTempDir();
+test("check - detects invalid migration", async () => {
+  const testDir = await mkdtemp(path.join(tmpdir(), "mongodbee_"));
+  await installLibrary(testDir);
 
   try {
     // Create test directory structure
-    await Deno.mkdir(path.join(testDir, "migrations"), { recursive: true });
+    await mkdir(path.join(testDir, "migrations"), { recursive: true });
 
     // Create config
-    await Deno.writeTextFile(
+    await writeFile(
       path.join(testDir, "mongodbee.config.json"),
       JSON.stringify({
         paths: {
@@ -102,15 +108,14 @@ Deno.test("check - detects invalid migration", async () => {
         database: {
           name: "test_check",
           connection: {
-            uri: Deno.env.get("MONGODBEE_TEST_URI") ??
-              "mongodb://localhost:27017",
+            uri: process.env.MONGODBEE_TEST_URI ?? "mongodb://localhost:27017",
           },
         },
       }),
     );
 
     // Create schemas
-    await Deno.writeTextFile(
+    await writeFile(
       path.join(testDir, "schemas.ts"),
       `import * as v from "valibot";
 
@@ -129,9 +134,9 @@ export const schemas = {
     );
 
     // Create root migration
-    await Deno.writeTextFile(
+    await writeFile(
       path.join(testDir, "migrations", "2025_01_01_000000_create_users.ts"),
-      `import { migrationDefinition } from "@diister/mongodbee/migration";
+      `import { migrationDefinition } from "mongodbee/migration";
 import * as v from "valibot";
 
 export default migrationDefinition("2025_01_01_000000", "create_users", {
@@ -158,9 +163,9 @@ export default migrationDefinition("2025_01_01_000000", "create_users", {
     );
 
     // Create invalid migration (schema change without transformation)
-    await Deno.writeTextFile(
+    await writeFile(
       path.join(testDir, "migrations", "2025_01_02_000000_add_age.ts"),
-      `import { migrationDefinition } from "@diister/mongodbee/migration";
+      `import { migrationDefinition } from "mongodbee/migration";
 import * as v from "valibot";
 import rootMigration from "./2025_01_01_000000_create_users.ts";
 
@@ -195,19 +200,20 @@ export default migrationDefinition("2025_01_02_000000", "add_age", {
 
     assertEquals(errorThrown, true, "Check should fail for invalid migration");
   } finally {
-    await Deno.remove(testDir, { recursive: true });
+    await rm(testDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("check - detects schema mismatch", async () => {
-  const testDir = await Deno.makeTempDir();
+test("check - detects schema mismatch", async () => {
+  const testDir = await mkdtemp(path.join(tmpdir(), "mongodbee_"));
+  await installLibrary(testDir);
 
   try {
     // Create test directory structure
-    await Deno.mkdir(path.join(testDir, "migrations"), { recursive: true });
+    await mkdir(path.join(testDir, "migrations"), { recursive: true });
 
     // Create config
-    await Deno.writeTextFile(
+    await writeFile(
       path.join(testDir, "mongodbee.config.json"),
       JSON.stringify({
         paths: {
@@ -217,15 +223,14 @@ Deno.test("check - detects schema mismatch", async () => {
         database: {
           name: "test_check",
           connection: {
-            uri: Deno.env.get("MONGODBEE_TEST_URI") ??
-              "mongodb://localhost:27017",
+            uri: process.env.MONGODBEE_TEST_URI ?? "mongodb://localhost:27017",
           },
         },
       }),
     );
 
     // Create schemas with DIFFERENT schema than last migration
-    await Deno.writeTextFile(
+    await writeFile(
       path.join(testDir, "schemas.ts"),
       `import * as v from "valibot";
 
@@ -244,9 +249,9 @@ export const schemas = {
     );
 
     // Create migration
-    await Deno.writeTextFile(
+    await writeFile(
       path.join(testDir, "migrations", "2025_01_01_000000_create_users.ts"),
-      `import { migrationDefinition } from "@diister/mongodbee/migration";
+      `import { migrationDefinition } from "mongodbee/migration";
 import * as v from "valibot";
 
 export default migrationDefinition("2025_01_01_000000", "create_users", {
@@ -283,19 +288,20 @@ export default migrationDefinition("2025_01_01_000000", "create_users", {
       "Check should fail when schemas don't match",
     );
   } finally {
-    await Deno.remove(testDir, { recursive: true });
+    await rm(testDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("check - handles empty migrations directory", async () => {
-  const testDir = await Deno.makeTempDir();
+test("check - handles empty migrations directory", async () => {
+  const testDir = await mkdtemp(path.join(tmpdir(), "mongodbee_"));
+  await installLibrary(testDir);
 
   try {
     // Create test directory structure
-    await Deno.mkdir(path.join(testDir, "migrations"), { recursive: true });
+    await mkdir(path.join(testDir, "migrations"), { recursive: true });
 
     // Create config
-    await Deno.writeTextFile(
+    await writeFile(
       path.join(testDir, "mongodbee.config.json"),
       JSON.stringify({
         paths: {
@@ -305,15 +311,14 @@ Deno.test("check - handles empty migrations directory", async () => {
         database: {
           name: "test_check",
           connection: {
-            uri: Deno.env.get("MONGODBEE_TEST_URI") ??
-              "mongodb://localhost:27017",
+            uri: process.env.MONGODBEE_TEST_URI ?? "mongodb://localhost:27017",
           },
         },
       }),
     );
 
     // Create schemas
-    await Deno.writeTextFile(
+    await writeFile(
       path.join(testDir, "schemas.ts"),
       `import * as v from "valibot";
 
@@ -327,6 +332,6 @@ export const schemas = {
     // Run check command - should succeed with warning
     await checkCommand({ cwd: testDir });
   } finally {
-    await Deno.remove(testDir, { recursive: true });
+    await rm(testDir, { recursive: true, force: true });
   }
 });

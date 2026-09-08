@@ -12,33 +12,40 @@
  * @module
  */
 
-import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { test } from "../../+harness.ts";
+import process from "node:process";
+import { writeFile } from "node:fs/promises";
+import { assert, assertEquals, assertStringIncludes } from "../../+assert.ts";
 import { MongoClient } from "../../../src/mongodb.ts";
 import { initCommand } from "../../../src/migration/cli/commands/init.ts";
 import { generateCommand } from "../../../src/migration/cli/commands/generate.ts";
 import { migrateCommand } from "../../../src/migration/cli/commands/migrate.ts";
 import { getAppliedMigrationIds } from "../../../src/migration/state.ts";
 import {
+  CLI_ENTRY,
   delay,
   getMigrationPath,
   getMigrationsDir,
   listMigrationFiles,
   readFile,
+  runScript,
   withTempDir,
 } from "./shared.ts";
 
 // MongoDB test connection
-const TEST_MONGODB_URI = Deno.env.get("TEST_MONGODB_URI") ||
-  Deno.env.get("MONGODBEE_TEST_URI") ||
+const TEST_MONGODB_URI =
+  process.env.TEST_MONGODB_URI ||
+  process.env.MONGODBEE_TEST_URI ||
   "mongodb://localhost:27017";
 
 /**
  * Generate a unique database name for each test to avoid collisions
  */
 function generateTestDbName(): string {
-  return `mongodbee_test_migrate_${
-    crypto.randomUUID().replace(/-/g, "").substring(0, 8)
-  }`;
+  return `mongodbee_test_migrate_${crypto
+    .randomUUID()
+    .replace(/-/g, "")
+    .substring(0, 8)}`;
 }
 
 /**
@@ -78,13 +85,13 @@ async function withTestDb(
  * Setup test configuration
  */
 async function setupTestConfig(tempDir: string, dbName: string) {
-  await Deno.writeTextFile(
+  await writeFile(
     `${tempDir}/mongodbee.config.ts`,
     `export default { database: { connection: { uri: "${TEST_MONGODB_URI}" }, name: "${dbName}" }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
   );
 }
 
-Deno.test("migrate - applies single pending migration", async () => {
+test("migrate - applies single pending migration", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -106,7 +113,7 @@ Deno.test("migrate - applies single pending migration", async () => {
   });
 });
 
-Deno.test("migrate - applies multiple pending migrations in order", async () => {
+test("migrate - applies multiple pending migrations in order", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -132,7 +139,7 @@ Deno.test("migrate - applies multiple pending migrations in order", async () => 
   });
 });
 
-Deno.test("migrate - skips already applied migrations", async () => {
+test("migrate - skips already applied migrations", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -163,7 +170,7 @@ Deno.test("migrate - skips already applied migrations", async () => {
   });
 });
 
-Deno.test("migrate - dry run mode doesn't apply migrations", async () => {
+test("migrate - dry run mode doesn't apply migrations", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -185,7 +192,7 @@ Deno.test("migrate - dry run mode doesn't apply migrations", async () => {
   });
 });
 
-Deno.test("migrate - handles migrations with actual operations", async () => {
+test("migrate - handles migrations with actual operations", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -220,7 +227,7 @@ Deno.test("migrate - handles migrations with actual operations", async () => {
         migration.createCollection("users");`,
       );
 
-      await Deno.writeTextFile(migrationPath, content);
+      await writeFile(migrationPath, content);
 
       // Update schema file
       let updatedSchema = await readFile(`${tempDir}/schemas.ts`);
@@ -234,7 +241,7 @@ Deno.test("migrate - handles migrations with actual operations", async () => {
           },
         `,
       );
-      await Deno.writeTextFile(`${tempDir}/schemas.ts`, updatedSchema);
+      await writeFile(`${tempDir}/schemas.ts`, updatedSchema);
 
       // Apply migration
       await migrateCommand({ cwd: tempDir, force: true });
@@ -247,7 +254,7 @@ Deno.test("migrate - handles migrations with actual operations", async () => {
   });
 });
 
-Deno.test("migrate - reports success when no pending migrations", async () => {
+test("migrate - reports success when no pending migrations", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       // Setup
@@ -267,14 +274,14 @@ Deno.test("migrate - reports success when no pending migrations", async () => {
   });
 });
 
-Deno.test("migrate - validates schema consistency before applying", async () => {
+test("migrate - validates schema consistency before applying", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       // Setup
       await initCommand({ cwd: tempDir });
 
       // Update config
-      await Deno.writeTextFile(
+      await writeFile(
         `${tempDir}/mongodbee.config.ts`,
         `export default { db: { uri: "${TEST_MONGODB_URI}", name: "${dbName}" }, paths: { migrationsDir: "./migrations", schema: "./schemas.ts" } };`,
       );
@@ -289,7 +296,7 @@ Deno.test("migrate - validates schema consistency before applying", async () => 
   });
 });
 
-Deno.test("migrate - uses custom config path when provided", async () => {
+test("migrate - uses custom config path when provided", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -297,7 +304,7 @@ Deno.test("migrate - uses custom config path when provided", async () => {
       await setupTestConfig(tempDir, dbName); // Standard config for generate
 
       // Create custom config
-      await Deno.writeTextFile(
+      await writeFile(
         `${tempDir}/custom.config.ts`,
         `export default { database: { connection: { uri: "${TEST_MONGODB_URI}" }, name: "${dbName}" }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
       );
@@ -322,25 +329,13 @@ Deno.test("migrate - uses custom config path when provided", async () => {
 // Regression for C6: the documented `--progress` migrate option must be wired
 // into the CLI (registered in parseArgs and surfaced in help). Run the real CLI
 // entrypoint and assert the flag shows up in the migrate options.
-Deno.test("migrate - `--progress` flag is registered and documented in the CLI", async () => {
-  const mainUrl = new URL(
-    "../../../src/migration/cli/main.ts",
-    import.meta.url,
-  );
-  const command = new Deno.Command("deno", {
-    // `--no-check`: this asserts CLI wiring, not the type-health of the whole
-    // (possibly-in-flight) tree; the `help` path never runs migration code.
-    args: ["run", "--no-check", "-A", mainUrl.href, "help"],
-    stdout: "piped",
-    stderr: "piped",
-  });
-  const { code, stdout } = await command.output();
+test("migrate - `--progress` flag is registered and documented in the CLI", async () => {
+  const { code, stdout } = await runScript(CLI_ENTRY, ["help"]);
   assertEquals(code, 0, "CLI help should exit successfully");
-  const out = new TextDecoder().decode(stdout);
-  assertStringIncludes(out, "--progress");
+  assertStringIncludes(stdout, "--progress");
 });
 
-Deno.test("migrate - validates all migrations before applying any", async () => {
+test("migrate - validates all migrations before applying any", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Initialize project
@@ -358,7 +353,7 @@ export default {
     schemas: "./schemas.ts",
   },
 };`;
-      await Deno.writeTextFile(`${tempDir}/mongodbee.config.ts`, configContent);
+      await writeFile(`${tempDir}/mongodbee.config.ts`, configContent);
 
       // Generate first migration (valid)
       await generateCommand({ name: "create_users", cwd: tempDir });
@@ -378,8 +373,8 @@ export default {
       // Make first migration valid
       const migration1Path = getMigrationPath(tempDir, files[0]);
       const migration1Content = `
-import { migrationDefinition } from "@diister/mongodbee/migration";
-import { migrationBuilder } from "@diister/mongodbee/migration";
+import { migrationDefinition } from "mongodbee/migration";
+import { migrationBuilder } from "mongodbee/migration";
 import * as v from "valibot";
 
 const userSchema = {
@@ -394,13 +389,13 @@ export default migrationDefinition({
   schemas: { collections: { users: userSchema }, multiModels: {} },
   migrate: (b) => b.createCollection("users", userSchema).compile(),
 });`;
-      await Deno.writeTextFile(migration1Path, migration1Content);
+      await writeFile(migration1Path, migration1Content);
 
       // Make second migration valid
       const migration2Path = getMigrationPath(tempDir, files[1]);
       const migration2Content = `
-import { migrationDefinition } from "@diister/mongodbee/migration";
-import { migrationBuilder } from "@diister/mongodbee/migration";
+import { migrationDefinition } from "mongodbee/migration";
+import { migrationBuilder } from "mongodbee/migration";
 import * as v from "valibot";
 
 const userSchema = {
@@ -420,13 +415,13 @@ export default migrationDefinition({
   schemas: { collections: { users: userSchema, posts: postSchema }, multiModels: {} },
   migrate: (b) => b.createCollection("posts", postSchema).compile(),
 });`;
-      await Deno.writeTextFile(migration2Path, migration2Content);
+      await writeFile(migration2Path, migration2Content);
 
       // Make third migration INVALID (schema change without transformation)
       const migration3Path = getMigrationPath(tempDir, files[2]);
       const migration3Content = `
-import { migrationDefinition } from "@diister/mongodbee/migration";
-import { migrationBuilder } from "@diister/mongodbee/migration";
+import { migrationDefinition } from "mongodbee/migration";
+import { migrationBuilder } from "mongodbee/migration";
 import * as v from "valibot";
 
 const userSchema = {
@@ -447,7 +442,7 @@ export default migrationDefinition({
   schemas: { collections: { users: userSchema, posts: postSchema }, multiModels: {} },
   migrate: (b) => b.compile(), // ❌ NO TRANSFORMATION - This should fail validation
 });`;
-      await Deno.writeTextFile(migration3Path, migration3Content);
+      await writeFile(migration3Path, migration3Content);
 
       // Try to apply migrations
       let errorThrown = false;

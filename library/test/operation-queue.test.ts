@@ -1,7 +1,8 @@
-import { assertEquals, assertRejects } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assertEquals, assertRejects } from "./+assert.ts";
 import { createQueueSystem } from "../src/utils/queue.ts";
 
-Deno.test("MongoOperationQueue - Basic functionality", async () => {
+test("MongoOperationQueue - Basic functionality", async () => {
   const queue = createQueueSystem({ maxConcurrent: 2 });
 
   // Test basic operation
@@ -12,7 +13,7 @@ Deno.test("MongoOperationQueue - Basic functionality", async () => {
   assertEquals(result, "success");
 });
 
-Deno.test("MongoOperationQueue - Concurrency limit", async () => {
+test("MongoOperationQueue - Concurrency limit", async () => {
   const queue = createQueueSystem({ maxConcurrent: 2 });
   const executionOrder: number[] = [];
   const startTimes: number[] = [];
@@ -38,13 +39,13 @@ Deno.test("MongoOperationQueue - Concurrency limit", async () => {
   assertEquals(results.sort(), [1, 2, 3, 4]);
 
   // Check that only 2 operations started immediately (within 30ms of each other)
-  const firstBatch = startTimes.filter((time, index) =>
-    index === 0 || time - startTimes[0] < 30
+  const firstBatch = startTimes.filter(
+    (time, index) => index === 0 || time - startTimes[0] < 30,
   );
   assertEquals(firstBatch.length, 2);
 });
 
-Deno.test("MongoOperationQueue - Priority ordering", async () => {
+test("MongoOperationQueue - Priority ordering", async () => {
   const queue = createQueueSystem({ maxConcurrent: 1 });
   const executionOrder: number[] = [];
 
@@ -70,14 +71,14 @@ Deno.test("MongoOperationQueue - Priority ordering", async () => {
   assertEquals(executionOrder, [1, 2, 3]);
 });
 
-Deno.test("MongoOperationQueue - Timeout handling", async () => {
+test("MongoOperationQueue - Timeout handling", async () => {
   const queue = createQueueSystem({ defaultTimeout: 30 }); // Very short timeout
 
   try {
     await queue.add(() => {
       // Operation that just waits a bit longer than timeout
       return new Promise((resolve) =>
-        setTimeout(() => resolve("should not complete"), 50)
+        setTimeout(() => resolve("should not complete"), 50),
       );
     });
     throw new Error("Should have timed out");
@@ -89,7 +90,7 @@ Deno.test("MongoOperationQueue - Timeout handling", async () => {
   await new Promise((resolve) => setTimeout(resolve, 60));
 });
 
-Deno.test("MongoOperationQueue - Error handling", async () => {
+test("MongoOperationQueue - Error handling", async () => {
   const queue = createQueueSystem();
 
   await assertRejects(
@@ -102,7 +103,7 @@ Deno.test("MongoOperationQueue - Error handling", async () => {
   );
 });
 
-Deno.test("MongoOperationQueue - Error isolation between operations", async () => {
+test("MongoOperationQueue - Error isolation between operations", async () => {
   const queue = createQueueSystem({ maxConcurrent: 2 });
   const executionOrder: number[] = [];
 
@@ -141,7 +142,7 @@ Deno.test("MongoOperationQueue - Error isolation between operations", async () =
   assertEquals((results[3] as Error).message, "failure-4");
 });
 
-Deno.test("MongoOperationQueue - Retry functionality", async () => {
+test("MongoOperationQueue - Retry functionality", async () => {
   const queue = createQueueSystem({
     retry: true,
     retryAttempts: 2,
@@ -162,7 +163,7 @@ Deno.test("MongoOperationQueue - Retry functionality", async () => {
   assertEquals(attempts, 2);
 });
 
-Deno.test("MongoOperationQueue - Stats tracking", async () => {
+test("MongoOperationQueue - Stats tracking", async () => {
   const queue = createQueueSystem({ maxConcurrent: 1 });
 
   // Wait a bit to avoid timer conflicts from previous tests
@@ -201,7 +202,7 @@ Deno.test("MongoOperationQueue - Stats tracking", async () => {
   assertEquals(stats.failed, 0);
 });
 
-Deno.test("MongoOperationQueue - Drain functionality", async () => {
+test("MongoOperationQueue - Drain functionality", async () => {
   const queue = createQueueSystem({ maxConcurrent: 1 });
 
   // Wait a bit to avoid timer conflicts from previous tests
@@ -236,7 +237,7 @@ Deno.test("MongoOperationQueue - Drain functionality", async () => {
   assertEquals(stats.running, 0);
 });
 
-Deno.test("MongoOperationQueue - Clear functionality", async () => {
+test("MongoOperationQueue - Clear functionality", async () => {
   const queue = createQueueSystem({ maxConcurrent: 1 });
 
   // Add operations

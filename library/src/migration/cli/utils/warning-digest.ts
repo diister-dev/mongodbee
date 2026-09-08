@@ -153,33 +153,38 @@ export function formatWarningDigest(
   if (digest.groups.length === 0) return [];
 
   const { totalMigrations, verbose = false } = options;
-  const maxGroups = verbose ? digest.groups.length : options.maxGroups ?? 25;
+  const maxGroups = verbose ? digest.groups.length : (options.maxGroups ?? 25);
   const lines: string[] = [];
 
   const plural = (n: number, word: string) =>
     `${n} ${word}${n === 1 ? "" : "s"}`;
-  const headline = digest.occurrences > digest.groups.length
-    ? `${plural(digest.groups.length, "distinct warning")} (${
-      plural(digest.occurrences, "occurrence")
-    })`
-    : plural(digest.groups.length, "warning");
+  const headline =
+    digest.occurrences > digest.groups.length
+      ? `${plural(digest.groups.length, "distinct warning")} (${plural(
+          digest.occurrences,
+          "occurrence",
+        )})`
+      : plural(digest.groups.length, "warning");
   lines.push(`⚠ ${headline}`);
   lines.push("");
 
   for (const group of digest.groups.slice(0, maxGroups)) {
     lines.push(`  ⚠ ${group.representative}`);
 
-    const scope = group.migrations.length >= totalMigrations
-      ? `every migration (${totalMigrations})`
-      : group.migrations.length === 1
-      ? `1 migration`
-      : `${group.migrations.length}/${totalMigrations} migrations`;
+    const scope =
+      group.migrations.length >= totalMigrations
+        ? `every migration (${totalMigrations})`
+        : group.migrations.length === 1
+          ? `1 migration`
+          : `${group.migrations.length}/${totalMigrations} migrations`;
     const extraVariants = group.variants.length - 1;
     const detail = [
       `×${group.occurrences}`,
       scope,
       extraVariants > 0 ? `${plural(extraVariants, "other site")}` : undefined,
-    ].filter(Boolean).join(" · ");
+    ]
+      .filter(Boolean)
+      .join(" · ");
     lines.push(`      ${detail}`);
 
     if (verbose && extraVariants > 0) {

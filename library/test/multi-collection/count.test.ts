@@ -1,10 +1,11 @@
+import { test } from "../+harness.ts";
 import * as v from "../../src/schema.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../+assert.ts";
 import { withDatabase } from "../+shared.ts";
 import { defineModel } from "../../src/multi-collection-model.ts";
 
-Deno.test("MultiCollection: countDocuments functionality", async (t) => {
+test("MultiCollection: countDocuments functionality", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("catalog", {
       schema: {

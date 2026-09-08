@@ -7,8 +7,8 @@
  */
 
 import process from "node:process";
-import { blue, bold, dim, green, red, yellow } from "@std/fmt/colors";
-import * as path from "@std/path";
+import { blue, bold, dim, green, red, yellow } from "../../../utils/colors.ts";
+import * as path from "node:path";
 
 import { loadConfig } from "../../config/loader.ts";
 import { buildMigrationChain, loadAllMigrations } from "../../discovery.ts";
@@ -40,7 +40,9 @@ function parseSimulationMode(mode?: string): SimulationPowerLevel {
   if (!mode) return "normal";
   const normalized = mode.toLowerCase();
   if (
-    normalized === "quick" || normalized === "normal" || normalized === "hard"
+    normalized === "quick" ||
+    normalized === "normal" ||
+    normalized === "hard"
   ) {
     return normalized;
   }
@@ -74,10 +76,7 @@ export async function checkCommand(
     cwd,
     config.paths?.migrations || "./migrations",
   );
-  const schemaPath = path.resolve(
-    cwd,
-    config.paths?.schemas || "./schemas.ts",
-  );
+  const schemaPath = path.resolve(cwd, config.paths?.schemas || "./schemas.ts");
 
   console.log(dim(`Migrations directory: ${migrationsDir}`));
   console.log(dim(`Schemas file: ${schemaPath}`));

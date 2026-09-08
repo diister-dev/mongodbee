@@ -11,7 +11,8 @@
 // multi-collection (paginate's and aggregate's) and the scoped builder are
 // covered.
 
-import { assertRejects } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assertRejects } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
@@ -20,7 +21,7 @@ import { refId } from "../src/ids.ts";
 
 const EXPO = "exposition:expoaaaaa01";
 
-Deno.test("lookup: let.localValue is refused (multi aggregate builder)", async () => {
+test("lookup: let.localValue is refused (multi aggregate builder)", async () => {
   await withDatabase("lookup-let-reserved-multi-agg", async (db) => {
     const catalog = await multiCollection(db, "catalog", {
       participant: { name: v.string() },
@@ -41,7 +42,7 @@ Deno.test("lookup: let.localValue is refused (multi aggregate builder)", async (
   });
 });
 
-Deno.test("lookup: let.localValue is refused (multi paginate builder)", async () => {
+test("lookup: let.localValue is refused (multi paginate builder)", async () => {
   await withDatabase("lookup-let-reserved-multi-pag", async (db) => {
     const catalog = await multiCollection(db, "catalog", {
       participant: { name: v.string() },
@@ -49,21 +50,25 @@ Deno.test("lookup: let.localValue is refused (multi paginate builder)", async ()
     });
     await assertRejects(
       () =>
-        catalog.paginate("participant", {}, {
-          pipeline: (stage) => [
-            stage.lookup("badge", "_id", "participantId", {
-              as: "badges",
-              let: { localValue: "$name" },
-            }),
-          ],
-        }),
+        catalog.paginate(
+          "participant",
+          {},
+          {
+            pipeline: (stage) => [
+              stage.lookup("badge", "_id", "participantId", {
+                as: "badges",
+                let: { localValue: "$name" },
+              }),
+            ],
+          },
+        ),
       Error,
       "localValue",
     );
   });
 });
 
-Deno.test("lookup: let.localValue is refused (scoped builder, lookup + anyLookup)", async () => {
+test("lookup: let.localValue is refused (scoped builder, lookup + anyLookup)", async () => {
   await withDatabase("lookup-let-reserved-scoped", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
       schemaManagement: "auto",

@@ -39,9 +39,11 @@ function resolveStateCollection(
   state: DatabaseState,
   name: string,
 ): { content: Record<string, unknown>[] } | undefined {
-  return state.collections[name] ??
+  return (
+    state.collections[name] ??
     state.multiCollections[name] ??
-    state.scopedMultiCollections[name];
+    state.scopedMultiCollections[name]
+  );
 }
 
 function getFieldByPath(doc: Record<string, unknown>, path: string): unknown {
@@ -120,11 +122,15 @@ function applyOperator(
     case "$ne":
       return !valuesEqual(fieldValue, operand);
     case "$in":
-      return Array.isArray(operand) &&
-        operand.some((o) => valuesEqual(fieldValue, o));
+      return (
+        Array.isArray(operand) &&
+        operand.some((o) => valuesEqual(fieldValue, o))
+      );
     case "$nin":
-      return Array.isArray(operand) &&
-        !operand.some((o) => valuesEqual(fieldValue, o));
+      return (
+        Array.isArray(operand) &&
+        !operand.some((o) => valuesEqual(fieldValue, o))
+      );
     case "$gt": {
       const c = compareValues(fieldValue, operand);
       return c !== undefined && c > 0;
@@ -173,7 +179,7 @@ function matchesWhere(
     const fieldValue = getFieldByPath(doc, key);
     if (isOperatorExpression(condition)) {
       return Object.entries(condition).every(([op, operand]) =>
-        applyOperator(fieldValue, op, operand)
+        applyOperator(fieldValue, op, operand),
       );
     }
     return valuesEqual(fieldValue, condition);
@@ -349,7 +355,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
               "",
               sig,
               i,
-            )
+            ),
           ),
         );
         collection.content = collection.content.filter(
@@ -403,7 +409,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
               operation.documentType,
               sig,
               i,
-            )
+            ),
           ),
         );
         multiCollection.content = multiCollection.content.filter(
@@ -420,8 +426,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
             `Multi-model instance ${operation.collectionName} does not exist`,
           );
         }
-        const sig =
-          `${operation.collectionName}:${operation.modelType}:${operation.documentType}`;
+        const sig = `${operation.collectionName}:${operation.modelType}:${operation.documentType}`;
         multiCollection.content.push(
           ...operation.documents.map((doc: unknown, i) => {
             const typedDoc = doc as Record<string, unknown>;
@@ -447,8 +452,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
             `Multi-model instance ${operation.collectionName} does not exist`,
           );
         }
-        const sig =
-          `${operation.collectionName}:${operation.modelType}:${operation.documentType}`;
+        const sig = `${operation.collectionName}:${operation.modelType}:${operation.documentType}`;
         const seededIds = new Set(
           operation.documents.map((doc: unknown, i) =>
             seedId(
@@ -457,7 +461,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
               operation.documentType,
               sig,
               i,
-            )
+            ),
           ),
         );
         multiCollection.content = multiCollection.content.filter(
@@ -470,9 +474,9 @@ export function createMemoryApplier(migration: MigrationDefinition) {
       apply: (state, operation) => {
         const modelType = operation.modelType;
         const sig = `${operation.modelType}:${operation.documentType}`;
-        for (
-          const [_instanceName, instance] of Object.entries(state.multiModels)
-        ) {
+        for (const [_instanceName, instance] of Object.entries(
+          state.multiModels,
+        )) {
           if (instance.modelType === modelType) {
             instance.content.push(
               ...operation.documents.map((doc: unknown, i) => {
@@ -505,12 +509,12 @@ export function createMemoryApplier(migration: MigrationDefinition) {
               operation.documentType,
               sig,
               i,
-            )
+            ),
           ),
         );
-        for (
-          const [_instanceName, instance] of Object.entries(state.multiModels)
-        ) {
+        for (const [_instanceName, instance] of Object.entries(
+          state.multiModels,
+        )) {
           if (instance.modelType === modelType) {
             instance.content = instance.content.filter(
               (doc) => !seededIds.has(String(doc._id)),
@@ -628,9 +632,9 @@ export function createMemoryApplier(migration: MigrationDefinition) {
     transform_multimodel_instances_type: {
       apply: (state, operation) => {
         const modelType = operation.modelType;
-        for (
-          const [_instanceName, instance] of Object.entries(state.multiModels)
-        ) {
+        for (const [_instanceName, instance] of Object.entries(
+          state.multiModels,
+        )) {
           if (instance.modelType === modelType) {
             instance.content = instance.content.map((doc) => {
               if (doc._type === operation.documentType) {
@@ -647,9 +651,9 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           throw new Error(`Operation is irreversible`);
         }
         const modelType = operation.modelType;
-        for (
-          const [_instanceName, instance] of Object.entries(state.multiModels)
-        ) {
+        for (const [_instanceName, instance] of Object.entries(
+          state.multiModels,
+        )) {
           if (instance.modelType === modelType) {
             instance.content = instance.content.map((doc) => {
               if (doc._type === operation.documentType) {
@@ -679,7 +683,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
 
         const prefix = extractIdPrefix(operation.targetIdSchema, "");
         const matched = src.content.filter((doc) =>
-          matchesWhere(doc, operation.from.where)
+          matchesWhere(doc, operation.from.where),
         );
 
         for (const doc of matched) {
@@ -726,7 +730,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
                 migrationId,
                 operation.from.collection,
                 String(doc._id),
-              )
+              ),
             ),
         );
         tgt.content = tgt.content.filter(
@@ -760,10 +764,11 @@ export function createMemoryApplier(migration: MigrationDefinition) {
        * catch-up) therefore requires `onConflict: "skip"` or `"merge"`.
        */
       apply: (state, operation) => {
-        const target =
-          (state.scopedMultiCollections[operation.into.collection] ??= {
-            content: [],
-          });
+        const target = (state.scopedMultiCollections[
+          operation.into.collection
+        ] ??= {
+          content: [],
+        });
 
         // Resolve the concrete source(s) and the docs each contributes. Each
         // source carries `dropWhole` — how to consume it when nothing was
@@ -812,9 +817,9 @@ export function createMemoryApplier(migration: MigrationDefinition) {
             });
           }
         } else if (from.kind === "multiModelInstances") {
-          for (
-            const [instanceName, inst] of Object.entries(state.multiModels)
-          ) {
+          for (const [instanceName, inst] of Object.entries(
+            state.multiModels,
+          )) {
             if (inst.modelType !== from.model) continue;
             // Instances are named `<model>:<id>` — same rule the mongodb
             // applier gets from `discoverMultiCollectionInstances`. Without it
@@ -826,9 +831,8 @@ export function createMemoryApplier(migration: MigrationDefinition) {
               // Skip the multi-collection's internal bookkeeping docs
               // (`_information`/`_migrations`) — mongodbee plumbing, not real
               // sub-documents (mirrors the mongodb applier).
-              if (
-                typeof doc._type === "string" && doc._type.startsWith("_")
-              ) continue;
+              if (typeof doc._type === "string" && doc._type.startsWith("_"))
+                continue;
               items.push({
                 doc,
                 ctx: { instanceName },
@@ -885,7 +889,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
               : { ...doc };
             const toType = operation.toType
               ? operation.toType(doc, ctx)
-              : (mapped._type ?? doc._type) as string;
+              : ((mapped._type ?? doc._type) as string);
             let id = mapped._id;
             if (id === undefined || id === null) {
               // DETERMINISTIC id (not a random UUID) so a replay lands the same
@@ -1086,9 +1090,9 @@ export function createMemoryApplier(migration: MigrationDefinition) {
     delete_multimodel_instances_type: {
       apply: (state, operation) => {
         const modelType = operation.modelType;
-        for (
-          const [_instanceName, instance] of Object.entries(state.multiModels)
-        ) {
+        for (const [_instanceName, instance] of Object.entries(
+          state.multiModels,
+        )) {
           if (instance.modelType === modelType) {
             // Remove all documents of this type from this instance
             instance.content = instance.content.filter(
@@ -1183,23 +1187,24 @@ export function createMemoryApplier(migration: MigrationDefinition) {
             `Scoped multi-collection ${operation.collectionName} does not exist`,
           );
         }
-        const sig =
-          `${operation.collectionName}:${operation.scope}:${operation.documentType}`;
-        coll.content.push(...operation.documents.map((doc: unknown, i) => {
-          const typedDoc = doc as Record<string, unknown>;
-          return {
-            ...typedDoc,
-            _id: seedId(
-              typedDoc,
-              operation.schema._id,
-              operation.documentType,
-              sig,
-              i,
-            ),
-            _type: operation.documentType,
-            _scope: operation.scope,
-          };
-        }));
+        const sig = `${operation.collectionName}:${operation.scope}:${operation.documentType}`;
+        coll.content.push(
+          ...operation.documents.map((doc: unknown, i) => {
+            const typedDoc = doc as Record<string, unknown>;
+            return {
+              ...typedDoc,
+              _id: seedId(
+                typedDoc,
+                operation.schema._id,
+                operation.documentType,
+                sig,
+                i,
+              ),
+              _type: operation.documentType,
+              _scope: operation.scope,
+            };
+          }),
+        );
         return state;
       },
       reverse: (state, operation) => {
@@ -1209,8 +1214,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
             `Scoped multi-collection ${operation.collectionName} does not exist`,
           );
         }
-        const sig =
-          `${operation.collectionName}:${operation.scope}:${operation.documentType}`;
+        const sig = `${operation.collectionName}:${operation.scope}:${operation.documentType}`;
         const seededIds = new Set(
           operation.documents.map((doc: unknown, i) =>
             seedId(
@@ -1219,7 +1223,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
               operation.documentType,
               sig,
               i,
-            )
+            ),
           ),
         );
         coll.content = coll.content.filter(
@@ -1293,9 +1297,9 @@ export function createMemoryApplier(migration: MigrationDefinition) {
         const oldTypePrefix = `${operation.oldTypeName}:`;
         const newTypePrefix = `${operation.newTypeName}:`;
 
-        for (
-          const [_instanceName, instance] of Object.entries(state.multiModels)
-        ) {
+        for (const [_instanceName, instance] of Object.entries(
+          state.multiModels,
+        )) {
           if (instance.modelType === modelType) {
             // Rename all documents from oldTypeName to newTypeName
             // Also update _id if it starts with "oldTypeName:"
@@ -1306,7 +1310,8 @@ export function createMemoryApplier(migration: MigrationDefinition) {
 
                 // If _id is a string starting with "oldTypeName:", replace the prefix
                 if (
-                  typeof oldId === "string" && oldId.startsWith(oldTypePrefix)
+                  typeof oldId === "string" &&
+                  oldId.startsWith(oldTypePrefix)
                 ) {
                   newId = newTypePrefix + oldId.slice(oldTypePrefix.length);
                 }
@@ -1324,9 +1329,9 @@ export function createMemoryApplier(migration: MigrationDefinition) {
         const oldTypePrefix = `${operation.oldTypeName}:`;
         const newTypePrefix = `${operation.newTypeName}:`;
 
-        for (
-          const [_instanceName, instance] of Object.entries(state.multiModels)
-        ) {
+        for (const [_instanceName, instance] of Object.entries(
+          state.multiModels,
+        )) {
           if (instance.modelType === modelType) {
             // Reverse: rename from newTypeName back to oldTypeName
             // Also restore _id prefix if it starts with "newTypeName:"
@@ -1340,8 +1345,8 @@ export function createMemoryApplier(migration: MigrationDefinition) {
                   typeof currentId === "string" &&
                   currentId.startsWith(newTypePrefix)
                 ) {
-                  restoredId = oldTypePrefix +
-                    currentId.slice(newTypePrefix.length);
+                  restoredId =
+                    oldTypePrefix + currentId.slice(newTypePrefix.length);
                 }
 
                 return {
@@ -1368,7 +1373,6 @@ export function createMemoryApplier(migration: MigrationDefinition) {
       throw new Error(`No handler for operation type: ${operation.type}`);
     }
     // Type assertion is safe here because we're dispatching to the correct handler based on operation.type
-    // deno-lint-ignore no-explicit-any
     return await handler(state, operation as any);
   }
 
@@ -1383,7 +1387,6 @@ export function createMemoryApplier(migration: MigrationDefinition) {
       );
     }
     // Type assertion is safe here because we're dispatching to the correct handler based on operation.type
-    // deno-lint-ignore no-explicit-any
     return await handler(state, operation as any);
   }
 
@@ -1412,9 +1415,9 @@ export function createMemoryApplier(migration: MigrationDefinition) {
       if (irreversible.length > 0) {
         throw new Error(
           `Cannot roll back: migration contains ${irreversible.length} ` +
-            `irreversible operation(s) [${
-              irreversible.map((o) => o.type).join(", ")
-            }]. ` +
+            `irreversible operation(s) [${irreversible
+              .map((o) => o.type)
+              .join(", ")}]. ` +
             `Rollback aborted before any changes were made.`,
         );
       }
@@ -1422,9 +1425,8 @@ export function createMemoryApplier(migration: MigrationDefinition) {
 
     // Rollback undoes operations in LIFO order — reverse the list for 'down'
     // so e.g. a `seed` is undone before the `create_collection` it depends on.
-    const ordered = direction === "down"
-      ? [...operations].reverse()
-      : operations;
+    const ordered =
+      direction === "down" ? [...operations].reverse() : operations;
 
     for (const operation of ordered) {
       if (direction === "up") {

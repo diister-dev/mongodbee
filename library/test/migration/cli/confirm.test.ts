@@ -6,7 +6,8 @@
  * resolving, so the `close` handler's `resolve(false)` always won.
  */
 
-import { assertEquals } from "@std/assert";
+import { test } from "../../+harness.ts";
+import { assertEquals } from "../../+assert.ts";
 import { PassThrough } from "node:stream";
 import { confirm } from "../../../src/migration/cli/utils/confirm.ts";
 
@@ -17,21 +18,21 @@ function streams() {
   return { input, output };
 }
 
-Deno.test("confirm - 'yes' confirms", async () => {
+test("confirm - 'yes' confirms", async () => {
   const { input, output } = streams();
   const answer = confirm("Proceed?", { input, output });
   input.write("yes\n");
   assertEquals(await answer, true);
 });
 
-Deno.test("confirm - answer is case-insensitive and trimmed", async () => {
+test("confirm - answer is case-insensitive and trimmed", async () => {
   const { input, output } = streams();
   const answer = confirm("Proceed?", { input, output });
   input.write("  YeS \r\n");
   assertEquals(await answer, true);
 });
 
-Deno.test("confirm - anything but yes refuses", async () => {
+test("confirm - anything but yes refuses", async () => {
   for (const line of ["no\n", "y\n", "\n", "yes please\n"]) {
     const { input, output } = streams();
     const answer = confirm("Proceed?", { input, output });
@@ -40,20 +41,20 @@ Deno.test("confirm - anything but yes refuses", async () => {
   }
 });
 
-Deno.test("confirm - input closing without an answer refuses", async () => {
+test("confirm - input closing without an answer refuses", async () => {
   const { input, output } = streams();
   const answer = confirm("Proceed?", { input, output });
   input.end();
   assertEquals(await answer, false);
 });
 
-Deno.test("confirm - answer arriving before the prompt is still read", async () => {
+test("confirm - answer arriving before the prompt is still read", async () => {
   const { input, output } = streams();
   input.write("yes\n");
   assertEquals(await confirm("Proceed?", { input, output }), true);
 });
 
-Deno.test("confirm - two prompts in a row each get their own answer", async () => {
+test("confirm - two prompts in a row each get their own answer", async () => {
   const first = streams();
   const p1 = confirm("First?", first);
   first.input.write("yes\n");

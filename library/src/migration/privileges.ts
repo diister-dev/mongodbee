@@ -116,34 +116,34 @@ export interface PrivilegeEvaluation {
  */
 export type MigrationPrivilegeCheck =
   | {
-    /** Every required action is granted database-wide */
-    status: "ok";
-    database: string;
-    users: Array<{ user: string; db: string }>;
-    roles: Array<{ role: string; db: string }>;
-    required: string[];
-  }
+      /** Every required action is granted database-wide */
+      status: "ok";
+      database: string;
+      users: Array<{ user: string; db: string }>;
+      roles: Array<{ role: string; db: string }>;
+      required: string[];
+    }
   | {
-    /** At least one required action is not granted database-wide */
-    status: "missing";
-    database: string;
-    users: Array<{ user: string; db: string }>;
-    roles: Array<{ role: string; db: string }>;
-    required: string[];
-    missing: string[];
-    collectionScoped: Record<string, string[]>;
-  }
+      /** At least one required action is not granted database-wide */
+      status: "missing";
+      database: string;
+      users: Array<{ user: string; db: string }>;
+      roles: Array<{ role: string; db: string }>;
+      required: string[];
+      missing: string[];
+      collectionScoped: Record<string, string[]>;
+    }
   | {
-    /**
-     * Nothing could be verified: access control is disabled (no authenticated
-     * user, so nothing can be refused either), or the server did not answer
-     * `connectionStatus` the way MongoDB does. Never a reason to abort.
-     */
-    status: "skipped";
-    database: string;
-    reason: string;
-    required: string[];
-  };
+      /**
+       * Nothing could be verified: access control is disabled (no authenticated
+       * user, so nothing can be refused either), or the server did not answer
+       * `connectionStatus` the way MongoDB does. Never a reason to abort.
+       */
+      status: "skipped";
+      database: string;
+      reason: string;
+      required: string[];
+    };
 
 /**
  * Whether a privilege resource covers every (non-system) collection of `dbName`

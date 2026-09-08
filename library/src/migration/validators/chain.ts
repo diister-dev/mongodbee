@@ -85,7 +85,9 @@ export interface ChainValidatorOptions {
  * Migration chain validator for ensuring integrity and consistency
  */
 export class ChainValidator {
-  constructor(private options: ChainValidatorOptions = {}) {
+  private options: ChainValidatorOptions;
+
+  constructor(options: ChainValidatorOptions = {}) {
     // Set defaults
     this.options = {
       allowMultipleRoots: false,
@@ -127,8 +129,8 @@ export class ChainValidator {
 
     // Advanced validations
     this.validateCircularDependencies(migrations, errors);
-    const { roots, leaves, depth, topologicalOrder } = this
-      .analyzeChainStructure(migrations, errors, warnings);
+    const { roots, leaves, depth, topologicalOrder } =
+      this.analyzeChainStructure(migrations, errors, warnings);
 
     // Configuration-based validations
     this.validateRootsAndLeaves(roots, leaves, errors, warnings);
@@ -195,9 +197,9 @@ export class ChainValidator {
         (!migration.parent || typeof migration.parent !== "object")
       ) {
         errors.push(
-          `Migration "${migration.id}" has invalid parent reference: ${
-            JSON.stringify(migration.parent)
-          }`,
+          `Migration "${migration.id}" has invalid parent reference: ${JSON.stringify(
+            migration.parent,
+          )}`,
         );
       }
     }
@@ -468,9 +470,9 @@ export class ChainValidator {
       );
     } else if (roots.length > 1 && !this.options.allowMultipleRoots) {
       errors.push(
-        `Multiple root migrations found: ${
-          roots.join(", ")
-        }. Set allowMultipleRoots: true if this is intended`,
+        `Multiple root migrations found: ${roots.join(
+          ", ",
+        )}. Set allowMultipleRoots: true if this is intended`,
       );
     }
 
@@ -480,9 +482,9 @@ export class ChainValidator {
       );
     } else if (leaves.length > 1 && !this.options.allowMultipleLeaves) {
       errors.push(
-        `Multiple leaf migrations found: ${
-          leaves.join(", ")
-        }. Set allowMultipleLeaves: true if this is intended`,
+        `Multiple leaf migrations found: ${leaves.join(
+          ", ",
+        )}. Set allowMultipleLeaves: true if this is intended`,
       );
     }
   }

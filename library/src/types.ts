@@ -30,3 +30,17 @@ export type ScopedMetaField = "_id" | "_type" | "_scope";
  * ```
  */
 export type OmitScopedMeta<T> = Omit<T, ScopedMetaField>;
+
+/**
+ * One stage of a MongoDB aggregation pipeline.
+ *
+ * Declared here, once. It used to be spelled out identically in
+ * `collection.ts`, `multi-collection.ts` and `scoped-multi-collection.ts`, and
+ * the generated `.d.ts` then carried three top-level `AggregationStage`
+ * declarations that `mod.ts` re-exported through `export *`. `deno check` was
+ * fine with it, but `tsc` rejected the published types outright — consumers
+ * building with `skipLibCheck: false` got
+ * `TS2308: Module "./src/collection.js" has already exported a member named
+ * 'AggregationStage'` and could not typecheck at all.
+ */
+export type AggregationStage = Record<string, unknown>;

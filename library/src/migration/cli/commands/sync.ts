@@ -8,9 +8,9 @@
  */
 
 import process from "node:process";
-import { blue, bold, dim, green, red, yellow } from "@std/fmt/colors";
+import { blue, bold, dim, green, red, yellow } from "../../../utils/colors.ts";
 import { MongoClient } from "../../../mongodb.ts";
-import * as path from "@std/path";
+import * as path from "node:path";
 
 import { loadConfig } from "../../config/loader.ts";
 import { buildMigrationChain, loadAllMigrations } from "../../discovery.ts";
@@ -50,8 +50,8 @@ export async function syncCommand(
       cwd,
       config.paths?.migrations || "./migrations",
     );
-    const connectionUri = config.database?.connection?.uri ||
-      "mongodb://localhost:27017";
+    const connectionUri =
+      config.database?.connection?.uri || "mongodb://localhost:27017";
     const dbName = config.database?.name || "myapp";
 
     console.log(dim(`Migrations directory: ${migrationsDir}`));
@@ -67,7 +67,8 @@ export async function syncCommand(
     // Pre-flight: sync is nothing BUT validator and index DDL, so an account
     // without `collMod` fails on the first collection. Refuse it up-front.
     await ensureMigrationPrivileges(db, {
-      skip: options.skipPrivilegeCheck ??
+      skip:
+        options.skipPrivilegeCheck ??
         (options as Record<string, unknown>)["skip-privilege-check"] === true,
     });
 
@@ -136,9 +137,9 @@ export async function syncCommand(
 
     console.log(
       bold(
-        `Syncing to latest migration: ${blue(latestMigration.name)} ${
-          dim(`(${latestMigration.id})`)
-        }`,
+        `Syncing to latest migration: ${blue(latestMigration.name)} ${dim(
+          `(${latestMigration.id})`,
+        )}`,
       ),
     );
     console.log();
@@ -148,27 +149,27 @@ export async function syncCommand(
       if (latestMigration.schemas.collections) {
         console.log(
           dim(
-            `  Collections: ${
-              Object.keys(latestMigration.schemas.collections).join(", ")
-            }`,
+            `  Collections: ${Object.keys(
+              latestMigration.schemas.collections,
+            ).join(", ")}`,
           ),
         );
       }
       if (latestMigration.schemas.multiCollections) {
         console.log(
           dim(
-            `  Multi-collections: ${
-              Object.keys(latestMigration.schemas.multiCollections).join(", ")
-            }`,
+            `  Multi-collections: ${Object.keys(
+              latestMigration.schemas.multiCollections,
+            ).join(", ")}`,
           ),
         );
       }
       if (latestMigration.schemas.multiModels) {
         console.log(
           dim(
-            `  Multi-models: ${
-              Object.keys(latestMigration.schemas.multiModels).join(", ")
-            }`,
+            `  Multi-models: ${Object.keys(
+              latestMigration.schemas.multiModels,
+            ).join(", ")}`,
           ),
         );
       }

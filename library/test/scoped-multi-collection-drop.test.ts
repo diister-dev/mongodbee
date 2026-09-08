@@ -1,7 +1,8 @@
 // drop(): the whole-collection nuke. Requires { force: true }; drops the
 // underlying physical MongoDB collection (every scope at once).
 
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals, assertRejects } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";
@@ -31,18 +32,13 @@ async function collectionExists(
   return cols.length > 0;
 }
 
-Deno.test("drop() without { force: true } throws and leaves the collection intact", async () => {
+test("drop() without { force: true } throws and leaves the collection intact", async () => {
   await withDatabase("smc2-drop-noforce", async (db) => {
     const catalog = await makeCatalog(db);
     const expo = catalog.scope(EXPO_A);
     await expo.insertOne("artwork", { title: "A", year: 1 });
 
-    await assertRejects(
-      // deno-lint-ignore no-explicit-any
-      () => catalog.drop({} as any),
-      Error,
-      "force",
-    );
+    await assertRejects(() => catalog.drop({} as any), Error, "force");
 
     // Collection and its data are untouched.
     assert(await collectionExists(db, "catalog"), "collection still exists");
@@ -50,7 +46,7 @@ Deno.test("drop() without { force: true } throws and leaves the collection intac
   });
 });
 
-Deno.test("drop({ force: true }) drops the physical collection and every scope in it", async () => {
+test("drop({ force: true }) drops the physical collection and every scope in it", async () => {
   await withDatabase("smc2-drop-force", async (db) => {
     const catalog = await makeCatalog(db);
     await catalog.scope(EXPO_A).insertOne("artwork", { title: "A", year: 1 });

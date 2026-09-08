@@ -1,9 +1,10 @@
-import { assert } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert } from "./+assert.ts";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
 import * as v from "../src/schema.ts";
 
-Deno.test("integer validation rejects non-integer numbers", async (t) => {
+test("integer validation rejects non-integer numbers", async (t) => {
   await withDatabase(t.name, async (db) => {
     const schema = {
       count: v.pipe(v.number(), v.integer()),

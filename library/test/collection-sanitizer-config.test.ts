@@ -1,6 +1,8 @@
+import { test } from "./+harness.ts";
+import process from "node:process";
 import * as v from "../src/schema.ts";
 import { collection } from "../src/collection.ts";
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "./+assert.ts";
 import { MongoClient } from "../src/mongodb.ts";
 import { TEST_URI } from "./+shared.ts";
 import { removeField } from "../src/sanitizer.ts";
@@ -10,7 +12,7 @@ let client: MongoClient;
 let db: ReturnType<MongoClient["db"]>;
 
 async function setupTestDb() {
-  const mongoUrl = Deno.env.get("MONGODB_URL") || TEST_URI;
+  const mongoUrl = process.env.MONGODB_URL || TEST_URI;
   client = new MongoClient(mongoUrl);
   await client.connect();
   db = client.db("test_sanitizer_config");
@@ -30,14 +32,16 @@ const userSchema = {
   email: v.optional(v.string()),
   phone: v.optional(v.string()),
   age: v.optional(v.number()),
-  address: v.optional(v.object({
-    street: v.string(),
-    city: v.optional(v.string()),
-    zipcode: v.optional(v.string()),
-  })),
+  address: v.optional(
+    v.object({
+      street: v.string(),
+      city: v.optional(v.string()),
+      zipcode: v.optional(v.string()),
+    }),
+  ),
 };
 
-Deno.test("Collection with default undefined behavior (remove)", async () => {
+test("Collection with default undefined behavior (remove)", async () => {
   await setupTestDb();
 
   try {
@@ -65,7 +69,7 @@ Deno.test("Collection with default undefined behavior (remove)", async () => {
   }
 });
 
-Deno.test("Collection with ignore undefined behavior", async () => {
+test("Collection with ignore undefined behavior", async () => {
   await setupTestDb();
 
   try {
@@ -103,7 +107,7 @@ Deno.test("Collection with ignore undefined behavior", async () => {
   }
 });
 
-Deno.test("Collection with error undefined behavior", async () => {
+test("Collection with error undefined behavior", async () => {
   await setupTestDb();
 
   try {
@@ -128,7 +132,7 @@ Deno.test("Collection with error undefined behavior", async () => {
   }
 });
 
-Deno.test("Explicit field removal with removeField()", async () => {
+test("Explicit field removal with removeField()", async () => {
   await setupTestDb();
 
   try {
@@ -166,7 +170,7 @@ Deno.test("Explicit field removal with removeField()", async () => {
   }
 });
 
-Deno.test("Complex nested object with mixed undefined behaviors", async () => {
+test("Complex nested object with mixed undefined behaviors", async () => {
   await setupTestDb();
 
   try {
@@ -223,17 +227,21 @@ Deno.test("Complex nested object with mixed undefined behaviors", async () => {
   }
 });
 
-Deno.test("Array sanitization with undefined values", async () => {
+test("Array sanitization with undefined values", async () => {
   await setupTestDb();
 
   try {
     const usersSchema = {
       name: v.string(),
       tags: v.optional(v.array(v.string())),
-      contacts: v.optional(v.array(v.object({
-        type: v.string(),
-        value: v.optional(v.string()),
-      }))),
+      contacts: v.optional(
+        v.array(
+          v.object({
+            type: v.string(),
+            value: v.optional(v.string()),
+          }),
+        ),
+      ),
     };
 
     const users = await collection(db, "users_arrays", usersSchema);
@@ -266,7 +274,7 @@ Deno.test("Array sanitization with undefined values", async () => {
   }
 });
 
-Deno.test("Behavior consistency across insert and replace operations", async () => {
+test("Behavior consistency across insert and replace operations", async () => {
   await setupTestDb();
 
   try {
@@ -306,7 +314,7 @@ Deno.test("Behavior consistency across insert and replace operations", async () 
   }
 });
 
-Deno.test("Collection updateOne with removeField()", async () => {
+test("Collection updateOne with removeField()", async () => {
   await setupTestDb();
 
   try {
@@ -328,11 +336,14 @@ Deno.test("Collection updateOne with removeField()", async () => {
     assertEquals(initialUser.age, 30);
 
     // Remove email field using $set with removeField()
-    await users.updateOne({ _id: userId }, {
-      $set: {
-        email: removeField(),
+    await users.updateOne(
+      { _id: userId },
+      {
+        $set: {
+          email: removeField(),
+        },
       },
-    });
+    );
 
     // Verify email was removed
     const afterEmailRemoval = await users.findOne({ _id: userId });
@@ -343,13 +354,16 @@ Deno.test("Collection updateOne with removeField()", async () => {
     assertEquals(afterEmailRemoval.age, 30);
 
     // Mix update and remove in same operation
-    await users.updateOne({ _id: userId }, {
-      $set: {
-        name: "John Doe",
-        phone: removeField(),
-        age: removeField(),
+    await users.updateOne(
+      { _id: userId },
+      {
+        $set: {
+          name: "John Doe",
+          phone: removeField(),
+          age: removeField(),
+        },
       },
-    });
+    );
 
     // Verify mixed operation
     const afterMixedUpdate = await users.findOne({ _id: userId });
@@ -363,7 +377,7 @@ Deno.test("Collection updateOne with removeField()", async () => {
   }
 });
 
-Deno.test("Collection findOneAndUpdate with removeField()", async () => {
+test("Collection findOneAndUpdate with removeField()", async () => {
   await setupTestDb();
 
   try {

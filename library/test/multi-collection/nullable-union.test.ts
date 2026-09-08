@@ -1,5 +1,6 @@
+import { test } from "../+harness.ts";
 import * as v from "../../src/schema.ts";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../+assert.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import assert from "node:assert";
@@ -18,18 +19,20 @@ import { defineModel } from "../../src/multi-collection-model.ts";
 // NULLABLE FIELD TESTS
 // =============================================================================
 
-Deno.test("MultiCollection: Nullable object - null to object transition", async (t) => {
+test("MultiCollection: Nullable object - null to object transition", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
         job: {
           name: v.string(),
           status: v.string(),
-          request: v.nullable(v.object({
-            type: v.string(),
-            requestedAt: v.date(),
-            requestedBy: v.string(),
-          })),
+          request: v.nullable(
+            v.object({
+              type: v.string(),
+              requestedAt: v.date(),
+              requestedBy: v.string(),
+            }),
+          ),
         },
       },
     });
@@ -65,16 +68,18 @@ Deno.test("MultiCollection: Nullable object - null to object transition", async 
   });
 });
 
-Deno.test("MultiCollection: Nullable object - object to null transition", async (t) => {
+test("MultiCollection: Nullable object - object to null transition", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
         job: {
           name: v.string(),
-          request: v.nullable(v.object({
-            type: v.string(),
-            requestedAt: v.date(),
-          })),
+          request: v.nullable(
+            v.object({
+              type: v.string(),
+              requestedAt: v.date(),
+            }),
+          ),
         },
       },
     });
@@ -103,18 +108,20 @@ Deno.test("MultiCollection: Nullable object - object to null transition", async 
   });
 });
 
-Deno.test("MultiCollection: Nullable object - full replacement removes old fields", async (t) => {
+test("MultiCollection: Nullable object - full replacement removes old fields", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
         job: {
           name: v.string(),
-          request: v.nullable(v.object({
-            type: v.string(),
-            requestedAt: v.date(),
-            requestedBy: v.string(),
-            reason: v.optional(v.string()),
-          })),
+          request: v.nullable(
+            v.object({
+              type: v.string(),
+              requestedAt: v.date(),
+              requestedBy: v.string(),
+              reason: v.optional(v.string()),
+            }),
+          ),
         },
       },
     });
@@ -152,7 +159,7 @@ Deno.test("MultiCollection: Nullable object - full replacement removes old field
   });
 });
 
-Deno.test("MultiCollection: Deeply nested nullable object", async (t) => {
+test("MultiCollection: Deeply nested nullable object", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
@@ -160,10 +167,12 @@ Deno.test("MultiCollection: Deeply nested nullable object", async (t) => {
           name: v.string(),
           profile: v.object({
             bio: v.string(),
-            contact: v.nullable(v.object({
-              email: v.string(),
-              phone: v.optional(v.string()),
-            })),
+            contact: v.nullable(
+              v.object({
+                email: v.string(),
+                phone: v.optional(v.string()),
+              }),
+            ),
           }),
         },
       },
@@ -198,7 +207,7 @@ Deno.test("MultiCollection: Deeply nested nullable object", async (t) => {
 // UNION FIELD TESTS
 // =============================================================================
 
-Deno.test("MultiCollection: Union - switch between variants", async (t) => {
+test("MultiCollection: Union - switch between variants", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
@@ -254,16 +263,18 @@ Deno.test("MultiCollection: Union - switch between variants", async (t) => {
   });
 });
 
-Deno.test("MultiCollection: Nullable union - null to variant", async (t) => {
+test("MultiCollection: Nullable union - null to variant", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
         entity: {
           name: v.string(),
-          data: v.nullable(v.union([
-            v.object({ type: v.literal("typeA"), a: v.string() }),
-            v.object({ type: v.literal("typeB"), b: v.number() }),
-          ])),
+          data: v.nullable(
+            v.union([
+              v.object({ type: v.literal("typeA"), a: v.string() }),
+              v.object({ type: v.literal("typeB"), b: v.number() }),
+            ]),
+          ),
         },
       },
     });
@@ -294,7 +305,7 @@ Deno.test("MultiCollection: Nullable union - null to variant", async (t) => {
   });
 });
 
-Deno.test("MultiCollection: Union with different structures - complete replacement", async (t) => {
+test("MultiCollection: Union with different structures - complete replacement", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {

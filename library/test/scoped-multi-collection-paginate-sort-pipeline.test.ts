@@ -5,7 +5,8 @@
 // `$expr` vs query-operator cursor semantics (query `$gt`/`$lt` never match a
 // missing field, so parents with no joined doc vanish from page 2 onward).
 
-import { assertEquals, assertExists, assertRejects } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assertEquals, assertExists, assertRejects } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import {
   scopedMultiCollection,
@@ -43,7 +44,6 @@ const badgeSortPipeline = (s: ScopedStageBuilder<typeof types>) => [
  * is exercised on top of the joined sort key.
  */
 async function seed(
-  // deno-lint-ignore no-explicit-any
   catalog: any,
 ): Promise<{ ids: string[]; badgeless: Set<string> }> {
   const view = catalog.scope(EXPO);
@@ -67,9 +67,7 @@ async function seed(
 }
 
 /** Walk every page via afterId; returns rows + per-page total/position. */
-// deno-lint-ignore no-explicit-any
 async function walkAll(view: any, sort: Record<string, 1 | -1>, limit: number) {
-  // deno-lint-ignore no-explicit-any
   const all: any[] = [];
   const pages: { total?: number; position?: number; size: number }[] = [];
   let afterId: string | undefined = undefined;
@@ -98,7 +96,6 @@ async function walkAll(view: any, sort: Record<string, 1 | -1>, limit: number) {
  * reproduce this exact id sequence. The `_id` tie-break follows the field's
  * direction, mirroring `normalizePaginateSort`.
  */
-// deno-lint-ignore no-explicit-any
 async function groundTruth(view: any, dir: 1 | -1): Promise<string[]> {
   const rows = await view.aggregate((s: ScopedStageBuilder<typeof types>) => [
     s.match("participant", {}),
@@ -108,7 +105,7 @@ async function groundTruth(view: any, dir: 1 | -1): Promise<string[]> {
   return (rows as { _id: string }[]).map((r) => r._id);
 }
 
-Deno.test("sortPipeline ASC: page walk == MongoDB's joined-field order, once each", async () => {
+test("sortPipeline ASC: page walk == MongoDB's joined-field order, once each", async () => {
   await withDatabase("smc-sortpipe-asc", async (db) => {
     const catalog = await makeCatalog(db);
     await seed(catalog);
@@ -124,7 +121,7 @@ Deno.test("sortPipeline ASC: page walk == MongoDB's joined-field order, once eac
   });
 });
 
-Deno.test("sortPipeline DESC with missing joined docs: badgeless parents survive page 2+", async () => {
+test("sortPipeline DESC with missing joined docs: badgeless parents survive page 2+", async () => {
   await withDatabase("smc-sortpipe-desc-missing", async (db) => {
     const catalog = await makeCatalog(db);
     const { badgeless } = await seed(catalog);
@@ -149,7 +146,7 @@ Deno.test("sortPipeline DESC with missing joined docs: badgeless parents survive
   });
 });
 
-Deno.test("sortPipeline: total + position stay consistent across pages", async () => {
+test("sortPipeline: total + position stay consistent across pages", async () => {
   await withDatabase("smc-sortpipe-position", async (db) => {
     const catalog = await makeCatalog(db);
     await seed(catalog);
@@ -166,7 +163,7 @@ Deno.test("sortPipeline: total + position stay consistent across pages", async (
   });
 });
 
-Deno.test("sortPipeline: beforeId walks backward over the same order", async () => {
+test("sortPipeline: beforeId walks backward over the same order", async () => {
   await withDatabase("smc-sortpipe-before", async (db) => {
     const catalog = await makeCatalog(db);
     await seed(catalog);
@@ -192,7 +189,7 @@ Deno.test("sortPipeline: beforeId walks backward over the same order", async () 
   });
 });
 
-Deno.test("sortPipeline: joined docs from another scope never feed the sort", async () => {
+test("sortPipeline: joined docs from another scope never feed the sort", async () => {
   await withDatabase("smc-sortpipe-scope", async (db) => {
     const catalog = await makeCatalog(db);
     const view = catalog.scope(EXPO);
@@ -210,11 +207,14 @@ Deno.test("sortPipeline: joined docs from another scope never feed the sort", as
       sort: { "badgeDoc.generatedAt": 1 },
       sortPipeline: badgeSortPipeline,
     });
-    assertEquals(page.data.map((d: { _id: string }) => d._id), [b, a]);
+    assertEquals(
+      page.data.map((d: { _id: string }) => d._id),
+      [b, a],
+    );
   });
 });
 
-Deno.test("sortPipeline: sort key produced by `pipeline` throws, pointing at sortPipeline", async () => {
+test("sortPipeline: sort key produced by `pipeline` throws, pointing at sortPipeline", async () => {
   await withDatabase("smc-sortpipe-verrou", async (db) => {
     const catalog = await makeCatalog(db);
     await seed(catalog);
@@ -234,7 +234,7 @@ Deno.test("sortPipeline: sort key produced by `pipeline` throws, pointing at sor
   });
 });
 
-Deno.test("sortPipeline: anchor dropped by the sort pipeline fails loud", async () => {
+test("sortPipeline: anchor dropped by the sort pipeline fails loud", async () => {
   await withDatabase("smc-sortpipe-dropped-anchor", async (db) => {
     const catalog = await makeCatalog(db);
     const { ids } = await seed(catalog);

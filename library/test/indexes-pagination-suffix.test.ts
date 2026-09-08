@@ -10,7 +10,8 @@
 // itself, so a shape rollout would have been silently skipped for existing
 // collections (the index is found by name, options match, stale key kept).
 
-import { assert, assertEquals } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
@@ -19,20 +20,23 @@ import * as v from "../src/schema.ts";
 import { refId } from "../src/ids.ts";
 import { withIndex } from "../src/indexes.ts";
 
-// deno-lint-ignore no-explicit-any
 async function indexByName(db: any, coll: string, name: string) {
   const all = await db.collection(coll).listIndexes().toArray();
-  // deno-lint-ignore no-explicit-any
   return all.find((i: any) => i.name === name);
 }
 
-Deno.test("withIndex: plain fields get the _id suffix; unique and TTL stay bare", async (t) => {
+test("withIndex: plain fields get the _id suffix; unique and TTL stay bare", async (t) => {
   await withDatabase(t.name, async (db) => {
-    await collection(db, "people", {
-      name: withIndex(v.string()),
-      email: withIndex(v.string(), { unique: true }),
-      seenAt: withIndex(v.date(), { expireAfterSeconds: 3600 }),
-    }, { schemaManagement: "auto" });
+    await collection(
+      db,
+      "people",
+      {
+        name: withIndex(v.string()),
+        email: withIndex(v.string(), { unique: true }),
+        seenAt: withIndex(v.date(), { expireAfterSeconds: 3600 }),
+      },
+      { schemaManagement: "auto" },
+    );
     assertEquals((await indexByName(db, "people", "name")).key, {
       name: 1,
       _id: 1,
@@ -42,20 +46,24 @@ Deno.test("withIndex: plain fields get the _id suffix; unique and TTL stay bare"
       seenAt: 1,
     });
 
-    await multiCollection(db, "catalog", {
-      participant: {
-        badge: withIndex(v.string()),
-        code: withIndex(v.string(), { unique: true }),
+    await multiCollection(
+      db,
+      "catalog",
+      {
+        participant: {
+          badge: withIndex(v.string()),
+          code: withIndex(v.string(), { unique: true }),
+        },
       },
-    }, { schemaManagement: "auto" });
-    assertEquals(
-      (await indexByName(db, "catalog", "participant_badge")).key,
-      { badge: 1, _id: 1 },
+      { schemaManagement: "auto" },
     );
-    assertEquals(
-      (await indexByName(db, "catalog", "participant_code")).key,
-      { code: 1 },
-    );
+    assertEquals((await indexByName(db, "catalog", "participant_badge")).key, {
+      badge: 1,
+      _id: 1,
+    });
+    assertEquals((await indexByName(db, "catalog", "participant_code")).key, {
+      code: 1,
+    });
 
     await scopedMultiCollection(db, "scoped", {
       schemaManagement: "auto",
@@ -79,17 +87,20 @@ Deno.test("withIndex: plain fields get the _id suffix; unique and TTL stay bare"
   });
 });
 
-Deno.test("withIndex: a pre-suffix bare index migrates to the new shape, then re-init is stable", async (t) => {
+test("withIndex: a pre-suffix bare index migrates to the new shape, then re-init is stable", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Simulate an install created before the suffix rollout on all three
     // surfaces: same NAME, bare key. The applier must drop + recreate (the
     // reconcile checks compare the key, not just the options), and a second
     // init must leave the index untouched (no oscillation).
     await db.collection("people").createIndex({ name: 1 }, { name: "name" });
-    await db.collection("catalog").createIndex({ badge: 1 }, {
-      name: "participant_badge",
-      partialFilterExpression: { _type: { $eq: "participant" } },
-    });
+    await db.collection("catalog").createIndex(
+      { badge: 1 },
+      {
+        name: "participant_badge",
+        partialFilterExpression: { _type: { $eq: "participant" } },
+      },
+    );
     await db.collection("scoped").createIndex(
       { _scope: 1, _type: 1, generatedAt: 1 },
       {
@@ -99,12 +110,22 @@ Deno.test("withIndex: a pre-suffix bare index migrates to the new shape, then re
     );
 
     const init = async () => {
-      await collection(db, "people", { name: withIndex(v.string()) }, {
-        schemaManagement: "auto",
-      });
-      await multiCollection(db, "catalog", {
-        participant: { badge: withIndex(v.string()) },
-      }, { schemaManagement: "auto" });
+      await collection(
+        db,
+        "people",
+        { name: withIndex(v.string()) },
+        {
+          schemaManagement: "auto",
+        },
+      );
+      await multiCollection(
+        db,
+        "catalog",
+        {
+          participant: { badge: withIndex(v.string()) },
+        },
+        { schemaManagement: "auto" },
+      );
       await scopedMultiCollection(db, "scoped", {
         schemaManagement: "auto",
         scope: refId("exposition"),
@@ -116,12 +137,9 @@ Deno.test("withIndex: a pre-suffix bare index migrates to the new shape, then re
     const shapes = async () => ({
       people: (await indexByName(db, "people", "name")).key,
       catalog: (await indexByName(db, "catalog", "participant_badge")).key,
-      scoped: (await indexByName(
-        db,
-        "scoped",
-        "_scope__type_participant_generatedAt",
-      ))
-        .key,
+      scoped: (
+        await indexByName(db, "scoped", "_scope__type_participant_generatedAt")
+      ).key,
     });
     const after1 = await shapes();
     assertEquals(after1.people, { name: 1, _id: 1 });
@@ -139,7 +157,6 @@ Deno.test("withIndex: a pre-suffix bare index migrates to the new shape, then re
     for (const coll of ["people", "catalog", "scoped"]) {
       const all = await db.collection(coll).listIndexes().toArray();
       assert(
-        // deno-lint-ignore no-explicit-any
         all.filter((i: any) => JSON.stringify(i.key).includes('"_id":1'))
           .length >= 1,
         `${coll}: suffixed index missing after re-init`,

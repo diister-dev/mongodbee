@@ -1,11 +1,12 @@
+import { test } from "./+harness.ts";
 import * as v from "../src/schema.ts";
-import { assertEquals, assertExists } from "@std/assert";
+import { assertEquals, assertExists } from "./+assert.ts";
 import { collection } from "../src/collection.ts";
-import { withDatabase } from "./+shared.ts";
+import { waitUntil, withDatabase } from "./+shared.ts";
 import { ObjectId } from "mongodb";
 import { closeAllWatchers } from "../src/change-stream.ts";
 
-Deno.test("Collection watcher events test", async (t) => {
+test("Collection watcher events test", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Test variables to track events
     const events: { [key: string]: number } = {
@@ -49,10 +50,7 @@ Deno.test("Collection watcher events test", async (t) => {
     });
 
     // Update the document - should trigger 'update' event
-    await users.updateOne(
-      { _id: new ObjectId(userId) },
-      { $set: { age: 31 } },
-    );
+    await users.updateOne({ _id: new ObjectId(userId) }, { $set: { age: 31 } });
 
     // Replace the document - should trigger 'replace' event
     await users.replaceOne(
@@ -67,9 +65,14 @@ Deno.test("Collection watcher events test", async (t) => {
     // Delete the document - should trigger 'delete' event
     await users.deleteOne({ _id: new ObjectId(userId) });
 
-    // Wait for events to be processed
-    // MongoDB change streams might have a slight delay
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await waitUntil(
+      () =>
+        events.insert >= 1 &&
+        events.update >= 1 &&
+        events.replace >= 1 &&
+        events.delete >= 1,
+      "the four change-stream events",
+    );
 
     // Assert events were fired
     assertEquals(events.insert, 1, "Insert event should be triggered once");
@@ -79,7 +82,7 @@ Deno.test("Collection watcher events test", async (t) => {
   });
 });
 
-Deno.test("Collection watcher event unsubscribe", async (t) => {
+test("Collection watcher event unsubscribe", async (t) => {
   await withDatabase(t.name, async (db) => {
     let insertCount = 0;
     let updateCount = 0;
@@ -129,8 +132,10 @@ Deno.test("Collection watcher event unsubscribe", async (t) => {
       { $set: { email: "bob.updated@example.com" } },
     );
 
-    // Wait for events to be processed
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await waitUntil(
+      () => insertCount >= 1 && updateCount >= 2,
+      "the insert and update events",
+    );
 
     // Insert count should still be 1, update count should be 2
     assertEquals(
@@ -153,7 +158,8 @@ Deno.test("Collection watcher event unsubscribe", async (t) => {
       { $set: { email: "bob.final@example.com" } },
     );
 
-    // Wait for events to be processed
+    // Fixed wait on purpose: this asserts that NOTHING further arrives, and
+    // there is no condition to poll for the absence of an event.
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // Counts should remain the same
@@ -162,7 +168,7 @@ Deno.test("Collection watcher event unsubscribe", async (t) => {
   });
 });
 
-Deno.test("Multiple collections with watchers", async (t) => {
+test("Multiple collections with watchers", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create two different collections and ensure events don't cross-contaminate
     const events = {
@@ -197,15 +203,17 @@ Deno.test("Multiple collections with watchers", async (t) => {
     await posts.insertOne({ title: "Post 1", content: "Content 1" });
     await posts.insertOne({ title: "Post 2", content: "Content 2" });
 
-    // Wait for events to be processed
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await waitUntil(
+      () => events.usersInsert >= 1 && events.postsInsert >= 2,
+      "the user and post insert events",
+    );
 
     assertEquals(events.usersInsert, 1, "Should have 1 user insert event");
     assertEquals(events.postsInsert, 2, "Should have 2 post insert events");
   });
 });
 
-Deno.test("FinalizationRegistry cleanup test", async (t) => {
+test("FinalizationRegistry cleanup test", async (t) => {
   // This test is more theoretical as it's hard to verify garbage collection,
   // but we can check that creating and disposing collections doesn't cause errors
   await withDatabase(t.name, async (db) => {
@@ -239,7 +247,7 @@ Deno.test("FinalizationRegistry cleanup test", async (t) => {
   });
 });
 
-Deno.test("Collection destroy and recreate test", async (t) => {
+test("Collection destroy and recreate test", async (t) => {
   await withDatabase(t.name, async (db) => {
     let insertEvents = 0;
 
@@ -265,8 +273,7 @@ Deno.test("Collection destroy and recreate test", async (t) => {
       email: "test@example.com",
     });
 
-    // Wait for event to be processed
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await waitUntil(() => insertEvents >= 1, "the insert event");
 
     assertEquals(insertEvents, 1, "Insert event should be triggered once");
 
@@ -297,7 +304,7 @@ Deno.test("Collection destroy and recreate test", async (t) => {
   });
 });
 
-Deno.test("Database drop and recreate test", async (t) => {
+test("Database drop and recreate test", async (t) => {
   await withDatabase(t.name, async (db) => {
     let insertEvents = 0;
     let updateEvents = 0;
@@ -329,10 +336,7 @@ Deno.test("Database drop and recreate test", async (t) => {
     });
 
     // Update the document - should trigger 'update' event
-    await users.updateOne(
-      { _id: new ObjectId(userId) },
-      { $set: { age: 31 } },
-    );
+    await users.updateOne({ _id: new ObjectId(userId) }, { $set: { age: 31 } });
 
     // Wait for events to be processed
     await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -387,7 +391,7 @@ Deno.test("Database drop and recreate test", async (t) => {
   });
 });
 
-Deno.test("Database cascade creation", async (t) => {
+test("Database cascade creation", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create a collection with a schema
     const userSchema = {

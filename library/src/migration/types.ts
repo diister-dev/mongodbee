@@ -15,13 +15,13 @@ import type * as v from "../schema.ts";
  */
 export type MigrationProperty =
   | {
-    /** Indicates that this migration cannot be reversed */
-    type: "irreversible";
-  }
+      /** Indicates that this migration cannot be reversed */
+      type: "irreversible";
+    }
   | {
-    /** Indicates that this migration has lossy transformations */
-    type: "lossy";
-  };
+      /** Indicates that this migration has lossy transformations */
+      type: "lossy";
+    };
 
 /**
  * Rule for creating a new collection
@@ -376,10 +376,10 @@ export type FlowToScopeSource =
   | { kind: "collection"; name: string; where?: Record<string, unknown> }
   | { kind: "multiModelInstances"; model: string }
   | {
-    kind: "multiCollectionType";
-    collectionName: string;
-    documentType: string;
-  };
+      kind: "multiCollectionType";
+      collectionName: string;
+      documentType: string;
+    };
 
 /**
  * Route documents from a source (a plain collection, every instance of a
@@ -485,10 +485,7 @@ export type MigrationRule =
  * @template T - Input document type
  * @template U - Output document type
  */
-export type TransformRule<
-  T = Record<string, any>,
-  U = Record<string, any>,
-> = {
+export type TransformRule<T = Record<string, any>, U = Record<string, any>> = {
   /** Function to transform from old to new format */
   readonly up: (doc: T) => U;
   /** Function to transform from new to old format */
@@ -825,9 +822,7 @@ export interface MigrationBuilder {
    * @param modelType - The type/model of the multi-collection
    * @returns An instance builder that applies to all instances of this model type
    */
-  multiModelInstances(
-    modelType: string,
-  ): MultiModelInstancesBuilder;
+  multiModelInstances(modelType: string): MultiModelInstancesBuilder;
 
   /**
    * Creates a new scoped multi-collection.
@@ -958,10 +953,7 @@ export type ScopedMultiSchema = {
  */
 export type SchemasDefinition = {
   /** Schema definitions for regular collections */
-  collections?: Record<
-    string,
-    SchemaContent
-  >;
+  collections?: Record<string, SchemaContent>;
 
   /** Schema definitions for regular multi-collections */
   multiCollections?: Record<

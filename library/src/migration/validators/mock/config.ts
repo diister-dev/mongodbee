@@ -49,10 +49,13 @@ export const INSTANCES_PER_MODEL = 1;
  * pool (N), and the per-model batch budget divides the document count across
  * them (see `drawInstanceBatchCount` in `populate.ts`).
  */
-const POWER_LEVEL_PRESETS: Record<SimulationPowerLevel, {
-  docsPerCollectionMin: number;
-  docsPerCollectionMax: number;
-}> = {
+const POWER_LEVEL_PRESETS: Record<
+  SimulationPowerLevel,
+  {
+    docsPerCollectionMin: number;
+    docsPerCollectionMax: number;
+  }
+> = {
   quick: {
     docsPerCollectionMin: 10,
     docsPerCollectionMax: 10,

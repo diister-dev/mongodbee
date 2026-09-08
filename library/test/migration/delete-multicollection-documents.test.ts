@@ -1,4 +1,5 @@
-import { assertEquals, assertRejects } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assertEquals, assertRejects } from "../+assert.ts";
 import { withDatabase } from "../+shared.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import {
@@ -45,7 +46,9 @@ function buildPair() {
     parent,
     schemas: SCHEMAS,
     migrate: (b) => {
-      b.multiCollection("+tenants").type("role").deleteWhere({ isSystem: true })
+      b.multiCollection("+tenants")
+        .type("role")
+        .deleteWhere({ isSystem: true })
         .end();
       return b.compile();
     },
@@ -54,7 +57,7 @@ function buildPair() {
   return { parent, child };
 }
 
-Deno.test("deleteWhere: memory applier drops only the matching documents of the type", async () => {
+test("deleteWhere: memory applier drops only the matching documents of the type", async () => {
   const { parent, child } = buildPair();
   const parentOps = parent.migrate(
     migrationBuilder({ schemas: parent.schemas }),
@@ -86,7 +89,7 @@ Deno.test("deleteWhere: memory applier drops only the matching documents of the 
   );
 });
 
-Deno.test("deleteWhere: mongodb applier agrees with the memory semantics", async () => {
+test("deleteWhere: mongodb applier agrees with the memory semantics", async () => {
   await withDatabase("delete-multicollection-documents", async (db) => {
     const { parent, child } = buildPair();
     const parentOps = parent.migrate(
@@ -112,7 +115,10 @@ Deno.test("deleteWhere: mongodb applier agrees with the memory semantics", async
     await childApplier.applyMigration(childOps, "up");
 
     const roles = await tenants.find({ _type: "role" }).toArray();
-    assertEquals(roles.map((d) => d.name), ["custom"]);
+    assertEquals(
+      roles.map((d) => d.name),
+      ["custom"],
+    );
     assertEquals(await tenants.countDocuments({ _type: "member" }), 1);
   });
 });

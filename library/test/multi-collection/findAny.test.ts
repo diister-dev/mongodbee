@@ -1,10 +1,11 @@
+import { test } from "../+harness.ts";
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertNotEquals } from "@std/assert";
+import { assertEquals, assertNotEquals } from "../+assert.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import { defineModel } from "../../src/multi-collection-model.ts";
 
-Deno.test("findAny - cross-type filter on shared field", async (t) => {
+test("findAny - cross-type filter on shared field", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {
@@ -33,7 +34,7 @@ Deno.test("findAny - cross-type filter on shared field", async (t) => {
   });
 });
 
-Deno.test("findAny - by _type field", async (t) => {
+test("findAny - by _type field", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {
@@ -56,7 +57,7 @@ Deno.test("findAny - by _type field", async (t) => {
   });
 });
 
-Deno.test("findAny - complex $or with per-type discriminators", async (t) => {
+test("findAny - complex $or with per-type discriminators", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {
@@ -87,7 +88,7 @@ Deno.test("findAny - complex $or with per-type discriminators", async (t) => {
   });
 });
 
-Deno.test("findAny - no matches returns empty array", async (t) => {
+test("findAny - no matches returns empty array", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {
@@ -104,7 +105,7 @@ Deno.test("findAny - no matches returns empty array", async (t) => {
   });
 });
 
-Deno.test("findAny - honors FindOptions (limit)", async (t) => {
+test("findAny - honors FindOptions (limit)", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {
@@ -126,7 +127,7 @@ Deno.test("findAny - honors FindOptions (limit)", async (t) => {
   });
 });
 
-Deno.test("findOneAny - returns first matching doc across types", async (t) => {
+test("findOneAny - returns first matching doc across types", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {
@@ -147,7 +148,7 @@ Deno.test("findOneAny - returns first matching doc across types", async (t) => {
   });
 });
 
-Deno.test("findOneAny - returns null when no match", async (t) => {
+test("findOneAny - returns null when no match", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {
@@ -164,7 +165,7 @@ Deno.test("findOneAny - returns null when no match", async (t) => {
   });
 });
 
-Deno.test("findOneAny - $or cross-type existence check (the expo-visibility pattern)", async (t) => {
+test("findOneAny - $or cross-type existence check (the expo-visibility pattern)", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {

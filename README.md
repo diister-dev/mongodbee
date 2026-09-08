@@ -20,6 +20,9 @@
   </p>
 
 <p align="center">
+    <a href="https://www.npmjs.com/package/mongodbee">
+      <img src="https://img.shields.io/npm/v/mongodbee" alt="npm version">
+    </a>
     <a href="https://jsr.io/@diister/mongodbee">
       <img src="https://jsr.io/badges/@diister/mongodbee" alt="JSR Score">
     </a>
@@ -105,31 +108,54 @@ designed to prevent data loss and maintain integrity.
 
 ## 📦 Installation
 
-### Deno
+MongoDBee runs on **Bun, Node.js (22.18+) and Deno**. It is published to npm as
+`mongodbee` and to JSR as `@diister/mongodbee`; the two carry the same code.
 
-```ts
-// Import from JSR
-import { collection, multiCollection, withIndex } from "jsr:@diister/mongodbee";
-import * as v from "jsr:@diister/mongodbee/schema";
-
-// For migrations
-import { migrationDefinition } from "jsr:@diister/mongodbee/migration";
-```
-
-### Node.js
+### Bun / Node.js / npm
 
 ```bash
-npm install mongodbee mongodb
+bun add mongodbee mongodb     # or: npm install / pnpm add / yarn add
 ```
 
 ```ts
-// Import in Node.js
 import { collection, multiCollection, withIndex } from "mongodbee";
 import * as v from "mongodbee/schema";
 
 // For migrations
 import { migrationDefinition } from "mongodbee/migration";
 ```
+
+The migration CLI ships as a binary, so no path juggling:
+
+```bash
+bunx mongodbee migrate        # or: npx mongodbee migrate
+```
+
+### Deno
+
+```bash
+deno add jsr:@diister/mongodbee
+```
+
+```ts
+import { collection, multiCollection, withIndex } from "mongodbee";
+import * as v from "mongodbee/schema";
+
+// For migrations
+import { migrationDefinition } from "mongodbee/migration";
+```
+
+> **Node.js 22.18 or newer.** The migration CLI loads your migration files
+> directly as TypeScript, which relies on the runtime stripping types — on by
+> default since 22.18, and stable (no longer experimental) since 24.12. The
+> library also uses `Set.prototype.difference`, which landed in Node 22.
+>
+> Type stripping *erases* types, it does not compile them, so your **migration
+> and schema files** must avoid the TypeScript constructs that need real code
+> generation: `enum`, `namespace` containing runtime code, parameter
+> properties, decorators, and import aliases. Write `import type { … }` for
+> type-only imports. None of this applies under Bun or Deno, which transpile
+> fully, nor to the library itself, which ships compiled JavaScript to npm.
 
 ## 🚀 Usage
 
@@ -377,11 +403,11 @@ are the recommended way to manage schema changes in production.
 Initialize migrations in your project:
 
 ```bash
-# Deno
-deno task mongodbee init
+# Bun / Node
+bunx mongodbee init           # or: npx mongodbee init
 
-# Or directly
-deno run --allow-read --allow-write --allow-net --allow-env jsr:@diister/mongodbee/migration/cli init
+# Deno
+deno run -A jsr:@diister/mongodbee/migration/cli/bin init
 ```
 
 This creates:
@@ -393,14 +419,15 @@ This creates:
 **Configuration**: The generated `mongodbee.config.ts` uses a simple structure:
 
 ```typescript
-import { defineConfig } from "@diister/mongodbee";
+import { defineConfig } from "mongodbee";
+import process from "node:process";
 
 export default defineConfig({
   database: {
     connection: {
-      uri: Deno.env.get("MONGODB_URI")!,
+      uri: process.env.MONGODB_URI!,
     },
-    name: Deno.env.get("MONGODB_DATABASE")!,
+    name: process.env.MONGODB_DATABASE!,
   },
   paths: {
     migrations: "./migrations",
@@ -414,14 +441,14 @@ export default defineConfig({
 Generate a new migration file:
 
 ```bash
-deno task mongodbee generate --name initial_schema
+bunx mongodbee generate --name initial_schema
 ```
 
 This creates a migration file in `migrations/` with this structure:
 
 ```typescript
-import { migrationDefinition } from "@diister/mongodbee/migration";
-import { dbId } from "@diister/mongodbee";
+import { migrationDefinition } from "mongodbee/migration";
+import { dbId } from "mongodbee";
 import * as v from "valibot";
 
 const id = "2025_10_14_1234_ABC123@initial_schema";
@@ -459,9 +486,9 @@ export default migrationDefinition(id, name, {
 match:
 
 ```typescript
-import { dbId } from "@diister/mongodbee";
+import { dbId } from "mongodbee";
 import * as v from "valibot";
-import { type SchemasDefinition } from "@diister/mongodbee/migration";
+import { type SchemasDefinition } from "mongodbee/migration";
 
 export const schemas = {
   collections: {
@@ -481,16 +508,16 @@ export const schemas = {
 
 ```bash
 # Validate migrations before applying
-deno task mongodbee check
+bunx mongodbee check
 
 # Check migration status
-deno task mongodbee status
+bunx mongodbee status
 
 # Apply all pending migrations
-deno task mongodbee migrate
+bunx mongodbee migrate
 
 # Rollback the last migration
-deno task mongodbee rollback
+bunx mongodbee rollback
 ```
 
 The `check` command validates your migrations by:
@@ -602,7 +629,7 @@ Perfect for per-user workspaces, tenant isolation, or per-entity data:
 
 ```typescript
 // In your schemas.ts or a separate file
-import { defineModel } from "@diister/mongodbee";
+import { defineModel } from "mongodbee";
 import * as v from "valibot";
 
 export const workspaceModel = defineModel("workspace", {
@@ -681,8 +708,8 @@ export default migrationDefinition(id, name, {
 **3. Use in your application:**
 
 ```typescript
-import { multiCollection } from "@diister/mongodbee";
-import { discoverMultiCollectionInstances } from "@diister/mongodbee/migration";
+import { multiCollection } from "mongodbee";
+import { discoverMultiCollectionInstances } from "mongodbee/migration";
 import { workspaceModel } from "./schemas.ts";
 
 // Discover all workspace instances
@@ -741,7 +768,7 @@ Validate your migration system at application startup to catch issues before
 they become problems:
 
 ```typescript
-import { checkMigrationStatus } from "@diister/mongodbee/migration";
+import { checkMigrationStatus } from "mongodbee/migration";
 
 // Automatically loads paths from mongodbee.config.ts
 const status = await checkMigrationStatus({ db });
@@ -790,7 +817,7 @@ if (status.database && !status.database.isUpToDate) {
 **Fail-fast mode:**
 
 ```typescript
-import { assertMigrationSystemHealthy } from "@diister/mongodbee/migration";
+import { assertMigrationSystemHealthy } from "mongodbee/migration";
 
 // Throws if unhealthy - loads from config automatically
 await assertMigrationSystemHealthy({ db });

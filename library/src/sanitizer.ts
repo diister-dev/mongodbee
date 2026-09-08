@@ -84,7 +84,9 @@ export function sanitizeDocument(
   options: SanitizeOptions = { undefinedBehavior: "remove", deep: true },
 ): any {
   if (
-    !options.deep && typeof obj === "object" && obj !== null &&
+    !options.deep &&
+    typeof obj === "object" &&
+    obj !== null &&
     !Array.isArray(obj)
   ) {
     // Shallow sanitization - only top level
@@ -210,12 +212,15 @@ export function extractFieldsToRemove(
  * @param options - Sanitization options
  * @returns Sanitized object with proper field removal handling
  */
-export function sanitizeForMongoDB<T = unknown>(obj: T, options: {
-  /** How to handle undefined values: 'remove' | 'ignore' | 'error' */
-  undefinedBehavior: "remove" | "ignore" | "error";
-  /** Whether to sanitize nested objects (should always be true) */
-  deep: boolean;
-} = { undefinedBehavior: "remove", deep: true }): T {
+export function sanitizeForMongoDB<T = unknown>(
+  obj: T,
+  options: {
+    /** How to handle undefined values: 'remove' | 'ignore' | 'error' */
+    undefinedBehavior: "remove" | "ignore" | "error";
+    /** Whether to sanitize nested objects (should always be true) */
+    deep: boolean;
+  } = { undefinedBehavior: "remove", deep: true },
+): T {
   function processValue(value: unknown): unknown {
     if (value === REMOVE_FIELD) {
       return undefined; // Will be removed by removeUndefined
@@ -241,13 +246,14 @@ export function sanitizeForMongoDB<T = unknown>(obj: T, options: {
     }
 
     if (Array.isArray(value)) {
-      return value.map(processValue).filter((item) =>
-        item !== undefined && item !== IGNORE_FIELD
-      );
+      return value
+        .map(processValue)
+        .filter((item) => item !== undefined && item !== IGNORE_FIELD);
     }
 
     if (
-      typeof value === "object" && value !== null &&
+      typeof value === "object" &&
+      value !== null &&
       value.constructor === Object
     ) {
       const result: Record<string, unknown> = {};

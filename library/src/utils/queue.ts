@@ -160,7 +160,9 @@ export class MongoOperationQueue {
   private async executeTask<T>(task: QueueTask<T>): Promise<void> {
     task.attempts = (task.attempts ?? 0) + 1;
 
-    let timeoutId: number | undefined;
+    // `setTimeout` hands back a `number` under Deno and a `Timeout` object
+    // under Node and Bun, so the handle cannot be typed as either one.
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     const startedAt = Date.now();
     log.debug(
       `start ${task.id} attempt=${task.attempts}`,
@@ -176,10 +178,7 @@ export class MongoOperationQueue {
       });
 
       // Race between operation and timeout
-      const result = await Promise.race([
-        task.operation(),
-        timeoutPromise,
-      ]);
+      const result = await Promise.race([task.operation(), timeoutPromise]);
 
       // Success
       this.runningTasks.delete(task as QueueTask);
@@ -211,10 +210,7 @@ export class MongoOperationQueue {
       // Failed permanently
       this.runningTasks.delete(task as QueueTask);
       this.failedCount++;
-      log.warn(
-        `fail  ${task.id} in ${Date.now() - startedAt}ms:`,
-        error,
-      );
+      log.warn(`fail  ${task.id} in ${Date.now() - startedAt}ms:`, error);
       task.reject(error instanceof Error ? error : new Error(String(error)));
     } finally {
       // Cleanup

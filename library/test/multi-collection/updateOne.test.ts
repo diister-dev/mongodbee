@@ -1,12 +1,13 @@
+import { test } from "../+harness.ts";
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects } from "../+assert.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import assert from "node:assert";
 import { defineModel } from "../../src/multi-collection-model.ts";
 import { partial, removeField } from "../../src/sanitizer.ts";
 
-Deno.test("UpdateOne: Basic update test", async (t) => {
+test("UpdateOne: Basic update test", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
@@ -71,7 +72,7 @@ Deno.test("UpdateOne: Basic update test", async (t) => {
   });
 });
 
-Deno.test("UpdateOne: Array updates test", async (t) => {
+test("UpdateOne: Array updates test", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
@@ -83,10 +84,12 @@ Deno.test("UpdateOne: Array updates test", async (t) => {
             key: v.string(),
             value: v.string(),
           }),
-          nestedData: v.array(v.object({
-            key: v.string(),
-            value: v.string(),
-          })),
+          nestedData: v.array(
+            v.object({
+              key: v.string(),
+              value: v.string(),
+            }),
+          ),
         },
       },
     });
@@ -94,10 +97,7 @@ Deno.test("UpdateOne: Array updates test", async (t) => {
     const collection = await multiCollection(db, "test", testModel);
 
     // Create test users
-    const members = [
-      "user:abc123",
-      "user:def456",
-    ];
+    const members = ["user:abc123", "user:def456"];
 
     // Insert a group with array
     const groupId = await collection.insertOne("group", {
@@ -134,7 +134,7 @@ Deno.test("UpdateOne: Array updates test", async (t) => {
   });
 });
 
-Deno.test("UpdateOne: Non-existent document", async (t) => {
+test("UpdateOne: Non-existent document", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
@@ -160,7 +160,7 @@ Deno.test("UpdateOne: Non-existent document", async (t) => {
   });
 });
 
-Deno.test("UpdateOne: Invalid id format test", async (t) => {
+test("UpdateOne: Invalid id format test", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
@@ -180,36 +180,34 @@ Deno.test("UpdateOne: Invalid id format test", async (t) => {
     });
 
     // Try to update with wrong id format
-    await assertRejects(
-      async () => {
-        await collection.updateOne("user", "invalidformat", {
-          name: "John Smith",
-        });
-      },
-    );
+    await assertRejects(async () => {
+      await collection.updateOne("user", "invalidformat", {
+        name: "John Smith",
+      });
+    });
 
     // Try to update with id from wrong collection type
-    await assertRejects(
-      async () => {
-        await collection.updateOne("user", "group:abc123", {
-          name: "John Smith",
-        });
-      },
-    );
+    await assertRejects(async () => {
+      await collection.updateOne("user", "group:abc123", {
+        name: "John Smith",
+      });
+    });
   });
 });
 
-Deno.test("UpdateOne: Support optional object entry", async (t) => {
+test("UpdateOne: Support optional object entry", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
         user: {
           name: v.string(),
           age: v.number(),
-          address: v.optional(v.object({
-            city: v.string(),
-            country: v.string(),
-          })),
+          address: v.optional(
+            v.object({
+              city: v.string(),
+              country: v.string(),
+            }),
+          ),
         },
       },
     });
@@ -240,7 +238,7 @@ Deno.test("UpdateOne: Support optional object entry", async (t) => {
   });
 });
 
-Deno.test("UpdateOne: Multiple updates at once", async (t) => {
+test("UpdateOne: Multiple updates at once", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
@@ -296,17 +294,19 @@ Deno.test("UpdateOne: Multiple updates at once", async (t) => {
   });
 });
 
-Deno.test("UpdateOne: Update Complex array", async (t) => {
+test("UpdateOne: Update Complex array", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
         user: {
           name: v.string(),
           email: v.string(),
-          tags: v.array(v.object({
-            name: v.string(),
-            value: v.string(),
-          })),
+          tags: v.array(
+            v.object({
+              name: v.string(),
+              value: v.string(),
+            }),
+          ),
         },
       },
     });
@@ -360,7 +360,7 @@ Deno.test("UpdateOne: Update Complex array", async (t) => {
   });
 });
 
-Deno.test("UpdateOne: Remove optional field with removeField()", async (t) => {
+test("UpdateOne: Remove optional field with removeField()", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
@@ -425,7 +425,7 @@ Deno.test("UpdateOne: Remove optional field with removeField()", async (t) => {
   });
 });
 
-Deno.test("UpdateOne: Mix update and remove fields", async (t) => {
+test("UpdateOne: Mix update and remove fields", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
@@ -471,7 +471,7 @@ Deno.test("UpdateOne: Mix update and remove fields", async (t) => {
   });
 });
 
-Deno.test("UpdateOne: Remove field with removeField() vs undefined", async (t) => {
+test("UpdateOne: Remove field with removeField() vs undefined", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
@@ -507,20 +507,24 @@ Deno.test("UpdateOne: Remove field with removeField() vs undefined", async (t) =
   });
 });
 
-Deno.test("UpdateOne: Remove nested field with removeField()", async (t) => {
+test("UpdateOne: Remove nested field with removeField()", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
         user: {
           name: v.string(),
-          settings: v.optional(v.object({
-            theme: v.optional(v.string()),
-            language: v.optional(v.string()),
-            notifications: v.optional(v.object({
-              email: v.optional(v.boolean()),
-              push: v.optional(v.boolean()),
-            })),
-          })),
+          settings: v.optional(
+            v.object({
+              theme: v.optional(v.string()),
+              language: v.optional(v.string()),
+              notifications: v.optional(
+                v.object({
+                  email: v.optional(v.boolean()),
+                  push: v.optional(v.boolean()),
+                }),
+              ),
+            }),
+          ),
         },
       },
     });
@@ -565,20 +569,24 @@ Deno.test("UpdateOne: Remove nested field with removeField()", async (t) => {
   });
 });
 
-Deno.test("UpdateOne: Remove deeply nested field with removeField()", async (t) => {
+test("UpdateOne: Remove deeply nested field with removeField()", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
         user: {
           name: v.string(),
-          profile: v.optional(v.object({
-            bio: v.optional(v.string()),
-            social: v.optional(v.object({
-              twitter: v.optional(v.string()),
-              github: v.optional(v.string()),
-              linkedin: v.optional(v.string()),
-            })),
-          })),
+          profile: v.optional(
+            v.object({
+              bio: v.optional(v.string()),
+              social: v.optional(
+                v.object({
+                  twitter: v.optional(v.string()),
+                  github: v.optional(v.string()),
+                  linkedin: v.optional(v.string()),
+                }),
+              ),
+            }),
+          ),
         },
       },
     });
@@ -620,19 +628,23 @@ Deno.test("UpdateOne: Remove deeply nested field with removeField()", async (t) 
   });
 });
 
-Deno.test("UpdateOne: Remove entire nested object with removeField()", async (t) => {
+test("UpdateOne: Remove entire nested object with removeField()", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
         user: {
           name: v.string(),
-          metadata: v.optional(v.object({
-            createdAt: v.optional(v.string()),
-            updatedAt: v.optional(v.string()),
-          })),
-          preferences: v.optional(v.object({
-            theme: v.optional(v.string()),
-          })),
+          metadata: v.optional(
+            v.object({
+              createdAt: v.optional(v.string()),
+              updatedAt: v.optional(v.string()),
+            }),
+          ),
+          preferences: v.optional(
+            v.object({
+              theme: v.optional(v.string()),
+            }),
+          ),
         },
       },
     });

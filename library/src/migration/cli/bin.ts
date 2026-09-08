@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-read --allow-write --allow-net --allow-env
+#!/usr/bin/env node
 /**
  * MongoDBee Migration CLI executable
  *
@@ -6,21 +6,21 @@
  *
  * @example
  * ```bash
- * # Install globally
- * deno install --allow-read --allow-write --allow-net --allow-env --name mongodbee-migrate jsr:@diister/mongodbee/migration/cli/bin
+ * # npm / Bun (the `bin` entry ships with the package)
+ * npx mongodbee migrate
+ * bunx mongodbee migrate
  *
- * # Use the CLI
- * mongodbee-migrate init
- * mongodbee-migrate generate --name create-users
- * mongodbee-migrate apply
+ * # Deno
+ * deno run -A jsr:@diister/mongodbee/migration/cli/bin migrate
  * ```
  *
  * @module
  */
 
+import { isMainModule } from "../utils/platform.ts";
 import { main } from "./main.ts";
 
 // Run the CLI if this is the main module
-if (import.meta.main) {
+if (isMainModule(import.meta.url)) {
   await main();
 }

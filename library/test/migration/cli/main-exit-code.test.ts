@@ -10,27 +10,29 @@
 // Both directions are locked here. A fix that exits non-zero unconditionally
 // would be just as useless as the bug.
 
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import { test } from "../../+harness.ts";
+import { mkdir, writeFile } from "node:fs/promises";
+import { assertEquals, assertStringIncludes } from "../../+assert.ts";
 import { runCli, withTempDir } from "./shared.ts";
 
 /** A chain whose declared schema contradicts `schemas.ts` — check must reject it. */
 async function writeDivergentChain(dir: string): Promise<void> {
-  await Deno.mkdir(`${dir}/migrations`, { recursive: true });
-  await Deno.writeTextFile(
+  await mkdir(`${dir}/migrations`, { recursive: true });
+  await writeFile(
     `${dir}/mongodbee.config.ts`,
     `export default { migrationsDir: "./migrations", schemasPath: "./schemas.ts" };\n`,
   );
-  await Deno.writeTextFile(
+  await writeFile(
     `${dir}/schemas.ts`,
-    `import * as v from "@diister/mongodbee/schema";\n` +
-      `import { dbId } from "@diister/mongodbee/ids";\n` +
+    `import * as v from "mongodbee/schema";\n` +
+      `import { dbId } from "mongodbee/ids";\n` +
       `export default { collections: { "+t": { _id: dbId("t"), label: v.string() } } };\n`,
   );
-  await Deno.writeTextFile(
+  await writeFile(
     `${dir}/migrations/2025_01_01_000000_AAAAAAAAAA.ts`,
-    `import { migrationDefinition } from "@diister/mongodbee/migration";\n` +
-      `import * as v from "@diister/mongodbee/schema";\n` +
-      `import { dbId } from "@diister/mongodbee/ids";\n` +
+    `import { migrationDefinition } from "mongodbee/migration";\n` +
+      `import * as v from "mongodbee/schema";\n` +
+      `import { dbId } from "mongodbee/ids";\n` +
       // `label` is a number here and a string in schemas.ts — the chain cannot
       // be consistent, so `check` must fail.
       `export default migrationDefinition("2025_01_01_000000_AAAAAAAAAA", "init", {\n` +
@@ -40,7 +42,7 @@ async function writeDivergentChain(dir: string): Promise<void> {
   );
 }
 
-Deno.test("cli: a failing `check` exits non-zero", async () => {
+test("cli: a failing `check` exits non-zero", async () => {
   await withTempDir(async (tempDir) => {
     await writeDivergentChain(tempDir);
     const { code, stderr } = await runCli(tempDir, ["check"]);
@@ -57,7 +59,7 @@ Deno.test("cli: a failing `check` exits non-zero", async () => {
   });
 });
 
-Deno.test("cli: a succeeding command still exits zero", async () => {
+test("cli: a succeeding command still exits zero", async () => {
   await withTempDir(async (tempDir) => {
     const { code } = await runCli(tempDir, ["help"]);
     assertEquals(code, 0, "an exit code that is always non-zero gates nothing");

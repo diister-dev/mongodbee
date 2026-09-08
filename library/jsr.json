@@ -1,0 +1,38 @@
+{
+  "name": "@diister/mongodbee",
+  "version": "0.23.0-beta.18",
+  "license": "MIT",
+  "exports": {
+    ".": "./mod.ts",
+    "./schema": "./schema.ts",
+    "./session": "./session.ts",
+    "./telemetry": "./telemetry.ts",
+    "./ids": "./src/ids.ts",
+    "./indexes": "./src/indexes.ts",
+    "./schema-navigator": "./src/schema-navigator.ts",
+    "./types": "./src/types.ts",
+    "./migration": "./src/migration/mod.ts",
+    "./migration/cli": "./src/migration/cli/mod.ts",
+    "./migration/cli/bin": "./src/migration/cli/bin.ts"
+  },
+  "imports": {
+    "@diister/valibot-mock": "jsr:@diister/valibot-mock@^0.1.8",
+    "@opentelemetry/api": "npm:@opentelemetry/api@^1.9.0",
+    "mongodb": "npm:mongodb@^6.21.0",
+    "valibot": "npm:valibot@^1.4.0"
+  },
+  "publish": {
+    "include": [
+      "src/**/*.ts",
+      "types/**/*.ts",
+      "mod.ts",
+      "schema.ts",
+      "session.ts",
+      "telemetry.ts",
+      "README.md",
+      "LICENSE",
+      "jsr.json"
+    ],
+    "exclude": ["src/**/*.test.ts"]
+  }
+}

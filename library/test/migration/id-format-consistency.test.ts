@@ -4,7 +4,8 @@
  * `validateMigrationChain()` then rejected because it required numeric-only
  * IDs. The two functions must agree on what a valid ID looks like.
  */
-import { assert, assertEquals } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals } from "../+assert.ts";
 import {
   generateMigrationId,
   migrationDefinition,
@@ -12,7 +13,7 @@ import {
 } from "../../src/migration/definition.ts";
 import * as v from "../../src/schema.ts";
 
-Deno.test("generateMigrationId output is accepted by validateMigrationChain", () => {
+test("generateMigrationId output is accepted by validateMigrationChain", () => {
   const id1 = generateMigrationId();
   const id2 = generateMigrationId("add-users");
   const id3 = generateMigrationId("complex name with spaces");
@@ -39,15 +40,15 @@ Deno.test("generateMigrationId output is accepted by validateMigrationChain", ()
     assertEquals(
       result.errors,
       [],
-      `validateMigrationChain rejected a generated id (${id}): ${
-        result.errors.join(", ")
-      }`,
+      `validateMigrationChain rejected a generated id (${id}): ${result.errors.join(
+        ", ",
+      )}`,
     );
     assert(result.valid, `result.valid should be true for ${id}`);
   }
 });
 
-Deno.test("validateMigrationChain still rejects empty / non-string IDs", () => {
+test("validateMigrationChain still rejects empty / non-string IDs", () => {
   // The relaxation should NOT make the validator a no-op — invalid IDs
   // (empty, contains pathological chars) should still be caught at
   // migrationDefinition construction time.
@@ -64,7 +65,7 @@ Deno.test("validateMigrationChain still rejects empty / non-string IDs", () => {
   assert(threw, "empty id should throw at migrationDefinition");
 });
 
-Deno.test("validateMigrationChain preserves IDs lexicographic ordering check via parent chain", () => {
+test("validateMigrationChain preserves IDs lexicographic ordering check via parent chain", () => {
   const id1 = generateMigrationId("first");
   // Small delay to make sure id2 > id1 lexically
   const id2 = "9999_99_99_9999_ZZZZZZZZZZ@later";

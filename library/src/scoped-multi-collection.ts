@@ -56,7 +56,6 @@ const NON_NULLABLE_SORT_FIELDS: ReadonlySet<string> = new Set([
 /** Reserved internal field names — cannot appear in user-defined type schemas. */
 const RESERVED_FIELDS: Set<string> = new Set(["_scope", "_type"]);
 
-// deno-lint-ignore no-explicit-any
 type AnyMessage = any;
 type AnySchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
 
@@ -107,9 +106,10 @@ export type ScopedMultiCollectionConfig<
 // -------- Per-type schema augmentation -----------------------------------
 
 // Use the user-provided _id schema if any (literal IDs), otherwise dbId(type).
-type DynId<TField> = TField extends v.LiteralSchema<infer _L, AnyMessage>
-  ? TField
-  : ReturnType<typeof dbId>;
+type DynId<TField> =
+  TField extends v.LiteralSchema<infer _L, AnyMessage>
+    ? TField
+    : ReturnType<typeof dbId>;
 
 // Element schema with all reserved fields for **storage** (used when validating
 // docs read back from Mongo and as the source for the MongoDB JSON Schema
@@ -119,13 +119,11 @@ type StorageElementSchema<
   K extends keyof T,
   S extends AnySchema,
 > = v.ObjectSchema<
-  & {
+  {
     _id: DynId<T[K]["_id"]>;
     _type: v.LiteralSchema<K & string, AnyMessage>;
     _scope: S;
-  }
-  & T[K],
-  // deno-lint-ignore no-explicit-any
+  } & T[K],
   any
 >;
 
@@ -137,22 +135,25 @@ type InsertElementSchema<
   K extends keyof T,
   S extends AnySchema,
 > = v.ObjectSchema<
-  & {
+  {
     _id: DynId<T[K]["_id"]>;
     _type: v.OptionalSchema<
       v.LiteralSchema<K & string, AnyMessage>,
       () => K & string
     >;
     _scope: S;
-  }
-  & T[K],
-  // deno-lint-ignore no-explicit-any
+  } & T[K],
   any
 >;
 
 /** Input shape the user passes to insertOne (no _scope/_type). */
-type UserInputDoc<T extends ScopedMultiCollectionTypes, K extends keyof T> =
-  Omit<v.InferInput<InsertElementSchema<T, K, AnySchema>>, "_scope" | "_type">;
+type UserInputDoc<
+  T extends ScopedMultiCollectionTypes,
+  K extends keyof T,
+> = Omit<
+  v.InferInput<InsertElementSchema<T, K, AnySchema>>,
+  "_scope" | "_type"
+>;
 
 /** Output shape returned by reads. Always includes _scope. */
 type OutputDoc<
@@ -178,9 +179,10 @@ export type { OmitScopedMeta, ScopedMetaField } from "./types.ts";
  * `multiCollection.updateOne`. Recurses into nested objects so a field can be
  * removed at any depth.
  */
-type DeepWithRemovable<X> = X extends Record<string, unknown>
-  ? { [K in keyof X]: DeepWithRemovable<X[K]> | symbol }
-  : X;
+type DeepWithRemovable<X> =
+  X extends Record<string, unknown>
+    ? { [K in keyof X]: DeepWithRemovable<X[K]> | symbol }
+    : X;
 type WithRemovable<X> = { [K in keyof X]: DeepWithRemovable<X[K]> | symbol };
 
 // -------- Views ----------------------------------------------------------
@@ -207,10 +209,7 @@ export type ScopedView<
     docs: UserInputDoc<T, K>[],
   ): Promise<string[]>;
 
-  getById<K extends keyof T>(
-    type: K,
-    id: string,
-  ): Promise<OutputDoc<T, K, S>>;
+  getById<K extends keyof T>(type: K, id: string): Promise<OutputDoc<T, K, S>>;
 
   findOne<K extends keyof T>(
     type: K,
@@ -305,7 +304,6 @@ export type ScopedView<
 
   aggregate(
     stageBuilder: (stage: ScopedStageBuilder<T>) => AggregationStage[],
-    // deno-lint-ignore no-explicit-any
   ): Promise<any[]>;
 
   paginate<K extends keyof T, EN = OutputDoc<T, K, S>, R = EN>(
@@ -349,7 +347,10 @@ export type ScopedView<
 };
 
 /** Single MongoDB aggregation stage (already-built object form). */
-export type AggregationStage = Record<string, unknown>;
+// Re-exported so the public surface is unchanged, and imported so this module
+// can still name the type internally.
+import type { AggregationStage } from "./types.ts";
+export type { AggregationStage };
 
 /**
  * Stage builder injected into the user callback of
@@ -367,32 +368,38 @@ export type ScopedStageBuilder<T extends ScopedMultiCollectionTypes> = {
     type: K,
     localField: string,
     foreignField: string,
-    asOrOptions?: string | {
-      as?: string;
-      pipeline?: (stage: ScopedStageBuilder<T>) => AggregationStage[];
-      let?: Record<string, unknown>;
-    },
+    asOrOptions?:
+      | string
+      | {
+          as?: string;
+          pipeline?: (stage: ScopedStageBuilder<T>) => AggregationStage[];
+          let?: Record<string, unknown>;
+        },
   ) => AggregationStage;
   /** Lookup ignoring `_type` ; still scope-bounded. */
   anyLookup: (
     localField: string,
     foreignField: string,
-    asOrOptions?: string | {
-      as?: string;
-      pipeline?: (stage: ScopedStageBuilder<T>) => AggregationStage[];
-      let?: Record<string, unknown>;
-    },
+    asOrOptions?:
+      | string
+      | {
+          as?: string;
+          pipeline?: (stage: ScopedStageBuilder<T>) => AggregationStage[];
+          let?: Record<string, unknown>;
+        },
   ) => AggregationStage;
   /** Lookup into an external collection ; no scope injection. */
   externalLookup: (
     fromCollection: string,
     localField: string,
     foreignField: string,
-    asOrOptions?: string | {
-      as?: string;
-      pipeline?: AggregationStage[];
-      let?: Record<string, unknown>;
-    },
+    asOrOptions?:
+      | string
+      | {
+          as?: string;
+          pipeline?: AggregationStage[];
+          let?: Record<string, unknown>;
+        },
   ) => AggregationStage;
   project: (
     projection: Record<string, 1 | 0 | string | Record<string, unknown>>,
@@ -446,7 +453,6 @@ export type ReadOnlyMultiScopeView<
 
   aggregate(
     stageBuilder: (stage: ScopedStageBuilder<T>) => AggregationStage[],
-    // deno-lint-ignore no-explicit-any
   ): Promise<any[]>;
 };
 
@@ -498,10 +504,7 @@ export type ScopedMultiCollectionResult<
    *
    * @returns Number of documents removed.
    */
-  dropScope(
-    id: v.InferInput<S>,
-    options: { confirm: true },
-  ): Promise<number>;
+  dropScope(id: v.InferInput<S>, options: { confirm: true }): Promise<number>;
 
   /**
    * Aggregate counts per type for one scope. Returns `{ total: 0, byType: {} }`
@@ -579,7 +582,6 @@ export async function scopedMultiCollection<
       });
       return acc;
     },
-    // deno-lint-ignore no-explicit-any
     {} as Record<string, v.ObjectSchema<any, any>>,
   );
 
@@ -595,7 +597,6 @@ export async function scopedMultiCollection<
       });
       return acc;
     },
-    // deno-lint-ignore no-explicit-any
     {} as Record<string, v.ObjectSchema<any, any>>,
   );
 
@@ -612,15 +613,14 @@ export async function scopedMultiCollection<
       acc[typeName] = createDotNotationSchema(schema);
       return acc;
     },
-    // deno-lint-ignore no-explicit-any
     {} as Record<string, v.BaseSchema<any, any, any>>,
   );
 
-  // deno-lint-ignore no-explicit-any
   const collection = db.collection<any>(collectionName);
   const sessionContext = getSessionContext(db.client);
 
-  const shouldAutoApply = config.schemaManagement === "auto" ||
+  const shouldAutoApply =
+    config.schemaManagement === "auto" ||
     (config.schemaManagement !== "managed" && !isSchemaManaged());
   const insideSession = !!sessionContext.getSession();
   if (shouldAutoApply && !insideSession) {
@@ -712,7 +712,6 @@ export async function scopedMultiCollection<
           const safeDoc = sanitizeForMongoDB(parsed, {
             undefinedBehavior: "remove",
             deep: true,
-            // deno-lint-ignore no-explicit-any
           }) as any;
 
           const session = sessionContext.getSession();
@@ -747,12 +746,12 @@ export async function scopedMultiCollection<
             });
           });
 
-          const safeDocs = parsed.map((p) =>
-            sanitizeForMongoDB(p, {
-              undefinedBehavior: "remove",
-              deep: true,
-              // deno-lint-ignore no-explicit-any
-            }) as any
+          const safeDocs = parsed.map(
+            (p) =>
+              sanitizeForMongoDB(p, {
+                undefinedBehavior: "remove",
+                deep: true,
+              }) as any,
           );
 
           const session = sessionContext.getSession();
@@ -777,26 +776,32 @@ export async function scopedMultiCollection<
         const run = async () => {
           const typeName = type as string;
           const session = sessionContext.getSession();
-          const raw = await collection.findOne({
-            _id: id,
-            _type: typeName,
-            _scope: scopeId,
-            // deno-lint-ignore no-explicit-any
-          } as any, { session });
+          const raw = await collection.findOne(
+            {
+              _id: id,
+              _type: typeName,
+              _scope: scopeId,
+            } as any,
+            { session },
+          );
           if (!raw) {
             throw errorWithSafeMessage(
               `getById(${typeName}, ${id}): no element found in scope "${scopeId}"`,
               `getById(${typeName}): no element found in scope`,
             );
           }
-          // deno-lint-ignore no-explicit-any
           return v.parse(storageSchemas[typeName], raw) as any;
         };
-        return traced(tele, "getById", () => ({
-          [TA.SCOPE]: recordScope ? scopeId : undefined,
-          [TA.DOC_TYPE]: String(type),
-          [TA.FILTER_KEYS]: "_id",
-        }), run);
+        return traced(
+          tele,
+          "getById",
+          () => ({
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: "_id",
+          }),
+          run,
+        );
       },
 
       async findOne(type, filter) {
@@ -809,19 +814,22 @@ export async function scopedMultiCollection<
           ];
           if (filter) conditions.push(filter as Record<string, unknown>);
 
-          // deno-lint-ignore no-explicit-any
           const raw = await collection.findOne({ $and: conditions } as any, {
             session,
           });
           if (!raw) return null;
-          // deno-lint-ignore no-explicit-any
           return v.parse(storageSchemas[typeName], raw) as any;
         };
-        return traced(tele, "findOne", () => ({
-          [TA.SCOPE]: recordScope ? scopeId : undefined,
-          [TA.DOC_TYPE]: String(type),
-          [TA.FILTER_KEYS]: filterKeys(filter),
-        }), run);
+        return traced(
+          tele,
+          "findOne",
+          () => ({
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: filterKeys(filter),
+          }),
+          run,
+        );
       },
 
       async find(type, filter, options) {
@@ -835,7 +843,6 @@ export async function scopedMultiCollection<
           ];
           if (filter) conditions.push(filter as Record<string, unknown>);
 
-          // deno-lint-ignore no-explicit-any
           const cursor = collection.find({ $and: conditions } as any, {
             session,
             ...findOptions,
@@ -845,7 +852,6 @@ export async function scopedMultiCollection<
           // reads, returning the raw stored docs. Schema transforms are NOT
           // applied in that mode — opt out only when you don't depend on them.
           if (validate === false) {
-            // deno-lint-ignore no-explicit-any
             return raw as any;
           }
           const out: unknown[] = [];
@@ -853,7 +859,6 @@ export async function scopedMultiCollection<
             const parsed = v.safeParse(storageSchemas[typeName], item);
             if (parsed.success) out.push(parsed.output);
           }
-          // deno-lint-ignore no-explicit-any
           return out as any;
         };
         return traced(
@@ -878,18 +883,13 @@ export async function scopedMultiCollection<
             { _scope: scopeId },
           ];
           if (filter) conditions.push(filter as Record<string, unknown>);
-          const cursor = collection.find(
-            // deno-lint-ignore no-explicit-any
-            { $and: conditions } as any,
-            {
-              session,
-              ...options,
-              projection: buildProjection(fields as readonly string[]),
-            },
-          );
+          const cursor = collection.find({ $and: conditions } as any, {
+            session,
+            ...options,
+            projection: buildProjection(fields as readonly string[]),
+          });
           // Projected docs are partial — return them raw. Validating against
           // the full type schema would reject the omitted fields.
-          // deno-lint-ignore no-explicit-any
           return (await cursor.toArray()) as any;
         };
         return traced(
@@ -910,18 +910,21 @@ export async function scopedMultiCollection<
           const session = sessionContext.getSession();
           const conditions: Record<string, unknown>[] = [{ _scope: scopeId }];
           if (filter) conditions.push(filter as Record<string, unknown>);
-          // deno-lint-ignore no-explicit-any
           const raw = await collection.findOne({ $and: conditions } as any, {
             session,
           });
           if (!raw) return null;
-          // deno-lint-ignore no-explicit-any
           return v.parse(storageUnion, raw) as any;
         };
-        return traced(tele, "findOneAny", () => ({
-          [TA.SCOPE]: recordScope ? scopeId : undefined,
-          [TA.FILTER_KEYS]: filterKeys(filter),
-        }), run);
+        return traced(
+          tele,
+          "findOneAny",
+          () => ({
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
+            [TA.FILTER_KEYS]: filterKeys(filter),
+          }),
+          run,
+        );
       },
 
       async findAny(filter, options) {
@@ -930,20 +933,17 @@ export async function scopedMultiCollection<
           const { validate = true, ...findOptions } = options ?? {};
           const conditions: Record<string, unknown>[] = [{ _scope: scopeId }];
           if (filter) conditions.push(filter as Record<string, unknown>);
-          const cursor = collection.find(
-            // deno-lint-ignore no-explicit-any
-            { $and: conditions } as any,
-            { session, ...findOptions },
-          );
+          const cursor = collection.find({ $and: conditions } as any, {
+            session,
+            ...findOptions,
+          });
           const raw = await cursor.toArray();
-          // deno-lint-ignore no-explicit-any
           if (validate === false) return raw as any;
           const out: unknown[] = [];
           for (const item of raw) {
             const parsed = v.safeParse(storageUnion, item);
             if (parsed.success) out.push(parsed.output);
           }
-          // deno-lint-ignore no-explicit-any
           return out as any;
         };
         return traced(
@@ -967,29 +967,35 @@ export async function scopedMultiCollection<
             { _scope: scopeId },
           ];
           if (filter) conditions.push(filter as Record<string, unknown>);
-          return collection.countDocuments(
-            // deno-lint-ignore no-explicit-any
-            { $and: conditions } as any,
-            { session, ...options },
-          );
+          return collection.countDocuments({ $and: conditions } as any, {
+            session,
+            ...options,
+          });
         };
-        return traced(tele, "countDocuments", () => ({
-          [TA.SCOPE]: recordScope ? scopeId : undefined,
-          [TA.DOC_TYPE]: String(type),
-          [TA.FILTER_KEYS]: filterKeys(filter),
-        }), run);
+        return traced(
+          tele,
+          "countDocuments",
+          () => ({
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: filterKeys(filter),
+          }),
+          run,
+        );
       },
 
       async deleteId(type, id) {
         const run = async () => {
           const typeName = type as string;
           const session = sessionContext.getSession();
-          const result = await collection.deleteOne({
-            _id: id,
-            _type: typeName,
-            _scope: scopeId,
-            // deno-lint-ignore no-explicit-any
-          } as any, { session });
+          const result = await collection.deleteOne(
+            {
+              _id: id,
+              _type: typeName,
+              _scope: scopeId,
+            } as any,
+            { session },
+          );
           if (!result.acknowledged) throw new Error("Delete failed");
           if (result.deletedCount === 0) {
             throw errorWithSafeMessage(
@@ -999,23 +1005,30 @@ export async function scopedMultiCollection<
           }
           return result.deletedCount;
         };
-        return traced(tele, "deleteId", () => ({
-          [TA.SCOPE]: recordScope ? scopeId : undefined,
-          [TA.DOC_TYPE]: String(type),
-          [TA.FILTER_KEYS]: "_id",
-        }), run);
+        return traced(
+          tele,
+          "deleteId",
+          () => ({
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: "_id",
+          }),
+          run,
+        );
       },
 
       async deleteIds(type, ids) {
         const run = async () => {
           const typeName = type as string;
           const session = sessionContext.getSession();
-          const result = await collection.deleteMany({
-            _id: { $in: ids },
-            _type: typeName,
-            _scope: scopeId,
-            // deno-lint-ignore no-explicit-any
-          } as any, { session });
+          const result = await collection.deleteMany(
+            {
+              _id: { $in: ids },
+              _type: typeName,
+              _scope: scopeId,
+            } as any,
+            { session },
+          );
           if (!result.acknowledged) throw new Error("Delete failed");
           return result.deletedCount;
         };
@@ -1037,12 +1050,14 @@ export async function scopedMultiCollection<
         const run = async () => {
           const typeName = type as string;
           const session = sessionContext.getSession();
-          const result = await collection.deleteMany({
-            ...(filter as Record<string, unknown>),
-            _type: typeName,
-            _scope: scopeId,
-            // deno-lint-ignore no-explicit-any
-          } as any, { session });
+          const result = await collection.deleteMany(
+            {
+              ...(filter as Record<string, unknown>),
+              _type: typeName,
+              _scope: scopeId,
+            } as any,
+            { session },
+          );
           if (!result.acknowledged) throw new Error("Delete failed");
           return result.deletedCount;
         };
@@ -1085,27 +1100,29 @@ export async function scopedMultiCollection<
           const updateOps = buildUpdateOps(set, unset);
           if (Object.keys(updateOps).length === 0) return 0;
 
-          return retryOnWriteConflict(async () => {
-            const session = sessionContext.getSession();
-            const result = await collection.updateOne(
-              {
-                _id: id,
-                _type: typeName,
-                _scope: scopeId,
-                // deno-lint-ignore no-explicit-any
-              } as any,
-              updateOps as any,
-              { session },
-            );
-            if (!result.acknowledged) throw new Error("Update failed");
-            if (result.matchedCount === 0) {
-              throw errorWithSafeMessage(
-                `updateOne(${typeName}, ${id}): no element found in scope "${scopeId}"`,
-                `updateOne(${typeName}): no element found in scope`,
+          return retryOnWriteConflict(
+            async () => {
+              const session = sessionContext.getSession();
+              const result = await collection.updateOne(
+                {
+                  _id: id,
+                  _type: typeName,
+                  _scope: scopeId,
+                } as any,
+                updateOps as any,
+                { session },
               );
-            }
-            return result.modifiedCount;
-          }, op ? { onRetry: op.onRetry } : undefined);
+              if (!result.acknowledged) throw new Error("Update failed");
+              if (result.matchedCount === 0) {
+                throw errorWithSafeMessage(
+                  `updateOne(${typeName}, ${id}): no element found in scope "${scopeId}"`,
+                  `updateOne(${typeName}): no element found in scope`,
+                );
+              }
+              return result.modifiedCount;
+            },
+            op ? { onRetry: op.onRetry } : undefined,
+          );
         };
         return traced(
           tele,
@@ -1151,7 +1168,6 @@ export async function scopedMultiCollection<
                     _id: id,
                     _type: typeName,
                     _scope: scopeId,
-                    // deno-lint-ignore no-explicit-any
                   } as any,
                   update: updateOps,
                 },
@@ -1163,11 +1179,14 @@ export async function scopedMultiCollection<
           op?.setAttributes({ [TA.BATCH_SIZE]: bulkOps.length });
           if (bulkOps.length === 0) return 0;
 
-          return retryOnWriteConflict(async () => {
-            const session = sessionContext.getSession();
-            const result = await collection.bulkWrite(bulkOps, { session });
-            return result.modifiedCount;
-          }, op ? { onRetry: op.onRetry } : undefined);
+          return retryOnWriteConflict(
+            async () => {
+              const session = sessionContext.getSession();
+              const result = await collection.bulkWrite(bulkOps, { session });
+              return result.modifiedCount;
+            },
+            op ? { onRetry: op.onRetry } : undefined,
+          );
         };
         return traced(
           tele,
@@ -1255,9 +1274,8 @@ export async function scopedMultiCollection<
             sortStages,
             userPipeline,
           );
-          const sortMachinery = sortStages.length > 0
-            ? buildSortMachinery(sortObj)
-            : null;
+          const sortMachinery =
+            sortStages.length > 0 ? buildSortMachinery(sortObj) : null;
 
           // Resolve the anchor THROUGH the sort pipeline: the sort key may
           // only exist after those stages run (e.g. a $lookup'ed field), so a
@@ -1267,18 +1285,23 @@ export async function scopedMultiCollection<
             anchorId: string,
             label: "afterId" | "beforeId",
           ): Promise<Record<string, unknown>> => {
-            const rows = await collection.aggregate([
-              // deno-lint-ignore no-explicit-any
-              { $match: { _id: anchorId, _scope: scopeId, _type: typeName } },
-              ...sortStages,
-              { $limit: 1 },
-            ] as any, { session }).toArray();
+            const rows = await collection
+              .aggregate(
+                [
+                  {
+                    $match: { _id: anchorId, _scope: scopeId, _type: typeName },
+                  },
+                  ...sortStages,
+                  { $limit: 1 },
+                ] as any,
+                { session },
+              )
+              .toArray();
             if (rows[0]) return rows[0] as Record<string, unknown>;
             // Fail loud, and say WHY: a dropped anchor (a $match inside
             // sortPipeline excluded it) is a different caller bug than a
             // stale/cross-scope id.
             const exists = await collection.findOne(
-              // deno-lint-ignore no-explicit-any
               { _id: anchorId, _scope: scopeId, _type: typeName } as any,
               { session },
             );
@@ -1308,7 +1331,6 @@ export async function scopedMultiCollection<
             direction: "after" | "before",
           ): Promise<Record<string, unknown>[] | null> => {
             const anchor = await collection.findOne(
-              // deno-lint-ignore no-explicit-any
               { _id: anchorId, _scope: scopeId, _type: typeName } as any,
               { session },
             );
@@ -1402,17 +1424,19 @@ export async function scopedMultiCollection<
             machinery: SortMachinery,
             cursor: AggregationStage | null,
           ): Promise<number> => {
-            const rows = await collection.aggregate(
-              buildSortPaginateStages({
-                baseMatch: { $and: baseQuery },
-                sortStages,
-                machinery,
-                cursorFilter: cursor,
-                pipeline: userPipeline,
-                count: true,
-              }),
-              { session },
-            ).toArray();
+            const rows = await collection
+              .aggregate(
+                buildSortPaginateStages({
+                  baseMatch: { $and: baseQuery },
+                  sortStages,
+                  machinery,
+                  cursorFilter: cursor,
+                  pipeline: userPipeline,
+                  count: true,
+                }),
+                { session },
+              )
+              .toArray();
             return (rows[0]?.total as number | undefined) ?? 0;
           };
 
@@ -1425,7 +1449,8 @@ export async function scopedMultiCollection<
             if (sortMachinery) {
               total = await countViaSortPipeline(sortMachinery, null);
               if (afterId) {
-                position = total -
+                position =
+                  total -
                   (await countViaSortPipeline(sortMachinery, exprCursor));
               } else if (beforeId) {
                 position = -1;
@@ -1465,14 +1490,12 @@ export async function scopedMultiCollection<
               }
             } else {
               total = await collection.countDocuments(
-                // deno-lint-ignore no-explicit-any
                 { $and: baseQuery } as any,
                 { session },
               );
               if (afterId) {
                 if (cursorBranches) {
                   const afterCount = await collection.countDocuments(
-                    // deno-lint-ignore no-explicit-any
                     composeCursorQuery(baseQuery, cursorBranches) as any,
                     { session },
                   );
@@ -1499,7 +1522,6 @@ export async function scopedMultiCollection<
           // path never server-caps (see below) — it relies on the JS limit.
           const serverCap = customFilter ? undefined : limit;
 
-          // deno-lint-ignore no-explicit-any
           let cursor: m.FindCursor<any> | m.AggregationCursor<any>;
           if (sortMachinery) {
             // sortPipeline path: the stages the sort depends on ($lookup, …)
@@ -1532,15 +1554,15 @@ export async function scopedMultiCollection<
               { $sort: sort },
               ...userPipeline,
             ];
-            // deno-lint-ignore no-explicit-any
             cursor = collection.aggregate(dataPipeline as any, { session });
           } else {
-            // deno-lint-ignore no-explicit-any
-            const findCursor = collection.find(finalQuery as any, { session })
+            const findCursor = collection
+              .find(finalQuery as any, { session })
               .sort(sort as m.Sort);
-            cursor = serverCap !== undefined
-              ? findCursor.limit(serverCap)
-              : findCursor;
+            cursor =
+              serverCap !== undefined
+                ? findCursor.limit(serverCap)
+                : findCursor;
           }
 
           // Stream rows: the `limit` is applied in JS so a rejecting
@@ -1557,9 +1579,10 @@ export async function scopedMultiCollection<
               if (!parsed.success) continue;
               // Preserve pipeline-added fields ($lookup results) alongside the
               // validated document (parse strips unknown keys).
-              const validatedDoc = pipelineBuilder || sortPipelineBuilder
-                ? { ...doc, ...parsed.output }
-                : parsed.output;
+              const validatedDoc =
+                pipelineBuilder || sortPipelineBuilder
+                  ? { ...doc, ...parsed.output }
+                  : parsed.output;
               const enriched = prepare
                 ? await prepare(validatedDoc as never)
                 : validatedDoc;
@@ -1615,11 +1638,9 @@ export async function scopedMultiCollection<
                     .aggregate(beforePipeline, { session })
                     .toArray();
                   beforeCount =
-                    (beforeResult[0]?.total as number | undefined) ??
-                      0;
+                    (beforeResult[0]?.total as number | undefined) ?? 0;
                 } else {
                   beforeCount = await collection.countDocuments(
-                    // deno-lint-ignore no-explicit-any
                     composeCursorQuery(baseQuery, cursorBranches) as any,
                     { session },
                   );
@@ -1634,7 +1655,6 @@ export async function scopedMultiCollection<
           return {
             total,
             position,
-            // deno-lint-ignore no-explicit-any
             data: data as any,
             ...(peek ? { hasMore } : {}),
           };
@@ -1658,11 +1678,12 @@ export async function scopedMultiCollection<
     scopeIds: string[] | null,
   ): ReadOnlyMultiScopeView<T, S> {
     // scopeIds: array of scope ids (may be empty), or null for unscoped.
-    const filter: ScopeFilterShape = scopeIds === null
-      ? null
-      : scopeIds.length === 1
-      ? { kind: "single", id: scopeIds[0] }
-      : { kind: "multi", ids: scopeIds };
+    const filter: ScopeFilterShape =
+      scopeIds === null
+        ? null
+        : scopeIds.length === 1
+          ? { kind: "single", id: scopeIds[0] }
+          : { kind: "multi", ids: scopeIds };
 
     function scopeMatch(): Record<string, unknown> | null {
       if (scopeIds === null) return null;
@@ -1675,9 +1696,8 @@ export async function scopedMultiCollection<
     // unscoped view (scopeIds === null) carries no scope attribute at all.
     // Only allocated when telemetry is enabled and scope recording is on —
     // when `recordScope` is false the attribute is entirely absent.
-    const scopeAttr = tele && recordScope && scopeIds !== null
-      ? [...scopeIds]
-      : undefined;
+    const scopeAttr =
+      tele && recordScope && scopeIds !== null ? [...scopeIds] : undefined;
 
     return {
       _scopes: scopeIds === null ? [] : [...scopeIds],
@@ -1693,19 +1713,22 @@ export async function scopedMultiCollection<
             conditions.push(userFilter as Record<string, unknown>);
           }
 
-          // deno-lint-ignore no-explicit-any
           const raw = await collection.findOne({ $and: conditions } as any, {
             session,
           });
           if (!raw) return null;
-          // deno-lint-ignore no-explicit-any
           return v.parse(storageSchemas[typeName], raw) as any;
         };
-        return traced(tele, "findOne", () => ({
-          [TA.SCOPE]: scopeAttr,
-          [TA.DOC_TYPE]: String(type),
-          [TA.FILTER_KEYS]: filterKeys(userFilter),
-        }), run);
+        return traced(
+          tele,
+          "findOne",
+          () => ({
+            [TA.SCOPE]: scopeAttr,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: filterKeys(userFilter),
+          }),
+          run,
+        );
       },
 
       async find(type, userFilter, options) {
@@ -1720,20 +1743,17 @@ export async function scopedMultiCollection<
             conditions.push(userFilter as Record<string, unknown>);
           }
 
-          const cursor = collection.find(
-            // deno-lint-ignore no-explicit-any
-            { $and: conditions } as any,
-            { session, ...findOptions },
-          );
+          const cursor = collection.find({ $and: conditions } as any, {
+            session,
+            ...findOptions,
+          });
           const raw = await cursor.toArray();
-          // deno-lint-ignore no-explicit-any
           if (validate === false) return raw as any;
           const out: unknown[] = [];
           for (const item of raw) {
             const parsed = v.safeParse(storageSchemas[typeName], item);
             if (parsed.success) out.push(parsed.output);
           }
-          // deno-lint-ignore no-explicit-any
           return out as any;
         };
         return traced(
@@ -1759,16 +1779,11 @@ export async function scopedMultiCollection<
           if (userFilter) {
             conditions.push(userFilter as Record<string, unknown>);
           }
-          const cursor = collection.find(
-            // deno-lint-ignore no-explicit-any
-            { $and: conditions } as any,
-            {
-              session,
-              ...options,
-              projection: buildProjection(fields as readonly string[]),
-            },
-          );
-          // deno-lint-ignore no-explicit-any
+          const cursor = collection.find({ $and: conditions } as any, {
+            session,
+            ...options,
+            projection: buildProjection(fields as readonly string[]),
+          });
           return (await cursor.toArray()) as any;
         };
         return traced(
@@ -1795,17 +1810,21 @@ export async function scopedMultiCollection<
             conditions.push(userFilter as Record<string, unknown>);
           }
 
-          return collection.countDocuments(
-            // deno-lint-ignore no-explicit-any
-            { $and: conditions } as any,
-            { session, ...options },
-          );
+          return collection.countDocuments({ $and: conditions } as any, {
+            session,
+            ...options,
+          });
         };
-        return traced(tele, "countDocuments", () => ({
-          [TA.SCOPE]: scopeAttr,
-          [TA.DOC_TYPE]: String(type),
-          [TA.FILTER_KEYS]: filterKeys(userFilter),
-        }), run);
+        return traced(
+          tele,
+          "countDocuments",
+          () => ({
+            [TA.SCOPE]: scopeAttr,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: filterKeys(userFilter),
+          }),
+          run,
+        );
       },
 
       async aggregate(stageBuilder) {
@@ -1834,24 +1853,28 @@ export async function scopedMultiCollection<
   const unscopedView: UnscopedView<T, S> = config.allowUnscoped
     ? buildReadOnlyView(null)
     : new Proxy({} as UnscopedView<T, S>, {
-      get(_target, prop) {
-        if (prop === "_scopes") return [];
-        // Let thenable checks (`then`), JSON serialization (`toJSON`) and any
-        // inspection symbol (Symbol.toStringTag / Symbol.iterator / Node's
-        // util.inspect.custom, …) probe the object harmlessly — otherwise a
-        // bare `console.log(catalog)` or an accidental `await catalog.unscoped`
-        // would explode. Only the real view methods stay guarded.
-        if (typeof prop === "symbol" || prop === "then" || prop === "toJSON") {
-          return undefined;
-        }
-        throw new Error(
-          `unscoped: access to "${
-            String(prop)
-          }" is disabled. Set { allowUnscoped: true } on the ` +
-            `scopedMultiCollection config to enable cross-scope reads.`,
-        );
-      },
-    });
+        get(_target, prop) {
+          if (prop === "_scopes") return [];
+          // Let thenable checks (`then`), JSON serialization (`toJSON`) and any
+          // inspection symbol (Symbol.toStringTag / Symbol.iterator / Node's
+          // util.inspect.custom, …) probe the object harmlessly — otherwise a
+          // bare `console.log(catalog)` or an accidental `await catalog.unscoped`
+          // would explode. Only the real view methods stay guarded.
+          if (
+            typeof prop === "symbol" ||
+            prop === "then" ||
+            prop === "toJSON"
+          ) {
+            return undefined;
+          }
+          throw new Error(
+            `unscoped: access to "${String(
+              prop,
+            )}" is disabled. Set { allowUnscoped: true } on the ` +
+              `scopedMultiCollection config to enable cross-scope reads.`,
+          );
+        },
+      });
 
   return {
     scope(id) {
@@ -1870,13 +1893,9 @@ export async function scopedMultiCollection<
         const values = await collection.distinct("_scope", {}, { session });
         return values.filter((v): v is string => typeof v === "string");
       };
-      return traced(
-        tele,
-        "listScopes",
-        undefined,
-        run,
-        (scopes) => ({ [TA.RETURNED_ROWS]: scopes.length }),
-      );
+      return traced(tele, "listScopes", undefined, run, (scopes) => ({
+        [TA.RETURNED_ROWS]: scopes.length,
+      }));
     },
 
     async scopeExists(id) {
@@ -1884,15 +1903,19 @@ export async function scopedMultiCollection<
       const run = async () => {
         const session = sessionContext.getSession();
         const count = await collection.countDocuments(
-          // deno-lint-ignore no-explicit-any
           { _scope: validated } as any,
           { session, limit: 1 },
         );
         return count > 0;
       };
-      return traced(tele, "scopeExists", () => ({
-        [TA.SCOPE]: recordScope ? validated : undefined,
-      }), run);
+      return traced(
+        tele,
+        "scopeExists",
+        () => ({
+          [TA.SCOPE]: recordScope ? validated : undefined,
+        }),
+        run,
+      );
     },
 
     async dropScope(id, options) {
@@ -1906,7 +1929,6 @@ export async function scopedMultiCollection<
       const run = async () => {
         const session = sessionContext.getSession();
         const result = await collection.deleteMany(
-          // deno-lint-ignore no-explicit-any
           { _scope: validated } as any,
           { session },
         );
@@ -1940,7 +1962,6 @@ export async function scopedMultiCollection<
           byType[g._id] = g.count;
           total += g.count;
         }
-        // deno-lint-ignore no-explicit-any
         return { total, byType: byType as any };
       };
       return traced(
@@ -2077,9 +2098,7 @@ function buildScopedStageBuilder<T extends ScopedMultiCollectionTypes>(
       const options = asOrOptions || {};
       const as = options.as || localField;
       assertLetDoesNotShadowJoinBinding(options.let);
-      const basePipeline: AggregationStage[] = [
-        lookupBaseMatch(foreignField),
-      ];
+      const basePipeline: AggregationStage[] = [lookupBaseMatch(foreignField)];
       if (options.pipeline) {
         basePipeline.push(...options.pipeline(stage));
       }
@@ -2194,7 +2213,8 @@ async function applyValidator(
   unionSchema: AnySchema,
 ): Promise<void> {
   const validator = toMongoValidator(unionSchema);
-  const collections = await db.listCollections({ name: collectionName })
+  const collections = await db
+    .listCollections({ name: collectionName })
     .toArray();
 
   if (collections.length === 0) {

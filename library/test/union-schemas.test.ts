@@ -1,5 +1,6 @@
+import { test } from "./+harness.ts";
 import * as v from "../src/schema.ts";
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects } from "./+assert.ts";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { withIndex } from "../src/indexes.ts";
@@ -11,7 +12,7 @@ import { defineModel } from "../src/multi-collection-model.ts";
  * Covers the case where withIndex is applied to union schemas
  */
 
-Deno.test("withIndex - Union schemas with unique constraints", async (t) => {
+test("withIndex - Union schemas with unique constraints", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create union schema similar to SIRET/SIREN
     const NumberOrString = v.union([v.string(), v.number()]);
@@ -66,14 +67,15 @@ Deno.test("withIndex - Union schemas with unique constraints", async (t) => {
 
     // Verify indexes were created
     const indexes = await coll.collection.listIndexes().toArray();
-    const valueIndex = indexes.find((idx: Record<string, unknown>) =>
-      idx.key && (idx.key as Record<string, unknown>).value
+    const valueIndex = indexes.find(
+      (idx: Record<string, unknown>) =>
+        idx.key && (idx.key as Record<string, unknown>).value,
     );
     assertEquals(valueIndex?.unique, true);
   });
 });
 
-Deno.test("withIndex - Complex nested union schemas", async (t) => {
+test("withIndex - Complex nested union schemas", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Complex validation schemas like SIRET/SIREN
     const SiretSchema = v.pipe(
@@ -148,7 +150,7 @@ Deno.test("withIndex - Complex nested union schemas", async (t) => {
   });
 });
 
-Deno.test("withIndex - Multi-collection with union schemas", async (t) => {
+test("withIndex - Multi-collection with union schemas", async (t) => {
   await withDatabase(t.name, async (db) => {
     const IdUnion = v.union([v.string(), v.number()]);
 

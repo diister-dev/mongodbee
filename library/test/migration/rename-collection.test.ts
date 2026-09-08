@@ -4,7 +4,8 @@
  * into a temp name, consume the sources, then rename the temp over the (now
  * free) final name. Reversible unless `dropTarget` drops an existing target.
  */
-import { assert, assertEquals } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals } from "../+assert.ts";
 import { withDatabase } from "../+shared.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import {
@@ -19,7 +20,7 @@ import * as v from "../../src/schema.ts";
 
 const S = { collections: { a: { _id: v.string() }, b: { _id: v.string() } } };
 
-Deno.test("renameCollection: plain rename is reversible (memory up + down)", async () => {
+test("renameCollection: plain rename is reversible (memory up + down)", async () => {
   const state = createEmptyDatabaseState();
   state.collections["a"] = { content: [{ _id: "x:1" }] };
 
@@ -45,7 +46,7 @@ Deno.test("renameCollection: plain rename is reversible (memory up + down)", asy
   assertEquals(state.collections["a"]?.content.length, 1);
 });
 
-Deno.test("renameCollection: dropTarget flags the op lossy", () => {
+test("renameCollection: dropTarget flags the op lossy", () => {
   const m = migrationDefinition("001", "rn", {
     parent: null,
     schemas: S,
@@ -56,7 +57,7 @@ Deno.test("renameCollection: dropTarget flags the op lossy", () => {
   assertEquals(getLossyOperations(ops).length, 1);
 });
 
-Deno.test("renameCollection: temp scoped collection → final name (memory)", async () => {
+test("renameCollection: temp scoped collection → final name (memory)", async () => {
   // The consolidation use case: a scoped collection built under a temp name is
   // renamed over the final name, carrying its scoped content.
   const state = createEmptyDatabaseState();
@@ -80,11 +81,11 @@ Deno.test("renameCollection: temp scoped collection → final name (memory)", as
   assertEquals(state.scopedMultiCollections["+expositions"]?.content.length, 2);
 });
 
-Deno.test("mongodb renameCollection: renames a real collection then reverses", async () => {
+test("mongodb renameCollection: renames a real collection then reverses", async () => {
   await withDatabase("rename-collection-mongo", async (db) => {
-    await db.collection("src_coll").insertMany(
-      [{ _id: "x:1" }, { _id: "x:2" }] as never,
-    );
+    await db
+      .collection("src_coll")
+      .insertMany([{ _id: "x:1" }, { _id: "x:2" }] as never);
 
     const SE = { collections: {} };
     const m = migrationDefinition("001", "rn", {

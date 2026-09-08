@@ -7,9 +7,9 @@
  */
 
 import process from "node:process";
-import { blue, bold, dim, green, red, yellow } from "@std/fmt/colors";
+import { blue, bold, dim, green, red, yellow } from "../../../utils/colors.ts";
 import { MongoClient } from "../../../mongodb.ts";
-import * as path from "@std/path";
+import * as path from "node:path";
 
 import { loadConfig } from "../../config/loader.ts";
 import { buildMigrationChain, loadAllMigrations } from "../../discovery.ts";
@@ -63,8 +63,8 @@ export async function rollbackCommand(
       cwd,
       config.paths?.migrations || "./migrations",
     );
-    const connectionUri = config.database?.connection?.uri ||
-      "mongodb://localhost:27017";
+    const connectionUri =
+      config.database?.connection?.uri || "mongodb://localhost:27017";
     const dbName = config.database?.name || "myapp";
 
     console.log(dim(`Migrations directory: ${migrationsDir}`));
@@ -81,7 +81,8 @@ export async function rollbackCommand(
     // migration does, so refuse it up-front when the account lacks the DDL
     // actions rather than half-way through.
     await ensureMigrationPrivileges(db, {
-      skip: options.skipPrivilegeCheck ??
+      skip:
+        options.skipPrivilegeCheck ??
         (options as Record<string, unknown>)["skip-privilege-check"] === true,
     });
     console.log();
@@ -98,8 +99,8 @@ export async function rollbackCommand(
     const migrationsWithFiles = await loadAllMigrations(migrationsDir);
     const allMigrations = buildMigrationChain(migrationsWithFiles);
 
-    const migrationToRollback = allMigrations.find((m) =>
-      m.id === lastApplied.id
+    const migrationToRollback = allMigrations.find(
+      (m) => m.id === lastApplied.id,
     );
 
     if (!migrationToRollback) {
@@ -120,7 +121,7 @@ export async function rollbackCommand(
     const state = migrationToRollback.migrate(builder);
 
     // Compact "where" label for an operation, for human-readable listings.
-    const opLabel = (op: typeof state.operations[number]): string => {
+    const opLabel = (op: (typeof state.operations)[number]): string => {
       const o = op as Record<string, unknown>;
       const target = (o.collectionName ?? o.modelType ?? "") as string;
       const docType = o.documentType ? `.${o.documentType as string}` : "";

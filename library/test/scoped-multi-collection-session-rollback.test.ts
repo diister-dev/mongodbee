@@ -4,7 +4,8 @@
 // scoped-multi-collection-any.test.ts ("withSession: scoped + plain collection
 // commit together") — this is its mirror image on the failure side.
 
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals, assertRejects } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { collection } from "../src/collection.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
@@ -26,7 +27,7 @@ async function makeCatalog(
   });
 }
 
-Deno.test("withSession: a throw rolls back the scoped write AND the plain collection write", async () => {
+test("withSession: a throw rolls back the scoped write AND the plain collection write", async () => {
   await withDatabase("smc2-sess-rollback", async (db) => {
     const audit = await collection(db, "audit", {
       _id: dbId("audit"),
@@ -58,7 +59,7 @@ Deno.test("withSession: a throw rolls back the scoped write AND the plain collec
   });
 });
 
-Deno.test("withSession: a write that succeeds BEFORE the transaction still stands; only the aborted batch rolls back", async () => {
+test("withSession: a write that succeeds BEFORE the transaction still stands; only the aborted batch rolls back", async () => {
   await withDatabase("smc2-sess-rollback-pre", async (db) => {
     const catalog = await makeCatalog(db);
     const expo = catalog.scope(EXPO_A);

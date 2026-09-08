@@ -23,7 +23,8 @@
  *    own window to cover every migration it is about to apply — see
  *    migrate-lastn-covers-pending.test.ts.
  */
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { test } from "../../+harness.ts";
+import { assert, assertEquals, assertRejects } from "../../+assert.ts";
 import { migrationDefinition } from "../../../src/migration/definition.ts";
 import {
   MigrationValidationFailedError,
@@ -106,9 +107,7 @@ function failingTailChain(): MigrationDefinition[] {
       },
       migrate(m) {
         m.createCollection("users");
-        m.collection("users").seed(
-          [{ _id: "u1", name: "Seeded" }] as never,
-        );
+        m.collection("users").seed([{ _id: "u1", name: "Seeded" }] as never);
         return m.compile();
       },
     },
@@ -193,11 +192,11 @@ function failingTailChain(): MigrationDefinition[] {
 
 /** The reporter emits colour; assertions read the text underneath. */
 function stripAnsi(text: string): string {
-  // deno-lint-ignore no-control-regex
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escapes is the point
   return text.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
-Deno.test("validate --last N: the window's verdicts are what the chain replay produced", async () => {
+test("validate --last N: the window's verdicts are what the chain replay produced", async () => {
   const chain = failingTailChain();
   const WINDOW = 2;
 
@@ -239,7 +238,7 @@ Deno.test("validate --last N: the window's verdicts are what the chain replay pr
   }
 });
 
-Deno.test("validate --last N: migrations outside the window get no result and no green banner", async () => {
+test("validate --last N: migrations outside the window get no result and no green banner", async () => {
   const chain = failingTailChain().slice(0, 2); // the two clean ones
   const output: string[] = [];
 
@@ -270,12 +269,12 @@ Deno.test("validate --last N: migrations outside the window get no result and no
   );
 });
 
-Deno.test("validate --last N: a fully valid window still passes (no false negative)", async () => {
+test("validate --last N: a fully valid window still passes (no false negative)", async () => {
   const chain = failingTailChain().slice(0, 2);
   await validateMigrationsWithSimulation(chain, { lastN: 1 });
 });
 
-Deno.test("validate: a full check keeps its all-clear banner and validates everything", async () => {
+test("validate: a full check keeps its all-clear banner and validates everything", async () => {
   const chain = failingTailChain().slice(0, 2);
   const output: string[] = [];
 

@@ -9,7 +9,8 @@
  * provenance log (régime B), so for now a move is marked irreversible and
  * the pre-rollback gate refuses it.
  */
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals, assertRejects } from "../+assert.ts";
 import { withDatabase } from "../+shared.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import {
@@ -40,22 +41,27 @@ function copyMigration(source: "keep" | "consume") {
       parent: null,
       schemas: SCHEMAS,
       migrate: (b) =>
-        b.createCollection("users").end()
-          .createCollection("archived_users").end()
+        b
+          .createCollection("users")
+          .end()
+          .createCollection("archived_users")
+          .end()
           .compile(),
     }),
     schemas: SCHEMAS,
     migrate: (b) =>
-      b.flow({
-        from: { collection: "users", where: { active: false } },
-        into: { collection: "archived_users" },
-        map: (doc) => ({ ...doc, archivedReason: "inactivity" }),
-        source,
-      }).compile(),
+      b
+        .flow({
+          from: { collection: "users", where: { active: false } },
+          into: { collection: "archived_users" },
+          map: (doc) => ({ ...doc, archivedReason: "inactivity" }),
+          source,
+        })
+        .compile(),
   });
 }
 
-Deno.test("memory flow COPY: copies matching docs, leaves source intact, reversible", async () => {
+test("memory flow COPY: copies matching docs, leaves source intact, reversible", async () => {
   const state = createEmptyDatabaseState();
   state.collections.users = {
     content: [
@@ -76,8 +82,8 @@ Deno.test("memory flow COPY: copies matching docs, leaves source intact, reversi
   // Only inactive copied
   assertEquals(state.collections.archived_users.content.length, 2);
   assert(
-    state.collections.archived_users.content.every((d) =>
-      d.active === false && d.archivedReason === "inactivity"
+    state.collections.archived_users.content.every(
+      (d) => d.active === false && d.archivedReason === "inactivity",
     ),
   );
 
@@ -87,7 +93,7 @@ Deno.test("memory flow COPY: copies matching docs, leaves source intact, reversi
   assertEquals(state.collections.users.content.length, 3);
 });
 
-Deno.test("memory flow MOVE: consumes source and is irreversible", async () => {
+test("memory flow MOVE: consumes source and is irreversible", async () => {
   const state = createEmptyDatabaseState();
   state.collections.users = {
     content: [
@@ -119,7 +125,7 @@ Deno.test("memory flow MOVE: consumes source and is irreversible", async () => {
   assertEquals(state.collections.users.content.length, 1);
 });
 
-Deno.test("memory flow COPY: target ids are deterministic across replays", async () => {
+test("memory flow COPY: target ids are deterministic across replays", async () => {
   const seed = () => {
     const s = createEmptyDatabaseState();
     s.collections.users = {
@@ -143,7 +149,7 @@ Deno.test("memory flow COPY: target ids are deterministic across replays", async
   );
 });
 
-Deno.test("mongodb flow COPY: copies + reverses cleanly on a real DB", async () => {
+test("mongodb flow COPY: copies + reverses cleanly on a real DB", async () => {
   await withDatabase("flow-copy-mongo", async (db) => {
     const m = copyMigration("keep");
     // Set up the collections first via the parent migration
@@ -214,17 +220,19 @@ function intoMultiCollection(source: "keep" | "consume") {
     }),
     schemas: MULTI_SCHEMAS,
     migrate: (b) => {
-      return b.flow({
-        from: { collection: "legacy_passwords" },
-        into: { collection: "+auth" },
-        map: (doc) => ({ ...doc, _type: "auth_password" }),
-        source,
-      }).compile();
+      return b
+        .flow({
+          from: { collection: "legacy_passwords" },
+          into: { collection: "+auth" },
+          map: (doc) => ({ ...doc, _type: "auth_password" }),
+          source,
+        })
+        .compile();
     },
   });
 }
 
-Deno.test("memory flow into a multi-collection: lands under the target's own bucket", async () => {
+test("memory flow into a multi-collection: lands under the target's own bucket", async () => {
   const state = createEmptyDatabaseState();
   state.multiCollections["+auth"] = { content: [] };
   state.collections.legacy_passwords = {
@@ -235,8 +243,9 @@ Deno.test("memory flow into a multi-collection: lands under the target's own buc
   };
 
   const m = intoMultiCollection("consume");
-  const ops =
-    m.migrate(migrationBuilder({ schemas: MULTI_SCHEMAS })).operations;
+  const ops = m.migrate(
+    migrationBuilder({ schemas: MULTI_SCHEMAS }),
+  ).operations;
   const applier = createMemoryApplier(m);
 
   await applier.applyMigration(state, ops, "up");
@@ -258,7 +267,7 @@ Deno.test("memory flow into a multi-collection: lands under the target's own buc
   );
 });
 
-Deno.test("memory flow into a multi-collection: a copy stays reversible", async () => {
+test("memory flow into a multi-collection: a copy stays reversible", async () => {
   const state = createEmptyDatabaseState();
   state.multiCollections["+auth"] = { content: [] };
   state.collections.legacy_passwords = {
@@ -266,8 +275,9 @@ Deno.test("memory flow into a multi-collection: a copy stays reversible", async 
   };
 
   const m = intoMultiCollection("keep");
-  const ops =
-    m.migrate(migrationBuilder({ schemas: MULTI_SCHEMAS })).operations;
+  const ops = m.migrate(
+    migrationBuilder({ schemas: MULTI_SCHEMAS }),
+  ).operations;
   const applier = createMemoryApplier(m);
 
   await applier.applyMigration(state, ops, "up");
@@ -282,7 +292,7 @@ Deno.test("memory flow into a multi-collection: a copy stays reversible", async 
   assertEquals(state.collections.legacy_passwords.content.length, 1);
 });
 
-Deno.test("memory flow FROM a multi-collection: the source resolves the same way", async () => {
+test("memory flow FROM a multi-collection: the source resolves the same way", async () => {
   // The mirror of the target bug, and the reason the lookup is one named
   // function rather than a chain repeated at each endpoint: the simulation read
   // the SOURCE from `collections` alone too, so a flow out of a multi-collection
@@ -312,23 +322,26 @@ Deno.test("memory flow FROM a multi-collection: the source resolves the same way
     }),
     schemas: MULTI_SCHEMAS,
     migrate: (b) =>
-      b.flow({
-        from: { collection: "+auth" },
-        into: { collection: "legacy_passwords" },
-        map: ({ _type: _dropped, ...rest }) => rest,
-        source: "consume",
-      }).compile(),
+      b
+        .flow({
+          from: { collection: "+auth" },
+          into: { collection: "legacy_passwords" },
+          map: ({ _type: _dropped, ...rest }) => rest,
+          source: "consume",
+        })
+        .compile(),
   });
 
-  const ops =
-    m.migrate(migrationBuilder({ schemas: MULTI_SCHEMAS })).operations;
+  const ops = m.migrate(
+    migrationBuilder({ schemas: MULTI_SCHEMAS }),
+  ).operations;
   await createMemoryApplier(m).applyMigration(state, ops, "up");
 
   assertEquals(state.collections.legacy_passwords.content.length, 1);
   assertEquals(state.multiCollections["+auth"].content.length, 0);
 });
 
-Deno.test("flow into a multi-collection: the minted _id carries the sub-type prefix", async () => {
+test("flow into a multi-collection: the minted _id carries the sub-type prefix", async () => {
   // The regression this guards produced ids the WRITE accepted and every later
   // READ rejected: a multi-collection derives `_id` from the sub-type name, so
   // the sub-type entries declare no `_id` of their own, and the lookup that
@@ -350,20 +363,23 @@ Deno.test("flow into a multi-collection: the minted _id carries the sub-type pre
     schemas: MULTI_SCHEMAS,
     migrate: (b) => {
       b.createMultiCollection("+auth");
-      return b.flow({
-        from: { collection: "legacy_passwords" },
-        into: { collection: "+auth" },
-        map: (doc: Record<string, unknown>) => ({
-          ...doc,
-          _type: "auth_password",
-        }),
-        source: "consume",
-      }).compile();
+      return b
+        .flow({
+          from: { collection: "legacy_passwords" },
+          into: { collection: "+auth" },
+          map: (doc: Record<string, unknown>) => ({
+            ...doc,
+            _type: "auth_password",
+          }),
+          source: "consume",
+        })
+        .compile();
     },
   });
 
-  const ops =
-    m.migrate(migrationBuilder({ schemas: MULTI_SCHEMAS })).operations;
+  const ops = m.migrate(
+    migrationBuilder({ schemas: MULTI_SCHEMAS }),
+  ).operations;
   await createMemoryApplier(m).applyMigration(state, ops, "up");
 
   const [moved] = state.multiCollections["+auth"].content;
@@ -375,7 +391,7 @@ Deno.test("flow into a multi-collection: the minted _id carries the sub-type pre
   );
 });
 
-Deno.test("flow into a multi-collection: a map that forgets _type is refused", async () => {
+test("flow into a multi-collection: a map that forgets _type is refused", async () => {
   // Loudly, and before anything is written. Minting a bare id instead would put
   // documents in place that only fail when something reads them back.
   const state = createEmptyDatabaseState();
@@ -395,17 +411,20 @@ Deno.test("flow into a multi-collection: a map that forgets _type is refused", a
     schemas: MULTI_SCHEMAS,
     migrate: (b) => {
       b.createMultiCollection("+auth");
-      return b.flow({
-        from: { collection: "legacy_passwords" },
-        into: { collection: "+auth" },
-        map: (doc: Record<string, unknown>) => ({ ...doc }),
-        source: "keep",
-      }).compile();
+      return b
+        .flow({
+          from: { collection: "legacy_passwords" },
+          into: { collection: "+auth" },
+          map: (doc: Record<string, unknown>) => ({ ...doc }),
+          source: "keep",
+        })
+        .compile();
     },
   });
 
-  const ops =
-    m.migrate(migrationBuilder({ schemas: MULTI_SCHEMAS })).operations;
+  const ops = m.migrate(
+    migrationBuilder({ schemas: MULTI_SCHEMAS }),
+  ).operations;
   await assertRejects(
     () => createMemoryApplier(m).applyMigration(state, ops, "up"),
     Error,

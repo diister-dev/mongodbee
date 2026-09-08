@@ -25,9 +25,9 @@ function eachDocument(
   for (const [name, { content }] of Object.entries(state.multiModels)) {
     for (const doc of content) visit(`multiModels/${name}`, doc);
   }
-  for (
-    const [name, { content }] of Object.entries(state.scopedMultiCollections)
-  ) {
+  for (const [name, { content }] of Object.entries(
+    state.scopedMultiCollections,
+  )) {
     for (const doc of content) visit(`scopedMultiCollections/${name}`, doc);
   }
 }
@@ -84,10 +84,12 @@ export function referencesTo(
     }
   };
   eachDocument(state, (location, doc) => walk(doc, "", location));
-  return [...found.entries()].map(([key, count]) => {
-    const [location, path] = key.split("|");
-    return { location, path, count };
-  }).sort((a, b) => b.count - a.count);
+  return [...found.entries()]
+    .map(([key, count]) => {
+      const [location, path] = key.split("|");
+      return { location, path, count };
+    })
+    .sort((a, b) => b.count - a.count);
 }
 
 export function deleteWarnings(
@@ -106,9 +108,10 @@ export function deleteWarnings(
   const dangling = referencesTo(state, deleted);
   if (dangling.length === 0) return [];
   const total = dangling.reduce((sum, d) => sum + d.count, 0);
-  const sites = dangling.slice(0, 3).map((d) =>
-    `${d.location} ${d.path} (${d.count})`
-  ).join(", ");
+  const sites = dangling
+    .slice(0, 3)
+    .map((d) => `${d.location} ${d.path} (${d.count})`)
+    .join(", ");
   return [
     `${label} deleted ${deleted.size} document(s) still referenced ${total} time(s): ${sites}${
       dangling.length > 3 ? `, ${dangling.length - 3} other site(s)` : ""

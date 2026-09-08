@@ -4,7 +4,8 @@
 // scoped-multi-collection-scope.test.ts; this file nails down the UPDATE and
 // insertMany surfaces, which are the subtler vectors.
 
-import { assertEquals, assertRejects } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assertEquals, assertRejects } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";
@@ -26,14 +27,13 @@ async function makeCatalog(
   });
 }
 
-Deno.test("updateOne: rejects a payload carrying _scope (scope-hop) — nothing is written", async () => {
+test("updateOne: rejects a payload carrying _scope (scope-hop) — nothing is written", async () => {
   await withDatabase("smc2-reserved-update-one-scope", async (db) => {
     const catalog = await makeCatalog(db);
     const expo = catalog.scope(EXPO_A);
     const id = await expo.insertOne("artwork", { title: "orig", year: 1 });
 
     await assertRejects(
-      // deno-lint-ignore no-explicit-any
       () =>
         expo.updateOne("artwork", id, { _scope: EXPO_B, title: "hop" } as any),
       Error,
@@ -47,14 +47,13 @@ Deno.test("updateOne: rejects a payload carrying _scope (scope-hop) — nothing 
   });
 });
 
-Deno.test("updateOne: rejects a payload carrying _type (type-hop) — nothing is written", async () => {
+test("updateOne: rejects a payload carrying _type (type-hop) — nothing is written", async () => {
   await withDatabase("smc2-reserved-update-one-type", async (db) => {
     const catalog = await makeCatalog(db);
     const expo = catalog.scope(EXPO_A);
     const id = await expo.insertOne("artwork", { title: "orig", year: 1 });
 
     await assertRejects(
-      // deno-lint-ignore no-explicit-any
       () =>
         expo.updateOne("artwork", id, { _type: "artist", title: "x" } as any),
       Error,
@@ -67,7 +66,7 @@ Deno.test("updateOne: rejects a payload carrying _type (type-hop) — nothing is
   });
 });
 
-Deno.test("updateMany: rejects when ANY entry carries a reserved field", async () => {
+test("updateMany: rejects when ANY entry carries a reserved field", async () => {
   await withDatabase("smc2-reserved-update-many", async (db) => {
     const catalog = await makeCatalog(db);
     const expo = catalog.scope(EXPO_A);
@@ -81,7 +80,6 @@ Deno.test("updateMany: rejects when ANY entry carries a reserved field", async (
         expo.updateMany({
           artwork: {
             [id1]: { title: "a-new" },
-            // deno-lint-ignore no-explicit-any
             [id2]: { _scope: EXPO_B, title: "hop" } as any,
           },
         }),
@@ -96,7 +94,7 @@ Deno.test("updateMany: rejects when ANY entry carries a reserved field", async (
   });
 });
 
-Deno.test("updateMany: rejects _type smuggled in an entry", async () => {
+test("updateMany: rejects _type smuggled in an entry", async () => {
   await withDatabase("smc2-reserved-update-many-type", async (db) => {
     const catalog = await makeCatalog(db);
     const expo = catalog.scope(EXPO_A);
@@ -105,7 +103,6 @@ Deno.test("updateMany: rejects _type smuggled in an entry", async () => {
     await assertRejects(
       () =>
         expo.updateMany({
-          // deno-lint-ignore no-explicit-any
           artwork: { [id]: { _type: "artist" } as any },
         }),
       Error,
@@ -115,7 +112,7 @@ Deno.test("updateMany: rejects _type smuggled in an entry", async () => {
   });
 });
 
-Deno.test("insertMany: rejects when any doc in the batch carries a reserved field", async () => {
+test("insertMany: rejects when any doc in the batch carries a reserved field", async () => {
   await withDatabase("smc2-reserved-insertmany", async (db) => {
     const catalog = await makeCatalog(db);
     const expo = catalog.scope(EXPO_A);
@@ -124,7 +121,6 @@ Deno.test("insertMany: rejects when any doc in the batch carries a reserved fiel
       () =>
         expo.insertMany("artwork", [
           { title: "ok", year: 1 },
-          // deno-lint-ignore no-explicit-any
           { _scope: EXPO_B, title: "smuggled", year: 2 } as any,
         ]),
       Error,
@@ -134,7 +130,6 @@ Deno.test("insertMany: rejects when any doc in the batch carries a reserved fiel
     await assertRejects(
       () =>
         expo.insertMany("artwork", [
-          // deno-lint-ignore no-explicit-any
           { _type: "artist", title: "smuggled", year: 3 } as any,
         ]),
       Error,

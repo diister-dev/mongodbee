@@ -16,7 +16,8 @@
 // hand-written order. The `_id` tie-break follows the LAST explicit field's
 // direction, mirroring normalizePaginateSort.
 
-import { assertEquals } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assertEquals } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
@@ -73,18 +74,16 @@ function effectiveSort(sort: Record<string, 1 | -1>): Record<string, 1 | -1> {
   return { ...sort, _id: sort[fields[fields.length - 1]] };
 }
 
-// deno-lint-ignore no-explicit-any
 async function truthFor(
-  // deno-lint-ignore no-explicit-any
   db: any,
   coll: string,
   baseMatch: Record<string, unknown>,
   sort: Record<string, 1 | -1>,
 ): Promise<string[]> {
-  const rows = await db.collection(coll).aggregate([
-    { $match: baseMatch },
-    { $sort: effectiveSort(sort) },
-  ]).toArray();
+  const rows = await db
+    .collection(coll)
+    .aggregate([{ $match: baseMatch }, { $sort: effectiveSort(sort) }])
+    .toArray();
   return (rows as { _id: string }[]).map((r) => String(r._id));
 }
 
@@ -177,7 +176,7 @@ async function runConformance(
   }
 }
 
-Deno.test("paginate conformance (collection): mixed-direction multi-key, both directions, positions exact", async (t) => {
+test("paginate conformance (collection): mixed-direction multi-key, both directions, positions exact", async (t) => {
   await withDatabase(t.name, async (db) => {
     const things = await collection(db, "things", {
       _id: dbId("thing"),
@@ -187,7 +186,6 @@ Deno.test("paginate conformance (collection): mixed-direction multi-key, both di
     for (const row of ROWS) await things.insertOne(row as never);
 
     await runConformance(
-      // deno-lint-ignore no-explicit-any
       (o) => things.paginate({}, o as any) as Promise<Page>,
       (sort) => truthFor(db, "things", {}, sort),
       "collection",
@@ -195,7 +193,7 @@ Deno.test("paginate conformance (collection): mixed-direction multi-key, both di
   });
 });
 
-Deno.test("paginate conformance (multiCollection): mixed-direction multi-key, both directions, positions exact", async (t) => {
+test("paginate conformance (multiCollection): mixed-direction multi-key, both directions, positions exact", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalog = await multiCollection(db, "catalog", {
       participant: {
@@ -208,16 +206,14 @@ Deno.test("paginate conformance (multiCollection): mixed-direction multi-key, bo
     }
 
     await runConformance(
-      (o) =>
-        // deno-lint-ignore no-explicit-any
-        catalog.paginate("participant", {}, o as any) as Promise<Page>,
+      (o) => catalog.paginate("participant", {}, o as any) as Promise<Page>,
       (sort) => truthFor(db, "catalog", { _type: "participant" }, sort),
       "multi",
     );
   });
 });
 
-Deno.test("paginate conformance (scoped): mixed-direction multi-key, both directions, positions exact", async (t) => {
+test("paginate conformance (scoped): mixed-direction multi-key, both directions, positions exact", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
       schemaManagement: "auto",
@@ -235,9 +231,7 @@ Deno.test("paginate conformance (scoped): mixed-direction multi-key, both direct
     }
 
     await runConformance(
-      (o) =>
-        // deno-lint-ignore no-explicit-any
-        view.paginate("participant", undefined, o as any) as Promise<Page>,
+      (o) => view.paginate("participant", undefined, o as any) as Promise<Page>,
       (sort) =>
         truthFor(db, "catalog", { _scope: EXPO, _type: "participant" }, sort),
       "scoped",
@@ -248,7 +242,7 @@ Deno.test("paginate conformance (scoped): mixed-direction multi-key, both direct
 // sortPipeline strategy: the sort keys cross a $lookup boundary (one joined
 // field DESC, one own optional field ASC — mixed directions over the hidden
 // normalized keys), with parents lacking the joined doc entirely.
-Deno.test("paginate conformance (scoped sortPipeline): mixed-direction joined+own keys, positions exact, backward round-trip", async (t) => {
+test("paginate conformance (scoped sortPipeline): mixed-direction joined+own keys, positions exact, backward round-trip", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
       schemaManagement: "auto",
@@ -280,7 +274,6 @@ Deno.test("paginate conformance (scoped sortPipeline): mixed-direction joined+ow
       }
     }
 
-    // deno-lint-ignore no-explicit-any
     const badgeSortPipeline = (s: any) => [
       s.lookup("badge", "_id", "participantId", { as: "badges" }),
       s.addFields({ badgeDoc: { $first: "$badges" } }),
@@ -289,7 +282,6 @@ Deno.test("paginate conformance (scoped sortPipeline): mixed-direction joined+ow
 
     const truthRows = await view.aggregate((s) => [
       s.match("participant", {}),
-      // deno-lint-ignore no-explicit-any
       ...badgeSortPipeline(s as any),
       s.sort({ "badgeDoc.generatedAt": -1, a: 1, _id: 1 }),
     ]);
@@ -300,7 +292,6 @@ Deno.test("paginate conformance (scoped sortPipeline): mixed-direction joined+ow
       view.paginate("participant", undefined, {
         ...o,
         sortPipeline: badgeSortPipeline,
-        // deno-lint-ignore no-explicit-any
       } as any) as Promise<Page>;
 
     for (const limit of [4, 7]) {

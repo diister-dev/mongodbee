@@ -3,8 +3,9 @@
  * across ALL scopes (one physical collection), leaves sibling types intact,
  * marks the migration irreversible, and both appliers agree.
  */
-import { assert, assertEquals } from "@std/assert";
-import { assertRejects } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals } from "../+assert.ts";
+import { assertRejects } from "../+assert.ts";
 import { withDatabase } from "../+shared.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import {
@@ -67,7 +68,7 @@ function buildPair() {
   return { parent, child };
 }
 
-Deno.test("deleteType (scoped): memory applier drops the type across all scopes, siblings survive", async () => {
+test("deleteType (scoped): memory applier drops the type across all scopes, siblings survive", async () => {
   const { parent, child } = buildPair();
   const parentOps = parent.migrate(
     migrationBuilder({ schemas: parent.schemas }),
@@ -85,7 +86,10 @@ Deno.test("deleteType (scoped): memory applier drops the type across all scopes,
   state = await applier.applyMigration(state, childCompiled.operations, "up");
 
   const content = state.scopedMultiCollections["+items"].content;
-  assertEquals(content.filter((d) => d._type === "drop"), []);
+  assertEquals(
+    content.filter((d) => d._type === "drop"),
+    [],
+  );
   const kept = content.filter((d) => d._type === "keep");
   assertEquals(kept.length, 2);
   assertEquals(
@@ -102,7 +106,7 @@ Deno.test("deleteType (scoped): memory applier drops the type across all scopes,
   );
 });
 
-Deno.test("deleteType (scoped): mongodb applier agrees with the memory semantics", async () => {
+test("deleteType (scoped): mongodb applier agrees with the memory semantics", async () => {
   await withDatabase("delete-scoped-type", async (db) => {
     const { parent, child } = buildPair();
     const parentOps = parent.migrate(

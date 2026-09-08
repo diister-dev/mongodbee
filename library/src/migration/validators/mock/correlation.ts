@@ -110,10 +110,7 @@ function targetKey(
  * type key IS the space. `autoKey` is null for plain collections, which
  * never auto-inject.
  */
-function targetIdSpace(
-  idSchema: unknown,
-  autoKey: string | null,
-): string {
+function targetIdSpace(idSchema: unknown, autoKey: string | null): string {
   if (idSchema !== undefined) return extractIdPrefix(idSchema);
   return autoKey ?? "";
 }
@@ -137,7 +134,6 @@ function walkReferences(
     visit(prefix, path);
     return;
   }
-  // deno-lint-ignore no-explicit-any
   const s = schema as Record<string, any>;
   if (s.type === "lazy") return;
   if (s.entries && typeof s.entries === "object") {
@@ -153,9 +149,11 @@ function walkReferences(
   if (s.wrapped) walkReferences(s.wrapped, path, visit, depth + 1);
   if (s.item) walkReferences(s.item, path, visit, depth + 1);
   if (Array.isArray(s.items)) {
-    s.items.forEach((item: unknown, i: number) =>
-      walkReferences(item, `${path}.${i}`, visit, depth + 1)
-    );
+    // A `for` loop rather than `forEach`: the arrow's implicit return handed
+    // back walkReferences' value, which the iteration then discarded anyway.
+    for (const [i, item] of s.items.entries()) {
+      walkReferences(item, `${path}.${i}`, visit, depth + 1);
+    }
   }
   if (Array.isArray(s.options)) {
     for (const option of s.options) {
@@ -202,22 +200,23 @@ function buildCorrelationPlan(
     }
     for (const [field, schema] of Object.entries(fields)) {
       if (field === "_id") continue;
-      walkReferences(schema, field, (refSpace, refPath) => {
-        if (!referenced.has(refSpace)) {
-          referenced.set(refSpace, { bucket, collection, path: refPath });
-        }
-      }, 0);
+      walkReferences(
+        schema,
+        field,
+        (refSpace, refPath) => {
+          if (!referenced.has(refSpace)) {
+            referenced.set(refSpace, { bucket, collection, path: refPath });
+          }
+        },
+        0,
+      );
     }
   };
 
-  for (
-    const [name, schema] of Object.entries(schemas.collections ?? {})
-  ) {
+  for (const [name, schema] of Object.entries(schemas.collections ?? {})) {
     addTarget("collections", name, undefined, schema, null);
   }
-  for (
-    const [name, types] of Object.entries(schemas.multiCollections ?? {})
-  ) {
+  for (const [name, types] of Object.entries(schemas.multiCollections ?? {})) {
     for (const [type, fields] of Object.entries(types)) {
       addTarget("multiCollections", name, type, fields, type);
     }
@@ -230,11 +229,9 @@ function buildCorrelationPlan(
 
   const scopeSpaces = new Map<string, string>();
   const singletons = new Set<string>();
-  for (
-    const [name, scoped] of Object.entries(
-      schemas.scopedMultiCollections ?? {},
-    )
-  ) {
+  for (const [name, scoped] of Object.entries(
+    schemas.scopedMultiCollections ?? {},
+  )) {
     const scopeSpace = extractIdPrefix(scoped.scope);
     if (scopeSpace && !uncorrelated.has(scopeSpace)) {
       scopeSpaces.set(name, scopeSpace);
@@ -285,9 +282,9 @@ function buildCorrelationPlan(
         kind: "correlation",
         space,
         message:
-          `Identifier space "${space}" is minted by ${keys.length} targets (${
-            keys.join(", ")
-          }) — correlated references draw from "${winner}" (deterministic ` +
+          `Identifier space "${space}" is minted by ${keys.length} targets (${keys.join(
+            ", ",
+          )}) — correlated references draw from "${winner}" (deterministic ` +
           `tie-break). Declare "${space}" in uncorrelatedSpaces to silence ` +
           `this if the ambiguity is intended.`,
       });
@@ -538,9 +535,9 @@ export interface CorrelationSession {
 function fieldsHash(content: SchemaContent): string {
   try {
     const simplified = Object.fromEntries(
-      Object.keys(content).sort().map((
-        field,
-      ) => [field, simplifySchema(content[field])]),
+      Object.keys(content)
+        .sort()
+        .map((field) => [field, simplifySchema(content[field])]),
     );
     return fnv1a32(JSON.stringify(simplified)).toString(36);
   } catch {
@@ -561,19 +558,25 @@ export function schemasFingerprint(schemas: SchemasDefinition): string {
     const entries = schemas[bucket] ?? {};
     for (const name of Object.keys(entries).sort()) {
       if (bucket === "collections") {
-        const content =
-          (entries as NonNullable<SchemasDefinition["collections"]>)[name];
+        const content = (
+          entries as NonNullable<SchemasDefinition["collections"]>
+        )[name];
         parts.push(`${bucket}:${name}@${fieldsHash(content)}`);
         continue;
       }
-      const types = bucket === "scopedMultiCollections"
-        ? (entries as NonNullable<SchemasDefinition["scopedMultiCollections"]>)[
-          name
-        ].types
-        : (entries as NonNullable<SchemasDefinition["multiCollections"]>)[name];
-      const typed = Object.keys(types).sort().map((type) =>
-        `${type}@${fieldsHash(types[type])}`
-      );
+      const types =
+        bucket === "scopedMultiCollections"
+          ? (
+              entries as NonNullable<
+                SchemasDefinition["scopedMultiCollections"]
+              >
+            )[name].types
+          : (entries as NonNullable<SchemasDefinition["multiCollections"]>)[
+              name
+            ];
+      const typed = Object.keys(types)
+        .sort()
+        .map((type) => `${type}@${fieldsHash(types[type])}`);
       parts.push(`${bucket}:${name}(${typed.join(",")})`);
     }
   }
@@ -645,7 +648,8 @@ export function createCorrelationSession(
       collection: target.collection,
       kind: "correlation",
       space,
-      message: `Correlated draw found no "${space}" id for ${target.bucket} ` +
+      message:
+        `Correlated draw found no "${space}" id for ${target.bucket} ` +
         `"${target.collection}" field "${path}"` +
         (target.scope !== null ? ` (scope "${target.scope}")` : "") +
         ` — an uncorrelated value was generated instead.`,
@@ -701,14 +705,14 @@ export function createCorrelationSession(
         );
       }
     }
-    for (
-      const [name, coll] of Object.entries(state.scopedMultiCollections)
-    ) {
+    for (const [name, coll] of Object.entries(state.scopedMultiCollections)) {
       const scopeSpace = plan.scopeSpaces.get(name);
       for (const doc of coll.content) {
         const scope = typeof doc._scope === "string" ? doc._scope : null;
         if (
-          scopeSpace && scope !== null && scope.startsWith(`${scopeSpace}:`)
+          scopeSpace &&
+          scope !== null &&
+          scope.startsWith(`${scopeSpace}:`)
         ) {
           known(scopeSpace).add(scope);
           pools.register(scopeSpace, null, scope);
@@ -772,9 +776,9 @@ export function createCorrelationSession(
   ): string[] {
     const names: string[] = [];
     if (!uncorrelated.has(model)) {
-      const candidates = pools.listOf(model, null).filter((id) =>
-        !taken.has(id)
-      );
+      const candidates = pools
+        .listOf(model, null)
+        .filter((id) => !taken.has(id));
       const order = seededShuffle(candidates.length);
       for (let i = 0; i < order.length && names.length < count; i++) {
         names.push(candidates[order[i]]);
@@ -824,12 +828,9 @@ export function createCorrelationSession(
       const n = bump(`scope:${collection}`);
       let value = "";
       for (let attempt = 0; attempt < 8; attempt++) {
-        const seed = fnv1a32(
-          `${baseSeed}|scope|${collection}|${n}|${attempt}`,
-        );
+        const seed = fnv1a32(`${baseSeed}|scope|${collection}|${n}|${attempt}`);
         // Generated from the ACTUAL scope schema so custom scope shapes stay
         // faithful; the refId case yields `space:<alnum>` like any real id.
-        // deno-lint-ignore no-explicit-any
         value = String(generateMockScopeValue(scopeSchema as any, { seed }));
         if (!space || !known(space).has(value)) break;
       }
@@ -851,10 +852,12 @@ export function createCorrelationSession(
     const contributor = plan.contributors.get(scopeSpace);
     if (!contributor) return false;
     const target = plan.targets.get(contributor);
-    return target !== undefined &&
+    return (
+      target !== undefined &&
       target.bucket === "scopedMultiCollections" &&
       target.collection === collection &&
-      plan.singletons.has(contributor);
+      plan.singletons.has(contributor)
+    );
   }
 
   function docOptions(target: DocTarget): MockDocumentOptions {
@@ -887,10 +890,8 @@ export function createCorrelationSession(
       if (nodeType !== "string") return SKIP;
       const space = extractIdPrefix(node.schema);
       if (!space || !plan.contributors.has(space)) return SKIP;
-      const id = pools.draw(
-        space,
-        target.scope,
-        (length) => node.faker.number.int({ min: 0, max: length - 1 }),
+      const id = pools.draw(space, target.scope, (length) =>
+        node.faker.number.int({ min: 0, max: length - 1 }),
       );
       if (id === undefined) {
         reportEmptyPool(space, target, node.path);

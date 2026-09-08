@@ -13,7 +13,8 @@
  * - planner behaviour via `explain()` (partial index used, keys bounded),
  * - cross-scope isolation of every lookup form after the change.
  */
-import { assert, assertEquals } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import {
   type AggregationStage,
@@ -45,19 +46,17 @@ async function makeCatalog(
 }
 
 /** Extract the `$lookup` stage stats from an executionStats explain. */
-// deno-lint-ignore no-explicit-any
 function lookupStats(explain: any): {
   indexesUsed: string[];
   collectionScans: number;
   totalKeysExamined: number;
 } {
-  // deno-lint-ignore no-explicit-any
   const stage = explain.stages?.find((s: any) => s.$lookup);
   assert(
     stage,
-    `expected a $lookup stage in explain output, got ${
-      JSON.stringify(Object.keys(explain))
-    }`,
+    `expected a $lookup stage in explain output, got ${JSON.stringify(
+      Object.keys(explain),
+    )}`,
   );
   return {
     indexesUsed: stage.indexesUsed ?? [],
@@ -66,7 +65,7 @@ function lookupStats(explain: any): {
   };
 }
 
-Deno.test("lookup: sub-pipeline match keeps constants OUT of $expr", async () => {
+test("lookup: sub-pipeline match keeps constants OUT of $expr", async () => {
   await withDatabase("smc-lookup-shape", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);
@@ -98,7 +97,7 @@ Deno.test("lookup: sub-pipeline match keeps constants OUT of $expr", async () =>
   });
 });
 
-Deno.test("lookup: planner uses the withIndex-created partial index", async () => {
+test("lookup: planner uses the withIndex-created partial index", async () => {
   await withDatabase("smc-lookup-partial-idx", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);
@@ -126,18 +125,21 @@ Deno.test("lookup: planner uses the withIndex-created partial index", async () =
       return captured;
     });
 
-    const explain = await db.collection("catalog").aggregate([
-      // Mirrors the scope guard the ScopedView prepends in aggregate().
-      { $match: { _scope: EXPO_A } },
-      ...captured,
-    ]).explain("executionStats");
+    const explain = await db
+      .collection("catalog")
+      .aggregate([
+        // Mirrors the scope guard the ScopedView prepends in aggregate().
+        { $match: { _scope: EXPO_A } },
+        ...captured,
+      ])
+      .explain("executionStats");
 
     const stats = lookupStats(explain);
     assert(
       stats.indexesUsed.includes("_scope__type_badge_participantId"),
-      `expected the withIndex partial index to be used, got ${
-        JSON.stringify(stats.indexesUsed)
-      }`,
+      `expected the withIndex partial index to be used, got ${JSON.stringify(
+        stats.indexesUsed,
+      )}`,
     );
     assertEquals(stats.collectionScans, 0);
     // Each of the N sub-plans should examine ~1 key. The $expr-only shape
@@ -150,7 +152,7 @@ Deno.test("lookup: planner uses the withIndex-created partial index", async () =
   });
 });
 
-Deno.test("lookup: every form stays scope-isolated after the mixed-match change", async () => {
+test("lookup: every form stays scope-isolated after the mixed-match change", async () => {
   await withDatabase("smc-lookup-isolation", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);
@@ -192,7 +194,7 @@ Deno.test("lookup: every form stays scope-isolated after the mixed-match change"
   });
 });
 
-Deno.test("lookup: multi-scope view sees its scopes, nothing beyond", async () => {
+test("lookup: multi-scope view sees its scopes, nothing beyond", async () => {
   await withDatabase("smc-lookup-multiscope", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);

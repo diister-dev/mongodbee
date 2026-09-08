@@ -9,7 +9,8 @@
  * "Unsupported schema type" warning and were silently dropped from the
  * generated validator, so strict bounds were only enforced at the app layer.
  */
-import { assert, assertEquals } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals } from "./+assert.ts";
 import { collection } from "../src/collection.ts";
 import { toMongoValidator } from "../src/validator.ts";
 import { withDatabase } from "./+shared.ts";
@@ -28,18 +29,20 @@ function withCapturedWarnings<T>(fn: () => T): { result: T; warns: string[] } {
   }
 }
 
-Deno.test("gtValue maps to draft-4 minimum + exclusiveMinimum, without warning", () => {
+test("gtValue maps to draft-4 minimum + exclusiveMinimum, without warning", () => {
   const schema = v.object({
     price: v.pipe(v.number(), v.gtValue(0)),
   });
 
   const { result: validator, warns } = withCapturedWarnings(() =>
-    toMongoValidator(schema)
+    toMongoValidator(schema),
   );
 
-  const price = (validator.$jsonSchema as {
-    properties: { price: Record<string, unknown> };
-  }).properties.price;
+  const price = (
+    validator.$jsonSchema as {
+      properties: { price: Record<string, unknown> };
+    }
+  ).properties.price;
 
   assertEquals(price.minimum, 0);
   assertEquals(price.exclusiveMinimum, true);
@@ -50,18 +53,20 @@ Deno.test("gtValue maps to draft-4 minimum + exclusiveMinimum, without warning",
   );
 });
 
-Deno.test("ltValue maps to draft-4 maximum + exclusiveMaximum, without warning", () => {
+test("ltValue maps to draft-4 maximum + exclusiveMaximum, without warning", () => {
   const schema = v.object({
     discount: v.pipe(v.number(), v.ltValue(1)),
   });
 
   const { result: validator, warns } = withCapturedWarnings(() =>
-    toMongoValidator(schema)
+    toMongoValidator(schema),
   );
 
-  const discount = (validator.$jsonSchema as {
-    properties: { discount: Record<string, unknown> };
-  }).properties.discount;
+  const discount = (
+    validator.$jsonSchema as {
+      properties: { discount: Record<string, unknown> };
+    }
+  ).properties.discount;
 
   assertEquals(discount.maximum, 1);
   assertEquals(discount.exclusiveMaximum, true);
@@ -72,7 +77,7 @@ Deno.test("ltValue maps to draft-4 maximum + exclusiveMaximum, without warning",
   );
 });
 
-Deno.test("gtValue strict bound is enforced by MongoDB, boundary rejected", async (t) => {
+test("gtValue strict bound is enforced by MongoDB, boundary rejected", async (t) => {
   await withDatabase(t.name, async (db) => {
     const schema = {
       amount: v.pipe(v.number(), v.gtValue(0)),
@@ -85,9 +90,7 @@ Deno.test("gtValue strict bound is enforced by MongoDB, boundary rejected", asyn
     try {
       // Bypass the app-layer Valibot parse to prove the DB validator alone
       // rejects the boundary value (this is what the mapping adds).
-      await amounts.collection.insertOne(
-        { amount: 0 } as never,
-      );
+      await amounts.collection.insertOne({ amount: 0 } as never);
       assert(false, "MongoDB validator should have rejected amount = 0");
     } catch (error) {
       assert(error, "Should throw a document validation error at the bound");

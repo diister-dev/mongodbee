@@ -11,11 +11,15 @@
  * falls in the skipped range. The broken migration must be reported invalid
  * and its failure surfaced in the top-level errors (visible without verbose).
  */
-import { assert, assertEquals } from "@std/assert";
-import * as path from "@std/path";
+import { test } from "../+harness.ts";
+import process from "node:process";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { assert, assertEquals } from "../+assert.ts";
+import * as path from "node:path";
 import { checkMigrationStatus } from "../../src/migration/check-status.ts";
 
-const LIB = Deno.cwd(); // `deno test` runs from the library directory
+const LIB = process.cwd(); // `deno test` runs from the library directory
 const DEFINITION = path.resolve(LIB, "src/migration/definition.ts");
 const SCHEMA = path.resolve(LIB, "src/schema.ts");
 
@@ -65,21 +69,15 @@ export const schemas = {
 };
 `;
 
-Deno.test("checkMigrationStatus --last N: broken migration in skipped range is reported invalid, not green", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "mongodbee_lastn_" });
+test("checkMigrationStatus --last N: broken migration in skipped range is reported invalid, not green", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "mongodbee_lastn_"));
   try {
     const migrationsDir = path.join(dir, "migrations");
-    await Deno.mkdir(migrationsDir);
-    await Deno.writeTextFile(
-      path.join(migrationsDir, BROKEN_FILE),
-      brokenContent,
-    );
-    await Deno.writeTextFile(
-      path.join(migrationsDir, VALID_FILE),
-      validContent,
-    );
+    await mkdir(migrationsDir);
+    await writeFile(path.join(migrationsDir, BROKEN_FILE), brokenContent);
+    await writeFile(path.join(migrationsDir, VALID_FILE), validContent);
     const schemaPath = path.join(dir, "schemas.ts");
-    await Deno.writeTextFile(schemaPath, schemaContent);
+    await writeFile(schemaPath, schemaContent);
 
     const status = await checkMigrationStatus({
       migrationsDir,
@@ -107,11 +105,11 @@ Deno.test("checkMigrationStatus --last N: broken migration in skipped range is r
       status.validation.errors.some(
         (e) => e.includes("broken") && e.includes("skipped --last N range"),
       ),
-      `expected a top-level error mentioning the skipped broken migration, got: ${
-        JSON.stringify(status.validation.errors)
-      }`,
+      `expected a top-level error mentioning the skipped broken migration, got: ${JSON.stringify(
+        status.validation.errors,
+      )}`,
     );
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    await rm(dir, { recursive: true, force: true });
   }
 });

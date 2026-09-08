@@ -1,10 +1,11 @@
-import { assert, assertEquals } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals } from "./+assert.ts";
 import * as v from "../src/schema.ts";
 import { toMongoValidator } from "../src/validator.ts";
 import { withDatabase } from "./+shared.ts";
 import { collection } from "../src/collection.ts";
 
-Deno.test("Valibot trim action validation", () => {
+test("Valibot trim action validation", () => {
   // Test how trim works with Valibot
   const trimSchema = v.object({
     name: v.pipe(v.string(), v.trim(), v.nonEmpty()),
@@ -43,7 +44,7 @@ Deno.test("Valibot trim action validation", () => {
   assert(validMinimal.success);
 });
 
-Deno.test("MongoDB validator generation for trim", () => {
+test("MongoDB validator generation for trim", () => {
   const trimSchema = v.object({
     name: v.pipe(v.string(), v.trim(), v.nonEmpty()),
     email: v.pipe(v.string(), v.trim(), v.regex(/^.+@.+\..+$/)),
@@ -74,7 +75,7 @@ Deno.test("MongoDB validator generation for trim", () => {
   });
 });
 
-Deno.test("Collection integration with trim", async (t) => {
+test("Collection integration with trim", async (t) => {
   await withDatabase(t.name, async (db) => {
     const users = await collection(db, "users", {
       name: v.pipe(v.string(), v.trim(), v.nonEmpty()),
@@ -110,7 +111,7 @@ Deno.test("Collection integration with trim", async (t) => {
   });
 });
 
-Deno.test("Trim with various string scenarios", () => {
+test("Trim with various string scenarios", () => {
   const schema = v.object({
     field: v.pipe(v.string(), v.trim(), v.nonEmpty()),
   });

@@ -13,7 +13,8 @@
  * `flowToScope` consolidation whose merged type REQUIRES the instance-only
  * fields, then one more migration living on the consolidated state.
  */
-import { assert, assertEquals } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals } from "../+assert.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import { createSimulationValidator } from "../../src/migration/validators/simulation.ts";
 import {
@@ -128,16 +129,18 @@ function buildChain(): MigrationDefinition[] {
           return { ...rest, owner: createdBy };
         },
       });
-      b.multiModelInstances("exposition").type("information").transform({
-        up: (doc: Record<string, unknown>) => {
-          const { owner, ...rest } = doc;
-          return { ...rest, createdBy: owner };
-        },
-        down: (doc: Record<string, unknown>) => {
-          const { createdBy, ...rest } = doc;
-          return { ...rest, owner: createdBy };
-        },
-      });
+      b.multiModelInstances("exposition")
+        .type("information")
+        .transform({
+          up: (doc: Record<string, unknown>) => {
+            const { owner, ...rest } = doc;
+            return { ...rest, createdBy: owner };
+          },
+          down: (doc: Record<string, unknown>) => {
+            const { createdBy, ...rest } = doc;
+            return { ...rest, owner: createdBy };
+          },
+        });
       return b.compile();
     },
   });
@@ -203,10 +206,13 @@ function buildChain(): MigrationDefinition[] {
       scopedMultiCollections: { ...m4.schemas.scopedMultiCollections },
     },
     migrate: (b) => {
-      b.scopedMultiCollection("+expositions").type("participant").transform({
-        up: (doc: Record<string, unknown>) => doc,
-        down: (doc: Record<string, unknown>) => doc,
-      }).end();
+      b.scopedMultiCollection("+expositions")
+        .type("participant")
+        .transform({
+          up: (doc: Record<string, unknown>) => doc,
+          down: (doc: Record<string, unknown>) => doc,
+        })
+        .end();
       return b.compile();
     },
   });
@@ -226,8 +232,9 @@ interface Coverage {
 }
 
 function measureCoverage(state: SimulationDatabaseState): Coverage {
-  const rootIds = (state.collections["+expositions"]?.content ?? [])
-    .map((d) => String(d._id));
+  const rootIds = (state.collections["+expositions"]?.content ?? []).map((d) =>
+    String(d._id),
+  );
   const instanceNames = Object.entries(state.multiModels)
     .filter(([, i]) => i.modelType === "exposition")
     .map(([name]) => name);
@@ -245,7 +252,7 @@ function measureCoverage(state: SimulationDatabaseState): Coverage {
 // The test — drives the EXACT loop of the CLI gate
 // ---------------------------------------------------------------------------
 
-Deno.test("chain propagation: root↔instance correlation survives every preparation, and the consolidation merges every scope", async () => {
+test("chain propagation: root↔instance correlation survives every preparation, and the consolidation merges every scope", async () => {
   const validator = createSimulationValidator({ powerLevel: "quick" });
   let currentState: SimulationDatabaseState = createEmptyDatabaseState();
 
@@ -278,8 +285,9 @@ Deno.test("chain propagation: root↔instance correlation survives every prepara
 
     const after = result.data?.stateAfterMigration as SimulationDatabaseState;
     if (migration.name === "consolidate") {
-      const information = after.scopedMultiCollections["+expositions"].content
-        .filter((d) => d._type === "information");
+      const information = after.scopedMultiCollections[
+        "+expositions"
+      ].content.filter((d) => d._type === "information");
       assert(
         information.length > 1,
         "the scenario must produce several scopes",
@@ -302,7 +310,7 @@ Deno.test("chain propagation: root↔instance correlation survives every prepara
   }
 });
 
-Deno.test("chain propagation: instance volume stays bounded across preparations", async () => {
+test("chain propagation: instance volume stays bounded across preparations", async () => {
   // Coverage repair must not grow the instance set step after step: dropped
   // roots take their instances along, fresh roots get exactly one each.
   const validator = createSimulationValidator({ powerLevel: "quick" });
@@ -323,7 +331,7 @@ Deno.test("chain propagation: instance volume stays bounded across preparations"
     }
     const result = await validator.validateMigration(migration, currentState);
     currentState = validator.prepareStateForNextMigration(
-      result.data?.stateAfterMigration as SimulationDatabaseState ??
+      (result.data?.stateAfterMigration as SimulationDatabaseState) ??
         currentState,
       migration.schemas,
     );
@@ -338,7 +346,7 @@ Deno.test("chain propagation: instance volume stays bounded across preparations"
 // Irreversible migrations have no rollback state to validate
 // ---------------------------------------------------------------------------
 
-Deno.test("chain propagation: an irreversible status collapse is not validated against a rollback that can never run", async () => {
+test("chain propagation: an irreversible status collapse is not validated against a rollback that can never run", async () => {
   // Mirrors a real status-machine collapse: the transform is declared
   // irreversible, so the real rollback path refuses the whole migration —
   // there is no after-rollback state whose documents could be checked
@@ -385,14 +393,17 @@ Deno.test("chain propagation: an irreversible status collapse is not validated a
       },
     },
     migrate: (b) => {
-      b.scopedMultiCollection("+registrations").type("registration").transform({
-        irreversible: true,
-        up: (doc: Record<string, unknown>) => ({
-          ...doc,
-          status: REMAP[String(doc.status)] ?? doc.status,
-        }),
-        down: (doc: Record<string, unknown>) => doc,
-      }).end();
+      b.scopedMultiCollection("+registrations")
+        .type("registration")
+        .transform({
+          irreversible: true,
+          up: (doc: Record<string, unknown>) => ({
+            ...doc,
+            status: REMAP[String(doc.status)] ?? doc.status,
+          }),
+          down: (doc: Record<string, unknown>) => doc,
+        })
+        .end();
       return b.compile();
     },
   });
@@ -409,9 +420,9 @@ Deno.test("chain propagation: an irreversible status collapse is not validated a
   assertEquals(
     result.errors,
     [],
-    `an irreversible migration must not fail on rollback revalidation:\n${
-      result.errors.join("\n")
-    }`,
+    `an irreversible migration must not fail on rollback revalidation:\n${result.errors.join(
+      "\n",
+    )}`,
   );
   assertEquals(result.data?.hasIrreversibleProperty, true);
 });

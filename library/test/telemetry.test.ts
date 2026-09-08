@@ -5,8 +5,14 @@
  * batching, disabled/default/no-provider behaviour, PII-free span payloads
  * and error paths (driver + validation).
  */
+import { test } from "./+harness.ts";
 import * as v from "../src/schema.ts";
-import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertExists,
+  assertRejects,
+} from "./+assert.ts";
 import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import { collection } from "../src/collection.ts";
 import { TELEMETRY_ATTRIBUTES as TA } from "../telemetry.ts";
@@ -35,7 +41,7 @@ function onlySpan(exporter: TestExporter, name: string) {
   return spans[0];
 }
 
-Deno.test("telemetry: one CLIENT span per operation with semconv attributes", async (t) => {
+test("telemetry: one CLIENT span per operation with semconv attributes", async (t) => {
   await withDatabase(t.name, async (db) => {
     const { exporter, telemetry } = makeTestTelemetry();
     const users = await collection(db, "users", userSchema, { telemetry });
@@ -107,7 +113,7 @@ Deno.test("telemetry: one CLIENT span per operation with semconv attributes", as
   });
 });
 
-Deno.test("telemetry: insertMany of N docs emits exactly one span with batch size", async (t) => {
+test("telemetry: insertMany of N docs emits exactly one span with batch size", async (t) => {
   await withDatabase(t.name, async (db) => {
     const { exporter, telemetry } = makeTestTelemetry();
     const users = await collection(db, "users", userSchema, { telemetry });
@@ -134,7 +140,7 @@ Deno.test("telemetry: insertMany of N docs emits exactly one span with batch siz
   });
 });
 
-Deno.test("telemetry: updateOne upsert records upserted_count === 1", async (t) => {
+test("telemetry: updateOne upsert records upserted_count === 1", async (t) => {
   await withDatabase(t.name, async (db) => {
     const { exporter, telemetry } = makeTestTelemetry();
     const users = await collection(db, "users", userSchema, { telemetry });
@@ -156,7 +162,7 @@ Deno.test("telemetry: updateOne upsert records upserted_count === 1", async (t) 
   });
 });
 
-Deno.test("telemetry: disabled and default emit zero spans with identical behavior", async (t) => {
+test("telemetry: disabled and default emit zero spans with identical behavior", async (t) => {
   await withDatabase(t.name, async (db) => {
     const { exporter, provider } = makeTestTelemetry();
 
@@ -197,7 +203,7 @@ Deno.test("telemetry: disabled and default emit zero spans with identical behavi
   });
 });
 
-Deno.test("telemetry: enabled without any provider is a silent no-op", async (t) => {
+test("telemetry: enabled without any provider is a silent no-op", async (t) => {
   await withDatabase(t.name, async (db) => {
     // enabled: true, no tracerProvider option, and no global provider is ever
     // registered by the test helpers: the API falls back to its no-op tracer.
@@ -233,7 +239,7 @@ Deno.test("telemetry: enabled without any provider is a silent no-op", async (t)
   });
 });
 
-Deno.test("telemetry: spans never contain document or filter values (anti-PII)", async (t) => {
+test("telemetry: spans never contain document or filter values (anti-PII)", async (t) => {
   await withDatabase(t.name, async (db) => {
     const SENTINEL_NAME = "PII_SENTINEL_NAME_c92d10";
     const SENTINEL_EMAIL = "PII_SENTINEL_EMAIL_xyz123";
@@ -266,19 +272,17 @@ Deno.test("telemetry: spans never contain document or filter values (anti-PII)",
         name: "valid name",
         email: "valid@example.com",
         age: SENTINEL_INVALID as unknown as number,
-      })
+      }),
     );
 
     const dump = dumpSpans(exporter);
     assert(exporter.getFinishedSpans().length >= 4, "spans were recorded");
-    for (
-      const sentinel of [
-        SENTINEL_NAME,
-        SENTINEL_EMAIL,
-        SENTINEL_UPDATE,
-        SENTINEL_INVALID,
-      ]
-    ) {
+    for (const sentinel of [
+      SENTINEL_NAME,
+      SENTINEL_EMAIL,
+      SENTINEL_UPDATE,
+      SENTINEL_INVALID,
+    ]) {
       assert(
         !dump.includes(sentinel),
         `span dump leaked the sentinel value ${sentinel}`,
@@ -293,7 +297,7 @@ Deno.test("telemetry: spans never contain document or filter values (anti-PII)",
   });
 });
 
-Deno.test("telemetry: error paths record ERROR spans and re-throw the original error", async (t) => {
+test("telemetry: error paths record ERROR spans and re-throw the original error", async (t) => {
   await withDatabase(t.name, async (db) => {
     const DUP_SENTINEL = "PII_SENTINEL_DUP_EMAIL_3af1@example.com";
     const { exporter, telemetry } = makeTestTelemetry();
@@ -305,7 +309,7 @@ Deno.test("telemetry: error paths record ERROR spans and re-throw the original e
     // --- Real driver error: duplicate key on the unique index. The driver
     // message embeds the indexed value (`dup key: { email: "..." }`).
     const driverError = await assertRejects(() =>
-      users.insertOne({ name: "Second", email: DUP_SENTINEL, age: 2 })
+      users.insertOne({ name: "Second", email: DUP_SENTINEL, age: 2 }),
     );
     assert(driverError instanceof Error, "driver error must be an Error");
     assertEquals(
@@ -354,7 +358,7 @@ Deno.test("telemetry: error paths record ERROR spans and re-throw the original e
         name: "Bad",
         email: "bad@example.com",
         age: SENTINEL as unknown as number,
-      })
+      }),
     );
     assert(validationError instanceof Error);
     assertEquals(validationError.name, "ValiError");
@@ -362,8 +366,8 @@ Deno.test("telemetry: error paths record ERROR spans and re-throw the original e
       validationError.message.includes(SENTINEL),
       "original validation message must reach the caller unchanged",
     );
-    const issues =
-      (validationError as unknown as { issues?: unknown[] }).issues;
+    const issues = (validationError as unknown as { issues?: unknown[] })
+      .issues;
     assert(
       Array.isArray(issues) && issues.length > 0,
       "original valibot issues must reach the caller",
@@ -387,12 +391,14 @@ Deno.test("telemetry: error paths record ERROR spans and re-throw the original e
     // --- Read-path validation failure: the original plain object
     // { message, errors, result } reaches the caller intact.
     const SENTINEL_DB = "PII_SENTINEL_GETBYID_90bc";
-    const raw = await db.collection("users").insertOne(
-      { name: 12345, email: SENTINEL_DB, age: "not-a-number" },
-      { bypassDocumentValidation: true },
-    );
+    const raw = await db
+      .collection("users")
+      .insertOne(
+        { name: 12345, email: SENTINEL_DB, age: "not-a-number" },
+        { bypassDocumentValidation: true },
+      );
     const objectError = await assertRejects(() =>
-      users.getById(raw.insertedId)
+      users.getById(raw.insertedId),
     );
     const validationObject = objectError as {
       message?: string;
@@ -414,7 +420,7 @@ Deno.test("telemetry: error paths record ERROR spans and re-throw the original e
   });
 });
 
-Deno.test("telemetry: duplicate-key driver errors are recorded with the indexed value redacted", async (t) => {
+test("telemetry: duplicate-key driver errors are recorded with the indexed value redacted", async (t) => {
   await withDatabase(t.name, async (db) => {
     const SENTINEL_EMAIL = "PII_SENTINEL_DUPKEY_7c3e@example.com";
 
@@ -427,7 +433,7 @@ Deno.test("telemetry: duplicate-key driver errors are recorded with the indexed 
     // The duplicate insert fails on the unique index; the raw driver message
     // embeds the indexed value as `dup key: { email: "<value>" }`.
     const driverError = await assertRejects(() =>
-      users.insertOne({ name: "Second", email: SENTINEL_EMAIL, age: 2 })
+      users.insertOne({ name: "Second", email: SENTINEL_EMAIL, age: 2 }),
     );
 
     // The caller receives the ORIGINAL, untouched driver error — value included.
@@ -465,12 +471,17 @@ Deno.test("telemetry: duplicate-key driver errors are recorded with the indexed 
   });
 });
 
-Deno.test("telemetry: server errors embedding the document _id are recorded with the _id redacted", async (t) => {
+test("telemetry: server errors embedding the document _id are recorded with the _id redacted", async (t) => {
   await withDatabase(t.name, async (db) => {
     const { exporter, telemetry } = makeTestTelemetry();
-    const items = await collection(db, "items", { name: v.string() }, {
-      telemetry,
-    });
+    const items = await collection(
+      db,
+      "items",
+      { name: v.string() },
+      {
+        telemetry,
+      },
+    );
 
     // A sentinel string _id we can scan for. `$inc` on the string field `name`
     // makes the server reject the update with a message that embeds the
@@ -478,18 +489,13 @@ Deno.test("telemetry: server errors embedding the document _id are recorded with
     const SENTINEL_ID = "PII_SENTINEL_INC_ID_5b9c";
     // The schema declares no `_id`, so its input type is an ObjectId; the ODM
     // still accepts a caller-chosen `_id` at runtime (`_id: v.optional(v.any())`).
-    // deno-lint-ignore no-explicit-any
     await items.insertOne({ _id: SENTINEL_ID, name: "hello" } as any);
     exporter.reset();
 
     const driverError = await assertRejects(() =>
       // $inc on a non-numeric field — a document-style update the ODM passes
       // straight through to the driver, which returns a Plan-executor error.
-      items.updateOne(
-        { _id: SENTINEL_ID },
-        // deno-lint-ignore no-explicit-any
-        { $inc: { name: 1 } } as any,
-      )
+      items.updateOne({ _id: SENTINEL_ID }, { $inc: { name: 1 } } as any),
     );
 
     // The caller still receives the original, untouched driver message.

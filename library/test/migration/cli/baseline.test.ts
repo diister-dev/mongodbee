@@ -14,7 +14,10 @@ import {
   assertEquals,
   assertRejects,
   assertStringIncludes,
-} from "@std/assert";
+} from "../../+assert.ts";
+import { test } from "../../+harness.ts";
+import process from "node:process";
+import { writeFile } from "node:fs/promises";
 import { MongoClient } from "../../../src/mongodb.ts";
 import { initCommand } from "../../../src/migration/cli/commands/init.ts";
 import { generateCommand } from "../../../src/migration/cli/commands/generate.ts";
@@ -31,14 +34,16 @@ import {
   withTempDir,
 } from "./shared.ts";
 
-const TEST_MONGODB_URI = Deno.env.get("TEST_MONGODB_URI") ||
-  Deno.env.get("MONGODBEE_TEST_URI") ||
+const TEST_MONGODB_URI =
+  process.env.TEST_MONGODB_URI ||
+  process.env.MONGODBEE_TEST_URI ||
   "mongodb://localhost:27017";
 
 function generateTestDbName(): string {
-  return `mongodbee_test_baseline_${
-    crypto.randomUUID().replace(/-/g, "").substring(0, 8)
-  }`;
+  return `mongodbee_test_baseline_${crypto
+    .randomUUID()
+    .replace(/-/g, "")
+    .substring(0, 8)}`;
 }
 
 async function withTestDb(
@@ -67,7 +72,7 @@ async function withTestDb(
 }
 
 async function setupTestConfig(tempDir: string, dbName: string) {
-  await Deno.writeTextFile(
+  await writeFile(
     `${tempDir}/mongodbee.config.ts`,
     `export default { database: { connection: { uri: "${TEST_MONGODB_URI}" }, name: "${dbName}" }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
   );
@@ -94,7 +99,7 @@ async function makeMigrationCreateUsers(tempDir: string) {
     `migrate(migration) {
     migration.createCollection("users");`,
   );
-  await Deno.writeTextFile(migrationPath, content);
+  await writeFile(migrationPath, content);
 
   let updatedSchema = await readFile(`${tempDir}/schemas.ts`);
   assert(updatedSchema !== null);
@@ -107,10 +112,10 @@ async function makeMigrationCreateUsers(tempDir: string) {
       },
     `,
   );
-  await Deno.writeTextFile(`${tempDir}/schemas.ts`, updatedSchema);
+  await writeFile(`${tempDir}/schemas.ts`, updatedSchema);
 }
 
-Deno.test("baseline - records the chain as applied without executing it", async () => {
+test("baseline - records the chain as applied without executing it", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       await initCommand({ cwd: tempDir });
@@ -122,8 +127,8 @@ Deno.test("baseline - records the chain as applied without executing it", async 
 
       // The whole point: the ledger moved, the database did not.
       assertEquals((await getAppliedMigrationIds(db)).length, 1);
-      const collections = (await db.listCollections().toArray()).map((c) =>
-        c.name
+      const collections = (await db.listCollections().toArray()).map(
+        (c) => c.name,
       );
       assertEquals(
         collections.includes("users"),
@@ -134,7 +139,7 @@ Deno.test("baseline - records the chain as applied without executing it", async 
   });
 });
 
-Deno.test("baseline - the record says the migration was adopted, not run", async () => {
+test("baseline - the record says the migration was adopted, not run", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       await initCommand({ cwd: tempDir });
@@ -154,7 +159,7 @@ Deno.test("baseline - the record says the migration was adopted, not run", async
   });
 });
 
-Deno.test("baseline - leaves migrations after the target pending", async () => {
+test("baseline - leaves migrations after the target pending", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       await initCommand({ cwd: tempDir });
@@ -177,7 +182,7 @@ Deno.test("baseline - leaves migrations after the target pending", async () => {
   });
 });
 
-Deno.test("baseline - refuses to contradict a later applied migration", async () => {
+test("baseline - refuses to contradict a later applied migration", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       await initCommand({ cwd: tempDir });
@@ -199,7 +204,7 @@ Deno.test("baseline - refuses to contradict a later applied migration", async ()
   });
 });
 
-Deno.test("baseline - is idempotent on an already covered ledger", async () => {
+test("baseline - is idempotent on an already covered ledger", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       await initCommand({ cwd: tempDir });
@@ -214,7 +219,7 @@ Deno.test("baseline - is idempotent on an already covered ledger", async () => {
   });
 });
 
-Deno.test("migrate --target - applies a prefix and leaves the rest pending", async () => {
+test("migrate --target - applies a prefix and leaves the rest pending", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       await initCommand({ cwd: tempDir });
@@ -236,7 +241,7 @@ Deno.test("migrate --target - applies a prefix and leaves the rest pending", asy
   });
 });
 
-Deno.test("migrate --target - says so when the target is already applied", async () => {
+test("migrate --target - says so when the target is already applied", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       await initCommand({ cwd: tempDir });

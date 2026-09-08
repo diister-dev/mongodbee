@@ -1,4 +1,10 @@
-import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
+import { test } from "./+harness.ts";
+import {
+  assert,
+  assertEquals,
+  assertExists,
+  assertRejects,
+} from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";
@@ -25,29 +31,25 @@ async function makeCatalog(
   });
 }
 
-Deno.test(".scope(id) rejects empty / null / undefined", async () => {
+test(".scope(id) rejects empty / null / undefined", async () => {
   await withDatabase("smc-scope-empty", async (db) => {
     const catalog = await makeCatalog(db);
 
-    // deno-lint-ignore no-explicit-any
     assertRejectsLike(() => catalog.scope("" as any), "scope");
-    // deno-lint-ignore no-explicit-any
     assertRejectsLike(() => catalog.scope(null as any), "scope");
-    // deno-lint-ignore no-explicit-any
     assertRejectsLike(() => catalog.scope(undefined as any), "scope");
   });
 });
 
-Deno.test(".scope(id) rejects ids that do not validate against the scope schema", async () => {
+test(".scope(id) rejects ids that do not validate against the scope schema", async () => {
   await withDatabase("smc-scope-invalid", async (db) => {
     const catalog = await makeCatalog(db);
     // refId("exposition") expects "exposition:..." — "foo" should fail
-    // deno-lint-ignore no-explicit-any
     assertRejectsLike(() => catalog.scope("foo" as any), "exposition");
   });
 });
 
-Deno.test(".scope(id).insertOne auto-injects _scope, _type, _id", async () => {
+test(".scope(id).insertOne auto-injects _scope, _type, _id", async () => {
   await withDatabase("smc-insert-one", async (db) => {
     const catalog = await makeCatalog(db);
     const expo = catalog.scope(EXPO_A);
@@ -67,36 +69,36 @@ Deno.test(".scope(id).insertOne auto-injects _scope, _type, _id", async () => {
   });
 });
 
-Deno.test(".scope(id).insertOne rejects docs containing _scope or _type", async () => {
+test(".scope(id).insertOne rejects docs containing _scope or _type", async () => {
   await withDatabase("smc-insert-reserved", async (db) => {
     const catalog = await makeCatalog(db);
     const expo = catalog.scope(EXPO_A);
 
     await assertRejects(
-      // deno-lint-ignore no-explicit-any
       () =>
-        expo.insertOne(
-          "artwork",
-          { _scope: EXPO_B, title: "x", year: 1 } as any,
-        ),
+        expo.insertOne("artwork", {
+          _scope: EXPO_B,
+          title: "x",
+          year: 1,
+        } as any),
       Error,
       "_scope",
     );
 
     await assertRejects(
-      // deno-lint-ignore no-explicit-any
       () =>
-        expo.insertOne(
-          "artwork",
-          { _type: "artist", title: "x", year: 1 } as any,
-        ),
+        expo.insertOne("artwork", {
+          _type: "artist",
+          title: "x",
+          year: 1,
+        } as any),
       Error,
       "_type",
     );
   });
 });
 
-Deno.test(".scope(id).insertMany inserts batch with scope+type auto-injected", async () => {
+test(".scope(id).insertMany inserts batch with scope+type auto-injected", async () => {
   await withDatabase("smc-insert-many", async (db) => {
     const catalog = await makeCatalog(db);
     const expo = catalog.scope(EXPO_A);
@@ -108,15 +110,18 @@ Deno.test(".scope(id).insertMany inserts batch with scope+type auto-injected", a
     ]);
     assertEquals(ids.length, 3);
 
-    const docs = await db.collection("catalog").find({
-      _scope: EXPO_A,
-      _type: "artwork",
-    } as never).toArray();
+    const docs = await db
+      .collection("catalog")
+      .find({
+        _scope: EXPO_A,
+        _type: "artwork",
+      } as never)
+      .toArray();
     assertEquals(docs.length, 3);
   });
 });
 
-Deno.test(".scope(id).find / findOne filter by scope + type", async () => {
+test(".scope(id).find / findOne filter by scope + type", async () => {
   await withDatabase("smc-find", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);
@@ -144,7 +149,7 @@ Deno.test(".scope(id).find / findOne filter by scope + type", async () => {
   });
 });
 
-Deno.test(".scope(id).getById is scope-checked", async () => {
+test(".scope(id).getById is scope-checked", async () => {
   await withDatabase("smc-getById", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);
@@ -160,7 +165,7 @@ Deno.test(".scope(id).getById is scope-checked", async () => {
   });
 });
 
-Deno.test(".scope(id).countDocuments scoped count", async () => {
+test(".scope(id).countDocuments scoped count", async () => {
   await withDatabase("smc-count", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);
@@ -178,7 +183,7 @@ Deno.test(".scope(id).countDocuments scoped count", async () => {
   });
 });
 
-Deno.test(".scope(id).updateOne is scope-checked", async () => {
+test(".scope(id).updateOne is scope-checked", async () => {
   await withDatabase("smc-updateOne", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);
@@ -194,12 +199,12 @@ Deno.test(".scope(id).updateOne is scope-checked", async () => {
 
     // Updating from another scope should fail
     await assertRejects(() =>
-      expoB.updateOne("artwork", id, { title: "hack" })
+      expoB.updateOne("artwork", id, { title: "hack" }),
     );
   });
 });
 
-Deno.test(".scope(id).deleteId is scope-checked; deleteMany scoped by filter", async () => {
+test(".scope(id).deleteId is scope-checked; deleteMany scoped by filter", async () => {
   await withDatabase("smc-delete", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);
@@ -225,7 +230,7 @@ Deno.test(".scope(id).deleteId is scope-checked; deleteMany scoped by filter", a
   });
 });
 
-Deno.test(".scope(id) cross-scope isolation: insert into A, never visible from B", async () => {
+test(".scope(id) cross-scope isolation: insert into A, never visible from B", async () => {
   await withDatabase("smc-isolation", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);
@@ -247,7 +252,7 @@ Deno.test(".scope(id) cross-scope isolation: insert into A, never visible from B
 // If the scope schema TRANSFORMS (trim/lowercase/…), `.scope(id)` must resolve
 // to the parse OUTPUT — otherwise the view filters on the untransformed input
 // and never sees the very documents it inserted.
-Deno.test(".scope(id) applies the scope schema transform so inserts stay visible (N1)", async () => {
+test(".scope(id) applies the scope schema transform so inserts stay visible (N1)", async () => {
   await withDatabase("smc-scope-transform", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
       schemaManagement: "auto",
@@ -280,7 +285,7 @@ Deno.test(".scope(id) applies the scope schema transform so inserts stay visible
 // "Document failed validation". A `v.check()` predicate is invisible to the
 // generated Mongo JSON-Schema validator, so without the fix an invalid update
 // would silently persist.
-Deno.test(".scope(id).updateOne validates $set values with Valibot (N2)", async () => {
+test(".scope(id).updateOne validates $set values with Valibot (N2)", async () => {
   await withDatabase("smc-update-validate", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
       schemaManagement: "auto",
@@ -300,20 +305,18 @@ Deno.test(".scope(id).updateOne validates $set values with Valibot (N2)", async 
 
     // Violates the valibot check (Mongo's validator can't see it) → must reject.
     await assertRejects(() =>
-      expo.updateOne("item", id, { code: "has space" })
+      expo.updateOne("item", id, { code: "has space" }),
     );
     // The invalid value must NOT have been written.
     assertEquals((await expo.getById("item", id)).code, "abc");
 
     // A plain type mismatch is likewise caught before hitting Mongo.
-    await assertRejects(
-      // deno-lint-ignore no-explicit-any
-      () => expo.updateOne("item", id, { qty: "twelve" as any }),
+    await assertRejects(() =>
+      expo.updateOne("item", id, { qty: "twelve" as any }),
     );
 
     // Reserved fields stay rejected on update.
     await assertRejects(
-      // deno-lint-ignore no-explicit-any
       () => expo.updateOne("item", id, { _scope: EXPO_B } as any),
       Error,
       "_scope",
@@ -328,7 +331,7 @@ Deno.test(".scope(id).updateOne validates $set values with Valibot (N2)", async 
 });
 
 // [N2] updateMany validates each batch entry the same way.
-Deno.test(".scope(id).updateMany validates $set values with Valibot (N2)", async () => {
+test(".scope(id).updateMany validates $set values with Valibot (N2)", async () => {
   await withDatabase("smc-update-many-validate", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
       schemaManagement: "auto",
@@ -346,7 +349,7 @@ Deno.test(".scope(id).updateMany validates $set values with Valibot (N2)", async
     const id = await expo.insertOne("item", { code: "abc" });
 
     await assertRejects(() =>
-      expo.updateMany({ item: { [id]: { code: "has space" } } })
+      expo.updateMany({ item: { [id]: { code: "has space" } } }),
     );
     assertEquals((await expo.getById("item", id)).code, "abc");
   });
@@ -355,7 +358,7 @@ Deno.test(".scope(id).updateMany validates $set values with Valibot (N2)", async
 // [N8] The unscoped-disabled Proxy must tolerate inspection / thenable probes
 // (then / toJSON / any symbol) so `console.log(catalog)` and accidental
 // `await`s don't explode — while still guarding the real view methods.
-Deno.test(".unscoped (disabled) tolerates inspection and thenable probes (N8)", async () => {
+test(".unscoped (disabled) tolerates inspection and thenable probes (N8)", async () => {
   await withDatabase("smc-unscoped-probe", async (db) => {
     const catalog = await makeCatalog(db); // allowUnscoped not set → disabled
     const unscoped = catalog.unscoped;
@@ -374,19 +377,12 @@ Deno.test(".unscoped (disabled) tolerates inspection and thenable probes (N8)", 
     assertEquals(await unscoped, unscoped);
 
     // Real view methods are still guarded.
-    assertRejectsLike(
-      // deno-lint-ignore no-explicit-any
-      () => (unscoped as any).find("artwork"),
-      "allowUnscoped",
-    );
+    assertRejectsLike(() => (unscoped as any).find("artwork"), "allowUnscoped");
   });
 });
 
 // Helper: assertRejects for sync-throwing functions (scope() throws sync)
-function assertRejectsLike(
-  fn: () => unknown,
-  msgIncludes: string,
-) {
+function assertRejectsLike(fn: () => unknown, msgIncludes: string) {
   try {
     fn();
   } catch (err) {

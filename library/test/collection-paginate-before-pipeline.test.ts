@@ -9,12 +9,13 @@
 // scoped already counted through the pipeline; collection was the diverging
 // copy.
 
-import { assertEquals } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assertEquals } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { collection } from "../src/collection.ts";
 import * as v from "../src/schema.ts";
 
-Deno.test("paginate (collection): beforeId position is pipeline-aware", async (t) => {
+test("paginate (collection): beforeId position is pipeline-aware", async (t) => {
   await withDatabase(t.name, async (db) => {
     const orders = await collection(db, "orders", {
       _id: v.string(),
@@ -31,12 +32,13 @@ Deno.test("paginate (collection): beforeId position is pipeline-aware", async (t
       if (customerId) {
         await customers.insertOne({ _id: customerId as never, tier: i });
       }
-      await orders.insertOne(
-        { _id: oid(i), ref: `R${i}`, customerId } as never,
-      );
+      await orders.insertOne({
+        _id: oid(i),
+        ref: `R${i}`,
+        customerId,
+      } as never);
     }
 
-    // deno-lint-ignore no-explicit-any
     const pipeline = (stage: any) => [
       stage.externalLookup("customers", "customerId", "_id", "c"),
       { $match: { "c.0": { $exists: true } } },
@@ -45,12 +47,14 @@ Deno.test("paginate (collection): beforeId position is pipeline-aware", async (t
     // Survivors in _id order: o00, o02, …, o18. Anchor on o10 (survivor
     // index 5) and page backward by 3: expect survivors 2..4 with
     // position 2 and total 10.
-    // deno-lint-ignore no-explicit-any
-    const back: any = await orders.paginate({}, {
-      limit: 3,
-      beforeId: oid(10),
-      pipeline,
-    });
+    const back: any = await orders.paginate(
+      {},
+      {
+        limit: 3,
+        beforeId: oid(10),
+        pipeline,
+      },
+    );
     assertEquals(back.total, 10, "total counts JOIN survivors only");
     assertEquals(
       back.data.map((d: { _id: string }) => d._id),

@@ -6,7 +6,7 @@
 
 import * as readline from "node:readline";
 import process from "node:process";
-import { dim, yellow } from "@std/fmt/colors";
+import { dim, yellow } from "../../../utils/colors.ts";
 
 /**
  * Streams to prompt on. Defaults to the process' stdin/stdout; tests inject

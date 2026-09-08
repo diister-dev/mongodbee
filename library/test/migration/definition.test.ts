@@ -2,8 +2,9 @@
  * Tests migration definition, parent-child relationships, and chain validation
  */
 
+import { test } from "../+harness.ts";
 import * as v from "../../src/schema.ts";
-import { assert, assertEquals, assertExists } from "@std/assert";
+import { assert, assertEquals, assertExists } from "../+assert.ts";
 import {
   createMigrationSummary,
   findCommonAncestor,
@@ -19,7 +20,7 @@ import {
 // Migration Definition Tests
 // ============================================================================
 
-Deno.test("migrationDefinition - creates valid migration", () => {
+test("migrationDefinition - creates valid migration", () => {
   const schemas = {
     collections: {
       users: {
@@ -42,7 +43,7 @@ Deno.test("migrationDefinition - creates valid migration", () => {
   assertEquals(typeof migration.migrate, "function");
 });
 
-Deno.test("migrationDefinition - throws on invalid ID", () => {
+test("migrationDefinition - throws on invalid ID", () => {
   const schemas = {
     collections: {},
   };
@@ -60,7 +61,7 @@ Deno.test("migrationDefinition - throws on invalid ID", () => {
   }
 });
 
-Deno.test("migrationDefinition - throws on missing schemas", () => {
+test("migrationDefinition - throws on missing schemas", () => {
   try {
     migrationDefinition("001", "Test", {
       parent: null,
@@ -78,7 +79,7 @@ Deno.test("migrationDefinition - throws on missing schemas", () => {
 // Parent-Child Relationship Tests
 // ============================================================================
 
-Deno.test("Migration chain - creates parent-child relationship", () => {
+test("Migration chain - creates parent-child relationship", () => {
   const schemas1 = {
     collections: {
       users: {
@@ -118,7 +119,7 @@ Deno.test("Migration chain - creates parent-child relationship", () => {
 // Chain Validation Tests
 // ============================================================================
 
-Deno.test("validateMigrationChain - passes for valid chain", () => {
+test("validateMigrationChain - passes for valid chain", () => {
   const schemas = {
     collections: {
       users: {
@@ -152,7 +153,7 @@ Deno.test("validateMigrationChain - passes for valid chain", () => {
   assertEquals(result.errors.length, 0);
 });
 
-Deno.test("validateMigrationChain - fails when first migration has parent", () => {
+test("validateMigrationChain - fails when first migration has parent", () => {
   const schemas = {
     collections: {},
   };
@@ -175,7 +176,7 @@ Deno.test("validateMigrationChain - fails when first migration has parent", () =
   assert(result.errors.some((e) => e.includes("should have no parent")));
 });
 
-Deno.test("validateMigrationChain - fails on incorrect parent reference", () => {
+test("validateMigrationChain - fails on incorrect parent reference", () => {
   const schemas = {
     collections: {},
   };
@@ -199,7 +200,7 @@ Deno.test("validateMigrationChain - fails on incorrect parent reference", () => 
   assert(result.errors.some((e) => e.includes("parent")));
 });
 
-Deno.test("validateMigrationChain - fails on duplicate IDs", () => {
+test("validateMigrationChain - fails on duplicate IDs", () => {
   const schemas = {
     collections: {},
   };
@@ -226,7 +227,7 @@ Deno.test("validateMigrationChain - fails on duplicate IDs", () => {
 // Migration ID Generation Tests
 // ============================================================================
 
-Deno.test("generateMigrationId - creates unique IDs", () => {
+test("generateMigrationId - creates unique IDs", () => {
   const id1 = generateMigrationId("test");
   const id2 = generateMigrationId("test");
 
@@ -234,13 +235,13 @@ Deno.test("generateMigrationId - creates unique IDs", () => {
   assert(id1 !== id2);
 });
 
-Deno.test("generateMigrationId - includes name in ID", () => {
+test("generateMigrationId - includes name in ID", () => {
   const id = generateMigrationId("create_users");
 
   assert(id.includes("@create_users"));
 });
 
-Deno.test("generateMigrationId - has correct format", () => {
+test("generateMigrationId - has correct format", () => {
   const id = generateMigrationId("test");
 
   // Format: YYYY_MM_DD_HHMM_ULID@name
@@ -254,7 +255,7 @@ Deno.test("generateMigrationId - has correct format", () => {
   assert(datePart.includes("_"));
 });
 
-Deno.test("generateMigrationId - generates sortable IDs", () => {
+test("generateMigrationId - generates sortable IDs", () => {
   const ids: string[] = [];
 
   for (let i = 0; i < 5; i++) {
@@ -273,7 +274,7 @@ Deno.test("generateMigrationId - generates sortable IDs", () => {
 // Migration Ancestry Tests
 // ============================================================================
 
-Deno.test("getMigrationAncestors - returns empty for root migration", () => {
+test("getMigrationAncestors - returns empty for root migration", () => {
   const schemas = {
     collections: {},
   };
@@ -289,7 +290,7 @@ Deno.test("getMigrationAncestors - returns empty for root migration", () => {
   assertEquals(ancestors.length, 0);
 });
 
-Deno.test("getMigrationAncestors - returns all ancestors in order", () => {
+test("getMigrationAncestors - returns all ancestors in order", () => {
   const schemas = {
     collections: {},
   };
@@ -319,7 +320,7 @@ Deno.test("getMigrationAncestors - returns all ancestors in order", () => {
   assertEquals(ancestors[1].id, "002");
 });
 
-Deno.test("getMigrationPath - includes migration itself", () => {
+test("getMigrationPath - includes migration itself", () => {
   const schemas = {
     collections: {},
   };
@@ -343,7 +344,7 @@ Deno.test("getMigrationPath - includes migration itself", () => {
   assertEquals(path[1].id, "002");
 });
 
-Deno.test("findCommonAncestor - finds common ancestor", () => {
+test("findCommonAncestor - finds common ancestor", () => {
   const schemas = {
     collections: {},
   };
@@ -378,7 +379,7 @@ Deno.test("findCommonAncestor - finds common ancestor", () => {
   assertEquals(common?.id, "002");
 });
 
-Deno.test("findCommonAncestor - returns null for unrelated migrations", () => {
+test("findCommonAncestor - returns null for unrelated migrations", () => {
   const schemas = {
     collections: {},
   };
@@ -400,7 +401,7 @@ Deno.test("findCommonAncestor - returns null for unrelated migrations", () => {
   assertEquals(common, null);
 });
 
-Deno.test("isMigrationAncestor - returns true for ancestor", () => {
+test("isMigrationAncestor - returns true for ancestor", () => {
   const schemas = {
     collections: {},
   };
@@ -432,7 +433,7 @@ Deno.test("isMigrationAncestor - returns true for ancestor", () => {
 // Migration Summary Tests
 // ============================================================================
 
-Deno.test("createMigrationSummary - returns correct metadata", () => {
+test("createMigrationSummary - returns correct metadata", () => {
   const schemas = {
     collections: {
       users: {
@@ -474,7 +475,7 @@ Deno.test("createMigrationSummary - returns correct metadata", () => {
   assertEquals(summary.multiCollectionCount, 1);
 });
 
-Deno.test("createMigrationSummary - handles root migration", () => {
+test("createMigrationSummary - handles root migration", () => {
   const schemas = {
     collections: {},
   };

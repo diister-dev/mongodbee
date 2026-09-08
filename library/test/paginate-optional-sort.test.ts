@@ -13,7 +13,8 @@
 // participants with no badge yet carry no value, and they are the majority
 // early in an event.
 
-import { assert, assertEquals } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
@@ -45,7 +46,8 @@ async function walkAll(
   for (let guard = 0; guard < 50; guard++) {
     const p = await page(afterId);
     for (const doc of p.data) seen.push(doc._id);
-    const done = p.data.length === 0 ||
+    const done =
+      p.data.length === 0 ||
       (p.position ?? 0) + p.data.length >= (p.total ?? 0);
     if (done) break;
     afterId = p.data[p.data.length - 1]._id;
@@ -70,7 +72,7 @@ function assertWalkedAll(seen: string[], expected: string[], label: string) {
   }
 }
 
-Deno.test("paginate (scoped): an optional sort field walks the whole set", async () => {
+test("paginate (scoped): an optional sort field walks the whole set", async () => {
   await withDatabase("paginate-optsort-scoped", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
       schemaManagement: "auto",
@@ -101,7 +103,6 @@ Deno.test("paginate (scoped): an optional sort field walks the whole set", async
             sort: { generatedAt: dir, _id: 1 },
             limit: 5,
             ...(afterId ? { afterId } : {}),
-            // deno-lint-ignore no-explicit-any
           }) as any,
       );
       assertWalkedAll(seen, ids, `scoped sort ${dir}`);
@@ -109,7 +110,7 @@ Deno.test("paginate (scoped): an optional sort field walks the whole set", async
   });
 });
 
-Deno.test("paginate (multiCollection): an optional sort field walks the whole set", async () => {
+test("paginate (multiCollection): an optional sort field walks the whole set", async () => {
   await withDatabase("paginate-optsort-multi", async (db) => {
     const catalog = await multiCollection(db, "catalog", {
       participant: { name: v.string(), generatedAt: v.optional(v.date()) },
@@ -135,7 +136,6 @@ Deno.test("paginate (multiCollection): an optional sort field walks the whole se
             sort: { generatedAt: dir, _id: 1 },
             limit: 5,
             ...(afterId ? { afterId } : {}),
-            // deno-lint-ignore no-explicit-any
           }) as any,
       );
       assertWalkedAll(seen, ids, `multi sort ${dir}`);
@@ -143,7 +143,7 @@ Deno.test("paginate (multiCollection): an optional sort field walks the whole se
   });
 });
 
-Deno.test("paginate (collection): an optional sort field walks the whole set", async () => {
+test("paginate (collection): an optional sort field walks the whole set", async () => {
   await withDatabase("paginate-optsort-simple", async (db) => {
     const people = await collection(db, "people", {
       _id: dbId("person"),
@@ -154,26 +154,29 @@ Deno.test("paginate (collection): an optional sort field walks the whole set", a
     const ids: string[] = [];
     for (let i = 0; i < WITHOUT; i++) {
       ids.push(
-        await people.insertOne({ name: `none-${i}` } as never) as string,
+        (await people.insertOne({ name: `none-${i}` } as never)) as string,
       );
     }
     for (let i = 0; i < WITH; i++) {
       ids.push(
-        await people.insertOne(
-          { name: `set-${i}`, generatedAt: valueAt(i) } as never,
-        ) as string,
+        (await people.insertOne({
+          name: `set-${i}`,
+          generatedAt: valueAt(i),
+        } as never)) as string,
       );
     }
 
     for (const dir of [1, -1] as const) {
       const seen = await walkAll(
         (afterId) =>
-          people.paginate({}, {
-            sort: { generatedAt: dir, _id: 1 },
-            limit: 5,
-            ...(afterId ? { afterId } : {}),
-            // deno-lint-ignore no-explicit-any
-          }) as any,
+          people.paginate(
+            {},
+            {
+              sort: { generatedAt: dir, _id: 1 },
+              limit: 5,
+              ...(afterId ? { afterId } : {}),
+            },
+          ) as any,
       );
       assertWalkedAll(seen, ids, `collection sort ${dir}`);
     }

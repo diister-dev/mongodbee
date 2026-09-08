@@ -90,10 +90,12 @@ function report(ctx: MockPopulateContext, note: string): void {
  */
 function drawDocCount(ctx: MockPopulateContext): number {
   const { config } = ctx;
-  return Math.floor(
-    ctx.session.random() *
-      (config.DOCS_PER_COLLECTION_MAX - config.DOCS_PER_COLLECTION_MIN + 1),
-  ) + config.DOCS_PER_COLLECTION_MIN;
+  return (
+    Math.floor(
+      ctx.session.random() *
+        (config.DOCS_PER_COLLECTION_MAX - config.DOCS_PER_COLLECTION_MIN + 1),
+    ) + config.DOCS_PER_COLLECTION_MIN
+  );
 }
 
 /**
@@ -154,15 +156,17 @@ function appendPlainDocs(
   for (let i = 0; i < count; i++) {
     report(ctx, `mocking collections/${collectionName} ${i + 1}/${count}`);
     try {
-      content.push(generateMockDocument(
-        schema,
-        ctx.session.docOptions({
-          bucket: "collections",
-          collection: collectionName,
-          scope: null,
-          assignedId: ids?.[i],
-        }),
-      ));
+      content.push(
+        generateMockDocument(
+          schema,
+          ctx.session.docOptions({
+            bucket: "collections",
+            collection: collectionName,
+            scope: null,
+            assignedId: ids?.[i],
+          }),
+        ),
+      );
     } catch (error) {
       ctx.failures.push({
         bucket: "collections",
@@ -590,7 +594,8 @@ export function populateSyntheticMultiModelInstances(
     // The single-instance fallback only remains for a model whose space
     // pools nothing.
     const taken = new Set(Object.keys(state.multiModels));
-    const uncovered = ctx.session.pooledIds(modelType)
+    const uncovered = ctx.session
+      .pooledIds(modelType)
       .filter((id) => !taken.has(id));
     const existing = Object.values(state.multiModels).filter(
       (instance) => instance.modelType === modelType,
@@ -600,7 +605,8 @@ export function populateSyntheticMultiModelInstances(
     if (uncovered.length > 0) {
       count = uncovered.length;
     } else if (
-      existing === 0 && ctx.session.pooledIds(modelType).length === 0
+      existing === 0 &&
+      ctx.session.pooledIds(modelType).length === 0
     ) {
       count = INSTANCES_PER_MODEL;
     } else {
@@ -669,9 +675,10 @@ export function populateExistingMultiModelInstances(
     // Sparse for an instance = below one full batch (every type once): the
     // volume budget is per MODEL, so the per-collection minimum would top
     // every instance of a large pool up to a quadratic total.
-    const sparse = policy === "ifSparse"
-      ? instance.content.length < typeCount
-      : shouldPopulate(instance.content.length, policy, ctx.config);
+    const sparse =
+      policy === "ifSparse"
+        ? instance.content.length < typeCount
+        : shouldPopulate(instance.content.length, policy, ctx.config);
     if (!sparse) continue;
     appendTypedBatches(
       instance.content,
@@ -821,7 +828,7 @@ export function retainAndRefreshBuckets(
       modelType,
       new Set(
         (state.collections[rootCollection]?.content ?? []).map((doc) =>
-          String(doc._id)
+          String(doc._id),
         ),
       ),
     );
@@ -834,7 +841,7 @@ export function retainAndRefreshBuckets(
     const rootCollection = ctx.session.contributorCollection(modelType)!;
     const surviving = new Set(
       (state.collections[rootCollection]?.content ?? []).map((doc) =>
-        String(doc._id)
+        String(doc._id),
       ),
     );
     for (const [name, instance] of Object.entries(state.multiModels)) {

@@ -87,9 +87,12 @@ export function withIndex<
 ): v.SchemaWithPipe<
   readonly [
     T,
-    v.MetadataAction<v.InferOutput<T>, {
-      readonly [INDEX_SYMBOL]: IndexDatabase;
-    }>,
+    v.MetadataAction<
+      v.InferOutput<T>,
+      {
+        readonly [INDEX_SYMBOL]: IndexDatabase;
+      }
+    >,
   ]
 > {
   // Build the index metadata based on provided options
@@ -222,9 +225,7 @@ function normalizeCollation(
 /**
  * Normalize index options for comparison purposes.
  */
-export function normalizeIndexOptions(
-  opts: unknown,
-): {
+export function normalizeIndexOptions(opts: unknown): {
   unique: boolean;
   collation?: string;
   partialFilterExpression?: string;
@@ -235,18 +236,24 @@ export function normalizeIndexOptions(
   const hasUnique = Object.prototype.hasOwnProperty.call(objTyped, "unique")
     ? Boolean(objTyped["unique"])
     : false;
-  const collationVal =
-    Object.prototype.hasOwnProperty.call(objTyped, "collation")
-      ? objTyped["collation"]
-      : undefined;
-  const pfeVal =
-    Object.prototype.hasOwnProperty.call(objTyped, "partialFilterExpression")
-      ? objTyped["partialFilterExpression"]
-      : undefined;
-  const ttlVal =
-    Object.prototype.hasOwnProperty.call(objTyped, "expireAfterSeconds")
-      ? objTyped["expireAfterSeconds"]
-      : undefined;
+  const collationVal = Object.prototype.hasOwnProperty.call(
+    objTyped,
+    "collation",
+  )
+    ? objTyped["collation"]
+    : undefined;
+  const pfeVal = Object.prototype.hasOwnProperty.call(
+    objTyped,
+    "partialFilterExpression",
+  )
+    ? objTyped["partialFilterExpression"]
+    : undefined;
+  const ttlVal = Object.prototype.hasOwnProperty.call(
+    objTyped,
+    "expireAfterSeconds",
+  )
+    ? objTyped["expireAfterSeconds"]
+    : undefined;
   return {
     unique: hasUnique,
     collation: collationVal

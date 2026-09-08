@@ -17,6 +17,8 @@
  *   - listScopes / equivalent collection enumeration
  *   - Search across N scopes (10 and 100) — multi-scope reads
  */
+import { test } from "./+harness.ts";
+import process from "node:process";
 import { multiCollection } from "../src/multi-collection.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";
@@ -78,16 +80,16 @@ type Report = {
   failed?: string;
 };
 
-Deno.test({
-  name:
-    `PERF MEGA — ${SCOPES} scopes × ${DOCS_PER_SCOPE} docs (${TOTAL_DOCS.toLocaleString()} total)`,
-  ignore: !Deno.env.get("RUN_PERF_MEGA"),
+test({
+  name: `PERF MEGA — ${SCOPES} scopes × ${DOCS_PER_SCOPE} docs (${TOTAL_DOCS.toLocaleString()} total)`,
+  ignore: !process.env.RUN_PERF_MEGA,
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
-    const dbName = `${DB_PREFIX}${
-      crypto.randomUUID().replace(/-/g, "").substring(0, 8)
-    }`;
+    const dbName = `${DB_PREFIX}${crypto
+      .randomUUID()
+      .replace(/-/g, "")
+      .substring(0, 8)}`;
     const runStart = performance.now();
     console.log("");
     console.log("=".repeat(78));
@@ -116,9 +118,8 @@ Deno.test({
 
     // Random scope samples reused for read benches (same in both scenarios
     // for fairness).
-    const sampleScopes = Array.from(
-      { length: QUERY_ITERATIONS },
-      () => Math.floor(Math.random() * SCOPES),
+    const sampleScopes = Array.from({ length: QUERY_ITERATIONS }, () =>
+      Math.floor(Math.random() * SCOPES),
     );
     const searchSmallScopes = pickRandomScopes(SEARCH_N_SMALL);
     const searchLargeScopes = pickRandomScopes(SEARCH_N_LARGE);
@@ -133,7 +134,6 @@ Deno.test({
         const tSetup = performance.now();
         for (let i = 0; i < SCOPES; i++) {
           collections.push(
-            // deno-lint-ignore no-explicit-any
             await multiCollection<any>(
               db,
               `${LEGACY_COLLECTION_PREFIX}${i}`,
@@ -164,9 +164,9 @@ Deno.test({
             const rate = ((i + 1) * DOCS_PER_SCOPE) / (elapsed / 1000);
             console.log(
               `    inserted ${(i + 1) * DOCS_PER_SCOPE}/${TOTAL_DOCS} docs ` +
-                `(${(elapsed / 1000).toFixed(0)}s elapsed, ${
-                  rate.toFixed(0)
-                } docs/s)`,
+                `(${(elapsed / 1000).toFixed(0)}s elapsed, ${rate.toFixed(
+                  0,
+                )} docs/s)`,
             );
             if (elapsed > INSERT_TIMEOUT_MS) {
               abortedAt = i + 1;
@@ -182,9 +182,9 @@ Deno.test({
         reportA.insertMs = performance.now() - tIns;
         reportA.insertedDocs = (abortedAt ?? SCOPES) * DOCS_PER_SCOPE;
         console.log(
-          `  ✓ insert ${reportA.insertedDocs.toLocaleString()} docs: ${
-            fmt(reportA.insertMs)
-          }`,
+          `  ✓ insert ${reportA.insertedDocs.toLocaleString()} docs: ${fmt(
+            reportA.insertMs,
+          )}`,
         );
 
         // -- random per-scope query
@@ -200,11 +200,12 @@ Deno.test({
 
         // -- "list scopes" equivalent: enumerate collection names
         const tL = performance.now();
-        const names = await db.listCollections({}, { nameOnly: true })
+        const names = await db
+          .listCollections({}, { nameOnly: true })
           .toArray();
         reportA.listMs = performance.now() - tL;
         const legacyCount = names.filter((c) =>
-          c.name.startsWith(LEGACY_COLLECTION_PREFIX)
+          c.name.startsWith(LEGACY_COLLECTION_PREFIX),
         ).length;
         console.log(
           `  ✓ listCollections (${legacyCount} legacy): ${fmt(reportA.listMs)}`,
@@ -220,9 +221,9 @@ Deno.test({
         }
         reportA.searchSmallMs = performance.now() - tS1;
         console.log(
-          `  ✓ search in ${SEARCH_N_SMALL} scopes (year=0, ${seenSmall.length} docs): ${
-            fmt(reportA.searchSmallMs)
-          }`,
+          `  ✓ search in ${SEARCH_N_SMALL} scopes (year=0, ${seenSmall.length} docs): ${fmt(
+            reportA.searchSmallMs,
+          )}`,
         );
 
         const tS2 = performance.now();
@@ -234,13 +235,14 @@ Deno.test({
         }
         reportA.searchLargeMs = performance.now() - tS2;
         console.log(
-          `  ✓ search in ${SEARCH_N_LARGE} scopes (year=0, ${seenLarge.length} docs): ${
-            fmt(reportA.searchLargeMs)
-          }`,
+          `  ✓ search in ${SEARCH_N_LARGE} scopes (year=0, ${seenLarge.length} docs): ${fmt(
+            reportA.searchLargeMs,
+          )}`,
         );
 
         // Sample indexes from the first collection × scope count.
-        const sampleIdx = await db.collection(`${LEGACY_COLLECTION_PREFIX}0`)
+        const sampleIdx = await db
+          .collection(`${LEGACY_COLLECTION_PREFIX}0`)
           .indexes();
         reportA.indexes = sampleIdx.length * SCOPES;
       } catch (err) {
@@ -254,15 +256,13 @@ Deno.test({
       console.log(`>>> Scenario B: 1 scopedMultiCollection`);
 
       try {
-        const setup = await measure(
-          "setup 1 scopedMultiCollection",
-          () =>
-            scopedMultiCollection(db, SCOPED_COLLECTION_NAME, {
-              schemaManagement: "auto",
-              scope: refId("exposition"),
-              types: typesShape,
-              allowUnscoped: true, // needed for the unscoped read bench
-            }),
+        const setup = await measure("setup 1 scopedMultiCollection", () =>
+          scopedMultiCollection(db, SCOPED_COLLECTION_NAME, {
+            schemaManagement: "auto",
+            scope: refId("exposition"),
+            types: typesShape,
+            allowUnscoped: true, // needed for the unscoped read bench
+          }),
         );
         reportB.setupMs = setup.ms;
         const catalog = setup.result;
@@ -281,9 +281,9 @@ Deno.test({
             const rate = ((i + 1) * DOCS_PER_SCOPE) / (elapsed / 1000);
             console.log(
               `    inserted ${(i + 1) * DOCS_PER_SCOPE}/${TOTAL_DOCS} docs ` +
-                `(${(elapsed / 1000).toFixed(0)}s elapsed, ${
-                  rate.toFixed(0)
-                } docs/s)`,
+                `(${(elapsed / 1000).toFixed(0)}s elapsed, ${rate.toFixed(
+                  0,
+                )} docs/s)`,
             );
             if (elapsed > INSERT_TIMEOUT_MS) {
               abortedAt = i + 1;
@@ -299,9 +299,9 @@ Deno.test({
         reportB.insertMs = performance.now() - tIns;
         reportB.insertedDocs = (abortedAt ?? SCOPES) * DOCS_PER_SCOPE;
         console.log(
-          `  ✓ insert ${reportB.insertedDocs.toLocaleString()} docs: ${
-            fmt(reportB.insertMs)
-          }`,
+          `  ✓ insert ${reportB.insertedDocs.toLocaleString()} docs: ${fmt(
+            reportB.insertMs,
+          )}`,
         );
 
         const tQ = performance.now();
@@ -332,9 +332,9 @@ Deno.test({
         });
         reportB.searchSmallMs = performance.now() - tS1;
         console.log(
-          `  ✓ search in ${SEARCH_N_SMALL} scopes via .scopes() (${smallDocs.length} docs): ${
-            fmt(reportB.searchSmallMs)
-          }`,
+          `  ✓ search in ${SEARCH_N_SMALL} scopes via .scopes() (${smallDocs.length} docs): ${fmt(
+            reportB.searchSmallMs,
+          )}`,
         );
 
         const tS2 = performance.now();
@@ -346,9 +346,9 @@ Deno.test({
         });
         reportB.searchLargeMs = performance.now() - tS2;
         console.log(
-          `  ✓ search in ${SEARCH_N_LARGE} scopes via .scopes() (${largeDocs.length} docs): ${
-            fmt(reportB.searchLargeMs)
-          }`,
+          `  ✓ search in ${SEARCH_N_LARGE} scopes via .scopes() (${largeDocs.length} docs): ${fmt(
+            reportB.searchLargeMs,
+          )}`,
         );
 
         const idx = await db.collection(SCOPED_COLLECTION_NAME).indexes();
@@ -424,14 +424,18 @@ Deno.test({
         const which = [
           reportA.failed ? `A: ${reportA.failed}` : null,
           reportB.failed ? `B: ${reportB.failed}` : null,
-        ].filter(Boolean).join("; ");
+        ]
+          .filter(Boolean)
+          .join("; ");
         throw new Error(`Perf run failed (${which})`);
       }
     } finally {
       console.log(`Cleaning up: dropping ${dbName}`);
       try {
         await closeAllWatchers(db);
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
       await db.dropDatabase();
       await client.close();
     }

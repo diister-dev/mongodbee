@@ -20,7 +20,8 @@
  *  6. `prepareStateForNextMigration` populates empty scoped collections and
  *     applies retention (no unbounded growth) to non-empty ones.
  */
-import { assert, assertEquals } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals } from "../+assert.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import {
   createSimulationValidator,
@@ -51,7 +52,7 @@ function quickValidator(): SimulationValidator {
   return createSimulationValidator({ powerLevel: "quick" });
 }
 
-Deno.test("simulation: scoped seed violating its type schema fails naming bucket/collection/type", async () => {
+test("simulation: scoped seed violating its type schema fails naming bucket/collection/type", async () => {
   const migration = migrationDefinition("001", "seed-invalid-doc", {
     parent: null,
     schemas: SCOPED_SCHEMAS,
@@ -72,18 +73,19 @@ Deno.test("simulation: scoped seed violating its type schema fails naming bucket
 
   assertEquals(result.success, false);
   assert(
-    result.errors.some((e) =>
-      e.includes('scoped multi-collection "+scans"') &&
-      e.includes('type "scan"') &&
-      e.includes("does not match schema")
+    result.errors.some(
+      (e) =>
+        e.includes('scoped multi-collection "+scans"') &&
+        e.includes('type "scan"') &&
+        e.includes("does not match schema"),
     ),
-    `expected a scoped document-mismatch error, got: ${
-      result.errors.join(" | ")
-    }`,
+    `expected a scoped document-mismatch error, got: ${result.errors.join(
+      " | ",
+    )}`,
   );
 });
 
-Deno.test("simulation: scoped seed with invalid _scope fails mentioning _scope", async () => {
+test("simulation: scoped seed with invalid _scope fails mentioning _scope", async () => {
   const migration = migrationDefinition("001", "seed-invalid-scope", {
     parent: null,
     schemas: SCOPED_SCHEMAS,
@@ -104,23 +106,20 @@ Deno.test("simulation: scoped seed with invalid _scope fails mentioning _scope",
 
   assertEquals(result.success, false);
   assert(
-    result.errors.some((e) =>
-      e.includes('scoped multi-collection "+scans"') &&
-      e.includes("invalid _scope")
+    result.errors.some(
+      (e) =>
+        e.includes('scoped multi-collection "+scans"') &&
+        e.includes("invalid _scope"),
     ),
     `expected an invalid-_scope error, got: ${result.errors.join(" | ")}`,
   );
 });
 
-Deno.test("simulation: scoped document with unknown _type fails", async () => {
+test("simulation: scoped document with unknown _type fails", async () => {
   const parent = migrationDefinition("001", "baseline", {
     parent: null,
     schemas: SCOPED_SCHEMAS,
-    migrate: (b) =>
-      b
-        .createScopedMultiCollection("+scans")
-        .end()
-        .compile(),
+    migrate: (b) => b.createScopedMultiCollection("+scans").end().compile(),
   });
   const child = migrationDefinition("002", "noop-child", {
     parent,
@@ -143,15 +142,16 @@ Deno.test("simulation: scoped document with unknown _type fails", async () => {
 
   assertEquals(result.success, false);
   assert(
-    result.errors.some((e) =>
-      e.includes('scoped multi-collection "+scans"') &&
-      e.includes('unknown type "ghost"')
+    result.errors.some(
+      (e) =>
+        e.includes('scoped multi-collection "+scans"') &&
+        e.includes('unknown type "ghost"'),
     ),
     `expected an unknown-type error, got: ${result.errors.join(" | ")}`,
   );
 });
 
-Deno.test("simulation: valid scoped seeds pass", async () => {
+test("simulation: valid scoped seeds pass", async () => {
   const migration = migrationDefinition("001", "seed-valid", {
     parent: null,
     schemas: SCOPED_SCHEMAS,
@@ -177,15 +177,11 @@ Deno.test("simulation: valid scoped seeds pass", async () => {
   assertEquals(result.success, true);
 });
 
-Deno.test("simulation: mock state built from a scoped parent validates (valimock round-trip incl. _scope)", async () => {
+test("simulation: mock state built from a scoped parent validates (valimock round-trip incl. _scope)", async () => {
   const parent = migrationDefinition("001", "baseline", {
     parent: null,
     schemas: SCOPED_SCHEMAS,
-    migrate: (b) =>
-      b
-        .createScopedMultiCollection("+scans")
-        .end()
-        .compile(),
+    migrate: (b) => b.createScopedMultiCollection("+scans").end().compile(),
   });
   const child = migrationDefinition("002", "noop-child", {
     parent,
@@ -201,14 +197,14 @@ Deno.test("simulation: mock state built from a scoped parent validates (valimock
   assertEquals(
     result.errors,
     [],
-    `expected mock-populated scoped state to validate, got: ${
-      result.errors.join(" | ")
-    }`,
+    `expected mock-populated scoped state to validate, got: ${result.errors.join(
+      " | ",
+    )}`,
   );
   assertEquals(result.success, true);
 });
 
-Deno.test("prepareStateForNextMigration: populates empty scoped collections and bounds non-empty ones", () => {
+test("prepareStateForNextMigration: populates empty scoped collections and bounds non-empty ones", () => {
   const validator = quickValidator();
 
   const state = createEmptyDatabaseState();

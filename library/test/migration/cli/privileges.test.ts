@@ -5,8 +5,9 @@
  * stand-in answering `connectionStatus`.
  */
 
-import { assert, assertEquals, assertRejects } from "@std/assert";
-import { stripAnsiCode } from "@std/fmt/colors";
+import { test } from "../../+harness.ts";
+import { assert, assertEquals, assertRejects } from "../../+assert.ts";
+import { stripAnsiCode } from "../../../src/utils/colors.ts";
 import type { Db } from "../../../src/mongodb.ts";
 import { ensureMigrationPrivileges } from "../../../src/migration/cli/utils/privileges.ts";
 import type { ServerPrivilege } from "../../../src/migration/privileges.ts";
@@ -83,17 +84,14 @@ async function captureLog(work: () => Promise<void>): Promise<string[]> {
   return lines;
 }
 
-Deno.test("ensureMigrationPrivileges - refuses a readWrite-only account", async () => {
+test("ensureMigrationPrivileges - refuses a readWrite-only account", async () => {
   const { db } = fakeDb(() => Promise.resolve(status(readWriteOnApp)));
   const lines = await captureLog(async () => {
     const error = await assertRejects(
       () => ensureMigrationPrivileges(db),
       Error,
     );
-    assert(
-      error.message.includes("missing collMod"),
-      error.message,
-    );
+    assert(error.message.includes("missing collMod"), error.message);
     assert(error.message.includes('database "app"'), error.message);
     assert(error.message.includes("Grant dbAdmin"), error.message);
   });
@@ -113,7 +111,7 @@ Deno.test("ensureMigrationPrivileges - refuses a readWrite-only account", async 
   assert(text.includes("--skip-privilege-check"), text);
 });
 
-Deno.test("ensureMigrationPrivileges - suggests readWrite too when write actions are missing", async () => {
+test("ensureMigrationPrivileges - suggests readWrite too when write actions are missing", async () => {
   const readOnly: ServerPrivilege[] = [
     {
       resource: { db: "app", collection: "" },
@@ -121,7 +119,7 @@ Deno.test("ensureMigrationPrivileges - suggests readWrite too when write actions
     },
   ];
   const { db } = fakeDb(() =>
-    Promise.resolve(status(readOnly, [{ role: "read", db: "app" }]))
+    Promise.resolve(status(readOnly, [{ role: "read", db: "app" }])),
   );
   const lines = await captureLog(async () => {
     const error = await assertRejects(
@@ -139,7 +137,7 @@ Deno.test("ensureMigrationPrivileges - suggests readWrite too when write actions
   );
 });
 
-Deno.test("ensureMigrationPrivileges - names collections a missing action is scoped to", async () => {
+test("ensureMigrationPrivileges - names collections a missing action is scoped to", async () => {
   const scoped: ServerPrivilege[] = [
     ...readWriteOnApp,
     { resource: { db: "app", collection: "users" }, actions: ["collMod"] },
@@ -156,7 +154,7 @@ Deno.test("ensureMigrationPrivileges - names collections a missing action is sco
   );
 });
 
-Deno.test("ensureMigrationPrivileges - dry run reports but does not abort", async () => {
+test("ensureMigrationPrivileges - dry run reports but does not abort", async () => {
   const { db } = fakeDb(() => Promise.resolve(status(readWriteOnApp)));
   let check: Awaited<ReturnType<typeof ensureMigrationPrivileges>> | undefined;
   const lines = await captureLog(async () => {
@@ -167,14 +165,14 @@ Deno.test("ensureMigrationPrivileges - dry run reports but does not abort", asyn
   assert(text.includes("[DRY RUN]"), text);
 });
 
-Deno.test("ensureMigrationPrivileges - passes an account with every action", async () => {
+test("ensureMigrationPrivileges - passes an account with every action", async () => {
   const { db } = fakeDb(() =>
     Promise.resolve(
       status(withCollMod, [
         { role: "dbAdmin", db: "app" },
         { role: "readWrite", db: "app" },
       ]),
-    )
+    ),
   );
   let check: Awaited<ReturnType<typeof ensureMigrationPrivileges>> | undefined;
   const lines = await captureLog(async () => {
@@ -186,7 +184,7 @@ Deno.test("ensureMigrationPrivileges - passes an account with every action", asy
   assert(text.includes("rw@app: dbAdmin@app, readWrite@app"), text);
 });
 
-Deno.test("ensureMigrationPrivileges - skip flag never queries the server", async () => {
+test("ensureMigrationPrivileges - skip flag never queries the server", async () => {
   const fake = fakeDb(() => Promise.reject(new Error("must not be called")));
   let check: Awaited<ReturnType<typeof ensureMigrationPrivileges>> | undefined;
   const lines = await captureLog(async () => {
@@ -197,7 +195,7 @@ Deno.test("ensureMigrationPrivileges - skip flag never queries the server", asyn
   assert(lines.join("\n").includes("skipped"), lines.join("\n"));
 });
 
-Deno.test("ensureMigrationPrivileges - unverifiable server warns and proceeds", async () => {
+test("ensureMigrationPrivileges - unverifiable server warns and proceeds", async () => {
   const { db } = fakeDb(() => Promise.reject(new Error("no such command")));
   let check: Awaited<ReturnType<typeof ensureMigrationPrivileges>> | undefined;
   const lines = await captureLog(async () => {
@@ -209,7 +207,7 @@ Deno.test("ensureMigrationPrivileges - unverifiable server warns and proceeds", 
   assert(text.includes("no such command"), text);
 });
 
-Deno.test("ensureMigrationPrivileges - disabled access control proceeds silently", async () => {
+test("ensureMigrationPrivileges - disabled access control proceeds silently", async () => {
   const { db } = fakeDb(() =>
     Promise.resolve({
       ok: 1,
@@ -218,7 +216,7 @@ Deno.test("ensureMigrationPrivileges - disabled access control proceeds silently
         authenticatedUserRoles: [],
         authenticatedUserPrivileges: [],
       },
-    })
+    }),
   );
   let check: Awaited<ReturnType<typeof ensureMigrationPrivileges>> | undefined;
   await captureLog(async () => {

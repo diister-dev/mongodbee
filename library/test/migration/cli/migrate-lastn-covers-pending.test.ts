@@ -14,8 +14,12 @@
  * migration. Below that floor `--last N` is a request to skip validating
  * something that is about to be written to a real database.
  */
-import { assert, assertEquals, assertRejects } from "@std/assert";
-import * as path from "@std/path";
+import { test } from "../../+harness.ts";
+import process from "node:process";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { assert, assertEquals, assertRejects } from "../../+assert.ts";
+import * as path from "node:path";
 import { MongoClient } from "../../../src/mongodb.ts";
 import { migrateCommand } from "../../../src/migration/cli/commands/migrate.ts";
 import {
@@ -25,11 +29,12 @@ import {
 import { validateMigrationsWithSimulation } from "../../../src/migration/cli/utils/validate-migrations.ts";
 import { getAppliedMigrationIds } from "../../../src/migration/state.ts";
 
-const TEST_MONGODB_URI = Deno.env.get("TEST_MONGODB_URI") ||
-  Deno.env.get("MONGODBEE_TEST_URI") ||
+const TEST_MONGODB_URI =
+  process.env.TEST_MONGODB_URI ||
+  process.env.MONGODBEE_TEST_URI ||
   "mongodb://localhost:27017";
 
-const LIB = Deno.cwd(); // `deno test` runs from the library directory
+const LIB = process.cwd(); // `deno test` runs from the library directory
 const DEFINITION = path.resolve(LIB, "src/migration/definition.ts");
 const SCHEMA = path.resolve(LIB, "src/schema.ts");
 
@@ -109,24 +114,25 @@ async function writeProject(
   schemas: string,
   dbName: string,
 ): Promise<string> {
-  const dir = await Deno.makeTempDir({ prefix: "mongodbee_lastn_pending_" });
+  const dir = await mkdtemp(path.join(tmpdir(), "mongodbee_lastn_pending_"));
   const migrationsDir = path.join(dir, "migrations");
-  await Deno.mkdir(migrationsDir);
+  await mkdir(migrationsDir);
   for (const [name, content] of Object.entries(files)) {
-    await Deno.writeTextFile(path.join(migrationsDir, `${name}.ts`), content);
+    await writeFile(path.join(migrationsDir, `${name}.ts`), content);
   }
-  await Deno.writeTextFile(path.join(dir, "schemas.ts"), schemas);
-  await Deno.writeTextFile(
+  await writeFile(path.join(dir, "schemas.ts"), schemas);
+  await writeFile(
     path.join(dir, "mongodbee.config.ts"),
     `export default { database: { connection: { uri: "${TEST_MONGODB_URI}" }, name: "${dbName}" }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
   );
   return dir;
 }
 
-Deno.test("migrate --last N: the window widens to cover every pending migration", async () => {
-  const dbName = `mongodbee_test_lastn_${
-    crypto.randomUUID().replace(/-/g, "").substring(0, 8)
-  }`;
+test("migrate --last N: the window widens to cover every pending migration", async () => {
+  const dbName = `mongodbee_test_lastn_${crypto
+    .randomUUID()
+    .replace(/-/g, "")
+    .substring(0, 8)}`;
   const client = new MongoClient(TEST_MONGODB_URI);
   await client.connect();
   const db = client.db(dbName);
@@ -158,7 +164,10 @@ Deno.test("migrate --last N: the window widens to cover every pending migration"
     const windowOnly = await validateMigrationsWithSimulation(chain, {
       lastN: 1,
     });
-    assertEquals(windowOnly.map((r) => r.valid), [true]);
+    assertEquals(
+      windowOnly.map((r) => r.valid),
+      [true],
+    );
 
     // `--last 1` names only `leaf`. `broken` is pending right behind it and
     // is about to be applied, so the window has to widen to reach it.
@@ -181,7 +190,7 @@ Deno.test("migrate --last N: the window widens to cover every pending migration"
     await client.close();
     for (const dir of [appliedDir, fullDir]) {
       try {
-        await Deno.remove(dir, { recursive: true });
+        await rm(dir, { recursive: true, force: true });
       } catch {
         // Ignore cleanup errors
       }

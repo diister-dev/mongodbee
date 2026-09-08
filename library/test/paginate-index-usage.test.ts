@@ -15,7 +15,8 @@
 // Proven through the REAL paginate path via the database profiler: each
 // `find` the walk issues must ride an IXSCAN with bounded keysExamined.
 
-import { assert } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";
@@ -30,7 +31,7 @@ const LIMIT = 25;
 // groups. The broken plan examined ≈ 1000 keys — an order of magnitude away.
 const MAX_KEYS_PER_PAGE = 150;
 
-Deno.test("paginate (scoped): every cursor page is a bounded index read", async () => {
+test("paginate (scoped): every cursor page is a bounded index read", async () => {
   await withDatabase("paginate-index-usage", async (db) => {
     // The index is the one `withIndex` itself creates —
     // {_scope, _type, generatedAt, _id} partial on _type (see
@@ -72,15 +73,13 @@ Deno.test("paginate (scoped): every cursor page is a bounded index read", async 
     // follows the field's direction (an explicit `{generatedAt: -1, _id: 1}`
     // matches no index order and is legitimately a blocking sort).
     const runWalks = async () => {
-      for (
-        const sort of [
-          { generatedAt: -1 } as const,
-          { generatedAt: 1 } as const,
-        ]
-      ) {
+      for (const sort of [
+        { generatedAt: -1 } as const,
+        { generatedAt: 1 } as const,
+      ]) {
         let afterId: string | undefined = undefined;
         for (let page = 0; page < 6; page++) {
-          const p: { data: { _id: string }[] } = await view.paginate(
+          const p: { data: { _id: string }[] } = (await view.paginate(
             "participant",
             undefined,
             {
@@ -88,10 +87,8 @@ Deno.test("paginate (scoped): every cursor page is a bounded index read", async 
               limit: LIMIT,
               skipTotal: true,
               ...(afterId ? { afterId } : {}),
-              // deno-lint-ignore no-explicit-any
             } as any,
-            // deno-lint-ignore no-explicit-any
-          ) as any;
+          )) as any;
           if (p.data.length === 0) break;
           afterId = p.data[p.data.length - 1]._id;
         }
@@ -102,7 +99,10 @@ Deno.test("paginate (scoped): every cursor page is a bounded index read", async 
     // IXSCAN — no COLLSCAN, no half-scope residual scan. Returns the first
     // violation instead of throwing so the caller can retry once.
     const profiledWalkViolation = async (): Promise<string | null> => {
-      await db.collection("system.profile").drop().catch(() => {});
+      await db
+        .collection("system.profile")
+        .drop()
+        .catch(() => {});
       await db.command({ profile: 2 });
       await runWalks();
       await db.command({ profile: 0 });
@@ -110,8 +110,8 @@ Deno.test("paginate (scoped): every cursor page is a bounded index read", async 
         .collection("system.profile")
         .find({ op: "query", ns: `${db.databaseName}.catalog` })
         .toArray();
-      const pageFinds = profile.filter((p) =>
-        (p.command as { limit?: number } | undefined)?.limit === LIMIT
+      const pageFinds = profile.filter(
+        (p) => (p.command as { limit?: number } | undefined)?.limit === LIMIT,
       );
       if (pageFinds.length < 10) {
         return `expected the walk's page finds in the profile, got ${pageFinds.length}`;
@@ -121,11 +121,14 @@ Deno.test("paginate (scoped): every cursor page is a bounded index read", async 
           return `page find did not ride an index: ${op.planSummary}`;
         }
         if ((op.keysExamined as number) > MAX_KEYS_PER_PAGE) {
-          return `page find examined ${op.keysExamined} keys ` +
+          return (
+            `page find examined ${op.keysExamined} keys ` +
             `(> ${MAX_KEYS_PER_PAGE}) — the cursor lost its tight index ` +
-            `bounds (filter: ${
-              JSON.stringify(op.command?.filter).slice(0, 200)
-            })`;
+            `bounds (filter: ${JSON.stringify(op.command?.filter).slice(
+              0,
+              200,
+            )})`
+          );
         }
       }
       return null;

@@ -13,7 +13,8 @@
 // hasMore ground truth: forward = rows remain past the returned page;
 // backward = rows remain BEFORE the returned page (the walk direction).
 
-import { assertEquals } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assertEquals } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
@@ -115,7 +116,7 @@ const ROWS: { a?: number | null; b?: string | null }[] = [
   { b: "x" },
 ];
 
-Deno.test("peek: null/missing boundaries — every anchor, both directions, counts on", async (t) => {
+test("peek: null/missing boundaries — every anchor, both directions, counts on", async (t) => {
   await withDatabase(t.name, async (db) => {
     const items = await collection(db, "items", {
       _id: dbId("item"),
@@ -124,27 +125,24 @@ Deno.test("peek: null/missing boundaries — every anchor, both directions, coun
     });
     for (const row of ROWS) await items.insertOne(row as never);
 
-    for (
-      const sort of [{ a: 1, b: -1 }, { a: -1, b: 1 }] as Record<
-        string,
-        1 | -1
-      >[]
-    ) {
+    for (const sort of [
+      { a: 1, b: -1 },
+      { a: -1, b: 1 },
+    ] as Record<string, 1 | -1>[]) {
       const tieDir = sort.b;
-      const rows = await db.collection("items").aggregate([
-        { $sort: { ...sort, _id: tieDir } },
-      ]).toArray();
+      const rows = await db
+        .collection("items")
+        .aggregate([{ $sort: { ...sort, _id: tieDir } }])
+        .toArray();
       const truth = rows.map((r) => String(r._id));
 
       await sweepPeek(
         (opts) =>
-          // deno-lint-ignore no-explicit-any
           items.paginate({}, {
             sort,
             limit: LIMIT,
             peek: true,
             ...opts,
-            // deno-lint-ignore no-explicit-any
           } as any) as Promise<Page>,
         truth,
         `collection sort=${JSON.stringify(sort)}`,
@@ -179,7 +177,7 @@ const ZOO: unknown[] = [
   Timestamp.fromBits(1, 1),
 ];
 
-Deno.test("peek: cross-BSON-type boundaries — every anchor, both directions", async (t) => {
+test("peek: cross-BSON-type boundaries — every anchor, both directions", async (t) => {
   await withDatabase(t.name, async (db) => {
     const things = await collection(db, "things", {
       _id: dbId("thing"),
@@ -187,29 +185,26 @@ Deno.test("peek: cross-BSON-type boundaries — every anchor, both directions", 
       val: v.optional(v.unknown()),
     });
     for (let i = 0; i < ZOO.length; i++) {
-      await things.insertOne(
-        {
-          label: `t-${i}`,
-          ...(ZOO[i] === undefined ? {} : { val: ZOO[i] }),
-        } as never,
-      );
+      await things.insertOne({
+        label: `t-${i}`,
+        ...(ZOO[i] === undefined ? {} : { val: ZOO[i] }),
+      } as never);
     }
 
     for (const dir of [1, -1] as const) {
-      const rows = await db.collection("things").aggregate([
-        { $sort: { val: dir, _id: dir } },
-      ]).toArray();
+      const rows = await db
+        .collection("things")
+        .aggregate([{ $sort: { val: dir, _id: dir } }])
+        .toArray();
       const truth = rows.map((r) => String(r._id));
 
       await sweepPeek(
         (opts) =>
-          // deno-lint-ignore no-explicit-any
           things.paginate({}, {
             sort: { val: dir },
             limit: LIMIT,
             peek: true,
             ...opts,
-            // deno-lint-ignore no-explicit-any
           } as any) as Promise<Page>,
         truth,
         `zoo dir=${dir}`,
@@ -219,7 +214,7 @@ Deno.test("peek: cross-BSON-type boundaries — every anchor, both directions", 
   });
 });
 
-Deno.test("peek: multi surface, two _types sharing an optional field", async (t) => {
+test("peek: multi surface, two _types sharing an optional field", async (t) => {
   await withDatabase(t.name, async (db) => {
     const people = await multiCollection(db, "people", {
       a: { w: v.optional(v.number()) },
@@ -239,19 +234,23 @@ Deno.test("peek: multi surface, two _types sharing an optional field", async (t)
     ] as never[]);
 
     for (const dir of [1, -1] as const) {
-      const rows = await raw.aggregate([
-        { $sort: { w: dir, _id: dir } },
-      ]).toArray();
+      const rows = await raw
+        .aggregate([{ $sort: { w: dir, _id: dir } }])
+        .toArray();
       const truth = rows.map((r) => String(r._id));
 
       await sweepPeek(
         (opts) =>
-          people.paginate(["a", "b"], {}, {
-            sort: { w: dir },
-            limit: LIMIT,
-            peek: true,
-            ...opts,
-          }) as Promise<Page>,
+          people.paginate(
+            ["a", "b"],
+            {},
+            {
+              sort: { w: dir },
+              limit: LIMIT,
+              peek: true,
+              ...opts,
+            },
+          ) as Promise<Page>,
         truth,
         `multi cross-type dir=${dir}`,
         true,
@@ -260,7 +259,7 @@ Deno.test("peek: multi surface, two _types sharing an optional field", async (t)
   });
 });
 
-Deno.test("peek: scoped surface across the null boundary", async (t) => {
+test("peek: scoped surface across the null boundary", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
       schemaManagement: "auto",
@@ -273,9 +272,10 @@ Deno.test("peek: scoped surface across the null boundary", async (t) => {
     }
 
     for (const dir of [1, -1] as const) {
-      const rows = await db.collection("catalog").aggregate([
-        { $sort: { w: dir, _id: dir } },
-      ]).toArray();
+      const rows = await db
+        .collection("catalog")
+        .aggregate([{ $sort: { w: dir, _id: dir } }])
+        .toArray();
       const truth = rows.map((r) => String(r._id));
 
       await sweepPeek(
@@ -285,7 +285,6 @@ Deno.test("peek: scoped surface across the null boundary", async (t) => {
             limit: LIMIT,
             peek: true,
             ...opts,
-            // deno-lint-ignore no-explicit-any
           } as any) as Promise<Page>,
         truth,
         `scoped dir=${dir}`,
@@ -295,7 +294,7 @@ Deno.test("peek: scoped surface across the null boundary", async (t) => {
   });
 });
 
-Deno.test("peek: sortPipeline path across the missing-join boundary", async (t) => {
+test("peek: sortPipeline path across the missing-join boundary", async (t) => {
   await withDatabase(t.name, async (db) => {
     const items = await collection(db, "items", {
       _id: dbId("item"),
@@ -306,39 +305,38 @@ Deno.test("peek: sortPipeline path across the missing-join boundary", async (t) 
     // to null and sits at the boundary the hidden-key machinery guards.
     const meta = db.collection("meta");
     for (let i = 0; i < 9; i++) {
-      await items.insertOne(
-        {
-          name: `n-${i}`,
-          ...(i % 3 === 0 ? {} : { refId: `m-${i}` }),
-        } as never,
-      );
+      await items.insertOne({
+        name: `n-${i}`,
+        ...(i % 3 === 0 ? {} : { refId: `m-${i}` }),
+      } as never);
       if (i % 3 !== 0) {
         await meta.insertOne({ key: `m-${i}`, rank: (i * 7) % 5 });
       }
     }
 
-    const rows = await db.collection("items").aggregate([
-      {
-        $lookup: {
-          from: "meta",
-          localField: "refId",
-          foreignField: "key",
-          as: "metaDocs",
+    const rows = await db
+      .collection("items")
+      .aggregate([
+        {
+          $lookup: {
+            from: "meta",
+            localField: "refId",
+            foreignField: "key",
+            as: "metaDocs",
+          },
         },
-      },
-      { $addFields: { meta: { $first: "$metaDocs" } } },
-      // $sort ranks a missing "meta.rank" with null, so the raw path is a
-      // faithful ground truth for the normalized hidden key.
-      { $sort: { "meta.rank": -1, _id: -1 } },
-    ]).toArray();
+        { $addFields: { meta: { $first: "$metaDocs" } } },
+        // $sort ranks a missing "meta.rank" with null, so the raw path is a
+        // faithful ground truth for the normalized hidden key.
+        { $sort: { "meta.rank": -1, _id: -1 } },
+      ])
+      .toArray();
     const truth = rows.map((r) => String(r._id));
 
     await sweepPeek(
       (opts) =>
-        // deno-lint-ignore no-explicit-any
         items.paginate({}, {
           sort: { "meta.rank": -1 } as Record<string, 1 | -1>,
-          // deno-lint-ignore no-explicit-any
           sortPipeline: (s: any) => [
             s.externalLookup("meta", "refId", "key", { as: "metaDocs" }),
             s.addFields({ meta: { $first: "$metaDocs" } }),
@@ -346,7 +344,6 @@ Deno.test("peek: sortPipeline path across the missing-join boundary", async (t) 
           limit: LIMIT,
           peek: true,
           ...opts,
-          // deno-lint-ignore no-explicit-any
         } as any) as Promise<Page>,
       truth,
       "sortPipeline",
@@ -355,7 +352,7 @@ Deno.test("peek: sortPipeline path across the missing-join boundary", async (t) 
   });
 });
 
-Deno.test("peek + filter(doc): hasMore means a non-empty NEXT page, filter included", async (t) => {
+test("peek + filter(doc): hasMore means a non-empty NEXT page, filter included", async (t) => {
   await withDatabase(t.name, async (db) => {
     const items = await collection(db, "items", {
       _id: dbId("item"),
@@ -364,30 +361,38 @@ Deno.test("peek + filter(doc): hasMore means a non-empty NEXT page, filter inclu
     for (let i = 0; i < 10; i++) await items.insertOne({ n: i });
     const evens = ({ n }: { n: number }) => n % 2 === 0; // 5 pass
 
-    // limit 3, evens only: page 1 = 0,2,4 and 6,8 remain → hasMore true.
-    // deno-lint-ignore no-explicit-any
+    // Sorted on `n` rather than left to the default `_id` order. Ten inserts
+    // this tight land in the same millisecond, and two ULIDs from the same
+    // millisecond differ only in their random tail — so `_id` order is NOT
+    // insertion order, and the assertion below was a coin flip under load.
+    // What this case is actually about is peek/hasMore with a filter.
     const p1: any = await items.paginate({}, {
       limit: 3,
       peek: true,
       skipTotal: true,
       filter: evens,
-      // deno-lint-ignore no-explicit-any
+      sort: { n: 1 },
     } as any);
-    assertEquals(p1.data.map((d: { n: number }) => d.n), [0, 2, 4]);
+    assertEquals(
+      p1.data.map((d: { n: number }) => d.n),
+      [0, 2, 4],
+    );
     assertEquals(p1.hasMore, true, "two passing rows remain");
 
     // After 4: exactly 6,8 pass ≤ limit → hasMore false even though raw
     // rows 5..9 remain past the page.
-    // deno-lint-ignore no-explicit-any
     const p2: any = await items.paginate({}, {
       limit: 3,
       peek: true,
       skipTotal: true,
       filter: evens,
+      sort: { n: 1 },
       afterId: String(p1.data[2]._id),
-      // deno-lint-ignore no-explicit-any
     } as any);
-    assertEquals(p2.data.map((d: { n: number }) => d.n), [6, 8]);
+    assertEquals(
+      p2.data.map((d: { n: number }) => d.n),
+      [6, 8],
+    );
     assertEquals(p2.hasMore, false, "no passing row remains");
   });
 });

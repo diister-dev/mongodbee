@@ -18,7 +18,8 @@
 // an equality pin would be a pattern match) fail LOUD instead of silently
 // corrupting every following page.
 
-import { assertEquals, assertRejects } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assertEquals, assertRejects } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { collection } from "../src/collection.ts";
 import * as v from "../src/schema.ts";
@@ -62,25 +63,23 @@ const VALUES: unknown[] = [
 async function seed(db: Parameters<Parameters<typeof withDatabase>[1]>[0]) {
   const things = await collection(db, "things", ThingSchema);
   for (let i = 0; i < VALUES.length; i++) {
-    await things.insertOne(
-      {
-        label: `t-${i}`,
-        ...(VALUES[i] === undefined ? {} : { val: VALUES[i] }),
-      } as never,
-    );
+    await things.insertOne({
+      label: `t-${i}`,
+      ...(VALUES[i] === undefined ? {} : { val: VALUES[i] }),
+    } as never);
   }
   return things;
 }
 
-// deno-lint-ignore no-explicit-any
 async function groundTruth(db: any, dir: 1 | -1): Promise<string[]> {
-  const rows = await db.collection("things").aggregate([
-    { $sort: { val: dir, _id: dir } },
-  ]).toArray();
+  const rows = await db
+    .collection("things")
+    .aggregate([{ $sort: { val: dir, _id: dir } }])
+    .toArray();
   return (rows as { _id: string }[]).map((r) => String(r._id));
 }
 
-Deno.test("paginate: a mixed-type sort field walks the whole set in $sort order", async (t) => {
+test("paginate: a mixed-type sort field walks the whole set in $sort order", async (t) => {
   await withDatabase(t.name, async (db) => {
     const things = await seed(db);
 
@@ -90,13 +89,15 @@ Deno.test("paginate: a mixed-type sort field walks the whole set in $sort order"
         const walked: string[] = [];
         let afterId: string | undefined = undefined;
         for (let guard = 0; guard < 60; guard++) {
-          // deno-lint-ignore no-explicit-any
-          const page: any = await things.paginate({}, {
-            sort: { val: dir },
-            limit,
-            skipTotal: true,
-            afterId,
-          });
+          const page: any = await things.paginate(
+            {},
+            {
+              sort: { val: dir },
+              limit,
+              skipTotal: true,
+              afterId,
+            },
+          );
           if (page.data.length === 0) break;
           for (const d of page.data) walked.push(String(d._id));
           afterId = String(page.data[page.data.length - 1]._id);
@@ -117,24 +118,24 @@ Deno.test("paginate: a mixed-type sort field walks the whole set in $sort order"
   });
 });
 
-Deno.test("paginate: an array or regex anchor fails loud, not silently wrong", async (t) => {
+test("paginate: an array or regex anchor fails loud, not silently wrong", async (t) => {
   await withDatabase(t.name, async (db) => {
     const things = await collection(db, "things", ThingSchema);
-    const arrayId = await things.insertOne(
-      { label: "arr", val: [1, 2] } as never,
-    ) as string;
-    const regexId = await things.insertOne(
-      { label: "rx", val: /abc/ } as never,
-    ) as string;
+    const arrayId = (await things.insertOne({
+      label: "arr",
+      val: [1, 2],
+    } as never)) as string;
+    const regexId = (await things.insertOne({
+      label: "rx",
+      val: /abc/,
+    } as never)) as string;
 
     await assertRejects(
-      // deno-lint-ignore no-explicit-any
       () => things.paginate({}, { sort: { val: 1 }, afterId: arrayId } as any),
       Error,
       "ARRAY",
     );
     await assertRejects(
-      // deno-lint-ignore no-explicit-any
       () => things.paginate({}, { sort: { val: 1 }, afterId: regexId } as any),
       Error,
       "REGEX",

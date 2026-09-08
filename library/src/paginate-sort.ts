@@ -227,8 +227,10 @@ const DESCENDING_DIRECTIONS: readonly unknown[] = [-1, "desc", "descending"];
 
 /** A scalar the driver accepts as a sort direction. */
 function isSortDirection(value: unknown): boolean {
-  return ASCENDING_DIRECTIONS.includes(value) ||
-    DESCENDING_DIRECTIONS.includes(value);
+  return (
+    ASCENDING_DIRECTIONS.includes(value) ||
+    DESCENDING_DIRECTIONS.includes(value)
+  );
 }
 
 /**
@@ -289,7 +291,8 @@ export function normalizePaginateSort(sort: unknown): Record<string, 1 | -1> {
     }
   } else if (Array.isArray(input)) {
     if (
-      input.length === 2 && typeof input[0] === "string" &&
+      input.length === 2 &&
+      typeof input[0] === "string" &&
       isSortDirection(input[1])
     ) {
       // Single `[field, direction]` pair (driver disambiguates exactly so).
@@ -313,9 +316,7 @@ export function normalizePaginateSort(sort: unknown): Record<string, 1 | -1> {
       sortObj[field] = normalizeSortDirection(dir, field);
     }
   } else {
-    throw new Error(
-      `paginate: invalid sort ${JSON.stringify(input)}`,
-    );
+    throw new Error(`paginate: invalid sort ${JSON.stringify(input)}`);
   }
   if (!("_id" in sortObj)) {
     const fields = Object.keys(sortObj);
@@ -483,8 +484,8 @@ function cursorRungBranches(
   // NaN sits at the BOTTOM of the number bracket for `$sort`, but every
   // range comparison against NaN matches nothing (measured: `{$gt: NaN}` is
   // empty, `{$lt: v}` skips NaN). Equality on NaN works, so pins are fine.
-  const anchorIsNaN = typeof anchorValue === "number" &&
-    Number.isNaN(anchorValue);
+  const anchorIsNaN =
+    typeof anchorValue === "number" && Number.isNaN(anchorValue);
   if (op === "$gt") {
     if (bracket === null) return [{ [field]: { $ne: null } }];
     const above = BSON_TYPE_BRACKETS.slice(bracket + 1).flat();
@@ -571,9 +572,10 @@ export function composeCursorQuery(
 ): Record<string, unknown> {
   if (branches.length === 0) return { _id: { $in: [] } };
   const parts = baseParts.filter((p) => Object.keys(p).length > 0);
-  const folded = parts.length > 0
-    ? branches.map((b) => ({ $and: [...parts, b] }))
-    : branches;
+  const folded =
+    parts.length > 0
+      ? branches.map((b) => ({ $and: [...parts, b] }))
+      : branches;
   return folded.length === 1 ? folded[0] : { $or: folded };
 }
 

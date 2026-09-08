@@ -1,4 +1,5 @@
-import { assert, assertEquals, assertExists } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals, assertExists } from "./+assert.ts";
 import {
   type NavigationNode,
   SchemaNavigator,
@@ -48,7 +49,7 @@ class DepthLimitingVisitor implements SchemaVisitor {
   }
 }
 
-Deno.test("SchemaNavigator: Basic string schema navigation", () => {
+test("SchemaNavigator: Basic string schema navigation", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -64,7 +65,7 @@ Deno.test("SchemaNavigator: Basic string schema navigation", () => {
   assertEquals(visitor.nodes[0].key, undefined);
 });
 
-Deno.test("SchemaNavigator: Piped string schema navigation", () => {
+test("SchemaNavigator: Piped string schema navigation", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -78,7 +79,7 @@ Deno.test("SchemaNavigator: Piped string schema navigation", () => {
   assert(visitor.validations.length >= 2); // minLength and maxLength
 });
 
-Deno.test("SchemaNavigator: Object schema navigation", () => {
+test("SchemaNavigator: Object schema navigation", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -114,7 +115,7 @@ Deno.test("SchemaNavigator: Object schema navigation", () => {
   assertEquals(ageNode.schema.type, "number");
 });
 
-Deno.test("SchemaNavigator: Nested object schema navigation", () => {
+test("SchemaNavigator: Nested object schema navigation", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -149,14 +150,16 @@ Deno.test("SchemaNavigator: Nested object schema navigation", () => {
   assertEquals(bioNode.schema.type, "optional");
 });
 
-Deno.test("SchemaNavigator: Array schema navigation", () => {
+test("SchemaNavigator: Array schema navigation", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
-  const schema = v.array(v.object({
-    id: v.string(),
-    value: v.number(),
-  }));
+  const schema = v.array(
+    v.object({
+      id: v.string(),
+      value: v.number(),
+    }),
+  );
 
   navigator.navigate(schema, visitor);
 
@@ -177,7 +180,7 @@ Deno.test("SchemaNavigator: Array schema navigation", () => {
   assertEquals(idNode.depth, 2);
 });
 
-Deno.test("SchemaNavigator: Union schema navigation", () => {
+test("SchemaNavigator: Union schema navigation", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -199,15 +202,15 @@ Deno.test("SchemaNavigator: Union schema navigation", () => {
   assertEquals(unionNode.path, []);
 
   // Find union options
-  const stringOption = visitor.nodes.find((n) =>
-    n.schema.type === "string" && n.key === 0
+  const stringOption = visitor.nodes.find(
+    (n) => n.schema.type === "string" && n.key === 0,
   );
   assertExists(stringOption);
   assertEquals(stringOption.path, ["$union[0]"]);
   assertEquals(stringOption.depth, 1);
 });
 
-Deno.test("SchemaNavigator: Variant schema navigation", () => {
+test("SchemaNavigator: Variant schema navigation", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -226,8 +229,8 @@ Deno.test("SchemaNavigator: Variant schema navigation", () => {
   assertEquals(variantNode.path, []);
 
   // Branches must be reached under $variant[i]
-  const firstBranch = visitor.nodes.find((n) =>
-    n.schema.type === "object" && n.key === 0
+  const firstBranch = visitor.nodes.find(
+    (n) => n.schema.type === "object" && n.key === 0,
   );
   assertExists(firstBranch);
   assertEquals(firstBranch.path, ["$variant[0]"]);
@@ -235,14 +238,14 @@ Deno.test("SchemaNavigator: Variant schema navigation", () => {
 
   // Properties inside a branch must be reachable (this is what extractIndexes
   // depends on — without variant handling, these would never be visited).
-  const userIdNode = visitor.nodes.find((n) =>
-    n.schema.type === "string" && n.key === "userId"
+  const userIdNode = visitor.nodes.find(
+    (n) => n.schema.type === "string" && n.key === "userId",
   );
   assertExists(userIdNode);
   assertEquals(userIdNode.path, ["$variant[0]", "userId"]);
 });
 
-Deno.test("SchemaNavigator: Intersect schema navigation", () => {
+test("SchemaNavigator: Intersect schema navigation", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -258,22 +261,18 @@ Deno.test("SchemaNavigator: Intersect schema navigation", () => {
   assertEquals(visitor.containers.length, 3); // intersect + 2 objects
 
   // Find intersect node
-  const intersectNode = visitor.nodes.find((n) =>
-    n.schema.type === "intersect"
+  const intersectNode = visitor.nodes.find(
+    (n) => n.schema.type === "intersect",
   );
   assertExists(intersectNode);
   assertEquals(intersectNode.path, []);
 });
 
-Deno.test("SchemaNavigator: Tuple schema navigation", () => {
+test("SchemaNavigator: Tuple schema navigation", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
-  const schema = v.tuple([
-    v.string(),
-    v.number(),
-    v.boolean(),
-  ]);
+  const schema = v.tuple([v.string(), v.number(), v.boolean()]);
 
   navigator.navigate(schema, visitor);
 
@@ -293,7 +292,7 @@ Deno.test("SchemaNavigator: Tuple schema navigation", () => {
   assertEquals(secondItem.schema.type, "number");
 });
 
-Deno.test("SchemaNavigator: Record schema navigation", () => {
+test("SchemaNavigator: Record schema navigation", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -322,7 +321,7 @@ Deno.test("SchemaNavigator: Record schema navigation", () => {
   assertEquals(valueNode.schema.type, "number");
 });
 
-Deno.test("SchemaNavigator: Optional and nullable schemas", () => {
+test("SchemaNavigator: Optional and nullable schemas", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -353,7 +352,7 @@ Deno.test("SchemaNavigator: Optional and nullable schemas", () => {
   assertEquals(nullishNode.schema.type, "nullish");
 });
 
-Deno.test("SchemaNavigator: Depth limiting visitor", () => {
+test("SchemaNavigator: Depth limiting visitor", () => {
   const navigator = new SchemaNavigator();
   const visitor = new DepthLimitingVisitor(2);
 
@@ -377,7 +376,7 @@ Deno.test("SchemaNavigator: Depth limiting visitor", () => {
   assertEquals(level2Node.depth, 2);
 });
 
-Deno.test("SchemaNavigator: Initial context override", () => {
+test("SchemaNavigator: Initial context override", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -395,7 +394,7 @@ Deno.test("SchemaNavigator: Initial context override", () => {
   assertEquals(visitor.nodes[0].key, "customKey");
 });
 
-Deno.test("SchemaNavigator: Complex schema with all types", () => {
+test("SchemaNavigator: Complex schema with all types", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -451,7 +450,7 @@ Deno.test("SchemaNavigator: Complex schema with all types", () => {
   assertEquals(statusNode.schema.type, "union");
 });
 
-Deno.test("SchemaNavigator: Navigation node convenience accessors", () => {
+test("SchemaNavigator: Navigation node convenience accessors", () => {
   const navigator = new SchemaNavigator();
   const visitor = new CollectingVisitor();
 
@@ -480,7 +479,7 @@ Deno.test("SchemaNavigator: Navigation node convenience accessors", () => {
   assertEquals(valueNode.parent, valueNode.context.parent);
 });
 
-Deno.test("SchemaNavigator: Visitor without optional methods", () => {
+test("SchemaNavigator: Visitor without optional methods", () => {
   const navigator = new SchemaNavigator();
 
   // Visitor with only required method
@@ -499,7 +498,7 @@ Deno.test("SchemaNavigator: Visitor without optional methods", () => {
   navigator.navigate(schema, basicVisitor);
 });
 
-Deno.test("SchemaNavigator: Early termination", () => {
+test("SchemaNavigator: Early termination", () => {
   const navigator = new SchemaNavigator();
   const visited: string[] = [];
 

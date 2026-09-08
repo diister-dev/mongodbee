@@ -6,7 +6,8 @@
  * holding the built-in roles a migration account realistically has.
  */
 
-import { assert, assertEquals } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals } from "../+assert.ts";
 import type { Db } from "../../src/mongodb.ts";
 import {
   checkMigrationPrivileges,
@@ -121,7 +122,7 @@ const collectionScopedOnUsers: ServerPrivilege[] = [
   },
 ];
 
-Deno.test("evaluatePrivileges - readWrite alone is missing exactly collMod", () => {
+test("evaluatePrivileges - readWrite alone is missing exactly collMod", () => {
   const result = evaluatePrivileges(readWriteOnApp, "app");
   assertEquals(result.missing, ["collMod"]);
   assertEquals(result.collectionScoped, {});
@@ -131,29 +132,29 @@ Deno.test("evaluatePrivileges - readWrite alone is missing exactly collMod", () 
   );
 });
 
-Deno.test("evaluatePrivileges - readWrite + dbAdmin covers everything", () => {
+test("evaluatePrivileges - readWrite + dbAdmin covers everything", () => {
   const result = evaluatePrivileges(readWriteDbAdminOnApp, "app");
   assertEquals(result.missing, []);
   assertEquals(result.granted, [...MIGRATION_PRIVILEGE_ACTIONS]);
 });
 
-Deno.test("evaluatePrivileges - a grant on another database does not count", () => {
+test("evaluatePrivileges - a grant on another database does not count", () => {
   const result = evaluatePrivileges(readWriteDbAdminOnApp, "other");
   assertEquals(result.granted, []);
   assertEquals(result.missing, [...MIGRATION_PRIVILEGE_ACTIONS]);
 });
 
-Deno.test("evaluatePrivileges - readWriteAnyDatabase matches any db but lacks collMod", () => {
+test("evaluatePrivileges - readWriteAnyDatabase matches any db but lacks collMod", () => {
   const result = evaluatePrivileges(readWriteAnyDatabase, "app");
   assertEquals(result.missing, ["collMod"]);
 });
 
-Deno.test("evaluatePrivileges - root covers everything through the db-less resource", () => {
+test("evaluatePrivileges - root covers everything through the db-less resource", () => {
   const result = evaluatePrivileges(rootUser, "whatever");
   assertEquals(result.missing, []);
 });
 
-Deno.test("evaluatePrivileges - anyResource covers every action it lists", () => {
+test("evaluatePrivileges - anyResource covers every action it lists", () => {
   const result = evaluatePrivileges(
     [{ resource: { anyResource: true }, actions: ["collMod", "find"] }],
     "app",
@@ -163,7 +164,7 @@ Deno.test("evaluatePrivileges - anyResource covers every action it lists", () =>
   assertEquals(result.missing, ["insert"]);
 });
 
-Deno.test("evaluatePrivileges - cluster resources never satisfy database actions", () => {
+test("evaluatePrivileges - cluster resources never satisfy database actions", () => {
   const result = evaluatePrivileges(
     [{ resource: { cluster: true }, actions: ["find", "collMod"] }],
     "app",
@@ -172,7 +173,7 @@ Deno.test("evaluatePrivileges - cluster resources never satisfy database actions
   assertEquals(result.missing, ["find", "collMod"]);
 });
 
-Deno.test("evaluatePrivileges - collection-scoped grants are reported, not counted", () => {
+test("evaluatePrivileges - collection-scoped grants are reported, not counted", () => {
   const result = evaluatePrivileges(collectionScopedOnUsers, "app");
   assertEquals(result.granted, []);
   assertEquals(result.missing, [...MIGRATION_PRIVILEGE_ACTIONS]);
@@ -181,7 +182,7 @@ Deno.test("evaluatePrivileges - collection-scoped grants are reported, not count
   }
 });
 
-Deno.test("evaluatePrivileges - system collections are not collection-scoped hints", () => {
+test("evaluatePrivileges - system collections are not collection-scoped hints", () => {
   const result = evaluatePrivileges(
     [{ resource: { db: "app", collection: "system.js" }, actions: ["find"] }],
     "app",
@@ -191,7 +192,7 @@ Deno.test("evaluatePrivileges - system collections are not collection-scoped hin
   assertEquals(result.collectionScoped, {});
 });
 
-Deno.test("evaluatePrivileges - read-only role is missing every write and DDL action", () => {
+test("evaluatePrivileges - read-only role is missing every write and DDL action", () => {
   const result = evaluatePrivileges(
     [{ resource: { db: "app", collection: "" }, actions: READ_ACTIONS }],
     "app",
@@ -202,7 +203,7 @@ Deno.test("evaluatePrivileges - read-only role is missing every write and DDL ac
   assert(result.missing.includes("createIndex"));
 });
 
-Deno.test("evaluatePrivileges - tolerates malformed entries", () => {
+test("evaluatePrivileges - tolerates malformed entries", () => {
   const result = evaluatePrivileges(
     [
       { resource: {}, actions: ["find"] },
@@ -249,31 +250,39 @@ function authInfo(
   };
 }
 
-Deno.test("checkMigrationPrivileges - asks connectionStatus with showPrivileges", async () => {
-  const { db, commands } = fakeDb(
-    "app",
-    () =>
-      Promise.resolve(
-        authInfo([{ user: "rw", db: "app" }], [{
-          role: "readWrite",
-          db: "app",
-        }], readWriteOnApp),
+test("checkMigrationPrivileges - asks connectionStatus with showPrivileges", async () => {
+  const { db, commands } = fakeDb("app", () =>
+    Promise.resolve(
+      authInfo(
+        [{ user: "rw", db: "app" }],
+        [
+          {
+            role: "readWrite",
+            db: "app",
+          },
+        ],
+        readWriteOnApp,
       ),
+    ),
   );
   await checkMigrationPrivileges(db);
   assertEquals(commands, [{ connectionStatus: 1, showPrivileges: true }]);
 });
 
-Deno.test("checkMigrationPrivileges - readWrite account is refused for collMod", async () => {
-  const { db } = fakeDb(
-    "app",
-    () =>
-      Promise.resolve(
-        authInfo([{ user: "rw", db: "app" }], [{
-          role: "readWrite",
-          db: "app",
-        }], readWriteOnApp),
+test("checkMigrationPrivileges - readWrite account is refused for collMod", async () => {
+  const { db } = fakeDb("app", () =>
+    Promise.resolve(
+      authInfo(
+        [{ user: "rw", db: "app" }],
+        [
+          {
+            role: "readWrite",
+            db: "app",
+          },
+        ],
+        readWriteOnApp,
       ),
+    ),
   );
   const check = await checkMigrationPrivileges(db);
   assertEquals(check.status, "missing");
@@ -285,34 +294,42 @@ Deno.test("checkMigrationPrivileges - readWrite account is refused for collMod",
   assertEquals(check.required, [...MIGRATION_PRIVILEGE_ACTIONS]);
 });
 
-Deno.test("checkMigrationPrivileges - readWrite + dbAdmin account passes", async () => {
-  const { db } = fakeDb(
-    "app",
-    () =>
-      Promise.resolve(
-        authInfo(
-          [{ user: "rwadmin", db: "app" }],
-          [{ role: "dbAdmin", db: "app" }, { role: "readWrite", db: "app" }],
-          readWriteDbAdminOnApp,
-        ),
+test("checkMigrationPrivileges - readWrite + dbAdmin account passes", async () => {
+  const { db } = fakeDb("app", () =>
+    Promise.resolve(
+      authInfo(
+        [{ user: "rwadmin", db: "app" }],
+        [
+          { role: "dbAdmin", db: "app" },
+          { role: "readWrite", db: "app" },
+        ],
+        readWriteDbAdminOnApp,
       ),
+    ),
   );
   const check = await checkMigrationPrivileges(db);
   assertEquals(check.status, "ok");
   if (check.status !== "ok") return;
-  assertEquals(check.roles.map((r) => r.role), ["dbAdmin", "readWrite"]);
+  assertEquals(
+    check.roles.map((r) => r.role),
+    ["dbAdmin", "readWrite"],
+  );
 });
 
-Deno.test("checkMigrationPrivileges - custom action list is honoured", async () => {
-  const { db } = fakeDb(
-    "app",
-    () =>
-      Promise.resolve(
-        authInfo([{ user: "rw", db: "app" }], [{
-          role: "readWrite",
-          db: "app",
-        }], readWriteOnApp),
+test("checkMigrationPrivileges - custom action list is honoured", async () => {
+  const { db } = fakeDb("app", () =>
+    Promise.resolve(
+      authInfo(
+        [{ user: "rw", db: "app" }],
+        [
+          {
+            role: "readWrite",
+            db: "app",
+          },
+        ],
+        readWriteOnApp,
       ),
+    ),
   );
   const check = await checkMigrationPrivileges(db, {
     actions: ["find", "insert"],
@@ -321,7 +338,7 @@ Deno.test("checkMigrationPrivileges - custom action list is honoured", async () 
   assertEquals(check.required, ["find", "insert"]);
 });
 
-Deno.test("checkMigrationPrivileges - no authenticated user is skipped, not refused", async () => {
+test("checkMigrationPrivileges - no authenticated user is skipped, not refused", async () => {
   const { db } = fakeDb("app", () => Promise.resolve(authInfo([], [], [])));
   const check = await checkMigrationPrivileges(db);
   assertEquals(check.status, "skipped");
@@ -329,31 +346,33 @@ Deno.test("checkMigrationPrivileges - no authenticated user is skipped, not refu
   assert(check.reason.includes("no authenticated user"), check.reason);
 });
 
-Deno.test("checkMigrationPrivileges - server without privilege report is skipped", async () => {
-  const { db } = fakeDb(
-    "app",
-    () =>
-      Promise.resolve(
-        authInfo([{ user: "rw", db: "app" }], [{
-          role: "readWrite",
-          db: "app",
-        }]),
+test("checkMigrationPrivileges - server without privilege report is skipped", async () => {
+  const { db } = fakeDb("app", () =>
+    Promise.resolve(
+      authInfo(
+        [{ user: "rw", db: "app" }],
+        [
+          {
+            role: "readWrite",
+            db: "app",
+          },
+        ],
       ),
+    ),
   );
   const check = await checkMigrationPrivileges(db);
   assertEquals(check.status, "skipped");
 });
 
-Deno.test("checkMigrationPrivileges - server without authInfo is skipped", async () => {
+test("checkMigrationPrivileges - server without authInfo is skipped", async () => {
   const { db } = fakeDb("app", () => Promise.resolve({ ok: 1 }));
   const check = await checkMigrationPrivileges(db);
   assertEquals(check.status, "skipped");
 });
 
-Deno.test("checkMigrationPrivileges - connectionStatus failure is skipped with the reason", async () => {
-  const { db } = fakeDb(
-    "app",
-    () => Promise.reject(new Error("no such command: 'connectionStatus'")),
+test("checkMigrationPrivileges - connectionStatus failure is skipped with the reason", async () => {
+  const { db } = fakeDb("app", () =>
+    Promise.reject(new Error("no such command: 'connectionStatus'")),
   );
   const check = await checkMigrationPrivileges(db);
   assertEquals(check.status, "skipped");
@@ -361,7 +380,7 @@ Deno.test("checkMigrationPrivileges - connectionStatus failure is skipped with t
   assert(check.reason.includes("no such command"), check.reason);
 });
 
-Deno.test("checkMigrationPrivileges - runs against a real server", async () => {
+test("checkMigrationPrivileges - runs against a real server", async () => {
   await withDatabase("privileges", async (db) => {
     const check = await checkMigrationPrivileges(db);
     // The suite's server either has access control disabled (skipped) or

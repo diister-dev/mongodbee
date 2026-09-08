@@ -17,6 +17,8 @@
  * The test is OPT-IN via the env var `RUN_PERF_HARDCORE=1` because it
  * takes several minutes and pounds the local MongoDB.
  */
+import { test } from "./+harness.ts";
+import process from "node:process";
 import { multiCollection } from "../src/multi-collection.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";
@@ -54,15 +56,16 @@ async function measure<T>(
   return { label, ms, result };
 }
 
-Deno.test({
+test({
   name: `PERF HARDCORE — ${SCOPES} scopes × ${DOCS_PER_SCOPE} docs`,
-  ignore: !Deno.env.get("RUN_PERF_HARDCORE"),
+  ignore: !process.env.RUN_PERF_HARDCORE,
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
-    const dbName = `${DB_PREFIX}${
-      crypto.randomUUID().replace(/-/g, "").substring(0, 8)
-    }`;
+    const dbName = `${DB_PREFIX}${crypto
+      .randomUUID()
+      .replace(/-/g, "")
+      .substring(0, 8)}`;
     console.log("");
     console.log("=".repeat(78));
     console.log(`HARDCORE PERF RUN`);
@@ -107,7 +110,6 @@ Deno.test({
 
         for (let i = 0; i < SCOPES; i++) {
           collections.push(
-            // deno-lint-ignore no-explicit-any
             await multiCollection<any>(
               db,
               `${LEGACY_COLLECTION_PREFIX}${i}`,
@@ -145,9 +147,9 @@ Deno.test({
         }
         reportA.insertMs = performance.now() - tIns;
         console.log(
-          `  ✓ insert ${SCOPES * DOCS_PER_SCOPE} docs: ${
-            fmt(reportA.insertMs)
-          }`,
+          `  ✓ insert ${SCOPES * DOCS_PER_SCOPE} docs: ${fmt(
+            reportA.insertMs,
+          )}`,
         );
 
         // Query sample
@@ -164,12 +166,11 @@ Deno.test({
         // Sample index count : list indexes on the first collection × scope
         // count to extrapolate. listing 5000 indexes is itself slow, so we
         // sample one and multiply.
-        const sampleIdx = await db.collection(`${LEGACY_COLLECTION_PREFIX}0`)
+        const sampleIdx = await db
+          .collection(`${LEGACY_COLLECTION_PREFIX}0`)
           .indexes();
         reportA.indexes = sampleIdx.length * SCOPES;
-        console.log(
-          `  ✓ indexes (sampled × ${SCOPES}): ${reportA.indexes}`,
-        );
+        console.log(`  ✓ indexes (sampled × ${SCOPES}): ${reportA.indexes}`);
       } catch (err) {
         reportA.failed = err instanceof Error ? err.message : String(err);
         console.log(`  ✗ scenario A failed: ${reportA.failed}`);
@@ -181,14 +182,12 @@ Deno.test({
       console.log(`>>> Scenario B: 1 scopedMultiCollection`);
 
       try {
-        const setup = await measure(
-          "setup 1 scopedMultiCollection",
-          () =>
-            scopedMultiCollection(db, SCOPED_COLLECTION_NAME, {
-              schemaManagement: "auto",
-              scope: refId("exposition"),
-              types: typesShape,
-            }),
+        const setup = await measure("setup 1 scopedMultiCollection", () =>
+          scopedMultiCollection(db, SCOPED_COLLECTION_NAME, {
+            schemaManagement: "auto",
+            scope: refId("exposition"),
+            types: typesShape,
+          }),
         );
         reportB.setupMs = setup.ms;
 
@@ -211,9 +210,9 @@ Deno.test({
         }
         reportB.insertMs = performance.now() - tIns;
         console.log(
-          `  ✓ insert ${SCOPES * DOCS_PER_SCOPE} docs: ${
-            fmt(reportB.insertMs)
-          }`,
+          `  ✓ insert ${SCOPES * DOCS_PER_SCOPE} docs: ${fmt(
+            reportB.insertMs,
+          )}`,
         );
 
         const tQ = performance.now();
@@ -288,14 +287,18 @@ Deno.test({
         const which = [
           reportA.failed ? `A: ${reportA.failed}` : null,
           reportB.failed ? `B: ${reportB.failed}` : null,
-        ].filter(Boolean).join("; ");
+        ]
+          .filter(Boolean)
+          .join("; ");
         throw new Error(`Perf run failed (${which})`);
       }
     } finally {
       console.log(`Cleaning up: dropping ${dbName}`);
       try {
         await closeAllWatchers(db);
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
       await db.dropDatabase();
       await client.close();
     }

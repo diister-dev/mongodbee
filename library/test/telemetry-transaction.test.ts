@@ -3,7 +3,13 @@
  * `getSessionContext(client).withSession(...)`: parenting under application
  * spans, commit/abort outcome, and write-conflict retry accounting.
  */
-import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
+import { test } from "./+harness.ts";
+import {
+  assert,
+  assertEquals,
+  assertExists,
+  assertRejects,
+} from "./+assert.ts";
 import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import { withDatabase } from "./+shared.ts";
 import { collection } from "../src/collection.ts";
@@ -47,7 +53,7 @@ const userSchema = {
   name: v.string(),
 };
 
-Deno.test("telemetry parenting: op span is a child of the active application span", async () => {
+test("telemetry parenting: op span is a child of the active application span", async () => {
   await withDatabase("telemetry-tx-parenting", async (db) => {
     const t = makeTestTelemetry();
     const users = await collection(db, "users", userSchema, {
@@ -68,7 +74,7 @@ Deno.test("telemetry parenting: op span is a child of the active application spa
   });
 });
 
-Deno.test("telemetry transaction: commit emits an INTERNAL span parenting the ops", async () => {
+test("telemetry transaction: commit emits an INTERNAL span parenting the ops", async () => {
   await withDatabase("telemetry-tx-commit", async (db) => {
     const t = makeTestTelemetry();
     const users = await collection(db, "users", userSchema, {
@@ -100,7 +106,7 @@ Deno.test("telemetry transaction: commit emits an INTERNAL span parenting the op
   });
 });
 
-Deno.test("telemetry transaction: abort records outcome + ERROR and rolls back", async () => {
+test("telemetry transaction: abort records outcome + ERROR and rolls back", async () => {
   await withDatabase("telemetry-tx-abort", async (db) => {
     const t = makeTestTelemetry();
     const users = await collection(db, "users", userSchema, {
@@ -132,13 +138,18 @@ Deno.test("telemetry transaction: abort records outcome + ERROR and rolls back",
   });
 });
 
-Deno.test("telemetry transaction: concurrent write-conflict retries are counted", async () => {
+test("telemetry transaction: concurrent write-conflict retries are counted", async () => {
   await withDatabase("telemetry-tx-retries", async (db) => {
     const t = makeTestTelemetry();
-    const items = await collection(db, "items", {
-      name: v.string(),
-      value: v.number(),
-    }, { telemetry: t.telemetry });
+    const items = await collection(
+      db,
+      "items",
+      {
+        name: v.string(),
+        value: v.number(),
+      },
+      { telemetry: t.telemetry },
+    );
 
     const itemId = await items.insertOne({ name: "contended", value: 0 });
     const sessionContext = getSessionContext(db.client);

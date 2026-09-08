@@ -27,8 +27,9 @@
 
 import process from "node:process";
 import * as fs from "node:fs/promises";
+import { existsSync } from "node:fs";
 import * as v from "../../schema.ts";
-import * as path from "@std/path";
+import * as path from "node:path";
 import {
   type ConfigLoadOptions,
   type ConfigResult,
@@ -36,7 +37,7 @@ import {
   type MigrationSystemConfig,
   MigrationSystemConfigSchema,
 } from "./types.ts";
-import { red } from "@std/fmt/colors";
+import { red } from "../../utils/colors.ts";
 import { pathToFileUrl } from "../utils/platform.ts";
 
 /**
@@ -93,10 +94,11 @@ function validateConfig(config: unknown): {
   if (!parseResult.success) {
     return {
       success: false,
-      errors: parseResult.issues.map((issue) =>
-        `${
-          issue.path?.map((p) => String(p)).join(".") || "root"
-        }: ${issue.message}`
+      errors: parseResult.issues.map(
+        (issue) =>
+          `${
+            issue.path?.map((p) => String(p)).join(".") || "root"
+          }: ${issue.message}`,
       ),
       warnings: [],
     };
@@ -164,8 +166,9 @@ function loadFromEnvironment(
 
     if (connectTimeout || maxPoolSize) {
       config.database.connection.options = {
-        ...(connectTimeout &&
-          { connectTimeoutMS: parseInt(connectTimeout, 10) }),
+        ...(connectTimeout && {
+          connectTimeoutMS: parseInt(connectTimeout, 10),
+        }),
         ...(maxPoolSize && { maxPoolSize: parseInt(maxPoolSize, 10) }),
       };
     }
@@ -351,9 +354,9 @@ export async function loadConfig(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(
-        `${
-          red("Failed to load config from")
-        } ${options.configPath}: ${message}`,
+        `${red(
+          "Failed to load config from",
+        )} ${options.configPath}: ${message}`,
       );
       throw error;
     }
@@ -361,17 +364,33 @@ export async function loadConfig(
 
   // Otherwise, try to discover config files
   const toCheck = discoverConfigFiles(cwd);
+  // A configuration file that EXISTS but fails to load — a bad import
+  // specifier, a syntax error, a missing dependency — used to be swallowed
+  // here and reported as "no configuration file found", sending people to
+  // `init` to recreate a file that was already there. Keep why each candidate
+  // was rejected so the real cause survives.
+  const rejected: string[] = [];
   for (const configPath of toCheck) {
     try {
       config = await loadFromFile(configPath, cwd);
       return config;
-    } catch {
-      // Continue to next file
+    } catch (error) {
+      if (existsSync(configPath)) {
+        const message = error instanceof Error ? error.message : String(error);
+        rejected.push(`  ${configPath}: ${message}`);
+      }
       continue;
     }
   }
 
-  // If no config found, throw error
+  if (rejected.length > 0) {
+    throw new Error(
+      `Found a configuration file, but it could not be loaded:\n${rejected.join(
+        "\n",
+      )}`,
+    );
+  }
+
   throw new Error(
     'No configuration file found. Run "mongodbee init" to create one.',
   );
@@ -428,7 +447,7 @@ export async function loadConfigOld(
 
   if (configPath) {
     try {
-      fileConfig = await loadFromFile(configPath) as Record<string, unknown>;
+      fileConfig = (await loadFromFile(configPath)) as Record<string, unknown>;
       configSource = configPath;
     } catch (error) {
       if (strict) {
@@ -442,7 +461,7 @@ export async function loadConfigOld(
     for (const configFilePath of discoverConfigFiles()) {
       try {
         await fs.stat(configFilePath);
-        fileConfig = await loadFromFile(configFilePath) as Record<
+        fileConfig = (await loadFromFile(configFilePath)) as Record<
           string,
           unknown
         >;
@@ -471,8 +490,9 @@ export async function loadConfigOld(
     environment &&
     (baseConfig as MigrationSystemConfig).environments?.[environment]
   ) {
-    const envOverride = (baseConfig as MigrationSystemConfig)
-      .environments![environment] as Record<string, unknown>;
+    const envOverride = (baseConfig as MigrationSystemConfig).environments![
+      environment
+    ] as Record<string, unknown>;
     baseConfig = deepMergeConfig(baseConfig, envOverride);
     configSource += ` + ${environment} environment`;
   }
@@ -511,24 +531,30 @@ export function resolveConfigPaths(
   if (resolved.paths) {
     resolved.paths = {
       ...resolved.paths,
-      migrations:
-        new URL(resolved.paths.migrations, `file://${basePath}/`).pathname,
+      migrations: new URL(resolved.paths.migrations, `file://${basePath}/`)
+        .pathname,
       schemas: new URL(resolved.paths.schemas, `file://${basePath}/`).pathname,
     };
 
     if (resolved.paths.temp) {
-      resolved.paths.temp =
-        new URL(resolved.paths.temp, `file://${basePath}/`).pathname;
+      resolved.paths.temp = new URL(
+        resolved.paths.temp,
+        `file://${basePath}/`,
+      ).pathname;
     }
 
     if (resolved.paths.backup) {
-      resolved.paths.backup =
-        new URL(resolved.paths.backup, `file://${basePath}/`).pathname;
+      resolved.paths.backup = new URL(
+        resolved.paths.backup,
+        `file://${basePath}/`,
+      ).pathname;
     }
 
     if (resolved.paths.logs) {
-      resolved.paths.logs =
-        new URL(resolved.paths.logs, `file://${basePath}/`).pathname;
+      resolved.paths.logs = new URL(
+        resolved.paths.logs,
+        `file://${basePath}/`,
+      ).pathname;
     }
   }
 

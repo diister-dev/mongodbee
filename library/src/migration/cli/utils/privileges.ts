@@ -8,7 +8,7 @@
  * @module
  */
 
-import { bold, dim, green, red, yellow } from "@std/fmt/colors";
+import { bold, dim, green, red, yellow } from "../../../utils/colors.ts";
 import type { Db } from "../../../mongodb.ts";
 import {
   checkMigrationPrivileges,
@@ -65,9 +65,10 @@ export async function ensureMigrationPrivileges(
   }
 
   const account = check.users.map((u) => `${u.user}@${u.db}`).join(", ");
-  const roles = check.roles.length > 0
-    ? check.roles.map((r) => `${r.role}@${r.db}`).join(", ")
-    : "no role";
+  const roles =
+    check.roles.length > 0
+      ? check.roles.map((r) => `${r.role}@${r.db}`).join(", ")
+      : "no role";
 
   if (check.status === "ok") {
     console.log(
@@ -78,10 +79,10 @@ export async function ensureMigrationPrivileges(
   }
 
   const needsDbAdmin = check.missing.some((a) =>
-    DB_ADMIN_ONLY_ACTIONS.includes(a)
+    DB_ADMIN_ONLY_ACTIONS.includes(a),
   );
-  const needsReadWrite = check.missing.some((a) =>
-    !DB_ADMIN_ONLY_ACTIONS.includes(a)
+  const needsReadWrite = check.missing.some(
+    (a) => !DB_ADMIN_ONLY_ACTIONS.includes(a),
   );
   const suggestedRoles = [
     ...(needsReadWrite ? ["readWrite"] : []),
@@ -116,20 +117,18 @@ export async function ensureMigrationPrivileges(
   );
   console.log(
     dim(
-      `  Grant the built-in role(s) ${
-        suggestedRoles.join(" + ")
-      } on "${check.database}" (or dbOwner), e.g. in mongosh:`,
+      `  Grant the built-in role(s) ${suggestedRoles.join(
+        " + ",
+      )} on "${check.database}" (or dbOwner), e.g. in mongosh:`,
     ),
   );
   if (primaryUser) {
     console.log(dim(`    use ${primaryUser.db}`));
     console.log(
       dim(
-        `    db.grantRolesToUser("${primaryUser.user}", [${
-          suggestedRoles
-            .map((role) => `{ role: "${role}", db: "${check.database}" }`)
-            .join(", ")
-        }])`,
+        `    db.grantRolesToUser("${primaryUser.user}", [${suggestedRoles
+          .map((role) => `{ role: "${role}", db: "${check.database}" }`)
+          .join(", ")}])`,
       ),
     );
   }
@@ -139,17 +138,15 @@ export async function ensureMigrationPrivileges(
   console.log();
 
   if (options.dryRun) {
-    console.log(
-      yellow("  [DRY RUN] Continuing — a real run would stop here."),
-    );
+    console.log(yellow("  [DRY RUN] Continuing — a real run would stop here."));
     console.log();
     return check;
   }
 
   throw new Error(
-    `Insufficient privileges: account ${account} is missing ${
-      check.missing.join(", ")
-    } on database "${check.database}". ` +
+    `Insufficient privileges: account ${account} is missing ${check.missing.join(
+      ", ",
+    )} on database "${check.database}". ` +
       `Grant ${suggestedRoles.join(" + ")} (or dbOwner) and retry.`,
   );
 }

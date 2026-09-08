@@ -1,10 +1,9 @@
-// deno-lint-ignore-file no-import-prefix -- test-only OpenTelemetry SDK deps, kept out of the published import map
 /**
  * Shared helpers for the telemetry test suites.
  *
- * Test-only OpenTelemetry dependencies are imported through direct npm:
- * specifiers on purpose: they must never enter the published import map of
- * the package (the library itself only depends on @opentelemetry/api).
+ * The OpenTelemetry SDK packages below are devDependencies on purpose: they
+ * must never reach the published dependency list, because the library itself
+ * only ever depends on @opentelemetry/api.
  */
 import { context } from "@opentelemetry/api";
 import {
@@ -12,8 +11,8 @@ import {
   InMemorySpanExporter,
   type ReadableSpan,
   SimpleSpanProcessor,
-} from "npm:@opentelemetry/sdk-trace-base@^2.1.0";
-import { AsyncLocalStorageContextManager } from "npm:@opentelemetry/context-async-hooks@^2.1.0";
+} from "@opentelemetry/sdk-trace-base";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import type { TelemetryOptions } from "../telemetry.ts";
 
 // Span parenting relies on context propagation, and the bare @opentelemetry/api

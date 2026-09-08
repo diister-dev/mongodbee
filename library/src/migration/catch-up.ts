@@ -258,8 +258,9 @@ export function filterOperationsForModelType(
       // `multiModelInstances` source shape is model-scoped; `collection` and
       // `multiCollectionType` sources are unrelated to this model type.
       case "flow_to_scope":
-        return op.from.kind === "multiModelInstances" &&
-          op.from.model === modelType;
+        return (
+          op.from.kind === "multiModelInstances" && op.from.model === modelType
+        );
 
       // Skip collection and multi-collection operations
       case "create_collection":

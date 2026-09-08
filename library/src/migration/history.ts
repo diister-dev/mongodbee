@@ -116,7 +116,6 @@ export async function recordOperation(
     ...(options?.adopted ? { adopted: true } : {}),
   };
 
-  // deno-lint-ignore no-explicit-any
   await collection.insertOne(record as any);
 }
 
@@ -170,10 +169,7 @@ export async function getLastOperation(
 export async function getAllOperations(db: Db): Promise<MigrationOperation[]> {
   const collection = getMigrationOperationsCollection(db);
 
-  return await collection
-    .find({})
-    .sort({ executedAt: 1 })
-    .toArray();
+  return await collection.find({}).sort({ executedAt: 1 }).toArray();
 }
 
 /**
@@ -205,10 +201,13 @@ export function calculateMigrationState(
  * @returns Map of migration ID to current state
  */
 export async function getCurrentState(db: Db): Promise<
-  Map<string, {
-    status: "pending" | "applied" | "failed" | "reverted";
-    lastOperation?: MigrationOperation;
-  }>
+  Map<
+    string,
+    {
+      status: "pending" | "applied" | "failed" | "reverted";
+      lastOperation?: MigrationOperation;
+    }
+  >
 > {
   const allOperations = await getAllOperations(db);
 
@@ -281,8 +280,8 @@ export async function getLastAppliedMigration(
     return null;
   }
 
-  appliedMigrations.sort((a, b) =>
-    b.executedAt.getTime() - a.executedAt.getTime()
+  appliedMigrations.sort(
+    (a, b) => b.executedAt.getTime() - a.executedAt.getTime(),
   );
   return appliedMigrations[0];
 }

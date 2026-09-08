@@ -88,7 +88,8 @@ export async function applySecurityToCollection(
     const validator = toMongoValidator(wrappedSchema);
 
     // Check if collection exists
-    const collections = await db.listCollections({ name: collectionName })
+    const collections = await db
+      .listCollections({ name: collectionName })
       .toArray();
 
     if (collections.length === 0) {
@@ -102,11 +103,12 @@ export async function applySecurityToCollection(
       listCollections: 1,
       filter: { name: collectionName },
     });
-    const currentValidator = existingOptions.cursor?.firstBatch?.[0]?.options
-      ?.validator;
+    const currentValidator =
+      existingOptions.cursor?.firstBatch?.[0]?.options?.validator;
 
     // Compare validators
-    const needsUpdate = opts.force ||
+    const needsUpdate =
+      opts.force ||
       !currentValidator ||
       JSON.stringify(currentValidator) !== JSON.stringify(validator);
 
@@ -127,29 +129,32 @@ export async function applySecurityToCollection(
       return;
     }
 
-    await Promise.all(indexes.map((index) => {
-      return mongoOperationQueue.add(async () => {
-        const indexName = sanitizePathName(index.path);
-        const keySpec: Record<string, number> = {};
-        keySpec[index.path] = 1;
+    await Promise.all(
+      indexes.map((index) => {
+        return mongoOperationQueue.add(async () => {
+          const indexName = sanitizePathName(index.path);
+          const keySpec: Record<string, number> = {};
+          keySpec[index.path] = 1;
 
-        try {
-          await collection.createIndex(keySpec, {
-            name: indexName,
-            unique: index.metadata.unique || false,
-            sparse: false,
-          });
-        } catch (error) {
-          if (
-            error instanceof Error && error.message.includes("already exists")
-          ) {
-            // Index already exists, skip silently
-          } else {
-            throw error;
+          try {
+            await collection.createIndex(keySpec, {
+              name: indexName,
+              unique: index.metadata.unique || false,
+              sparse: false,
+            });
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              error.message.includes("already exists")
+            ) {
+              // Index already exists, skip silently
+            } else {
+              throw error;
+            }
           }
-        }
-      });
-    }));
+        });
+      }),
+    );
   }
 }
 
@@ -213,7 +218,8 @@ export async function applySecurityToMultiCollection(
     );
 
     // Check if collection exists
-    const collections = await db.listCollections({ name: collectionName })
+    const collections = await db
+      .listCollections({ name: collectionName })
       .toArray();
 
     if (collections.length === 0) {
@@ -227,10 +233,11 @@ export async function applySecurityToMultiCollection(
       listCollections: 1,
       filter: { name: collectionName },
     });
-    const currentValidator = existingOptions.cursor?.firstBatch?.[0]?.options
-      ?.validator;
+    const currentValidator =
+      existingOptions.cursor?.firstBatch?.[0]?.options?.validator;
 
-    const needsUpdate = opts.force ||
+    const needsUpdate =
+      opts.force ||
       !currentValidator ||
       JSON.stringify(currentValidator) !== JSON.stringify(validator);
 
@@ -246,9 +253,9 @@ export async function applySecurityToMultiCollection(
   if (opts.applyIndexes) {
     const indexOperations = [];
 
-    for (
-      const [typeName, typeSchema] of Object.entries(multiCollectionSchema)
-    ) {
+    for (const [typeName, typeSchema] of Object.entries(
+      multiCollectionSchema,
+    )) {
       const wrappedSchema = v.object(typeSchema);
       const indexes = extractIndexes(wrappedSchema);
 

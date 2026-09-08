@@ -30,7 +30,7 @@ export function isWriteConflictError(error: unknown): boolean {
     (message.includes("plan execution") &&
       message.includes("write conflict")) ||
     message.includes("writeconflict") ||
-    message.includes("transaction") && message.includes("aborted") ||
+    (message.includes("transaction") && message.includes("aborted")) ||
     // MongoDB error code for write conflicts
     (error as any).code === 112
   );

@@ -1,4 +1,5 @@
-import { assert, assertEquals } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import { removeField } from "../src/sanitizer.ts";
@@ -7,7 +8,7 @@ import { refId } from "../src/ids.ts";
 
 const EXPO = "exposition:expoaaaaa01";
 
-Deno.test("updateOne: removeField() unsets a field (parity with multiCollection)", async () => {
+test("updateOne: removeField() unsets a field (parity with multiCollection)", async () => {
   await withDatabase("smc-removefield", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
       schemaManagement: "auto",
@@ -32,7 +33,7 @@ Deno.test("updateOne: removeField() unsets a field (parity with multiCollection)
   });
 });
 
-Deno.test("updateMany: removeField() works across docs", async () => {
+test("updateMany: removeField() works across docs", async () => {
   await withDatabase("smc-removefield-many", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
       schemaManagement: "auto",

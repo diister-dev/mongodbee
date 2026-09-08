@@ -12,7 +12,8 @@
 //
 // Ground truth is the server's own $sort — never a hand-written order.
 
-import { assertEquals, assertRejects } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assertEquals, assertRejects } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { collection } from "../src/collection.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
@@ -21,24 +22,27 @@ import { refId } from "../src/ids.ts";
 
 const NAMES = ["delta", "alpha", "charlie", "bravo", "echo"];
 
-// deno-lint-ignore no-explicit-any
 async function truth(db: any, sort: Record<string, 1 | -1>) {
-  const rows = await db.collection("items").aggregate([{ $sort: sort }])
+  const rows = await db
+    .collection("items")
+    .aggregate([{ $sort: sort }])
     .toArray();
   return (rows as { name: string }[]).map((r) => r.name);
 }
 
 /** Full cursor walk (limit 2) — the misreads only bite from page 2. */
-// deno-lint-ignore no-explicit-any
 async function walk(items: any, sort: unknown): Promise<string[]> {
   const seen: string[] = [];
   let afterId: string | undefined;
   for (let guard = 0; guard < 10; guard++) {
-    const p = await items.paginate({}, {
-      sort,
-      limit: 2,
-      ...(afterId ? { afterId } : {}),
-    });
+    const p = await items.paginate(
+      {},
+      {
+        sort,
+        limit: 2,
+        ...(afterId ? { afterId } : {}),
+      },
+    );
     if (p.data.length === 0) break;
     for (const d of p.data) seen.push(d.name);
     if (p.data.length < 2) break;
@@ -47,7 +51,7 @@ async function walk(items: any, sort: unknown): Promise<string[]> {
   return seen;
 }
 
-Deno.test("paginate sort forms: every m.Sort shape orders as the driver would", async () => {
+test("paginate sort forms: every m.Sort shape orders as the driver would", async () => {
   await withDatabase("paginate-sort-forms", async (db) => {
     const items = await collection(db, "items", {
       name: v.string(),
@@ -84,7 +88,10 @@ Deno.test("paginate sort forms: every m.Sort shape orders as the driver would", 
     );
     // Array of pairs, mixed directions.
     assertEquals(
-      await walk(items, [["rank", 1], ["name", -1]]),
+      await walk(items, [
+        ["rank", 1],
+        ["name", -1],
+      ]),
       byRankThenName,
       "sort: [['rank',1],['name',-1]]",
     );
@@ -92,7 +99,10 @@ Deno.test("paginate sort forms: every m.Sort shape orders as the driver would", 
     assertEquals(
       await walk(
         items,
-        new Map<string, 1 | -1>([["rank", 1], ["name", -1]]),
+        new Map<string, 1 | -1>([
+          ["rank", 1],
+          ["name", -1],
+        ]),
       ),
       byRankThenName,
       "sort: Map",
@@ -105,13 +115,11 @@ Deno.test("paginate sort forms: every m.Sort shape orders as the driver would", 
       "$meta",
     );
     await assertRejects(
-      // deno-lint-ignore no-explicit-any
       () => items.paginate({}, { sort: { name: 2 } as any }),
       Error,
       "invalid sort direction",
     );
     await assertRejects(
-      // deno-lint-ignore no-explicit-any
       () => items.paginate({}, { sort: [42] as any }),
       Error,
       "invalid sort entry",
@@ -119,7 +127,7 @@ Deno.test("paginate sort forms: every m.Sort shape orders as the driver would", 
   });
 });
 
-Deno.test("paginate sort forms: shared normalization reaches the scoped surface", async () => {
+test("paginate sort forms: shared normalization reaches the scoped surface", async () => {
   await withDatabase("paginate-sort-forms-scoped", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
       schemaManagement: "auto",
@@ -129,16 +137,16 @@ Deno.test("paginate sort forms: shared normalization reaches the scoped surface"
     const view = catalog.scope("exposition:expoaaaaa01");
     for (const name of NAMES) await view.insertOne("item", { name });
 
-    const rows = await db.collection("catalog").aggregate([
-      { $sort: { name: 1, _id: 1 } },
-    ]).toArray();
+    const rows = await db
+      .collection("catalog")
+      .aggregate([{ $sort: { name: 1, _id: 1 } }])
+      .toArray();
     const expected = (rows as { name: string }[]).map((r) => r.name);
 
     const seen: string[] = [];
     let afterId: string | undefined;
     for (let guard = 0; guard < 10; guard++) {
       const p = await view.paginate("item", undefined, {
-        // deno-lint-ignore no-explicit-any
         sort: { name: "asc" } as any,
         limit: 2,
         ...(afterId ? { afterId } : {}),

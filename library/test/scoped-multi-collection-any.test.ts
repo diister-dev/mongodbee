@@ -1,4 +1,5 @@
-import { assert, assertEquals, assertExists } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals, assertExists } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { collection } from "../src/collection.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
@@ -21,7 +22,7 @@ async function makeCatalog(
   });
 }
 
-Deno.test("findOneAny: cross-type filter, scoped — does not leak other scopes", async () => {
+test("findOneAny: cross-type filter, scoped — does not leak other scopes", async () => {
   await withDatabase("smc-any-findone", async (db) => {
     const catalog = await makeCatalog(db);
     const a = catalog.scope(EXPO_A);
@@ -43,7 +44,7 @@ Deno.test("findOneAny: cross-type filter, scoped — does not leak other scopes"
   });
 });
 
-Deno.test("findAny: returns all cross-type matches within the scope only", async () => {
+test("findAny: returns all cross-type matches within the scope only", async () => {
   await withDatabase("smc-any-findall", async (db) => {
     const catalog = await makeCatalog(db);
     const a = catalog.scope(EXPO_A);
@@ -60,7 +61,7 @@ Deno.test("findAny: returns all cross-type matches within the scope only", async
   });
 });
 
-Deno.test("withSession: scoped + plain collection commit together (session propagates)", async () => {
+test("withSession: scoped + plain collection commit together (session propagates)", async () => {
   await withDatabase("smc-any-session", async (db) => {
     // A global plain collection + a scoped multi-collection sharing one client.
     const audit = await collection(db, "audit", {

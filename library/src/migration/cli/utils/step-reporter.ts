@@ -59,7 +59,7 @@ export interface StepReporter {
 }
 
 /** Visible width, ignoring the SGR sequences the labels are coloured with. */
-// deno-lint-ignore no-control-regex
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escapes is the point
 const ANSI = /\x1b\[[0-9;]*m/g;
 
 /**
@@ -74,7 +74,7 @@ function clamp(line: string, max: number): string {
   if (max <= 0 || line.replace(ANSI, "").length <= max) return line;
   let visible = 0;
   let out = "";
-  for (let i = 0; i < line.length;) {
+  for (let i = 0; i < line.length; ) {
     if (line[i] === "\x1b" && line[i + 1] === "[") {
       // A CSI sequence costs no columns: copy it whole, parameter bytes then
       // the final byte, and keep counting from after it.
@@ -94,13 +94,6 @@ function clamp(line: string, max: number): string {
 
 /** Terminal width, or 0 when nothing can tell us (no clamping then). */
 function terminalColumns(): number {
-  try {
-    if (typeof Deno !== "undefined" && typeof Deno.consoleSize === "function") {
-      return Deno.consoleSize().columns;
-    }
-  } catch {
-    // Not a terminal — the tty flag below already decides whether we render.
-  }
   return process.stdout.columns ?? 0;
 }
 
@@ -108,8 +101,8 @@ function terminalColumns(): number {
  * Builds a {@link StepReporter}.
  *
  * @param options.tty - Render transient lines. Defaults to
- *   `Deno.stdout.isTerminal()`, falling back to `process.stdout.isTTY` so the
- *   CLI behaves the same when the published package runs under Node.
+ *   `process.stdout.isTTY`, which every target runtime reports, so the CLI
+ *   behaves the same under Node, Bun and Deno.
  * @param options.write - Sink for rendered chunks; defaults to stdout.
  *   Injectable so both branches are testable without a real terminal.
  * @param options.minRedrawMs - Floor between two redraws of the same line.
@@ -126,11 +119,9 @@ export function createStepReporter(
     columns?: number;
   } = {},
 ): StepReporter {
-  const tty = options.tty ??
-    (typeof Deno !== "undefined"
-      ? Deno.stdout?.isTerminal?.() === true
-      : process.stdout.isTTY === true);
-  const write = options.write ??
+  const tty = options.tty ?? process.stdout.isTTY === true;
+  const write =
+    options.write ??
     ((chunk: string) => {
       process.stdout.write(chunk);
     });
@@ -138,8 +129,8 @@ export function createStepReporter(
   // Clamping exists because a real terminal WRAPS. An injected sink is a
   // string buffer with no width, so measuring one there would only truncate
   // what the caller wanted to read back.
-  const columns = options.columns ??
-    (tty && !options.write ? terminalColumns() : 0);
+  const columns =
+    options.columns ?? (tty && !options.write ? terminalColumns() : 0);
 
   let transientOpen = false;
   let live = false;

@@ -12,8 +12,9 @@
  * still carries the raw per-migration `warnings`/`errors` the consumer's
  * in-process CI gate reads.
  */
-import { assert, assertEquals, assertRejects } from "@std/assert";
-import { stripAnsiCode } from "@std/fmt/colors";
+import { test } from "../../+harness.ts";
+import { assert, assertEquals, assertRejects } from "../../+assert.ts";
+import { stripAnsiCode } from "../../../src/utils/colors.ts";
 import { migrationDefinition } from "../../../src/migration/definition.ts";
 import type { MigrationDefinition } from "../../../src/migration/types.ts";
 import { validateMigrationsWithSimulation } from "../../../src/migration/cli/utils/validate-migrations.ts";
@@ -40,9 +41,9 @@ function chain(length: number): MigrationDefinition[] {
   for (let i = 0; i < length; i++) {
     const extra = Array.from({ length: i }, (_, j) => `t${j}`);
     const migration: MigrationDefinition = migrationDefinition(
-      `2025_01_${String(i + 1).padStart(2, "0")}_0000_${
-        "A".repeat(25)
-      }${i}@step_${i}`,
+      `2025_01_${String(i + 1).padStart(2, "0")}_0000_${"A".repeat(
+        25,
+      )}${i}@step_${i}`,
       `step_${i}`,
       {
         parent,
@@ -68,9 +69,9 @@ function chainWithBrokenTail(length: number): MigrationDefinition[] {
   const extra = Array.from({ length: i }, (_, j) => `t${j}`);
   migrations.push(
     migrationDefinition(
-      `2025_01_${String(i + 1).padStart(2, "0")}_0000_${
-        "B".repeat(25)
-      }${i}@broken`,
+      `2025_01_${String(i + 1).padStart(2, "0")}_0000_${"B".repeat(
+        25,
+      )}${i}@broken`,
       "broken_tail",
       {
         parent,
@@ -83,9 +84,9 @@ function chainWithBrokenTail(length: number): MigrationDefinition[] {
         },
         migrate(m) {
           m.createCollection(`t${i - 1}`);
-          m.collection(`t${i - 1}`).seed(
-            [{ _id: `t${i - 1}:x`, n: "not-a-number" }] as never,
-          );
+          m.collection(`t${i - 1}`).seed([
+            { _id: `t${i - 1}:x`, n: "not-a-number" },
+          ] as never);
           return m.compile();
         },
       },
@@ -105,7 +106,7 @@ function recorder() {
 const occurrences = (haystack: string, needle: string) =>
   haystack.split(needle).length - 1;
 
-Deno.test("check report: a chain-invariant warning is printed once, not once per migration", async () => {
+test("check report: a chain-invariant warning is printed once, not once per migration", async () => {
   const out = recorder();
   const migrations = chain(6);
 
@@ -134,7 +135,7 @@ Deno.test("check report: a chain-invariant warning is printed once, not once per
   // consumer's CI gate reads, per migration, undeduplicated.
   assertEquals(results.length, 6);
   const raising = results.filter((r) =>
-    r.warnings.some((w) => w.includes(CHAIN_INVARIANT))
+    r.warnings.some((w) => w.includes(CHAIN_INVARIANT)),
   );
   assert(
     raising.length > 1,
@@ -142,7 +143,7 @@ Deno.test("check report: a chain-invariant warning is printed once, not once per
   );
 });
 
-Deno.test("check report: --verbose restores the per-migration firehose", async () => {
+test("check report: --verbose restores the per-migration firehose", async () => {
   const quiet = recorder();
   const loud = recorder();
   const migrations = chain(4);
@@ -166,7 +167,7 @@ Deno.test("check report: --verbose restores the per-migration firehose", async (
   );
 });
 
-Deno.test("check report: a failure still throws and is the last thing on screen", async () => {
+test("check report: a failure still throws and is the last thing on screen", async () => {
   const out = recorder();
   const migrations = chainWithBrokenTail(6);
 
@@ -190,7 +191,7 @@ Deno.test("check report: a failure still throws and is the last thing on screen"
   );
 });
 
-Deno.test("check report: the non-TTY sink receives no cursor escapes", async () => {
+test("check report: the non-TTY sink receives no cursor escapes", async () => {
   const chunks: string[] = [];
   await validateMigrationsWithSimulation(chain(3), {
     tty: false,
@@ -205,7 +206,7 @@ Deno.test("check report: the non-TTY sink receives no cursor escapes", async () 
   assertEquals(raw.includes("\x1b[K"), false, "no erase-line in CI logs");
 });
 
-Deno.test("check report: a clean chain still ends on the green banner", async () => {
+test("check report: a clean chain still ends on the green banner", async () => {
   const out = recorder();
   const results = await validateMigrationsWithSimulation(chain(3), {
     tty: false,
@@ -213,10 +214,14 @@ Deno.test("check report: a clean chain still ends on the green banner", async ()
     powerLevel: "quick",
   });
 
-  assertEquals(results.every((r) => r.valid), true);
+  assertEquals(
+    results.every((r) => r.valid),
+    true,
+  );
   assert(
-    out.text().trimEnd().endsWith(
-      "✓ All migrations are valid and ready to apply!",
-    ),
+    out
+      .text()
+      .trimEnd()
+      .endsWith("✓ All migrations are valid and ready to apply!"),
   );
 });

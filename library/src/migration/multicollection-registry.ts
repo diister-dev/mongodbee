@@ -40,40 +40,58 @@ export const MULTI_COLLECTION_INFO_TYPE = "_information";
 export const MULTI_COLLECTION_MIGRATIONS_TYPE = "_migrations";
 
 const metadataSchema: readonly [
-  v.ObjectSchema<{
-    readonly _id: v.LiteralSchema<"_information", undefined>;
-    readonly _type: v.LiteralSchema<"_information", undefined>;
-    readonly collectionType: v.StringSchema<undefined>;
-    readonly createdAt: v.DateSchema<undefined>;
-  }, undefined>,
-  v.ObjectSchema<{
-    readonly _id: v.LiteralSchema<"_migrations", undefined>;
-    readonly _type: v.LiteralSchema<"_migrations", undefined>;
-    readonly fromMigrationId: v.StringSchema<undefined>;
-    readonly mongodbeeVersion: v.StringSchema<undefined>;
-    readonly appliedMigrations: v.ArraySchema<
-      v.ObjectSchema<{
-        readonly id: v.StringSchema<undefined>;
-        readonly operation: v.UnionSchema<[
-          v.LiteralSchema<"applied", undefined>,
-          v.LiteralSchema<"reverted", undefined>,
-          v.LiteralSchema<"failed", undefined>,
-        ], undefined>;
-        readonly appliedAt: v.DateSchema<undefined>;
-        readonly duration: v.OptionalSchema<
-          v.NumberSchema<undefined>,
+  v.ObjectSchema<
+    {
+      readonly _id: v.LiteralSchema<"_information", undefined>;
+      readonly _type: v.LiteralSchema<"_information", undefined>;
+      readonly collectionType: v.StringSchema<undefined>;
+      readonly createdAt: v.DateSchema<undefined>;
+    },
+    undefined
+  >,
+  v.ObjectSchema<
+    {
+      readonly _id: v.LiteralSchema<"_migrations", undefined>;
+      readonly _type: v.LiteralSchema<"_migrations", undefined>;
+      readonly fromMigrationId: v.StringSchema<undefined>;
+      readonly mongodbeeVersion: v.StringSchema<undefined>;
+      readonly appliedMigrations: v.ArraySchema<
+        v.ObjectSchema<
+          {
+            readonly id: v.StringSchema<undefined>;
+            readonly operation: v.UnionSchema<
+              [
+                v.LiteralSchema<"applied", undefined>,
+                v.LiteralSchema<"reverted", undefined>,
+                v.LiteralSchema<"failed", undefined>,
+              ],
+              undefined
+            >;
+            readonly appliedAt: v.DateSchema<undefined>;
+            readonly duration: v.OptionalSchema<
+              v.NumberSchema<undefined>,
+              undefined
+            >;
+            readonly error: v.OptionalSchema<
+              v.StringSchema<undefined>,
+              undefined
+            >;
+            readonly status: v.UnionSchema<
+              [
+                v.LiteralSchema<"success", undefined>,
+                v.LiteralSchema<"failure", undefined>,
+              ],
+              undefined
+            >;
+            readonly mongodbeeVersion: v.StringSchema<undefined>;
+          },
           undefined
-        >;
-        readonly error: v.OptionalSchema<v.StringSchema<undefined>, undefined>;
-        readonly status: v.UnionSchema<[
-          v.LiteralSchema<"success", undefined>,
-          v.LiteralSchema<"failure", undefined>,
-        ], undefined>;
-        readonly mongodbeeVersion: v.StringSchema<undefined>;
-      }, undefined>,
-      undefined
-    >;
-  }, undefined>,
+        >,
+        undefined
+      >;
+    },
+    undefined
+  >,
 ] = [
   v.object({
     _id: v.literal(MULTI_COLLECTION_INFO_TYPE),
@@ -86,22 +104,21 @@ const metadataSchema: readonly [
     _type: v.literal(MULTI_COLLECTION_MIGRATIONS_TYPE),
     fromMigrationId: v.string(),
     mongodbeeVersion: v.string(),
-    appliedMigrations: v.array(v.object({
-      id: v.string(),
-      operation: v.union([
-        v.literal("applied"),
-        v.literal("reverted"),
-        v.literal("failed"),
-      ]),
-      appliedAt: v.date(),
-      duration: v.optional(v.number()),
-      error: v.optional(v.string()),
-      status: v.union([
-        v.literal("success"),
-        v.literal("failure"),
-      ]),
-      mongodbeeVersion: v.string(),
-    })),
+    appliedMigrations: v.array(
+      v.object({
+        id: v.string(),
+        operation: v.union([
+          v.literal("applied"),
+          v.literal("reverted"),
+          v.literal("failed"),
+        ]),
+        appliedAt: v.date(),
+        duration: v.optional(v.number()),
+        error: v.optional(v.string()),
+        status: v.union([v.literal("success"), v.literal("failure")]),
+        mongodbeeVersion: v.string(),
+      }),
+    ),
   }),
 ] as const;
 
@@ -124,22 +141,21 @@ export function createMetadataSchemas(): typeof metadataSchema {
       _type: v.literal(MULTI_COLLECTION_MIGRATIONS_TYPE),
       fromMigrationId: v.string(),
       mongodbeeVersion: v.string(),
-      appliedMigrations: v.array(v.object({
-        id: v.string(),
-        operation: v.union([
-          v.literal("applied"),
-          v.literal("reverted"),
-          v.literal("failed"),
-        ]),
-        appliedAt: v.date(),
-        duration: v.optional(v.number()),
-        error: v.optional(v.string()),
-        status: v.union([
-          v.literal("success"),
-          v.literal("failure"),
-        ]),
-        mongodbeeVersion: v.string(),
-      })),
+      appliedMigrations: v.array(
+        v.object({
+          id: v.string(),
+          operation: v.union([
+            v.literal("applied"),
+            v.literal("reverted"),
+            v.literal("failed"),
+          ]),
+          appliedAt: v.date(),
+          duration: v.optional(v.number()),
+          error: v.optional(v.string()),
+          status: v.union([v.literal("success"), v.literal("failure")]),
+          mongodbeeVersion: v.string(),
+        }),
+      ),
     }),
   ];
 }
@@ -298,9 +314,12 @@ export async function discoverMultiCollectionInstances(
     // different type rules it out.
     let info: MultiCollectionInfo | null = null;
     try {
-      info = await db.collection(collName).findOne({
-        _type: MULTI_COLLECTION_INFO_TYPE,
-      }, { session }) as MultiCollectionInfo | null;
+      info = (await db.collection(collName).findOne(
+        {
+          _type: MULTI_COLLECTION_INFO_TYPE,
+        },
+        { session },
+      )) as MultiCollectionInfo | null;
     } catch (_error) {
       // Unreadable collection. For a non-prefix collection it is simply not one
       // of ours; for a prefix match we can't prove it safe, so fall through to
@@ -317,7 +336,8 @@ export async function discoverMultiCollectionInstances(
     // Marker present but for a DIFFERENT model — belongs to another type, never
     // ours (whether or not the name matches our prefix).
     if (
-      info && typeof info.collectionType === "string" &&
+      info &&
+      typeof info.collectionType === "string" &&
       info.collectionType.length > 0
     ) {
       continue;
@@ -333,10 +353,13 @@ export async function discoverMultiCollectionInstances(
     // destructive consumer would otherwise flow or drop its real data.
     let hasData = false;
     try {
-      const anyDoc = await db.collection(collName).findOne({}, {
-        projection: { _id: 1 },
-        session,
-      });
+      const anyDoc = await db.collection(collName).findOne(
+        {},
+        {
+          projection: { _id: 1 },
+          session,
+        },
+      );
       hasData = anyDoc !== null;
     } catch (_error) {
       // Can't prove it empty → treat as data-bearing (suspicious).
@@ -385,9 +408,12 @@ export async function getMultiCollectionInfo(
   const session = getSessionFromDb(db);
   const collection = db.collection(collectionName);
 
-  return await collection.findOne({
-    _type: MULTI_COLLECTION_INFO_TYPE,
-  }, { session }) as MultiCollectionInfo | null;
+  return (await collection.findOne(
+    {
+      _type: MULTI_COLLECTION_INFO_TYPE,
+    },
+    { session },
+  )) as MultiCollectionInfo | null;
 }
 
 /**
@@ -513,9 +539,12 @@ export async function getMultiCollectionMigrations(
   const session = getSessionFromDb(db);
   const collection = db.collection(collectionName);
 
-  return await collection.findOne({
-    _type: MULTI_COLLECTION_MIGRATIONS_TYPE,
-  }, { session }) as MultiCollectionMigrations | null;
+  return (await collection.findOne(
+    {
+      _type: MULTI_COLLECTION_MIGRATIONS_TYPE,
+    },
+    { session },
+  )) as MultiCollectionMigrations | null;
 }
 
 /**
@@ -568,10 +597,13 @@ export async function getMultiModelCurrentState(
   db: Db,
   collectionName: string,
 ): Promise<
-  Map<string, {
-    status: "pending" | "applied" | "failed" | "reverted";
-    lastOperation?: MultiModelMigrationOperation;
-  }>
+  Map<
+    string,
+    {
+      status: "pending" | "applied" | "failed" | "reverted";
+      lastOperation?: MultiModelMigrationOperation;
+    }
+  >
 > {
   const migrations = await getMultiCollectionMigrations(db, collectionName);
 
@@ -669,9 +701,12 @@ export async function multiCollectionInstanceExists(
   try {
     const session = getSessionFromDb(db);
     const collection = db.collection(collectionName);
-    const info = await collection.findOne({
-      _type: MULTI_COLLECTION_INFO_TYPE,
-    }, { session }) as MultiCollectionInfo | null;
+    const info = (await collection.findOne(
+      {
+        _type: MULTI_COLLECTION_INFO_TYPE,
+      },
+      { session },
+    )) as MultiCollectionInfo | null;
     log.debug(
       `multiCollectionInstanceExists(${collectionName}): ${info !== null}`,
     );
@@ -800,9 +835,12 @@ export async function shouldInstanceReceiveMigration(
   try {
     const session = getSessionFromDb(db);
     const collection = db.collection(collectionName);
-    const migrations = await collection.findOne({
-      _type: MULTI_COLLECTION_MIGRATIONS_TYPE,
-    }, { session }) as MultiCollectionMigrations | null;
+    const migrations = (await collection.findOne(
+      {
+        _type: MULTI_COLLECTION_MIGRATIONS_TYPE,
+      },
+      { session },
+    )) as MultiCollectionMigrations | null;
 
     if (!migrations) {
       // No migrations document, can't receive migration
@@ -848,9 +886,12 @@ export async function shouldInstanceReceiveMigrationFromChain(
   try {
     const session = getSessionFromDb(db);
     const collection = db.collection(collectionName);
-    const migrations = await collection.findOne({
-      _type: MULTI_COLLECTION_MIGRATIONS_TYPE,
-    }, { session }) as MultiCollectionMigrations | null;
+    const migrations = (await collection.findOne(
+      {
+        _type: MULTI_COLLECTION_MIGRATIONS_TYPE,
+      },
+      { session },
+    )) as MultiCollectionMigrations | null;
 
     if (!migrations) {
       // No migrations-metadata document on this instance — we can't establish
@@ -914,9 +955,12 @@ export async function markAsMultiCollection(
   const collection = db.collection(collectionName);
 
   // Check if already marked
-  const existing = await collection.findOne({
-    _type: MULTI_COLLECTION_INFO_TYPE,
-  }, { session });
+  const existing = await collection.findOne(
+    {
+      _type: MULTI_COLLECTION_INFO_TYPE,
+    },
+    { session },
+  );
 
   if (existing) {
     throw new Error(

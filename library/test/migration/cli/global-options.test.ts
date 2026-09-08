@@ -12,7 +12,9 @@
 // `main.ts`, so a test that calls `statusCommand({ configPath })` passes on the
 // broken version too.
 
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import { test } from "../../+harness.ts";
+import { mkdir, writeFile } from "node:fs/promises";
+import { assertEquals, assertStringIncludes } from "../../+assert.ts";
 import { runCli, withTempDir } from "./shared.ts";
 
 const AUTO_DISCOVERED_DB = "mongodbee_test_autodiscovered";
@@ -20,22 +22,16 @@ const EXPLICIT_DB = "mongodbee_test_explicit";
 
 /** A directory holding two configurations that name different databases. */
 async function writeTwoConfigs(dir: string): Promise<void> {
-  await Deno.mkdir(`${dir}/migrations`, { recursive: true });
-  await Deno.writeTextFile(
-    `${dir}/schemas.ts`,
-    `export default { collections: {} };\n`,
-  );
+  await mkdir(`${dir}/migrations`, { recursive: true });
+  await writeFile(`${dir}/schemas.ts`, `export default { collections: {} };\n`);
   const config = (dbName: string) =>
     `export default { database: { connection: { uri: "mongodb://localhost:27017" }, name: "${dbName}" }, ` +
     `paths: { migrations: "./migrations", schemas: "./schemas.ts" } };\n`;
-  await Deno.writeTextFile(
-    `${dir}/mongodbee.config.ts`,
-    config(AUTO_DISCOVERED_DB),
-  );
-  await Deno.writeTextFile(`${dir}/elsewhere.config.ts`, config(EXPLICIT_DB));
+  await writeFile(`${dir}/mongodbee.config.ts`, config(AUTO_DISCOVERED_DB));
+  await writeFile(`${dir}/elsewhere.config.ts`, config(EXPLICIT_DB));
 }
 
-Deno.test("cli: --config aims a command other than migrate", async () => {
+test("cli: --config aims a command other than migrate", async () => {
   await withTempDir(async (tempDir) => {
     await writeTwoConfigs(tempDir);
 
@@ -56,7 +52,7 @@ Deno.test("cli: --config aims a command other than migrate", async () => {
   });
 });
 
-Deno.test("cli: --config aims the new baseline command too", async () => {
+test("cli: --config aims the new baseline command too", async () => {
   await withTempDir(async (tempDir) => {
     await writeTwoConfigs(tempDir);
 

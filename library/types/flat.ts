@@ -6,9 +6,14 @@
  * @template MAX - Maximum recursion depth counter
  * @internal
  */
-type HandleArray<T, K extends string = "", MAX extends keyof DECREMENT = 10> =
-  MAX extends 0 ? never
-    : T extends unknown[] ?
+type HandleArray<
+  T,
+  K extends string = "",
+  MAX extends keyof DECREMENT = 10,
+> = MAX extends 0
+  ? never
+  : T extends unknown[]
+    ?
         | { path: K; value: T }
         | { path: `${K}.${number}`; value: T[number] }
         | { path: `${K}.$[]`; value: T[number] }
@@ -24,17 +29,26 @@ type HandleArray<T, K extends string = "", MAX extends keyof DECREMENT = 10> =
  * @template MAX - Maximum recursion depth counter
  * @internal
  */
-type HandleRecord<T, K extends string = "", MAX extends keyof DECREMENT = 10> =
-  MAX extends 0 ? never
-    : T extends Record<string, unknown> ?
+type HandleRecord<
+  T,
+  K extends string = "",
+  MAX extends keyof DECREMENT = 10,
+> = MAX extends 0
+  ? never
+  : T extends Record<string, unknown>
+    ?
         | (K extends "" ? never : { path: K; value: T })
         | {
-          [k in keyof T]: NodesType<
-            T[k],
-            `${K}${K extends "" ? "" : "."}${k & string}`,
-            DECREMENT[MAX]
-          >;
-        }[keyof T] extends infer U ? U extends undefined ? never : U : never
+            [k in keyof T]: NodesType<
+              T[k],
+              `${K}${K extends "" ? "" : "."}${k & string}`,
+              DECREMENT[MAX]
+            >;
+          }[keyof T] extends infer U
+      ? U extends undefined
+        ? never
+        : U
+      : never
     : never;
 
 /**
@@ -49,10 +63,13 @@ export type NodesType<
   V,
   K extends string = "",
   MAX extends keyof DECREMENT = 10,
-> = MAX extends 0 ? never
-  : V extends (infer T)[] ? HandleArray<T[], K, DECREMENT[MAX]>
-  : V extends Record<string, unknown> ? HandleRecord<V, K, DECREMENT[MAX]>
-  : { path: K; value: V };
+> = MAX extends 0
+  ? never
+  : V extends (infer T)[]
+    ? HandleArray<T[], K, DECREMENT[MAX]>
+    : V extends Record<string, unknown>
+      ? HandleRecord<V, K, DECREMENT[MAX]>
+      : { path: K; value: V };
 
 /**
  * Extracts all possible dot notation keys from a type
@@ -62,8 +79,12 @@ export type NodesType<
  *
  * @template T - The object type to extract paths from
  */
-export type FlatKey<T extends Record<string, unknown>> = NodesType<T> extends
-  infer U ? U extends { path: infer P } ? P : never : never;
+export type FlatKey<T extends Record<string, unknown>> =
+  NodesType<T> extends infer U
+    ? U extends { path: infer P }
+      ? P
+      : never
+    : never;
 
 /**
  * Converts a nested type into a flattened type with dot notation paths as keys
@@ -92,12 +113,14 @@ export type FlatKey<T extends Record<string, unknown>> = NodesType<T> extends
  * type FlatUser = FlatType<User>;
  * ```
  */
-export type FlatType<T> = T extends Record<string, unknown>
-  ? NodesType<T> extends infer U ? {
-      [k in FlatKey<T>]: U extends { path: k; value: infer V } ? V : never;
-    }
-  : never
-  : never;
+export type FlatType<T> =
+  T extends Record<string, unknown>
+    ? NodesType<T> extends infer U
+      ? {
+          [k in FlatKey<T>]: U extends { path: k; value: infer V } ? V : never;
+        }
+      : never
+    : never;
 
 // System to prevent infinite recursion
 // DECREMENT is a type that maps numbers to their decremented values

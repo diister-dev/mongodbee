@@ -15,7 +15,8 @@
  *
  * DB prefixes are unique to this file to avoid colliding with sibling suites.
  */
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals, assertRejects } from "../+assert.ts";
 import { withDatabase } from "../+shared.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import { migrationBuilder } from "../../src/migration/builder.ts";
@@ -32,7 +33,7 @@ import * as v from "../../src/schema.ts";
 
 // ───────────────────────────── C3: idempotency ─────────────────────────────
 
-Deno.test("C3 mongodb seed: re-applying a seed is idempotent (deterministic upsert, no E11000)", async () => {
+test("C3 mongodb seed: re-applying a seed is idempotent (deterministic upsert, no E11000)", async () => {
   await withDatabase("c3-seed-idem", async (db) => {
     const S = {
       collections: { widgets: { _id: dbId("widget"), n: v.number() } },
@@ -41,7 +42,8 @@ Deno.test("C3 mongodb seed: re-applying a seed is idempotent (deterministic upse
       parent: null,
       schemas: S,
       migrate: (b) =>
-        b.createCollection("widgets")
+        b
+          .createCollection("widgets")
           .seed([{ n: 1 }, { n: 2 }, { n: 3 }])
           .end()
           .compile(),
@@ -60,7 +62,7 @@ Deno.test("C3 mongodb seed: re-applying a seed is idempotent (deterministic upse
   });
 });
 
-Deno.test("C3 mongodb seed: retry after a partial crash (some deterministic ids pre-inserted) succeeds", async () => {
+test("C3 mongodb seed: retry after a partial crash (some deterministic ids pre-inserted) succeeds", async () => {
   await withDatabase("c3-seed-partial", async (db) => {
     const S = {
       collections: { things: { _id: dbId("thing"), n: v.number() } },
@@ -69,7 +71,8 @@ Deno.test("C3 mongodb seed: retry after a partial crash (some deterministic ids 
       parent: null,
       schemas: S,
       migrate: (b) =>
-        b.createCollection("things")
+        b
+          .createCollection("things")
           .seed([{ n: 10 }, { n: 20 }])
           .end()
           .compile(),
@@ -80,18 +83,17 @@ Deno.test("C3 mongodb seed: retry after a partial crash (some deterministic ids 
     // collection name, index 0) but never recorded the migration.
     await db.createCollection("things");
     const crashedId = deterministicSeedId("thing", m.id, "things", 0);
-    await db.collection("things").insertOne(
-      { _id: crashedId, n: 10 } as never,
-    );
+    await db.collection("things").insertOne({ _id: crashedId, n: 10 } as never);
 
     // The retry must upsert cleanly (plain insertMany would throw E11000 here).
-    await createMongodbApplier(db, m, { currentMigrationId: m.id })
-      .applyMigration(ops, "up");
+    await createMongodbApplier(db, m, {
+      currentMigrationId: m.id,
+    }).applyMigration(ops, "up");
     assertEquals(await db.collection("things").countDocuments(), 2);
   });
 });
 
-Deno.test("C3 mongodb flow COPY: re-running the copy is idempotent (upsert on deterministic target id)", async () => {
+test("C3 mongodb flow COPY: re-running the copy is idempotent (upsert on deterministic target id)", async () => {
   await withDatabase("c3-flow-idem", async (db) => {
     const S = {
       collections: {
@@ -107,12 +109,14 @@ Deno.test("C3 mongodb flow COPY: re-running the copy is idempotent (upsert on de
       parent: null,
       schemas: S,
       migrate: (b) =>
-        b.flow({
-          from: { collection: "users", where: { active: false } },
-          into: { collection: "archived" },
-          map: (doc) => ({ ...doc }),
-          source: "keep",
-        }).compile(),
+        b
+          .flow({
+            from: { collection: "users", where: { active: false } },
+            into: { collection: "archived" },
+            map: (doc) => ({ ...doc }),
+            source: "keep",
+          })
+          .compile(),
     });
     const [flowOp] = m.migrate(migrationBuilder({ schemas: S })).operations;
 
@@ -136,27 +140,29 @@ Deno.test("C3 mongodb flow COPY: re-running the copy is idempotent (upsert on de
   });
 });
 
-Deno.test("C3 mongodb flow_to_scope: minted target ids are deterministic — replay never duplicates", async () => {
+test("C3 mongodb flow_to_scope: minted target ids are deterministic — replay never duplicates", async () => {
   await withDatabase("c3-fts-detid", async (db) => {
     const S = { collections: { src: { _id: v.string() } } };
     const m = migrationDefinition("001", "flow-detid", {
       parent: null,
       schemas: S,
       migrate: (b) =>
-        b.flowToScope({
-          from: { kind: "collection", name: "src" },
-          into: { collection: "scoped" },
-          toType: () => "thing",
-          scope: () => "exposition:z",
-          // Drop `_id` → the applier must MINT a deterministic id.
-          map: (d) => {
-            const { _id: _drop, ...rest } = d as Record<string, unknown>;
-            return rest;
-          },
-          onConflict: "merge",
-          merge: (existing, incoming) => ({ ...existing, ...incoming }),
-          source: "keep",
-        }).compile(),
+        b
+          .flowToScope({
+            from: { kind: "collection", name: "src" },
+            into: { collection: "scoped" },
+            toType: () => "thing",
+            scope: () => "exposition:z",
+            // Drop `_id` → the applier must MINT a deterministic id.
+            map: (d) => {
+              const { _id: _drop, ...rest } = d as Record<string, unknown>;
+              return rest;
+            },
+            onConflict: "merge",
+            merge: (existing, incoming) => ({ ...existing, ...incoming }),
+            source: "keep",
+          })
+          .compile(),
     });
     const [flowOp] = m.migrate(migrationBuilder({ schemas: S })).operations;
 
@@ -168,14 +174,20 @@ Deno.test("C3 mongodb flow_to_scope: minted target ids are deterministic — rep
     const applier = createMongodbApplier(db, m, { currentMigrationId: m.id });
 
     await applier.applyOperation(flowOp);
-    const first = await db.collection("scoped").find({} as never).toArray();
+    const first = await db
+      .collection("scoped")
+      .find({} as never)
+      .toArray();
     assertEquals(first.length, 2);
 
     // Replay: deterministic ids collide with the already-flowed docs, so the
     // merge path replaces them in place. With the old random-UUID id every
     // replay would DOUBLE the collection.
     await applier.applyOperation(flowOp);
-    const second = await db.collection("scoped").find({} as never).toArray();
+    const second = await db
+      .collection("scoped")
+      .find({} as never)
+      .toArray();
     assertEquals(second.length, 2);
 
     // The minted ids match what flowScopeTargetId derives from the source.
@@ -189,21 +201,23 @@ Deno.test("C3 mongodb flow_to_scope: minted target ids are deterministic — rep
 
 // ───────────────────── C4: skip + consume preserves skipped ─────────────────
 
-Deno.test("C4 mongodb flow_to_scope skip+consume (collection): skipped source docs survive", async () => {
+test("C4 mongodb flow_to_scope skip+consume (collection): skipped source docs survive", async () => {
   await withDatabase("c4-skip-consume-coll", async (db) => {
     const S = { collections: { src: { _id: v.string() } } };
     const m = migrationDefinition("001", "skip-consume", {
       parent: null,
       schemas: S,
       migrate: (b) =>
-        b.flowToScope({
-          from: { kind: "collection", name: "src" },
-          into: { collection: "scoped" },
-          toType: () => "thing",
-          scope: () => "s:1",
-          onConflict: "skip",
-          source: "consume",
-        }).compile(),
+        b
+          .flowToScope({
+            from: { kind: "collection", name: "src" },
+            into: { collection: "scoped" },
+            toType: () => "thing",
+            scope: () => "s:1",
+            onConflict: "skip",
+            source: "consume",
+          })
+          .compile(),
     });
     const [flowOp] = m.migrate(migrationBuilder({ schemas: S })).operations;
 
@@ -212,25 +226,30 @@ Deno.test("C4 mongodb flow_to_scope skip+consume (collection): skipped source do
       { _id: "thing:moveme", v: 2 },
     ] as never);
     // Pre-existing target doc collides with "thing:keepme" → it will be skipped.
-    await db.collection("scoped").insertOne(
-      {
-        _id: "thing:keepme",
-        _type: "thing",
-        _scope: "s:1",
-        pre: true,
-      } as never,
-    );
+    await db.collection("scoped").insertOne({
+      _id: "thing:keepme",
+      _type: "thing",
+      _scope: "s:1",
+      pre: true,
+    } as never);
 
-    await createMongodbApplier(db, m, { currentMigrationId: m.id })
-      .applyOperation(flowOp);
+    await createMongodbApplier(db, m, {
+      currentMigrationId: m.id,
+    }).applyOperation(flowOp);
 
     // The skipped doc is NOT consumed — it stays in the source.
-    const remaining = await db.collection("src").find({} as never).toArray();
+    const remaining = await db
+      .collection("src")
+      .find({} as never)
+      .toArray();
     assertEquals(remaining.length, 1);
     assertEquals(String(remaining[0]._id), "thing:keepme");
 
     // Target keeps the pre-existing (untouched) doc + the doc that landed.
-    const scoped = await db.collection("scoped").find({} as never).toArray();
+    const scoped = await db
+      .collection("scoped")
+      .find({} as never)
+      .toArray();
     assertEquals(scoped.length, 2);
     const kept = scoped.find((d) => String(d._id) === "thing:keepme")!;
     assertEquals((kept as { pre?: boolean }).pre, true); // not overwritten
@@ -238,67 +257,72 @@ Deno.test("C4 mongodb flow_to_scope skip+consume (collection): skipped source do
   });
 });
 
-Deno.test("C4 mongodb flow_to_scope skip+consume (instances): instance with a skip is NOT dropped", async () => {
+test("C4 mongodb flow_to_scope skip+consume (instances): instance with a skip is NOT dropped", async () => {
   await withDatabase("c4-skip-consume-inst", async (db) => {
     const S = { collections: {} };
     const m = migrationDefinition("001", "skip-consume-inst", {
       parent: null,
       schemas: S,
       migrate: (b) =>
-        b.flowToScope({
-          from: { kind: "multiModelInstances", model: "widget" },
-          into: { collection: "scoped" },
-          toType: () => "gadget",
-          scope: (_d, ctx) => ctx.instanceName!,
-          onConflict: "skip",
-          source: "consume",
-        }).compile(),
+        b
+          .flowToScope({
+            from: { kind: "multiModelInstances", model: "widget" },
+            into: { collection: "scoped" },
+            toType: () => "gadget",
+            scope: (_d, ctx) => ctx.instanceName!,
+            onConflict: "skip",
+            source: "consume",
+          })
+          .compile(),
     });
     const [flowOp] = m.migrate(migrationBuilder({ schemas: S })).operations;
 
     // Two registered instances of model "widget", each holding one gadget doc.
     await createMultiCollectionInfo(db, "widget:1", "widget", m.id);
     await createMultiCollectionInfo(db, "widget:2", "widget", m.id);
-    await db.collection("widget:1").insertOne(
-      { _id: "gadget:g1", _type: "gadget", v: 1 } as never,
-    );
-    await db.collection("widget:2").insertOne(
-      { _id: "gadget:g2", _type: "gadget", v: 2 } as never,
-    );
+    await db
+      .collection("widget:1")
+      .insertOne({ _id: "gadget:g1", _type: "gadget", v: 1 } as never);
+    await db
+      .collection("widget:2")
+      .insertOne({ _id: "gadget:g2", _type: "gadget", v: 2 } as never);
     // Pre-existing target doc collides with widget:1's gadget → it is skipped.
-    await db.collection("scoped").insertOne(
-      {
-        _id: "gadget:g1",
-        _type: "gadget",
-        _scope: "widget:1",
-        pre: true,
-      } as never,
-    );
+    await db.collection("scoped").insertOne({
+      _id: "gadget:g1",
+      _type: "gadget",
+      _scope: "widget:1",
+      pre: true,
+    } as never);
 
-    await createMongodbApplier(db, m, { currentMigrationId: m.id })
-      .applyOperation(flowOp);
+    await createMongodbApplier(db, m, {
+      currentMigrationId: m.id,
+    }).applyOperation(flowOp);
 
     // widget:1 had a skipped doc → the instance is NOT dropped and keeps g1.
     assertEquals(
-      await db.collection("widget:1").countDocuments(
-        { _id: "gadget:g1" } as never,
-      ),
+      await db
+        .collection("widget:1")
+        .countDocuments({ _id: "gadget:g1" } as never),
       1,
     );
     // widget:2 fully landed → its collection is dropped.
-    const collections = await db.listCollections({ name: "widget:2" } as never)
+    const collections = await db
+      .listCollections({ name: "widget:2" } as never)
       .toArray();
     assertEquals(collections.length, 0);
 
     // Target holds the pre-existing g1 (untouched) + the landed g2.
-    const scoped = await db.collection("scoped").find({} as never).toArray();
+    const scoped = await db
+      .collection("scoped")
+      .find({} as never)
+      .toArray();
     assertEquals(scoped.length, 2);
     const g1 = scoped.find((d) => String(d._id) === "gadget:g1")!;
     assertEquals((g1 as { pre?: boolean }).pre, true);
   });
 });
 
-Deno.test("C4 memory flow_to_scope skip+consume: skipped source docs survive", async () => {
+test("C4 memory flow_to_scope skip+consume: skipped source docs survive", async () => {
   const state = createEmptyDatabaseState();
   state.collections.src = {
     content: [
@@ -307,12 +331,14 @@ Deno.test("C4 memory flow_to_scope skip+consume: skipped source docs survive", a
     ],
   };
   state.scopedMultiCollections.scoped = {
-    content: [{
-      _id: "thing:keepme",
-      _type: "thing",
-      _scope: "s:1",
-      pre: true,
-    }],
+    content: [
+      {
+        _id: "thing:keepme",
+        _type: "thing",
+        _scope: "s:1",
+        pre: true,
+      },
+    ],
   };
 
   const S = { collections: { src: { _id: v.string() } } };
@@ -320,14 +346,16 @@ Deno.test("C4 memory flow_to_scope skip+consume: skipped source docs survive", a
     parent: null,
     schemas: S,
     migrate: (b) =>
-      b.flowToScope({
-        from: { kind: "collection", name: "src" },
-        into: { collection: "scoped" },
-        toType: () => "thing",
-        scope: () => "s:1",
-        onConflict: "skip",
-        source: "consume",
-      }).compile(),
+      b
+        .flowToScope({
+          from: { kind: "collection", name: "src" },
+          into: { collection: "scoped" },
+          toType: () => "thing",
+          scope: () => "s:1",
+          onConflict: "skip",
+          source: "consume",
+        })
+        .compile(),
   });
   const ops = m.migrate(migrationBuilder({ schemas: S })).operations;
   await createMemoryApplier(m).applyMigration(state, ops, "up");
@@ -339,13 +367,10 @@ Deno.test("C4 memory flow_to_scope skip+consume: skipped source docs survive", a
 
   const scoped = state.scopedMultiCollections.scoped.content;
   assertEquals(scoped.length, 2);
-  assertEquals(
-    scoped.find((d) => String(d._id) === "thing:keepme")!.pre,
-    true,
-  );
+  assertEquals(scoped.find((d) => String(d._id) === "thing:keepme")!.pre, true);
 });
 
-Deno.test("C4 memory flow_to_scope skip+consume (instances): a skip in one instance does NOT stop a sibling from being dropped", async () => {
+test("C4 memory flow_to_scope skip+consume (instances): a skip in one instance does NOT stop a sibling from being dropped", async () => {
   // Mirrors the mongodb "(instances)" test: skip/landed bookkeeping must be
   // PER SOURCE. widget:1 has a skipped doc → it survives; widget:2 is clean →
   // it is dropped WHOLE (key removed, including bookkeeping). A single global
@@ -368,12 +393,14 @@ Deno.test("C4 memory flow_to_scope skip+consume (instances): a skip in one insta
   };
   // Pre-existing target doc collides with widget:1's gadget → it is skipped.
   state.scopedMultiCollections.scoped = {
-    content: [{
-      _id: "gadget:g1",
-      _type: "gadget",
-      _scope: "widget:1",
-      pre: true,
-    }],
+    content: [
+      {
+        _id: "gadget:g1",
+        _type: "gadget",
+        _scope: "widget:1",
+        pre: true,
+      },
+    ],
   };
 
   const S = { collections: {} };
@@ -381,14 +408,16 @@ Deno.test("C4 memory flow_to_scope skip+consume (instances): a skip in one insta
     parent: null,
     schemas: S,
     migrate: (b) =>
-      b.flowToScope({
-        from: { kind: "multiModelInstances", model: "widget" },
-        into: { collection: "scoped" },
-        toType: () => "gadget",
-        scope: (_d, ctx) => ctx.instanceName!,
-        onConflict: "skip",
-        source: "consume",
-      }).compile(),
+      b
+        .flowToScope({
+          from: { kind: "multiModelInstances", model: "widget" },
+          into: { collection: "scoped" },
+          toType: () => "gadget",
+          scope: (_d, ctx) => ctx.instanceName!,
+          onConflict: "skip",
+          source: "consume",
+        })
+        .compile(),
   });
   const ops = m.migrate(migrationBuilder({ schemas: S })).operations;
   await createMemoryApplier(m).applyMigration(state, ops, "up");
@@ -396,8 +425,8 @@ Deno.test("C4 memory flow_to_scope skip+consume (instances): a skip in one insta
   // widget:1 had a skipped doc → the instance is NOT dropped and keeps g1.
   assert(state.multiModels["widget:1"], "instance with a skip must survive");
   assertEquals(
-    state.multiModels["widget:1"].content.some((d) =>
-      String(d._id) === "gadget:g1"
+    state.multiModels["widget:1"].content.some(
+      (d) => String(d._id) === "gadget:g1",
     ),
     true,
   );
@@ -411,10 +440,7 @@ Deno.test("C4 memory flow_to_scope skip+consume (instances): a skip in one insta
   // Target holds the pre-existing g1 (untouched) + the landed g2.
   const scoped = state.scopedMultiCollections.scoped.content;
   assertEquals(scoped.length, 2);
-  assertEquals(
-    scoped.find((d) => String(d._id) === "gadget:g1")!.pre,
-    true,
-  );
+  assertEquals(scoped.find((d) => String(d._id) === "gadget:g1")!.pre, true);
   assert(
     scoped.some((d) => String(d._id) === "gadget:g2"),
     "widget:2's gadget must have landed in the target",
@@ -423,7 +449,7 @@ Deno.test("C4 memory flow_to_scope skip+consume (instances): a skip in one insta
 
 // ──────────────────────── C5: simulation ↔ production ───────────────────────
 
-Deno.test("C5a memory flow_to_scope: conflict is keyed on _id ALONE (like prod)", async () => {
+test("C5a memory flow_to_scope: conflict is keyed on _id ALONE (like prod)", async () => {
   const state = createEmptyDatabaseState();
   state.collections.src = { content: [{ _id: "x:1", v: 1 }] };
   // Pre-existing target doc shares _id but a DIFFERENT _type/_scope. Under the
@@ -438,14 +464,16 @@ Deno.test("C5a memory flow_to_scope: conflict is keyed on _id ALONE (like prod)"
     parent: null,
     schemas: S,
     migrate: (b) =>
-      b.flowToScope({
-        from: { kind: "collection", name: "src" },
-        into: { collection: "scoped" },
-        toType: () => "typeB",
-        scope: () => "scopeB",
-        onConflict: "error",
-        source: "keep",
-      }).compile(),
+      b
+        .flowToScope({
+          from: { kind: "collection", name: "src" },
+          into: { collection: "scoped" },
+          toType: () => "typeB",
+          scope: () => "scopeB",
+          onConflict: "error",
+          source: "keep",
+        })
+        .compile(),
   });
   const ops = m.migrate(migrationBuilder({ schemas: S })).operations;
 
@@ -456,7 +484,7 @@ Deno.test("C5a memory flow_to_scope: conflict is keyed on _id ALONE (like prod)"
   );
 });
 
-Deno.test("C5b transform_scoped_multicollection_type: mongodb re-pins _id/_type/_scope (aligned with memory)", async () => {
+test("C5b transform_scoped_multicollection_type: mongodb re-pins _id/_type/_scope (aligned with memory)", async () => {
   const SCHEMAS = {
     collections: {},
     scopedMultiCollections: {
@@ -472,7 +500,8 @@ Deno.test("C5b transform_scoped_multicollection_type: mongodb re-pins _id/_type/
     parent: null,
     schemas: SCHEMAS,
     migrate: (b) =>
-      b.createScopedMultiCollection("catalog")
+      b
+        .createScopedMultiCollection("catalog")
         .type("artwork")
         .seed("expo:a", [{ title: "Mona Lisa" }])
         .end()
@@ -483,15 +512,18 @@ Deno.test("C5b transform_scoped_multicollection_type: mongodb re-pins _id/_type/
     parent: createAndSeed,
     schemas: SCHEMAS,
     migrate: (b) =>
-      b.scopedMultiCollection("catalog")
+      b
+        .scopedMultiCollection("catalog")
         .type("artwork")
         .transform({
           up: (doc) => {
             // Deliberately strip meta fields — the applier must restore them.
-            const { _id: _i, _type: _t, _scope: _s, ...rest } = doc as Record<
-              string,
-              unknown
-            >;
+            const {
+              _id: _i,
+              _type: _t,
+              _scope: _s,
+              ...rest
+            } = doc as Record<string, unknown>;
             return { ...rest, title: "renamed" };
           },
           down: (doc) => ({ ...doc }),
@@ -519,9 +551,10 @@ Deno.test("C5b transform_scoped_multicollection_type: mongodb re-pins _id/_type/
 
     // The doc is still visible to a scoped query (discriminators re-pinned) and
     // carries the transformed field.
-    const byScope = await db.collection("catalog").find(
-      { _scope: "expo:a", _type: "artwork" } as never,
-    ).toArray();
+    const byScope = await db
+      .collection("catalog")
+      .find({ _scope: "expo:a", _type: "artwork" } as never)
+      .toArray();
     assertEquals(byScope.length, 1);
     assertEquals((byScope[0] as { title?: string }).title, "renamed");
   });
@@ -547,7 +580,7 @@ Deno.test("C5b transform_scoped_multicollection_type: mongodb re-pins _id/_type/
   assertEquals(memDocs[0].title, "renamed");
 });
 
-Deno.test("C5c memory matchesWhere: supports operators + dot-paths, throws on unsupported", async () => {
+test("C5c memory matchesWhere: supports operators + dot-paths, throws on unsupported", async () => {
   const S = {
     collections: {
       people: { _id: v.string() },
@@ -572,12 +605,14 @@ Deno.test("C5c memory matchesWhere: supports operators + dot-paths, throws on un
       parent: null,
       schemas: S,
       migrate: (b) =>
-        b.flow({
-          from: { collection: "people", where },
-          into: { collection: "adults" },
-          map: (doc) => ({ ...doc }),
-          source: "keep",
-        }).compile(),
+        b
+          .flow({
+            from: { collection: "people", where },
+            into: { collection: "adults" },
+            map: (doc) => ({ ...doc }),
+            source: "keep",
+          })
+          .compile(),
     });
 
   // NOTE: régime-A `flow` re-keys the copy (`_id` = flowTargetId), so we assert

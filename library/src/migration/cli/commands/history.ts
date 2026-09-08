@@ -7,13 +7,14 @@
  */
 
 import process from "node:process";
-import { blue, bold, dim, gray, green, red } from "@std/fmt/colors";
+import { blue, bold, dim, gray, green, red } from "../../../utils/colors.ts";
 import { MongoClient } from "../../../mongodb.ts";
-import * as path from "@std/path";
+import * as path from "node:path";
 
 import { loadConfig } from "../../config/loader.ts";
 import { buildMigrationChain, loadAllMigrations } from "../../discovery.ts";
 import { getAllOperations, getMigrationHistory } from "../../history.ts";
+import type { MigrationOperation } from "../../history.ts";
 
 export interface HistoryCommandOptions {
   configPath?: string;
@@ -41,8 +42,8 @@ export async function historyCommand(
       cwd,
       config.paths?.migrations || "./migrations",
     );
-    const connectionUri = config.database?.connection?.uri ||
-      "mongodb://localhost:27017";
+    const connectionUri =
+      config.database?.connection?.uri || "mongodb://localhost:27017";
     const dbName = config.database?.name || "myapp";
 
     console.log(dim(`Database: ${dbName}`));
@@ -60,7 +61,7 @@ export async function historyCommand(
     const allMigrations = buildMigrationChain(migrationsWithFiles);
 
     // Get operations
-    let operations;
+    let operations: MigrationOperation[];
     if (options.migrationId) {
       // Show history for specific migration
       operations = await getMigrationHistory(db, options.migrationId);
@@ -95,8 +96,10 @@ export async function historyCommand(
 
     // Display operations timeline
     for (const op of operations) {
-      const dateStr =
-        op.executedAt.toISOString().replace("T", " ").split(".")[0];
+      const dateStr = op.executedAt
+        .toISOString()
+        .replace("T", " ")
+        .split(".")[0];
       const durationStr = op.duration ? dim(`(${op.duration}ms)`) : "";
 
       let icon = "  ";
@@ -125,9 +128,9 @@ export async function historyCommand(
         ? gray(` → ${op.migrationName}`)
         : "";
       console.log(
-        `${icon} ${dim(dateStr)}  ${
-          opColor(op.operation.padEnd(10))
-        } ${durationStr} ${statusIcon}${migrationName}`,
+        `${icon} ${dim(dateStr)}  ${opColor(
+          op.operation.padEnd(10),
+        )} ${durationStr} ${statusIcon}${migrationName}`,
       );
 
       // Show error if present
@@ -145,14 +148,14 @@ export async function historyCommand(
     console.log();
 
     // Summary
-    const appliedCount = operations.filter((op) =>
-      op.operation === "applied" && op.status === "success"
+    const appliedCount = operations.filter(
+      (op) => op.operation === "applied" && op.status === "success",
     ).length;
-    const revertedCount = operations.filter((op) =>
-      op.operation === "reverted" && op.status === "success"
+    const revertedCount = operations.filter(
+      (op) => op.operation === "reverted" && op.status === "success",
     ).length;
-    const failedCount = operations.filter((op) =>
-      op.status === "failure"
+    const failedCount = operations.filter(
+      (op) => op.status === "failure",
     ).length;
 
     console.log(bold("Summary:"));

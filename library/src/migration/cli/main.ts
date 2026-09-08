@@ -8,8 +8,8 @@
  */
 
 import process from "node:process";
-import { parseArgs } from "@std/cli/parse-args";
-import { blue, bold, green, red, yellow } from "@std/fmt/colors";
+import { parseArgs } from "../../utils/parse-args.ts";
+import { blue, bold, green, red, yellow } from "../../utils/colors.ts";
 
 import { generateCommand } from "./commands/generate.ts";
 import { migrateCommand } from "./commands/migrate.ts";
@@ -21,9 +21,8 @@ import { checkCommand } from "./commands/check.ts";
 import { syncCommand } from "./commands/sync.ts";
 import { baselineCommand } from "./commands/baseline.ts";
 
-import packageInfo from "../../../deno.json" with { type: "json" };
-
-const VERSION = packageInfo.version;
+import { VERSION } from "../../version.ts";
+import { isMainModule } from "../utils/platform.ts";
 
 const commands = [
   {
@@ -215,12 +214,10 @@ async function main(): Promise<void> {
     // was silently ignored by the six others and they ran against whichever
     // configuration file auto-discovery happened to find.
     const commandOptions = { ...args, configPath: args.config };
-    // deno-lint-ignore no-explicit-any
     await cmd.handler(commandOptions as any);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(red(bold("Error:")), message);
-    // deno-lint-ignore no-explicit-any
     const cause = (error as any).cause;
     if (cause) {
       // Errors:
@@ -239,11 +236,7 @@ async function main(): Promise<void> {
 }
 
 // Run main function if this is the main module
-const isMain =
-  import.meta.url === `file://${process.argv[1]?.replace(/\\/g, "/")}` ||
-  (import.meta as any).main === true;
-
-if (isMain) {
+if (isMainModule(import.meta.url)) {
   try {
     await main();
   } catch (error) {

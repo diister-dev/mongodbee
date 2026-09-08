@@ -11,12 +11,13 @@
  * These guard against silent schema drift between the declarative `schemas`
  * field and the imperative `migrate()` body.
  */
-import { assert, assertEquals } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals } from "../+assert.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import { SimulationValidator } from "../../src/migration/validators/simulation.ts";
 import * as v from "../../src/schema.ts";
 
-Deno.test("schema consistency: declared-but-not-created collection is flagged", async () => {
+test("schema consistency: declared-but-not-created collection is flagged", async () => {
   const m = migrationDefinition("001", "declare-without-create", {
     parent: null,
     schemas: {
@@ -32,13 +33,13 @@ Deno.test("schema consistency: declared-but-not-created collection is flagged", 
   assertEquals(result.success, false);
   assert(
     result.errors.some((e) => e.includes("users") && e.includes("not created")),
-    `expected a "declared but not created" error, got: ${
-      result.errors.join(" | ")
-    }`,
+    `expected a "declared but not created" error, got: ${result.errors.join(
+      " | ",
+    )}`,
   );
 });
 
-Deno.test("schema consistency: missing required field after migration is flagged", async () => {
+test("schema consistency: missing required field after migration is flagged", async () => {
   const parent = migrationDefinition("001", "init", {
     parent: null,
     schemas: {
@@ -66,7 +67,7 @@ Deno.test("schema consistency: missing required field after migration is flagged
   );
 });
 
-Deno.test("schema consistency: a consistent migration validates cleanly", async () => {
+test("schema consistency: a consistent migration validates cleanly", async () => {
   const parent = migrationDefinition("001", "init", {
     parent: null,
     schemas: {
@@ -83,7 +84,8 @@ Deno.test("schema consistency: a consistent migration validates cleanly", async 
       },
     },
     migrate: (b) =>
-      b.collection("users")
+      b
+        .collection("users")
         .transform({
           up: (doc) => ({ ...doc, age: 0 }),
           down: (doc) => {

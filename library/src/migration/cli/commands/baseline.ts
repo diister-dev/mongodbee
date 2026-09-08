@@ -8,9 +8,9 @@
  */
 
 import process from "node:process";
-import { blue, bold, dim, green, red, yellow } from "@std/fmt/colors";
+import { blue, bold, dim, green, red, yellow } from "../../../utils/colors.ts";
 import { MongoClient } from "../../../mongodb.ts";
-import * as path from "@std/path";
+import * as path from "node:path";
 
 import { loadConfig } from "../../config/loader.ts";
 import { buildMigrationChain, loadAllMigrations } from "../../discovery.ts";
@@ -56,8 +56,8 @@ export async function baselineCommand(
       cwd,
       config.paths?.migrations || "./migrations",
     );
-    const connectionUri = config.database?.connection?.uri ||
-      "mongodb://localhost:27017";
+    const connectionUri =
+      config.database?.connection?.uri || "mongodb://localhost:27017";
     const dbName = config.database?.name || "myapp";
 
     console.log(dim(`Migrations directory: ${migrationsDir}`));

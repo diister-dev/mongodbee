@@ -1,5 +1,6 @@
+import { test } from "./+harness.ts";
 import * as v from "../src/schema.ts";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "./+assert.ts";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
 import assert from "node:assert";
@@ -18,16 +19,18 @@ import { ObjectId } from "mongodb";
 // NULLABLE FIELD TESTS
 // =============================================================================
 
-Deno.test("Collection: Nullable object - null to object transition", async (t) => {
+test("Collection: Nullable object - null to object transition", async (t) => {
   await withDatabase(t.name, async (db) => {
     const jobSchema = {
       name: v.string(),
       status: v.string(),
-      request: v.nullable(v.object({
-        type: v.string(),
-        requestedAt: v.date(),
-        requestedBy: v.string(),
-      })),
+      request: v.nullable(
+        v.object({
+          type: v.string(),
+          requestedAt: v.date(),
+          requestedBy: v.string(),
+        }),
+      ),
     };
 
     const jobs = await collection(db, "jobs", jobSchema);
@@ -66,14 +69,16 @@ Deno.test("Collection: Nullable object - null to object transition", async (t) =
   });
 });
 
-Deno.test("Collection: Nullable object - object to null transition", async (t) => {
+test("Collection: Nullable object - object to null transition", async (t) => {
   await withDatabase(t.name, async (db) => {
     const jobSchema = {
       name: v.string(),
-      request: v.nullable(v.object({
-        type: v.string(),
-        requestedAt: v.date(),
-      })),
+      request: v.nullable(
+        v.object({
+          type: v.string(),
+          requestedAt: v.date(),
+        }),
+      ),
     };
 
     const jobs = await collection(db, "jobs", jobSchema);
@@ -101,16 +106,18 @@ Deno.test("Collection: Nullable object - object to null transition", async (t) =
   });
 });
 
-Deno.test("Collection: Nullable object - full replacement removes old fields", async (t) => {
+test("Collection: Nullable object - full replacement removes old fields", async (t) => {
   await withDatabase(t.name, async (db) => {
     const jobSchema = {
       name: v.string(),
-      request: v.nullable(v.object({
-        type: v.string(),
-        requestedAt: v.date(),
-        requestedBy: v.string(),
-        reason: v.optional(v.string()),
-      })),
+      request: v.nullable(
+        v.object({
+          type: v.string(),
+          requestedAt: v.date(),
+          requestedBy: v.string(),
+          reason: v.optional(v.string()),
+        }),
+      ),
     };
 
     const jobs = await collection(db, "jobs", jobSchema);
@@ -151,16 +158,18 @@ Deno.test("Collection: Nullable object - full replacement removes old fields", a
   });
 });
 
-Deno.test("Collection: Deeply nested nullable object", async (t) => {
+test("Collection: Deeply nested nullable object", async (t) => {
   await withDatabase(t.name, async (db) => {
     const userSchema = {
       name: v.string(),
       profile: v.object({
         bio: v.string(),
-        contact: v.nullable(v.object({
-          email: v.string(),
-          phone: v.optional(v.string()),
-        })),
+        contact: v.nullable(
+          v.object({
+            email: v.string(),
+            phone: v.optional(v.string()),
+          }),
+        ),
       }),
     };
 
@@ -198,7 +207,7 @@ Deno.test("Collection: Deeply nested nullable object", async (t) => {
 // UNION FIELD TESTS
 // =============================================================================
 
-Deno.test("Collection: Union - switch between variants", async (t) => {
+test("Collection: Union - switch between variants", async (t) => {
   await withDatabase(t.name, async (db) => {
     const entitySchema = {
       name: v.string(),
@@ -259,14 +268,16 @@ Deno.test("Collection: Union - switch between variants", async (t) => {
   });
 });
 
-Deno.test("Collection: Nullable union - null to variant", async (t) => {
+test("Collection: Nullable union - null to variant", async (t) => {
   await withDatabase(t.name, async (db) => {
     const entitySchema = {
       name: v.string(),
-      data: v.nullable(v.union([
-        v.object({ type: v.literal("typeA"), a: v.string() }),
-        v.object({ type: v.literal("typeB"), b: v.number() }),
-      ])),
+      data: v.nullable(
+        v.union([
+          v.object({ type: v.literal("typeA"), a: v.string() }),
+          v.object({ type: v.literal("typeB"), b: v.number() }),
+        ]),
+      ),
     };
 
     const entities = await collection(db, "entities", entitySchema);
@@ -304,7 +315,7 @@ Deno.test("Collection: Nullable union - null to variant", async (t) => {
   });
 });
 
-Deno.test("Collection: Union with different structures - complete replacement", async (t) => {
+test("Collection: Union with different structures - complete replacement", async (t) => {
   await withDatabase(t.name, async (db) => {
     const paymentSchema = {
       orderId: v.string(),

@@ -4,7 +4,8 @@
 // the same assembly as the data pipeline). Page-2 cases are the point: a
 // page-1-only test passes even when the cursor is wrong.
 
-import { assertEquals, assertRejects } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assertEquals, assertRejects } from "../+assert.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import * as v from "../../src/schema.ts";
@@ -17,14 +18,12 @@ const eventModel = defineModel("event", {
   },
 });
 
-// deno-lint-ignore no-explicit-any
 const badgeSortPipeline = (s: any) => [
   s.lookup("badge", "_id", "participantId", { as: "badgeDocs" }),
   s.addFields({ badgeDoc: { $first: "$badgeDocs" } }),
 ];
 
 /** 21 participants; `i % 3 !== 0` get a badge (7 badgeless), values repeat. */
-// deno-lint-ignore no-explicit-any
 async function seed(mc: any): Promise<{ ids: string[] }> {
   const ids: string[] = [];
   for (let i = 0; i < 21; i++) {
@@ -46,9 +45,7 @@ async function seed(mc: any): Promise<{ ids: string[] }> {
  * Independent ground truth: raw $sort on the joined field, no paginate. The
  * `_id` tie-break follows the field's direction (normalizePaginateSort).
  */
-// deno-lint-ignore no-explicit-any
 async function groundTruth(mc: any, dir: 1 | -1): Promise<string[]> {
-  // deno-lint-ignore no-explicit-any
   const rows = await mc.aggregate((s: any) => [
     s.match("participant", {}),
     ...badgeSortPipeline(s),
@@ -57,19 +54,21 @@ async function groundTruth(mc: any, dir: 1 | -1): Promise<string[]> {
   return (rows as { _id: string }[]).map((r) => r._id);
 }
 
-// deno-lint-ignore no-explicit-any
 async function walkAll(mc: any, sort: Record<string, 1 | -1>, limit: number) {
-  // deno-lint-ignore no-explicit-any
   const all: any[] = [];
   const pages: { total?: number; position?: number; size: number }[] = [];
   let afterId: string | undefined = undefined;
   for (let guard = 0; guard < 1000; guard++) {
-    const page = await mc.paginate("participant", {}, {
-      limit,
-      sort,
-      afterId,
-      sortPipeline: badgeSortPipeline,
-    });
+    const page = await mc.paginate(
+      "participant",
+      {},
+      {
+        limit,
+        sort,
+        afterId,
+        sortPipeline: badgeSortPipeline,
+      },
+    );
     all.push(...page.data);
     pages.push({
       total: page.total,
@@ -82,16 +81,12 @@ async function walkAll(mc: any, sort: Record<string, 1 | -1>, limit: number) {
   return { all, pages };
 }
 
-Deno.test("mc sortPipeline DESC with missing joined docs: full coverage, exact order", async (t) => {
+test("mc sortPipeline DESC with missing joined docs: full coverage, exact order", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "event", eventModel);
     await seed(mc);
 
-    const { all, pages } = await walkAll(
-      mc,
-      { "badgeDoc.generatedAt": -1 },
-      4,
-    );
+    const { all, pages } = await walkAll(mc, { "badgeDoc.generatedAt": -1 }, 4);
     const walked = all.map((d) => d._id as string);
     const truth = await groundTruth(mc, -1);
 
@@ -110,52 +105,63 @@ Deno.test("mc sortPipeline DESC with missing joined docs: full coverage, exact o
   });
 });
 
-Deno.test("mc sortPipeline ASC: page walk == raw $sort order", async (t) => {
+test("mc sortPipeline ASC: page walk == raw $sort order", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "event", eventModel);
     await seed(mc);
 
     const { all } = await walkAll(mc, { "badgeDoc.generatedAt": 1 }, 5);
-    assertEquals(all.map((d) => d._id), await groundTruth(mc, 1));
+    assertEquals(
+      all.map((d) => d._id),
+      await groundTruth(mc, 1),
+    );
   });
 });
 
-Deno.test("mc sortPipeline: sort key produced by `pipeline` throws, pointing at sortPipeline", async (t) => {
+test("mc sortPipeline: sort key produced by `pipeline` throws, pointing at sortPipeline", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "event", eventModel);
     await seed(mc);
 
     await assertRejects(
       () =>
-        mc.paginate("participant", {}, {
-          limit: 4,
-          sort: { "badgeDoc.generatedAt": 1 },
-          pipeline: badgeSortPipeline,
-        }),
+        mc.paginate(
+          "participant",
+          {},
+          {
+            limit: 4,
+            sort: { "badgeDoc.generatedAt": 1 },
+            pipeline: badgeSortPipeline,
+          },
+        ),
       Error,
       "sortPipeline",
     );
   });
 });
 
-Deno.test("mc sortPipeline: naturalIdSort combination is refused", async (t) => {
+test("mc sortPipeline: naturalIdSort combination is refused", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "event", eventModel);
 
     await assertRejects(
       () =>
-        mc.paginate(["participant", "badge"], {}, {
-          limit: 4,
-          naturalIdSort: true,
-          sortPipeline: badgeSortPipeline,
-        }),
+        mc.paginate(
+          ["participant", "badge"],
+          {},
+          {
+            limit: 4,
+            naturalIdSort: true,
+            sortPipeline: badgeSortPipeline,
+          },
+        ),
       Error,
       "cannot be combined",
     );
   });
 });
 
-Deno.test("mc naturalIdSort: position is the page offset on page 2 (count mirrors _ulid extraction)", async (t) => {
+test("mc naturalIdSort: position is the page offset on page 2 (count mirrors _ulid extraction)", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "event", eventModel);
     // Alternate types so the cross-type ULID order differs from a per-type walk.
@@ -167,18 +173,26 @@ Deno.test("mc naturalIdSort: position is the page offset on page 2 (count mirror
       }
     }
 
-    const page1 = await mc.paginate(["participant", "badge"], {}, {
-      limit: 3,
-      naturalIdSort: true,
-    });
+    const page1 = await mc.paginate(
+      ["participant", "badge"],
+      {},
+      {
+        limit: 3,
+        naturalIdSort: true,
+      },
+    );
     assertEquals(page1.total, 10);
     assertEquals(page1.position, 0);
 
-    const page2 = await mc.paginate(["participant", "badge"], {}, {
-      limit: 3,
-      naturalIdSort: true,
-      afterId: page1.data[page1.data.length - 1]._id as string,
-    });
+    const page2 = await mc.paginate(
+      ["participant", "badge"],
+      {},
+      {
+        limit: 3,
+        naturalIdSort: true,
+        afterId: page1.data[page1.data.length - 1]._id as string,
+      },
+    );
     assertEquals(page2.total, 10);
     // Before the fix, the `_ulid` cursor was counted against documents that
     // never ran ulidExtractStage → afterCount 0 → position == total (10).

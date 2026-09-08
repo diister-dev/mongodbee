@@ -1,9 +1,22 @@
 name: Publish
+
+# Tag or manual only — this used to publish on every push to main, so a merged
+# README fix was a release.
 on:
   push:
-    branches:
-      - main
+    tags:
+      - 'v*'
   workflow_dispatch:
+    inputs:
+      registry:
+        description: Which registry to publish to
+        type: choice
+        options: [both, npm, jsr]
+        default: both
+
+defaults:
+  run:
+    working-directory: library
 
 jobs:
   publish:
@@ -14,7 +27,58 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Publish package
-        run: cd library && npx jsr publish
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      # No NODE_AUTH_TOKEN: authentication is OIDC via the trusted publisher
+      # configured on npmjs.com, which also makes provenance automatic.
+      - uses: actions/setup-node@v7
+        with:
+          # 24 ships npm 11.19, past trusted publishing's 11.5.1 floor.
+          # (CI pins 22.18 instead, to test at the engines floor.)
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - run: bun install --frozen-lockfile
+
+      - name: Verify before publishing
+        run: |
+          bun run check
+          bun run lint
+          bun run build
+
+      - name: Refuse to publish a version that is not the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          manifest="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$manifest" ]; then
+            echo "tag $tag does not match package.json version $manifest" >&2
+            exit 1
+          fi
+
+      # Staged, not direct: the version lands in a pending state and only goes
+      # live once a maintainer runs `npm stage approve <id>` and clears a 2FA
+      # challenge. A compromised workflow therefore cannot ship anything.
+      - name: Stage the npm release
+        if: inputs.registry != 'jsr'
+        # npm tags "latest" whatever the version says, so the dist-tag comes
+        # from the version's own prerelease identifier instead — a beta must
+        # never become what `npm install mongodbee` hands a new user.
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          case "$version" in
+            *-*) tag="$(printf '%s' "${version#*-}" | cut -d. -f1)" ;;
+            *)   tag="latest" ;;
+          esac
+          echo "staging $version under dist-tag '$tag'"
+          npm stage publish --access public --tag "$tag"
+          echo "Staged. Release it with: npm stage list && npm stage approve <id>"
+
+      - name: Publish to JSR
+        if: inputs.registry != 'npm'
+        run: npx jsr publish
