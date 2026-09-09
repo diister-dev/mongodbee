@@ -16,7 +16,8 @@ import { assert, assertEquals, assertExists } from "../../+assert.ts";
 import * as path from "node:path";
 import { existsSync, readdirSync } from "node:fs";
 import { initCommand } from "../../../src/migration/cli/commands/init.ts";
-import { fileContains, withTempDir } from "./shared.ts";
+import { fileURLToPath } from "node:url";
+import { fileContains, runScript, withTempDir } from "./shared.ts";
 
 test("init - creates config file and migrations directory", async () => {
   await withTempDir(async (tempDir) => {
@@ -117,5 +118,57 @@ test("init - creates empty migrations directory", async () => {
 
     // Directory should be empty initially
     assertEquals(files.length, 0);
+  });
+});
+
+/**
+ * The scaffold is the first TypeScript a new user ever sees, so it has to
+ * compile. The assertions above only checked that the files exist and contain
+ * a few substrings, which is how `schemas.ts` came to import
+ * `SchemasDefinition` from the package root — a subpath that does not export
+ * it — and fail to typecheck for everybody running `mongodbee init`.
+ *
+ * `paths` maps the package specifiers onto this repo's sources so the check
+ * needs no packing or install, and `typeRoots` points at the suite's own
+ * `@types` because the temp project has no `node_modules`.
+ */
+test("init - the files it scaffolds typecheck against the package", async () => {
+  await withTempDir(async (tempDir) => {
+    await initCommand({ cwd: tempDir });
+
+    const libRoot = fileURLToPath(new URL("../../../", import.meta.url));
+    const tsconfig = {
+      compilerOptions: {
+        target: "esnext",
+        module: "nodenext",
+        moduleResolution: "nodenext",
+        lib: ["esnext", "dom"],
+        strict: true,
+        noEmit: true,
+        skipLibCheck: true,
+        typeRoots: [path.join(libRoot, "node_modules/@types")],
+        types: ["node"],
+        allowImportingTsExtensions: true,
+        baseUrl: ".",
+        paths: {
+          "@diister/mongodbee": [path.join(libRoot, "mod.ts")],
+          "@diister/mongodbee/*": [path.join(libRoot, "src/*/mod.ts")],
+        },
+      },
+      include: ["schemas.ts", "mongodbee.config.ts"],
+    };
+    await writeFile(
+      path.join(tempDir, "tsconfig.json"),
+      JSON.stringify(tsconfig, null, 2),
+      "utf-8",
+    );
+
+    const tsc = path.join(libRoot, "node_modules/typescript/bin/tsc");
+    const { code, stdout } = await runScript(
+      tsc,
+      ["-p", "tsconfig.json"],
+      tempDir,
+    );
+    assertEquals(code, 0, `scaffolded files do not typecheck:\n${stdout}`);
   });
 });

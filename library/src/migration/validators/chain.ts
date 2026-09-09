@@ -9,7 +9,7 @@
  *
  * @example
  * ```typescript
- * import { validateMigrationChain, createChainValidator } from "@diister/mongodbee/migration/validators";
+ * import { validateMigrationChain, createChainValidator } from "@diister/mongodbee/migration";
  *
  * const validator = createChainValidator();
  * const migrations = [
@@ -548,7 +548,7 @@ export class ChainValidator {
  *
  * @example
  * ```typescript
- * import { createChainValidator } from "@diister/mongodbee/migration/validators";
+ * import { createChainValidator } from "@diister/mongodbee/migration";
  *
  * const validator = createChainValidator({
  *   allowMultipleRoots: false,
@@ -572,7 +572,7 @@ export function createChainValidator(
  *
  * @example
  * ```typescript
- * import { validateMigrationChain } from "@diister/mongodbee/migration/validators";
+ * import { validateMigrationChain } from "@diister/mongodbee/migration";
  *
  * const result = validateMigrationChain(migrations, {
  *   allowMultipleRoots: false

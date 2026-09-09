@@ -7,12 +7,12 @@
  *
  * @example
  * ```typescript
- * import { createMigrationConfig } from "@diister/mongodbee/migration/config";
+ * import { createConfig } from "@diister/mongodbee/migration";
  *
- * const config = createMigrationConfig({
+ * const config = createConfig({
  *   database: {
- *     uri: "mongodb://localhost:27017",
- *     database: "myapp"
+ *     connection: { uri: "mongodb://localhost:27017" },
+ *     name: "myapp"
  *   },
  *   paths: {
  *     migrations: "./migrations",
@@ -443,43 +443,6 @@ export type EnvironmentConfig = {
   paths?: Partial<PathsConfig>;
   migration?: Partial<MigrationConfig>;
   cli?: Partial<CliConfig>;
-};
-
-/**
- * Configuration loading result with validation information
- */
-export type ConfigResult = {
-  /** The loaded and validated configuration */
-  config: MigrationSystemConfig;
-
-  /** Source of the configuration (file path, environment, etc.) */
-  source: string;
-
-  /** Any validation warnings (non-fatal issues) */
-  warnings: string[];
-
-  /** Applied environment overrides */
-  environment?: string;
-};
-
-/**
- * Configuration loading options
- */
-export type ConfigLoadOptions = {
-  /** Specific environment to load */
-  environment?: string;
-
-  /** Custom config file path */
-  configPath?: string;
-
-  /** Whether to merge with environment variables */
-  useEnvVars?: boolean;
-
-  /** Custom environment variable prefix */
-  envPrefix?: string;
-
-  /** Whether to validate the configuration strictly */
-  strict?: boolean;
 };
 
 /**

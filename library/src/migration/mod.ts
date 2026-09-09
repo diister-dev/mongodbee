@@ -46,6 +46,8 @@
  * @module
  */
 
+import { VERSION } from "../version.ts";
+
 // Core types and interfaces
 export type {
   CollectionBuilder as MigrationCollectionBuilder,
@@ -104,13 +106,10 @@ export type {
 // Configuration
 export * from "./config/mod.ts";
 
-// Validators (partial export of working functions)
-export {
-  createChainValidator,
-  type MigrationValidator,
-  type SimulationPowerLevel,
-  type ValidationResult,
-} from "./validators/mod.ts";
+// Validators. `validators/mod.ts` already curates its own surface; this used
+// to cherry-pick four names from it, which left the simulation validators —
+// the ones `mongodbee check` itself runs on — documented but unreachable.
+export * from "./validators/mod.ts";
 
 // Multi-collection registry
 export {
@@ -198,9 +197,13 @@ export type {
 } from "./privileges.ts";
 
 /**
- * Version information for the migration system
+ * The version of MongoDBee this migration system ships with.
+ *
+ * Re-exported from the single source of truth in `src/version.ts`, which
+ * `scripts/check-package.ts` keeps in step with package.json and jsr.json. It
+ * used to be a hardcoded "1.0.0" that no release ever updated.
  */
-export const VERSION = "1.0.0";
+export { VERSION };
 
 /**
  * Default export providing the most commonly used functions

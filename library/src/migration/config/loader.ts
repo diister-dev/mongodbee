@@ -7,7 +7,7 @@
  *
  * @example
  * ```typescript
- * import { loadConfig, createConfig } from "@diister/mongodbee/migration/config";
+ * import { loadConfig, createConfig } from "@diister/mongodbee/migration";
  *
  * // Load from config file
  * const { config } = await loadConfig({
@@ -31,8 +31,6 @@ import { existsSync } from "node:fs";
 import * as v from "../../schema.ts";
 import * as path from "node:path";
 import {
-  type ConfigLoadOptions,
-  type ConfigResult,
   DEFAULT_CONFIG,
   type MigrationSystemConfig,
   MigrationSystemConfigSchema,
@@ -94,10 +92,13 @@ function validateConfig(config: unknown): {
   if (!parseResult.success) {
     return {
       success: false,
+      // `issue.path` holds valibot PathItem objects, not strings: stringifying
+      // them produced "[object Object].[object Object]: Invalid key" for every
+      // malformed config. The readable segment is `key`.
       errors: parseResult.issues.map(
         (issue) =>
           `${
-            issue.path?.map((p) => String(p)).join(".") || "root"
+            issue.path?.map((item) => String(item.key)).join(".") || "root"
           }: ${issue.message}`,
       ),
       warnings: [],
@@ -135,95 +136,6 @@ function validateConfig(config: unknown): {
     errors: [],
     warnings,
   };
-}
-
-/**
- * Loads configuration from environment variables
- *
- * @param prefix - Environment variable prefix (default: 'MONGODBEE_')
- * @returns Partial configuration from environment variables
- */
-function loadFromEnvironment(
-  prefix = "MONGODBEE_",
-): Partial<MigrationSystemConfig> {
-  const config: Partial<MigrationSystemConfig> = {};
-
-  // Database configuration
-  const dbUri = process.env[`${prefix}DB_URI`];
-  const dbName = process.env[`${prefix}DB_NAME`];
-
-  if (dbUri && dbName) {
-    config.database = {
-      connection: {
-        uri: dbUri,
-      },
-      name: dbName,
-    };
-
-    // Optional database options
-    const connectTimeout = process.env[`${prefix}DB_CONNECT_TIMEOUT`];
-    const maxPoolSize = process.env[`${prefix}DB_MAX_POOL_SIZE`];
-
-    if (connectTimeout || maxPoolSize) {
-      config.database.connection.options = {
-        ...(connectTimeout && {
-          connectTimeoutMS: parseInt(connectTimeout, 10),
-        }),
-        ...(maxPoolSize && { maxPoolSize: parseInt(maxPoolSize, 10) }),
-      };
-    }
-  }
-
-  // Paths configuration
-  const migrationsPath = process.env[`${prefix}MIGRATIONS_PATH`];
-  const schemasPath = process.env[`${prefix}SCHEMAS_PATH`];
-
-  if (migrationsPath && schemasPath) {
-    config.paths = {
-      migrations: migrationsPath,
-      schemas: schemasPath,
-    };
-
-    // Optional paths
-    const tempPath = process.env[`${prefix}TEMP_PATH`];
-    const backupPath = process.env[`${prefix}BACKUP_PATH`];
-    const logsPath = process.env[`${prefix}LOGS_PATH`];
-
-    if (tempPath) config.paths.temp = tempPath;
-    if (backupPath) config.paths.backup = backupPath;
-    if (logsPath) config.paths.logs = logsPath;
-  }
-
-  // Migration configuration
-  const dryRun = process.env[`${prefix}DRY_RUN`];
-  const backup = process.env[`${prefix}BACKUP`];
-  const logLevel = process.env[`${prefix}LOG_LEVEL`];
-
-  if (dryRun || backup || logLevel) {
-    config.migration = {
-      ...(dryRun && { dryRun: dryRun.toLowerCase() === "true" }),
-      ...(backup && { backup: backup.toLowerCase() === "true" }),
-    };
-
-    if (logLevel) {
-      config.migration.logging = {
-        level: logLevel as "debug" | "info" | "warn" | "error",
-      };
-    }
-  }
-
-  // CLI configuration
-  const noColors = process.env[`${prefix}NO_COLORS`];
-  const verbose = process.env[`${prefix}VERBOSE`];
-
-  if (noColors || verbose) {
-    config.cli = {
-      ...(noColors && { colors: noColors.toLowerCase() !== "true" }),
-      ...(verbose && { verbose: verbose.toLowerCase() === "true" }),
-    };
-  }
-
-  return config;
 }
 
 /**
@@ -303,8 +215,8 @@ function discoverConfigFiles(cwd: string = process.cwd()): string[] {
  * ```typescript
  * const config = createConfig({
  *   database: {
- *     uri: "mongodb://localhost:27017",
- *     database: "myapp"
+ *     connection: { uri: "mongodb://localhost:27017" },
+ *     name: "myapp"
  *   },
  *   paths: {
  *     migrations: "./migrations",
@@ -394,124 +306,6 @@ export async function loadConfig(
   throw new Error(
     'No configuration file found. Run "mongodbee init" to create one.',
   );
-}
-
-/**
- * Loads configuration from multiple sources with priority
- *
- * Priority order:
- * 1. Explicit configuration file (if specified)
- * 2. Environment-specific overrides
- * 3. Environment variables
- * 4. Default discovered config files
- * 5. Default configuration
- *
- * @param options - Configuration loading options
- * @returns Promise resolving to configuration result
- *
- * @example
- * ```typescript
- * // Load with auto-discovery
- * const { config } = await loadConfig();
- *
- * // Load specific environment
- * const { config } = await loadConfig({
- *   environment: "production",
- *   configPath: "./config/prod.json"
- * });
- *
- * // Load with environment variables
- * const { config } = await loadConfig({
- *   useEnvVars: true,
- *   envPrefix: "MYAPP_"
- * });
- * ```
- */
-export async function loadConfigOld(
-  options: ConfigLoadOptions = {},
-): Promise<ConfigResult> {
-  const {
-    environment,
-    configPath,
-    useEnvVars = true,
-    envPrefix = "MONGODBEE_",
-    strict = true,
-  } = options;
-
-  let baseConfig = { ...DEFAULT_CONFIG } as Record<string, unknown>;
-  let configSource = "defaults";
-  const warnings: string[] = [];
-
-  // 1. Try to load from specified or discovered config files
-  let fileConfig: Record<string, unknown> = {};
-
-  if (configPath) {
-    try {
-      fileConfig = (await loadFromFile(configPath)) as Record<string, unknown>;
-      configSource = configPath;
-    } catch (error) {
-      if (strict) {
-        throw error;
-      }
-      const message = error instanceof Error ? error.message : String(error);
-      warnings.push(`Failed to load config from ${configPath}: ${message}`);
-    }
-  } else {
-    // Try to discover config files
-    for (const configFilePath of discoverConfigFiles()) {
-      try {
-        await fs.stat(configFilePath);
-        fileConfig = (await loadFromFile(configFilePath)) as Record<
-          string,
-          unknown
-        >;
-        configSource = configFilePath;
-        break;
-      } catch {
-        // Continue to next file
-      }
-    }
-  }
-
-  // 2. Merge base config with file config
-  baseConfig = deepMergeConfig(baseConfig, fileConfig);
-
-  // 3. Apply environment variables if enabled
-  if (useEnvVars) {
-    const envConfig = loadFromEnvironment(envPrefix) as Record<string, unknown>;
-    baseConfig = deepMergeConfig(baseConfig, envConfig);
-    if (Object.keys(envConfig).length > 0) {
-      configSource += " + environment";
-    }
-  }
-
-  // 4. Apply environment-specific overrides
-  if (
-    environment &&
-    (baseConfig as MigrationSystemConfig).environments?.[environment]
-  ) {
-    const envOverride = (baseConfig as MigrationSystemConfig).environments![
-      environment
-    ] as Record<string, unknown>;
-    baseConfig = deepMergeConfig(baseConfig, envOverride);
-    configSource += ` + ${environment} environment`;
-  }
-
-  // 5. Validate the final configuration
-  const validation = validateConfig(baseConfig as MigrationSystemConfig);
-
-  if (!validation.success) {
-    throw new Error(
-      `Configuration validation failed:\n${validation.errors.join("\n")}`,
-    );
-  }
-
-  return {
-    config: validation.config!,
-    source: configSource,
-    warnings: [...warnings, ...validation.warnings],
-    environment,
-  };
 }
 
 /**

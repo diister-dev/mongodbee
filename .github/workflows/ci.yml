@@ -124,9 +124,6 @@ jobs:
         run: |
           mkdir -p consumer && cd consumer
           echo '{"name":"consumer","type":"module","private":true}' > package.json
-          # Until @diister/valibot-mock is on npmjs.org, it resolves through
-          # JSR's npm compatibility registry. Drop this once it is published.
-          echo '@jsr:registry=https://npm.jsr.io' > .npmrc
           npm install /tmp/diister-mongodbee-*.tgz
 
       - name: Import every entry point
