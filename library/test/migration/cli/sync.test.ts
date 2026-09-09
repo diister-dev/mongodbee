@@ -10,7 +10,10 @@
  * @module
  */
 
-import { assertRejects } from "@std/assert";
+import { test } from "../../+harness.ts";
+import process from "node:process";
+import { writeFile } from "node:fs/promises";
+import { assertRejects } from "../../+assert.ts";
 import { MongoClient } from "../../../src/mongodb.ts";
 import { initCommand } from "../../../src/migration/cli/commands/init.ts";
 import { generateCommand } from "../../../src/migration/cli/commands/generate.ts";
@@ -19,16 +22,19 @@ import { syncCommand } from "../../../src/migration/cli/commands/sync.ts";
 import { withTempDir } from "./shared.ts";
 
 // MongoDB test connection
-const TEST_MONGODB_URI = Deno.env.get("TEST_MONGODB_URI") ||
+const TEST_MONGODB_URI =
+  process.env.TEST_MONGODB_URI ||
+  process.env.MONGODBEE_TEST_URI ||
   "mongodb://localhost:27017";
 
 /**
  * Generate a unique database name for each test to avoid collisions in parallel execution
  */
 function generateTestDbName(): string {
-  return `mongodbee_test_sync_${
-    crypto.randomUUID().replace(/-/g, "").substring(0, 8)
-  }`;
+  return `mongodbee_test_sync_${crypto
+    .randomUUID()
+    .replace(/-/g, "")
+    .substring(0, 8)}`;
 }
 
 /**
@@ -68,13 +74,13 @@ async function withTestDb(
  * Setup test configuration
  */
 async function setupTestConfig(tempDir: string, dbName: string) {
-  await Deno.writeTextFile(
+  await writeFile(
     `${tempDir}/mongodbee.config.ts`,
     `export default { database: { connection: { uri: "${TEST_MONGODB_URI}" }, name: "${dbName}" }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
   );
 }
 
-Deno.test("sync - succeeds when no migrations exist", async () => {
+test("sync - succeeds when no migrations exist", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       // Setup
@@ -88,7 +94,7 @@ Deno.test("sync - succeeds when no migrations exist", async () => {
   });
 });
 
-Deno.test("sync - rejects when pending migrations exist", async () => {
+test("sync - rejects when pending migrations exist", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       // Setup
@@ -108,7 +114,7 @@ Deno.test("sync - rejects when pending migrations exist", async () => {
   });
 });
 
-Deno.test("sync - succeeds with --force even when pending migrations exist", async () => {
+test("sync - succeeds with --force even when pending migrations exist", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       // Setup
@@ -125,7 +131,7 @@ Deno.test("sync - succeeds with --force even when pending migrations exist", asy
   });
 });
 
-Deno.test("sync - succeeds when all migrations are applied", async () => {
+test("sync - succeeds when all migrations are applied", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       // Setup

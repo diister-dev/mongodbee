@@ -12,12 +12,13 @@
  * @module
  */
 
-import { assertEquals } from "@std/assert";
+import { test } from "../../+harness.ts";
+import { assertEquals } from "../../+assert.ts";
 import * as v from "valibot";
 import { migrationDefinition } from "../../../src/migration/definition.ts";
 import { validateMigrationWithSimulation } from "../../../src/migration/validators/simulation.ts";
 
-Deno.test("Journey: Complete application lifecycle with validation", async () => {
+test("Journey: Complete application lifecycle with validation", async () => {
   // ========================================
   // STEP 1: Initial application - Users
   // ========================================
@@ -95,7 +96,8 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
       migrate(migration) {
         migration
           .createMultiModelInstance("posts_main", "posts")
-          .type("article").seed([
+          .type("article")
+          .seed([
             {
               _id: "post1",
               authorId: "user1",
@@ -103,8 +105,10 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
               content: "Hello World",
               createdAt: new Date("2025-01-02"),
             },
-          ]).end()
-          .type("video").seed([
+          ])
+          .end()
+          .type("video")
+          .seed([
             {
               _id: "post2",
               authorId: "user2",
@@ -195,7 +199,8 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
         // Create comments for posts multi-collection
         migration
           .createMultiModelInstance("comments_posts_main", "comments")
-          .type("comment").seed([
+          .type("comment")
+          .seed([
             {
               _id: "comment1",
               postId: "post1",
@@ -242,28 +247,34 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
       },
       migrate(migration) {
         // Transform articles to add likes array
-        migration.multiModelInstances("posts").type("article").transform({
-          up: (doc) => ({
-            ...doc,
-            likes: [], // Empty array for existing articles
-          }),
-          down: (doc) => {
-            const { likes: _likes, ...rest } = doc;
-            return rest;
-          },
-        });
+        migration
+          .multiModelInstances("posts")
+          .type("article")
+          .transform({
+            up: (doc) => ({
+              ...doc,
+              likes: [], // Empty array for existing articles
+            }),
+            down: (doc) => {
+              const { likes: _likes, ...rest } = doc;
+              return rest;
+            },
+          });
 
         // Transform videos to add likes array
-        migration.multiModelInstances("posts").type("video").transform({
-          up: (doc) => ({
-            ...doc,
-            likes: [], // Empty array for existing videos
-          }),
-          down: (doc) => {
-            const { likes: _likes, ...rest } = doc;
-            return rest;
-          },
-        });
+        migration
+          .multiModelInstances("posts")
+          .type("video")
+          .transform({
+            up: (doc) => ({
+              ...doc,
+              likes: [], // Empty array for existing videos
+            }),
+            down: (doc) => {
+              const { likes: _likes, ...rest } = doc;
+              return rest;
+            },
+          });
 
         return migration.compile();
       },
@@ -287,7 +298,7 @@ Deno.test("Journey: Complete application lifecycle with validation", async () =>
   );
 });
 
-Deno.test("Journey: Rollback to different points", async () => {
+test("Journey: Rollback to different points", async () => {
   // Setup complete migration chain
   const m1 = migrationDefinition("2025_01_01_ROOT", "step1", {
     parent: null,
@@ -301,9 +312,7 @@ Deno.test("Journey: Rollback to different points", async () => {
       multiModels: {},
     },
     migrate(m) {
-      m.createCollection("data").seed([
-        { _id: "1", value: 10 },
-      ]);
+      m.createCollection("data").seed([{ _id: "1", value: 10 }]);
       return m.compile();
     },
   });
@@ -382,7 +391,7 @@ Deno.test("Journey: Rollback to different points", async () => {
   );
 });
 
-Deno.test("Journey: State verification at each step", async () => {
+test("Journey: State verification at each step", async () => {
   // This test validates that data evolves correctly through the migration chain
 
   const step1 = migrationDefinition("2025_01_01_INIT", "init", {
@@ -397,9 +406,7 @@ Deno.test("Journey: State verification at each step", async () => {
       multiModels: {},
     },
     migrate(m) {
-      m.createCollection("counter").seed([
-        { _id: "main", count: 0 },
-      ]);
+      m.createCollection("counter").seed([{ _id: "main", count: 0 }]);
       return m.compile();
     },
   });

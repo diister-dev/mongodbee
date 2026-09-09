@@ -4,7 +4,13 @@
  * `db.operation.batch.size`, plus the anti-PII guarantee (inserted/filtered
  * values never reach the spans).
  */
-import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
+import { test } from "./+harness.ts";
+import {
+  assert,
+  assertEquals,
+  assertExists,
+  assertRejects,
+} from "./+assert.ts";
 import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import { withDatabase } from "./+shared.ts";
 import { multiCollection } from "../src/multi-collection.ts";
@@ -29,18 +35,23 @@ function spansNamed(t: TestTelemetry, name: string): FinishedSpan[] {
 const EXPO_A = "exposition:expoaaaaa01";
 const EXPO_B = "exposition:expobbbbb02";
 
-Deno.test("telemetry multi: doc_type on typed ops, none on *Any, batch size on deleteIds", async () => {
+test("telemetry multi: doc_type on typed ops, none on *Any, batch size on deleteIds", async () => {
   await withDatabase("telemetry-multi-doctype", async (db) => {
     const t = makeTestTelemetry();
-    const catalog = await multiCollection(db, "catalog", {
-      product: {
-        name: v.string(),
-        price: v.number(),
+    const catalog = await multiCollection(
+      db,
+      "catalog",
+      {
+        product: {
+          name: v.string(),
+          price: v.number(),
+        },
+        category: {
+          name: v.string(),
+        },
       },
-      category: {
-        name: v.string(),
-      },
-    }, { telemetry: t.telemetry });
+      { telemetry: t.telemetry },
+    );
 
     const SENTINEL_NAME = "SENTINEL_PRODUCT_NAME_93f1c";
 
@@ -119,10 +130,11 @@ Deno.test("telemetry multi: doc_type on typed ops, none on *Any, batch size on d
   });
 });
 
-Deno.test("telemetry scoped: scope + doc_type attributes on views", async () => {
+test("telemetry scoped: scope + doc_type attributes on views", async () => {
   await withDatabase("telemetry-scoped-attrs", async (db) => {
     const t = makeTestTelemetry();
     const catalog = await scopedMultiCollection(db, "catalog2", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         artwork: {
@@ -192,10 +204,11 @@ Deno.test("telemetry scoped: scope + doc_type attributes on views", async () => 
   });
 });
 
-Deno.test("telemetry scoped: not-found error keeps the id caller-side but strips it from the span", async () => {
+test("telemetry scoped: not-found error keeps the id caller-side but strips it from the span", async () => {
   await withDatabase("telemetry-scoped-notfound", async (db) => {
     const t = makeTestTelemetry();
     const catalog = await scopedMultiCollection(db, "catalog3", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         artwork: {
@@ -212,7 +225,7 @@ Deno.test("telemetry scoped: not-found error keeps the id caller-side but strips
 
     const expo = catalog.scope(SENTINEL_SCOPE);
     const error = await assertRejects(() =>
-      expo.getById("artwork", SENTINEL_ID)
+      expo.getById("artwork", SENTINEL_ID),
     );
 
     // Caller-facing behaviour is unchanged: the message still names the missing
@@ -239,16 +252,11 @@ Deno.test("telemetry scoped: not-found error keeps the id caller-side but strips
     assertExists(exceptionEvent);
     const exceptionMessage = exceptionEvent.attributes?.["exception.message"];
     assert(typeof exceptionMessage === "string", "exception message recorded");
-    for (
-      const [channel, text] of [
-        ["exception message", exceptionMessage],
-        ["status message", String(span.status.message ?? "")],
-      ] as const
-    ) {
-      assert(
-        !text.includes(SENTINEL_ID),
-        `id leaked into the ${channel}`,
-      );
+    for (const [channel, text] of [
+      ["exception message", exceptionMessage],
+      ["status message", String(span.status.message ?? "")],
+    ] as const) {
+      assert(!text.includes(SENTINEL_ID), `id leaked into the ${channel}`);
       assert(
         !text.includes(SENTINEL_SCOPE),
         `scope value leaked into the ${channel}`,
@@ -261,18 +269,23 @@ Deno.test("telemetry scoped: not-found error keeps the id caller-side but strips
   });
 });
 
-Deno.test("telemetry multi: updateMany carries doc_type as the string[] of type names", async () => {
+test("telemetry multi: updateMany carries doc_type as the string[] of type names", async () => {
   await withDatabase("telemetry-multi-updatemany", async (db) => {
     const t = makeTestTelemetry();
-    const catalog = await multiCollection(db, "catalog", {
-      product: {
-        name: v.string(),
-        price: v.number(),
+    const catalog = await multiCollection(
+      db,
+      "catalog",
+      {
+        product: {
+          name: v.string(),
+          price: v.number(),
+        },
+        category: {
+          name: v.string(),
+        },
       },
-      category: {
-        name: v.string(),
-      },
-    }, { telemetry: t.telemetry });
+      { telemetry: t.telemetry },
+    );
 
     const productId = await catalog.insertOne("product", {
       name: "SENTINEL_UPDATEMANY_PRODUCT_2b1a",
@@ -300,15 +313,20 @@ Deno.test("telemetry multi: updateMany carries doc_type as the string[] of type 
   });
 });
 
-Deno.test("telemetry multi: updateOne validation failure records one ERROR span and rethrows", async () => {
+test("telemetry multi: updateOne validation failure records one ERROR span and rethrows", async () => {
   await withDatabase("telemetry-multi-updateone-invalid", async (db) => {
     const t = makeTestTelemetry();
-    const catalog = await multiCollection(db, "catalog", {
-      product: {
-        name: v.string(),
-        price: v.number(),
+    const catalog = await multiCollection(
+      db,
+      "catalog",
+      {
+        product: {
+          name: v.string(),
+          price: v.number(),
+        },
       },
-    }, { telemetry: t.telemetry });
+      { telemetry: t.telemetry },
+    );
 
     const productId = await catalog.insertOne("product", {
       name: "valid",
@@ -322,7 +340,7 @@ Deno.test("telemetry multi: updateOne validation failure records one ERROR span 
     const error = await assertRejects(() =>
       catalog.updateOne("product", productId, {
         price: SENTINEL_INVALID as unknown as number,
-      })
+      }),
     );
 
     // The original validation error reaches the caller unchanged.
@@ -343,14 +361,19 @@ Deno.test("telemetry multi: updateOne validation failure records one ERROR span 
   });
 });
 
-Deno.test("telemetry multi: drop emits a CLIENT span", async () => {
+test("telemetry multi: drop emits a CLIENT span", async () => {
   await withDatabase("telemetry-multi-drop", async (db) => {
     const t = makeTestTelemetry();
-    const catalog = await multiCollection(db, "catalog", {
-      product: {
-        name: v.string(),
+    const catalog = await multiCollection(
+      db,
+      "catalog",
+      {
+        product: {
+          name: v.string(),
+        },
       },
-    }, { telemetry: t.telemetry });
+      { telemetry: t.telemetry },
+    );
     await catalog.insertOne("product", { name: "SENTINEL_DROP_PRODUCT_9c2d" });
     t.exporter.reset();
 
@@ -367,10 +390,11 @@ Deno.test("telemetry multi: drop emits a CLIENT span", async () => {
   });
 });
 
-Deno.test("telemetry scoped: drop emits a CLIENT span", async () => {
+test("telemetry scoped: drop emits a CLIENT span", async () => {
   await withDatabase("telemetry-scoped-drop", async (db) => {
     const t = makeTestTelemetry();
     const catalog = await scopedMultiCollection(db, "catalog5", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         artwork: {
@@ -396,10 +420,11 @@ Deno.test("telemetry scoped: drop emits a CLIENT span", async () => {
   });
 });
 
-Deno.test("telemetry scoped: invalid scope value in a handle op inside a transaction stays caller-side but never lands on the transaction span", async () => {
+test("telemetry scoped: invalid scope value in a handle op inside a transaction stays caller-side but never lands on the transaction span", async () => {
   await withDatabase("telemetry-scoped-invalid-scope-tx", async (db) => {
     const t = makeTestTelemetry();
     const catalog = await scopedMultiCollection(db, "catalog7", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         artwork: {
@@ -420,7 +445,7 @@ Deno.test("telemetry scoped: invalid scope value in a handle op inside a transac
     const error = await assertRejects(() =>
       catalog.withSession(async () => {
         await catalog.scopeExists(SENTINEL_INVALID_SCOPE);
-      })
+      }),
     );
 
     // The caller-facing message keeps the offending value for debuggability.
@@ -448,7 +473,7 @@ Deno.test("telemetry scoped: invalid scope value in a handle op inside a transac
   });
 });
 
-Deno.test("telemetry scoped: recordScope false omits mongodbee.scope everywhere", async () => {
+test("telemetry scoped: recordScope false omits mongodbee.scope everywhere", async () => {
   await withDatabase("telemetry-scoped-norecord", async (db) => {
     const t = makeTestTelemetry();
     // Both scope ids are unique sentinels: with recordScope disabled, neither
@@ -456,6 +481,7 @@ Deno.test("telemetry scoped: recordScope false omits mongodbee.scope everywhere"
     const SENTINEL_SCOPE_A = "exposition:norecordscopeaaa01";
     const SENTINEL_SCOPE_B = "exposition:norecordscopebbb02";
     const catalog = await scopedMultiCollection(db, "catalog6", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         artwork: {
@@ -476,10 +502,9 @@ Deno.test("telemetry scoped: recordScope false omits mongodbee.scope everywhere"
     assertEquals(await expo.countDocuments("artwork"), 1);
 
     // Multi-scope and unscoped views run through the other scope-attr path.
-    await catalog.scopes([SENTINEL_SCOPE_A, SENTINEL_SCOPE_B]).findOne(
-      "artwork",
-      {},
-    );
+    await catalog
+      .scopes([SENTINEL_SCOPE_A, SENTINEL_SCOPE_B])
+      .findOne("artwork", {});
     await catalog.unscoped.findOne("artwork", {});
 
     // Handle ops honour recordScope: false too — their spans also carry the

@@ -1,8 +1,9 @@
-import { assertEquals } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assertEquals } from "./+assert.ts";
 import * as v from "../src/schema.ts";
 import { toMongoValidator } from "../src/validator.ts";
 
-Deno.test("Conflict between non_empty and min_length", () => {
+test("Conflict between non_empty and min_length", () => {
   // Test case 1: non_empty (minLength: 1) + min_length(5) - should be min_length(5)
   const schema1 = v.object({
     field: v.pipe(v.string(), v.nonEmpty(), v.minLength(5)),
@@ -41,7 +42,7 @@ Deno.test("Conflict between non_empty and min_length", () => {
   assertEquals(jsonSchema3.properties!.field.minLength, 7);
 });
 
-Deno.test("Conflict between min_value and max_value", () => {
+test("Conflict between min_value and max_value", () => {
   // Test conflicting numeric ranges
   const schema = v.object({
     field: v.pipe(v.number(), v.minValue(10), v.maxValue(5)), // Impossible !
@@ -55,7 +56,7 @@ Deno.test("Conflict between min_value and max_value", () => {
   assertEquals(jsonSchema.properties!.field.maximum, 5);
 });
 
-Deno.test("Smart conflict resolution test", () => {
+test("Smart conflict resolution test", () => {
   // Test que les conflits min/max sont résolus intelligemment
   const smartSchema = v.object({
     // Test résolution minLength intelligent

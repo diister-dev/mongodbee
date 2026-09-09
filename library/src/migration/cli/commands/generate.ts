@@ -9,21 +9,24 @@
 import process from "node:process";
 import * as fs from "node:fs/promises";
 import { existsSync, readdirSync } from "node:fs";
-import { green, red } from "@std/fmt/colors";
-import * as path from "@std/path";
+import { green, red } from "../../../utils/colors.ts";
+import * as path from "node:path";
 import { generateMigrationId } from "../../definition.ts";
 import { prettyText } from "../utils.ts";
 import { loadConfig } from "../../config/loader.ts";
+import { pathToFileUrl } from "../../utils/platform.ts";
+import { resolveImportSpecifier } from "../../utils/package-info.ts";
 
 async function extractMigrationDefinitions(
   migrationsDir: string,
 ): Promise<any[]> {
   const migrations = readdirSync(migrationsDir, { withFileTypes: true });
-  const migrationsPaths = migrations.map((mig) => mig.name)
+  const migrationsPaths = migrations
+    .map((mig) => mig.name)
     .filter((name) => name.endsWith(".ts"))
     .sort((a, b) => a.localeCompare(b))
     .map(async (name) => {
-      const migrationPath = path.toFileUrl(path.join(migrationsDir, name)).href;
+      const migrationPath = pathToFileUrl(path.join(migrationsDir, name));
       return [name, await import(migrationPath)];
     });
 
@@ -56,6 +59,8 @@ export async function generateCommand(
   options: GenerateCommandOptions,
 ): Promise<void> {
   const cwd = options.cwd || process.cwd();
+  // Generated files must import the name that resolves in THIS project.
+  const pkg = resolveImportSpecifier(cwd);
   const config = await loadConfig({ configPath: options.configPath, cwd });
 
   const migrationsDir = config.paths?.migrations || "./migrations";
@@ -65,9 +70,8 @@ export async function generateCommand(
     return;
   }
 
-  const migrationsDefinitions = await extractMigrationDefinitions(
-    migrationsDirPath,
-  );
+  const migrationsDefinitions =
+    await extractMigrationDefinitions(migrationsDirPath);
   const lastMigration = migrationsDefinitions[migrationsDefinitions.length - 1];
 
   // Ensure a parent is never used twice
@@ -95,12 +99,12 @@ export async function generateCommand(
      * @module
      */
 
-    import { migrationDefinition } from "@diister/mongodbee/migration";${
-    lastMigration
-      ? `
+    import { migrationDefinition } from "${pkg}/migration";${
+      lastMigration
+        ? `
     import parent from "./${lastMigration[0]}";`
-      : ""
-  }
+        : ""
+    }
 
     const id = "${id}";
     const name = "${options.name || "Migration Name"}";
@@ -109,28 +113,28 @@ export async function generateCommand(
       parent: ${lastMigration ? "parent" : "null"},
       schemas: {
         collections: {${
-    lastMigration?.[1]?.schemas?.collections
-      ? `
+          lastMigration?.[1]?.schemas?.collections
+            ? `
           ...parent.schemas.collections,`
-      : `
+            : `
           // \"<collection_name>\" : {}`
-  }
+        }
         },
         multiCollections: {${
-    lastMigration?.[1]?.schemas?.multiCollections
-      ? `
+          lastMigration?.[1]?.schemas?.multiCollections
+            ? `
           ...parent.schemas.multiCollections,`
-      : `
+            : `
           // \"<collection_name>\" : {}`
-  }
+        }
         },
         multiModels: {${
-    lastMigration?.[1]?.schemas?.multiModels
-      ? `
+          lastMigration?.[1]?.schemas?.multiModels
+            ? `
           ...parent.schemas.multiModels,`
-      : `
+            : `
           // \"<collection_type>\" : {}`
-  }
+        }
         }
       },
       migrate(migration) {

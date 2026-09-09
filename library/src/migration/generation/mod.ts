@@ -3,7 +3,7 @@
  * Functions for generating migration IDs and files.
  */
 
-import { ulid } from "@std/ulid/ulid";
+import { ulid } from "../../utils/ulid.ts";
 
 /**
  * Generates a unique migration ID based on the current timestamp and an optional name.

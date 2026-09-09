@@ -11,7 +11,9 @@
  * @module
  */
 
-import { assert, assertEquals } from "@std/assert";
+import { test } from "../../+harness.ts";
+import { writeFile } from "node:fs/promises";
+import { assert, assertEquals } from "../../+assert.ts";
 import { initCommand } from "../../../src/migration/cli/commands/init.ts";
 import { generateCommand } from "../../../src/migration/cli/commands/generate.ts";
 import {
@@ -25,7 +27,25 @@ import {
   withTempDir,
 } from "./shared.ts";
 
-Deno.test("generate - creates first migration with no parent", async () => {
+/**
+ * Finds a generated migration by the name it was generated under.
+ *
+ * Indexing the sorted listing is not safe here: a migration id embeds a ULID
+ * whose time prefix is identical for two files generated in the same
+ * millisecond, leaving the random tail — and therefore the sort order — to
+ * decide. The suite used to index, and failed intermittently once the runner
+ * got fast enough to generate both within one millisecond.
+ */
+function migrationNamed(files: string[], name: string): string {
+  const found = files.find((f) => f.includes(`@${name}`));
+  assert(
+    found !== undefined,
+    `no generated migration named "${name}" in ${files.join(", ")}`,
+  );
+  return found;
+}
+
+test("generate - creates first migration with no parent", async () => {
   await withTempDir(async (tempDir) => {
     // Setup
     await initCommand({ cwd: tempDir });
@@ -50,7 +70,7 @@ Deno.test("generate - creates first migration with no parent", async () => {
   });
 });
 
-Deno.test("generate - creates child migration with parent reference", async () => {
+test("generate - creates child migration with parent reference", async () => {
   await withTempDir(async (tempDir) => {
     // Setup
     await initCommand({ cwd: tempDir });
@@ -67,17 +87,18 @@ Deno.test("generate - creates child migration with parent reference", async () =
     assertEquals(files.length, 2);
 
     // Check second migration references first as parent
-    const secondMigrationPath = getMigrationPath(tempDir, files[1]);
-    const content = await readFile(secondMigrationPath);
+    const content = await readFile(
+      getMigrationPath(tempDir, migrationNamed(files, "add_users")),
+    );
 
     assert(content !== null);
     assert(content.includes("import parent from"));
-    assert(content.includes(files[0]));
+    assert(content.includes(migrationNamed(files, "initial")));
     assert(content.includes("parent: parent"));
   });
 });
 
-Deno.test("generate - includes parent schemas in child migration", async () => {
+test("generate - includes parent schemas in child migration", async () => {
   await withTempDir(async (tempDir) => {
     // Setup
     await initCommand({ cwd: tempDir });
@@ -91,7 +112,10 @@ Deno.test("generate - includes parent schemas in child migration", async () => {
     // Check second migration inherits parent schemas
     const files = listMigrationFiles(getMigrationsDir(tempDir));
 
-    const secondMigrationPath = getMigrationPath(tempDir, files[1]);
+    const secondMigrationPath = getMigrationPath(
+      tempDir,
+      migrationNamed(files, "add_field"),
+    );
     const content = await readFile(secondMigrationPath);
 
     assert(content !== null);
@@ -99,7 +123,7 @@ Deno.test("generate - includes parent schemas in child migration", async () => {
   });
 });
 
-Deno.test("generate - creates unique migration IDs", async () => {
+test("generate - creates unique migration IDs", async () => {
   await withTempDir(async (tempDir) => {
     // Setup
     await initCommand({ cwd: tempDir });
@@ -123,7 +147,7 @@ Deno.test("generate - creates unique migration IDs", async () => {
   });
 });
 
-Deno.test("generate - preserves migration name in ID", async () => {
+test("generate - preserves migration name in ID", async () => {
   await withTempDir(async (tempDir) => {
     // Setup
     await initCommand({ cwd: tempDir });
@@ -144,7 +168,7 @@ Deno.test("generate - preserves migration name in ID", async () => {
   });
 });
 
-Deno.test("generate - migration ID follows correct format", async () => {
+test("generate - migration ID follows correct format", async () => {
   await withTempDir(async (tempDir) => {
     // Setup
     await initCommand({ cwd: tempDir });
@@ -180,7 +204,7 @@ Deno.test("generate - migration ID follows correct format", async () => {
   });
 });
 
-Deno.test("generate - includes proper TypeScript structure", async () => {
+test("generate - includes proper TypeScript structure", async () => {
   await withTempDir(async (tempDir) => {
     // Setup
     await initCommand({ cwd: tempDir });
@@ -211,7 +235,7 @@ Deno.test("generate - includes proper TypeScript structure", async () => {
   });
 });
 
-Deno.test("generate - handles migrations with long names", async () => {
+test("generate - handles migrations with long names", async () => {
   await withTempDir(async (tempDir) => {
     // Setup
     await initCommand({ cwd: tempDir });
@@ -228,7 +252,7 @@ Deno.test("generate - handles migrations with long names", async () => {
   });
 });
 
-Deno.test("generate - creates multiple migrations in sequence", async () => {
+test("generate - creates multiple migrations in sequence", async () => {
   await withTempDir(async (tempDir) => {
     // Setup
     await initCommand({ cwd: tempDir });
@@ -248,8 +272,8 @@ Deno.test("generate - creates multiple migrations in sequence", async () => {
     assertEquals(files.length, 4);
 
     // Check names
-    assert(files[0].includes("@initial"));
-    assert(files[1].includes("@add_users"));
+    migrationNamed(files, "initial");
+    migrationNamed(files, "add_users");
     assert(files[2].includes("@add_posts"));
     assert(files[3].includes("@add_comments"));
 
@@ -262,10 +286,10 @@ Deno.test("generate - creates multiple migrations in sequence", async () => {
   });
 });
 
-Deno.test("generate - fails gracefully if migrations directory doesn't exist", async () => {
+test("generate - fails gracefully if migrations directory doesn't exist", async () => {
   await withTempDir(async (tempDir) => {
     // Create config without initializing (no migrations directory)
-    await Deno.writeTextFile(
+    await writeFile(
       `${tempDir}/mongodbee.config.ts`,
       `export default { paths: { migrationsDir: "./migrations" } };`,
     );

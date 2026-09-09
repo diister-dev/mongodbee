@@ -9,7 +9,16 @@ import { mongoOperationQueue } from "./operation.ts";
 import { applyCollectionIndexes } from "./indexes-applier.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
 import { isSchemaManaged } from "./runtime-config.ts";
-import { getNestedValue } from "./dot-notation.ts";
+import {
+  assertSortResolvableBeforePipeline,
+  buildCursorLadderBranches,
+  buildExprCursorFilter,
+  buildSortMachinery,
+  buildSortPaginateStages,
+  composeCursorQuery,
+  normalizePaginateSort,
+  type SortMachinery,
+} from "./paginate-sort.ts";
 import {
   createOperationTracer,
   filterKeys,
@@ -23,8 +32,10 @@ import {
 import type { Db } from "./mongodb.ts";
 import type * as m from "mongodb";
 
-// Type for aggregation pipeline stages in simple collections
-type AggregationStage = Record<string, unknown>;
+import type { AggregationStage } from "./types.ts";
+
+// `_id` always exists — its cursor rungs stay raw comparisons (no null branch).
+const NON_NULLABLE_SORT_FIELDS: ReadonlySet<string> = new Set(["_id"]);
 
 /**
  * Stage builder for simple collections (not multi-collection)
@@ -42,11 +53,13 @@ type SimpleStageBuilder = {
   lookup: (
     localField: string,
     foreignField: string,
-    asOrOptions?: string | {
-      as?: string;
-      pipeline?: AggregationStage[];
-      let?: Record<string, unknown>;
-    },
+    asOrOptions?:
+      | string
+      | {
+          as?: string;
+          pipeline?: AggregationStage[];
+          let?: Record<string, unknown>;
+        },
   ) => AggregationStage;
   /**
    * Lookup into an external collection
@@ -56,11 +69,13 @@ type SimpleStageBuilder = {
     fromCollection: string,
     localField: string,
     foreignField: string,
-    asOrOptions?: string | {
-      as?: string;
-      pipeline?: AggregationStage[];
-      let?: Record<string, unknown>;
-    },
+    asOrOptions?:
+      | string
+      | {
+          as?: string;
+          pipeline?: AggregationStage[];
+          let?: Record<string, unknown>;
+        },
   ) => AggregationStage;
   /** Project specific fields */
   project: (
@@ -96,15 +111,17 @@ type CollectionOptions = {
   telemetry?: TelemetryOptions;
 };
 
-type WithId<T> = T extends { _id: unknown } ? T
-  : m.WithId<T> | { _id: string } & T;
+type WithId<T> = T extends { _id: unknown }
+  ? T
+  : m.WithId<T> | ({ _id: string } & T);
 
 /**
  * Helper type that recursively allows symbol values (for removeField()) in nested objects
  */
-type DeepWithRemovable<T> = T extends Record<string, unknown>
-  ? { [K in keyof T]?: DeepWithRemovable<T[K]> | symbol }
-  : T;
+type DeepWithRemovable<T> =
+  T extends Record<string, unknown>
+    ? { [K in keyof T]?: DeepWithRemovable<T[K]> | symbol }
+    : T;
 
 /**
  * Helper type that allows symbol values (for removeField()) in update operations
@@ -112,23 +129,22 @@ type DeepWithRemovable<T> = T extends Record<string, unknown>
  * Also accepts string keys for MongoDB dot notation (e.g., "items.0.price")
  * Recursively applies to nested objects
  */
-type WithRemovableFields<T> =
-  & {
-    [K in keyof T]?: DeepWithRemovable<T[K]> | symbol;
-  }
-  & {
-    [key: string]: unknown;
-  };
+type WithRemovableFields<T> = {
+  [K in keyof T]?: DeepWithRemovable<T[K]> | symbol;
+} & {
+  [key: string]: unknown;
+};
 
 /**
  * Update filter type that supports removeField() symbols in $set and other operators
  */
-type UpdateFilterWithRemovable<T> =
-  & Omit<m.UpdateFilter<T>, "$set" | "$setOnInsert">
-  & {
-    $set?: WithRemovableFields<T>;
-    $setOnInsert?: WithRemovableFields<T>;
-  };
+type UpdateFilterWithRemovable<T> = Omit<
+  m.UpdateFilter<T>,
+  "$set" | "$setOnInsert"
+> & {
+  $set?: WithRemovableFields<T>;
+  $setOnInsert?: WithRemovableFields<T>;
+};
 
 /**
  * Process update filter to extract removeField() symbols from $set and convert to $unset
@@ -152,7 +168,7 @@ function processUpdateWithRemoveField(
 
     if (Object.keys(unset).length > 0) {
       result.$unset = {
-        ...(result.$unset as Record<string, 1> || {}),
+        ...((result.$unset as Record<string, 1>) || {}),
         ...unset,
       };
     }
@@ -195,128 +211,137 @@ export type CollectionResult<
     string,
     v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
   >,
-> =
-  & Omit<
-    m.Collection<TInput<T>>,
-    | "findOne"
-    | "find"
-    | "insertOne"
-    | "updateOne"
-    | "updateMany"
-    | "distinct"
-    | "findOneAndDelete"
-    | "findOneAndReplace"
-    | "findOneAndUpdate"
-    | "indexInformation"
-    | "listSearchIndexes"
-    | "count"
-  >
-  & {
-    collection: m.Collection<TInput<T>>;
-    schema: v.ObjectSchema<
-      { readonly _id: v.OptionalSchema<v.AnySchema, undefined> } & T,
-      undefined
-    >;
-    on: ReturnType<typeof EventEmitter<Events<T>>>["on"];
-    off: ReturnType<typeof EventEmitter<Events<T>>>["off"];
-    insertOne: (
-      doc: m.OptionalUnlessRequiredId<TInput<T>>,
-      options?: m.InsertOneOptions,
-    ) => Promise<WithId<TOutput<T>>["_id"]>;
-    findOne: (
-      filter: m.Filter<WithId<TInput<T>>>,
-      options?: Omit<m.FindOptions, "timeoutMode"> & m.Abortable,
-    ) => Promise<WithId<TOutput<T>> | null>;
-    getById: (id: string | m.ObjectId) => Promise<WithId<TOutput<T>>>;
-    find: (
-      filter: m.Filter<TInput<T>>,
-      options?: m.FindOptions & m.Abortable,
-    ) => m.AbstractCursor<TOutput<T>>;
-    findInvalid: (
-      filter: m.Filter<TInput<T>>,
-      options?: m.FindOptions & m.Abortable,
-    ) => m.AbstractCursor<WithId<TInput<T>>>;
-    withSession: Awaited<ReturnType<typeof getSessionContext>>["withSession"];
+> = Omit<
+  m.Collection<TInput<T>>,
+  | "findOne"
+  | "find"
+  | "insertOne"
+  | "updateOne"
+  | "updateMany"
+  | "distinct"
+  | "findOneAndDelete"
+  | "findOneAndReplace"
+  | "findOneAndUpdate"
+  | "indexInformation"
+  | "listSearchIndexes"
+  | "count"
+> & {
+  collection: m.Collection<TInput<T>>;
+  schema: v.ObjectSchema<
+    { readonly _id: v.OptionalSchema<v.AnySchema, undefined> } & T,
+    undefined
+  >;
+  on: ReturnType<typeof EventEmitter<Events<T>>>["on"];
+  off: ReturnType<typeof EventEmitter<Events<T>>>["off"];
+  insertOne: (
+    doc: m.OptionalUnlessRequiredId<TInput<T>>,
+    options?: m.InsertOneOptions,
+  ) => Promise<WithId<TOutput<T>>["_id"]>;
+  findOne: (
+    filter: m.Filter<WithId<TInput<T>>>,
+    options?: Omit<m.FindOptions, "timeoutMode"> & m.Abortable,
+  ) => Promise<WithId<TOutput<T>> | null>;
+  getById: (id: string | m.ObjectId) => Promise<WithId<TOutput<T>>>;
+  find: (
+    filter: m.Filter<TInput<T>>,
+    options?: m.FindOptions & m.Abortable,
+  ) => m.AbstractCursor<TOutput<T>>;
+  findInvalid: (
+    filter: m.Filter<TInput<T>>,
+    options?: m.FindOptions & m.Abortable,
+  ) => m.AbstractCursor<WithId<TInput<T>>>;
+  withSession: Awaited<ReturnType<typeof getSessionContext>>["withSession"];
 
-    // Utilities
-    paginate: <E = WithId<TOutput<T>>, R = E>(
-      filter: m.Filter<TInput<T>>,
-      options?: {
-        limit?: number;
-        afterId?: string | m.ObjectId;
-        beforeId?: string | m.ObjectId;
-        sort?: m.Sort | m.SortDirection;
-        prepare?: (doc: WithId<TOutput<T>>) => Promise<E> | E;
-        filter?: (doc: E) => Promise<boolean> | boolean;
-        format?: (doc: E) => Promise<R> | R;
-        pipeline?: (stage: SimpleStageBuilder) => AggregationStage[];
-        /**
-         * Skip the `countDocuments` call(s). `total` and `position` will be
-         * `undefined` in the result. Useful when the caller only needs the
-         * page data and doesn't care about absolute position in the result set.
-         */
-        skipTotal?: boolean;
-        /**
-         * Fetch one extra document past `limit` to set `hasMore` cheaply
-         * (no second count). The extra row is dropped before the result is
-         * returned. Combine with `skipTotal: true` for fully count-free
-         * pagination.
-         */
-        peek?: boolean;
-      },
-    ) => Promise<{
-      total?: number;
-      position?: number;
-      data: R[];
-      hasMore?: boolean;
-    }>;
+  // Utilities
+  paginate: <E = WithId<TOutput<T>>, R = E>(
+    filter: m.Filter<TInput<T>>,
+    options?: {
+      limit?: number;
+      afterId?: string | m.ObjectId;
+      beforeId?: string | m.ObjectId;
+      sort?: m.Sort | m.SortDirection;
+      prepare?: (doc: WithId<TOutput<T>>) => Promise<E> | E;
+      filter?: (doc: E) => Promise<boolean> | boolean;
+      format?: (doc: E) => Promise<R> | R;
+      pipeline?: (stage: SimpleStageBuilder) => AggregationStage[];
+      /**
+       * Stages that run BEFORE the cursor match and the `$sort`, so `sort`
+       * may reference fields they compute (e.g. sort by a `$lookup`ed
+       * document's field). Unlike `pipeline` (which runs after the sort,
+       * lazily over ~`limit` docs), these stages run over the whole
+       * filtered set — keep them lean (join just what the sort needs).
+       * Fields they add survive into the returned docs. Sort keys must be
+       * scalar (`$first` a lookup result before sorting on it).
+       */
+      sortPipeline?: (stage: SimpleStageBuilder) => AggregationStage[];
+      /**
+       * Skip the `countDocuments` call(s). `total` and `position` will be
+       * `undefined` in the result. Useful when the caller only needs the
+       * page data and doesn't care about absolute position in the result set.
+       */
+      skipTotal?: boolean;
+      /**
+       * Fetch one extra document past `limit` to set `hasMore` cheaply
+       * (no second count). The extra row is dropped before the result is
+       * returned. Combine with `skipTotal: true` for fully count-free
+       * pagination.
+       */
+      peek?: boolean;
+    },
+  ) => Promise<{
+    total?: number;
+    position?: number;
+    data: R[];
+    hasMore?: boolean;
+  }>;
 
-    // From mongodb.Collection
-    updateOne(
-      filter: m.Filter<WithId<TInput<T>>>,
-      update: UpdateFilterWithRemovable<TInput<T>> | m.Document[],
-      options?: m.UpdateOptions,
-    ): Promise<m.UpdateResult<TInput<T>>>;
-    updateMany(
-      filter: m.Filter<TInput<T>>,
-      update: UpdateFilterWithRemovable<TInput<T>> | m.Document[],
-      options?: m.UpdateOptions,
-    ): Promise<m.UpdateResult<TInput<T>>>;
-    distinct<Key extends keyof WithId<TInput<T>>>(
-      key: Key,
-      filter: m.Filter<TInput<T>>,
-      options?: m.DistinctOptions,
-    ): Promise<Array<m.Flatten<WithId<TInput<T>>[Key]>>>;
-    findOneAndDelete(
-      filter: m.Filter<TInput<T>>,
-      options?: m.FindOneAndDeleteOptions & { includeResultMetadata: boolean },
-    ): Promise<WithId<TInput<T>> | null>;
-    findOneAndReplace(
-      filter: m.Filter<TInput<T>>,
-      replacement: m.WithoutId<TInput<T>>,
-      options?: m.FindOneAndReplaceOptions & { includeResultMetadata: boolean },
-    ): Promise<m.ModifyResult<TInput<T>> | null>;
-    findOneAndUpdate(
-      filter: m.Filter<TInput<T>>,
-      update: UpdateFilterWithRemovable<TInput<T>> | m.Document[],
-      options?: m.FindOneAndUpdateOptions & { includeResultMetadata: boolean },
-    ): Promise<m.WithId<TInput<T>> | null>;
-    indexInformation(
-      options: m.IndexInformationOptions & { full: true },
-    ): Promise<m.IndexDescriptionInfo[]>;
-    listSearchIndexes(
-      name: string,
-      options?: m.ListSearchIndexesOptions,
-    ): m.ListSearchIndexesCursor;
-  };
+  // From mongodb.Collection
+  updateOne(
+    filter: m.Filter<WithId<TInput<T>>>,
+    update: UpdateFilterWithRemovable<TInput<T>> | m.Document[],
+    options?: m.UpdateOptions,
+  ): Promise<m.UpdateResult<TInput<T>>>;
+  updateMany(
+    filter: m.Filter<TInput<T>>,
+    update: UpdateFilterWithRemovable<TInput<T>> | m.Document[],
+    options?: m.UpdateOptions,
+  ): Promise<m.UpdateResult<TInput<T>>>;
+  distinct<Key extends keyof WithId<TInput<T>>>(
+    key: Key,
+    filter: m.Filter<TInput<T>>,
+    options?: m.DistinctOptions,
+  ): Promise<Array<m.Flatten<WithId<TInput<T>>[Key]>>>;
+  findOneAndDelete(
+    filter: m.Filter<TInput<T>>,
+    options?: m.FindOneAndDeleteOptions & { includeResultMetadata: boolean },
+  ): Promise<WithId<TInput<T>> | null>;
+  findOneAndReplace(
+    filter: m.Filter<TInput<T>>,
+    replacement: m.WithoutId<TInput<T>>,
+    options?: m.FindOneAndReplaceOptions & { includeResultMetadata: boolean },
+  ): Promise<m.ModifyResult<TInput<T>> | null>;
+  findOneAndUpdate(
+    filter: m.Filter<TInput<T>>,
+    update: UpdateFilterWithRemovable<TInput<T>> | m.Document[],
+    options?: m.FindOneAndUpdateOptions & { includeResultMetadata: boolean },
+  ): Promise<m.WithId<TInput<T>> | null>;
+  indexInformation(
+    options: m.IndexInformationOptions & { full: true },
+  ): Promise<m.IndexDescriptionInfo[]>;
+  listSearchIndexes(
+    name: string,
+    options?: m.ListSearchIndexesOptions,
+  ): m.ListSearchIndexesCursor;
+};
 
 /**
  * Utility type for extracting the schema type from a collection
  * @template T - The CollectionResult type to extract the schema from
  */
-export type CollectionSchema<T> = T extends CollectionResult<infer U>
-  ? WithId<v.InferOutput<v.ObjectSchema<U, undefined>>>
-  : never;
+export type CollectionSchema<T> =
+  T extends CollectionResult<infer U>
+    ? WithId<v.InferOutput<v.ObjectSchema<U, undefined>>>
+    : never;
 
 // Roadmap
 //
@@ -416,7 +441,8 @@ export async function collection<
   const invalidValidation = { $nor: [validator] };
 
   async function applyValidator() {
-    const collections = await db.listCollections({ name: collectionName })
+    const collections = await db
+      .listCollections({ name: collectionName })
       .toArray();
 
     if (collections.length === 0) {
@@ -575,9 +601,10 @@ export async function collection<
     // Document creation operations with validation
     async insertOne(doc, options?) {
       const run = async () => {
-        const validatedDoc = v.parse(schema, doc) as m.OptionalUnlessRequiredId<
-          TInput
-        >;
+        const validatedDoc = v.parse(
+          schema,
+          doc,
+        ) as m.OptionalUnlessRequiredId<TInput>;
 
         // Apply sanitization based on configuration
         const safeDoc = sanitizeForMongoDB(validatedDoc, {
@@ -595,24 +622,21 @@ export async function collection<
         }
         return inserted.insertedId as WithId<TOutput>["_id"];
       };
-      return traced(
-        tele,
-        "insertOne",
-        undefined,
-        run,
-        () => ({ [TA.INSERTED_COUNT]: 1 }),
-      );
+      return traced(tele, "insertOne", undefined, run, () => ({
+        [TA.INSERTED_COUNT]: 1,
+      }));
     },
     async insertMany(docs, options?) {
       const run = async () => {
         const validatedDocs = docs.map((doc) => v.parse(schema, doc));
 
         // Apply sanitization based on configuration
-        const safeDocs = validatedDocs.map((doc) =>
-          sanitizeForMongoDB(doc, {
-            undefinedBehavior: opts.undefinedBehavior || "remove",
-            deep: true,
-          }) as unknown as m.OptionalUnlessRequiredId<TInput>
+        const safeDocs = validatedDocs.map(
+          (doc) =>
+            sanitizeForMongoDB(doc, {
+              undefinedBehavior: opts.undefinedBehavior || "remove",
+              deep: true,
+            }) as unknown as m.OptionalUnlessRequiredId<TInput>,
         );
 
         const session = sessionContext.getSession();
@@ -638,10 +662,13 @@ export async function collection<
     async findOne(filter, options?) {
       const run = async () => {
         const session = sessionContext.getSession();
-        const result = await collection.findOne({
-          ...validator, // Prevent returning invalid documents
-          ...filter as unknown as m.Filter<TInput>,
-        }, { session, ...options });
+        const result = await collection.findOne(
+          {
+            ...validator, // Prevent returning invalid documents
+            ...(filter as unknown as m.Filter<TInput>),
+          },
+          { session, ...options },
+        );
 
         if (!result) {
           return null;
@@ -708,14 +735,16 @@ export async function collection<
         const results = await originalToArray.call(cursor);
         let invalidsCount = 0;
 
-        const output = results.map((item) => {
-          const validation = v.safeParse(schema, item);
-          if (!validation.success) {
-            invalidsCount++;
-            return null;
-          }
-          return validation.output as m.WithId<TInput>;
-        }).filter((item): item is m.WithId<TInput> => item !== null);
+        const output = results
+          .map((item) => {
+            const validation = v.safeParse(schema, item);
+            if (!validation.success) {
+              invalidsCount++;
+              return null;
+            }
+            return validation.output as m.WithId<TInput>;
+          })
+          .filter((item): item is m.WithId<TInput> => item !== null);
 
         if (invalidsCount > 0) {
           console.warn(
@@ -727,9 +756,13 @@ export async function collection<
       };
 
       if (tele) {
-        cursor.toArray = tele.wrapToArray("find", {
-          [TA.FILTER_KEYS]: filterKeys(filter),
-        }, cursor.toArray.bind(cursor));
+        cursor.toArray = tele.wrapToArray(
+          "find",
+          {
+            [TA.FILTER_KEYS]: filterKeys(filter),
+          },
+          cursor.toArray.bind(cursor),
+        );
       }
 
       return cursor as unknown as m.AbstractCursor<TOutput>;
@@ -739,26 +772,28 @@ export async function collection<
       options?: m.FindOptions & m.Abortable,
     ): m.AbstractCursor<TOutput> {
       const session = sessionContext.getSession();
-      const cursor = collection.find({
-        $and: [
-          filter as any,
-          invalidValidation,
-        ],
-      }, { session, ...options });
+      const cursor = collection.find(
+        {
+          $and: [filter as any, invalidValidation],
+        },
+        { session, ...options },
+      );
 
       const originalToArray = cursor.toArray;
       // Override toArray
       cursor.toArray = async function () {
         const results = await originalToArray.call(cursor);
         let invalidsCount = 0;
-        const output = results.map((item) => {
-          const validation = v.safeParse(schema, item);
-          if (!validation.success) {
-            invalidsCount++;
-            return item as m.WithId<TInput>;
-          }
-          return null;
-        }).filter((item): item is m.WithId<TInput> => item !== null);
+        const output = results
+          .map((item) => {
+            const validation = v.safeParse(schema, item);
+            if (!validation.success) {
+              invalidsCount++;
+              return item as m.WithId<TInput>;
+            }
+            return null;
+          })
+          .filter((item): item is m.WithId<TInput> => item !== null);
 
         if (invalidsCount > 0) {
           console.warn(
@@ -769,9 +804,13 @@ export async function collection<
       };
 
       if (tele) {
-        cursor.toArray = tele.wrapToArray("findInvalid", {
-          [TA.FILTER_KEYS]: filterKeys(filter),
-        }, cursor.toArray.bind(cursor));
+        cursor.toArray = tele.wrapToArray(
+          "findInvalid",
+          {
+            [TA.FILTER_KEYS]: filterKeys(filter),
+          },
+          cursor.toArray.bind(cursor),
+        );
       }
 
       return cursor as unknown as m.AbstractCursor<TOutput>;
@@ -787,6 +826,7 @@ export async function collection<
         filter?: (doc: E) => Promise<boolean> | boolean;
         format?: (doc: E) => Promise<R>;
         pipeline?: (stage: SimpleStageBuilder) => AggregationStage[];
+        sortPipeline?: (stage: SimpleStageBuilder) => AggregationStage[];
         skipTotal?: boolean;
         peek?: boolean;
       },
@@ -808,105 +848,35 @@ export async function collection<
           filter: customFilter,
           format,
           pipeline: pipelineBuilder,
+          sortPipeline: sortPipelineBuilder,
         } = options || {};
         const session = sessionContext.getSession();
         const baseQuery: m.Filter<TInput> = { ...filter };
         let query: m.Filter<TInput> = { ...filter };
 
-        // Normalize sort to object format
-        sort = sort || { _id: 1 };
-        const sortObj: Record<string, 1 | -1> =
-          typeof sort === "object" && !Array.isArray(sort)
-            ? { ...sort as Record<string, 1 | -1> }
-            : {
-              _id: sort === 1 || sort === "asc" || sort === "ascending"
-                ? 1
-                : -1,
-            };
-
-        // Always add _id as tie-breaker if not already in sort (ensures stable ordering for duplicate values)
-        if (!("_id" in sortObj)) {
-          sortObj._id = 1;
-        }
-        // Update sort to include _id tie-breaker
+        // Normalize sort + direction-following `_id` tie-break (see
+        // normalizePaginateSort for why the tie-break is not a fixed `1`).
+        const sortObj = normalizePaginateSort(sort);
         sort = sortObj;
 
-        // Helper to build cursor-based pagination filter
-        const buildCursorFilter = async (
+        // Resolve the anchor and build the flat cursor DNF branches — see
+        // paginate-sort.ts for the null-boundary and rooted-$or reasoning.
+        const buildCursorBranches = async (
           anchorId: string | m.ObjectId,
           direction: "after" | "before",
-        ) => {
-          // Fetch the anchor document to get its sort field values
+        ): Promise<Record<string, unknown>[] | null> => {
           const anchorDoc = await collection.findOne(
             { _id: anchorId } as m.Filter<TInput>,
             { session },
           );
           if (!anchorDoc) return null;
-
-          const sortFields = Object.keys(sortObj);
-
-          // If sorting only by _id, use simple comparison
-          if (sortFields.length === 1 && sortFields[0] === "_id") {
-            const op = direction === "after"
-              ? (sortObj._id === 1 ? "$gt" : "$lt")
-              : (sortObj._id === 1 ? "$lt" : "$gt");
-            return { _id: { [op]: anchorId } };
-          }
-
-          // Build compound cursor filter for custom sort
-          // For afterId with sort { field: 1 }, we want documents where:
-          // (field > anchorValue) OR (field == anchorValue AND _id > anchorId)
-          const conditions: Record<string, unknown>[] = [];
-
-          for (let i = 0; i < sortFields.length; i++) {
-            const field = sortFields[i];
-            const sortDir = sortObj[field];
-            const anchorValue = getNestedValue(
-              anchorDoc as Record<string, unknown>,
-              field,
-            );
-
-            // Build condition for this level
-            const condition: Record<string, unknown> = {};
-
-            // All previous fields must be equal
-            for (let j = 0; j < i; j++) {
-              const prevField = sortFields[j];
-              condition[prevField] = getNestedValue(
-                anchorDoc as Record<string, unknown>,
-                prevField,
-              );
-            }
-
-            // Current field uses comparison based on sort direction and pagination direction
-            const isForward = direction === "after";
-            const op = (sortDir === 1) === isForward ? "$gt" : "$lt";
-            condition[field] = { [op]: anchorValue };
-
-            conditions.push(condition);
-          }
-
-          return { $or: conditions };
+          return buildCursorLadderBranches({
+            sortObj,
+            anchorDoc: anchorDoc as Record<string, unknown>,
+            direction,
+            nonNullable: NON_NULLABLE_SORT_FIELDS,
+          });
         };
-
-        // Add pagination filters
-        if (afterId) {
-          const cursorFilter = await buildCursorFilter(afterId, "after");
-          if (cursorFilter) {
-            query = { ...query, ...cursorFilter } as m.Filter<TInput>;
-          }
-        } else if (beforeId) {
-          const cursorFilter = await buildCursorFilter(beforeId, "before");
-          if (cursorFilter) {
-            query = { ...query, ...cursorFilter } as m.Filter<TInput>;
-          }
-          // Reverse the sort for beforeId to get items in reverse order
-          const reversedSort: Record<string, 1 | -1> = {};
-          for (const [field, dir] of Object.entries(sortObj)) {
-            reversedSort[field] = (dir === 1 ? -1 : 1) as 1 | -1;
-          }
-          sort = reversedSort;
-        }
 
         // Stage builder for simple collections
         const stageBuilder: SimpleStageBuilder = {
@@ -917,9 +887,10 @@ export async function collection<
             $unwind: field.startsWith("$") ? field : `$${field}`,
           }),
           lookup: (localField, foreignField, asOrOptions) => {
-            const baseAs = typeof asOrOptions === "string"
-              ? asOrOptions
-              : asOrOptions?.as ?? localField;
+            const baseAs =
+              typeof asOrOptions === "string"
+                ? asOrOptions
+                : (asOrOptions?.as ?? localField);
             if (
               typeof asOrOptions === "object" &&
               (asOrOptions.pipeline || asOrOptions.let)
@@ -952,9 +923,10 @@ export async function collection<
             foreignField,
             asOrOptions,
           ) => {
-            const baseAs = typeof asOrOptions === "string"
-              ? asOrOptions
-              : asOrOptions?.as ?? localField;
+            const baseAs =
+              typeof asOrOptions === "string"
+                ? asOrOptions
+                : (asOrOptions?.as ?? localField);
             if (
               typeof asOrOptions === "object" &&
               (asOrOptions.pipeline || asOrOptions.let)
@@ -993,6 +965,117 @@ export async function collection<
         const customPipeline = pipelineBuilder
           ? pipelineBuilder(stageBuilder)
           : [];
+        const sortStages = sortPipelineBuilder
+          ? sortPipelineBuilder(stageBuilder)
+          : [];
+        assertSortResolvableBeforePipeline(
+          Object.keys(sortObj),
+          sortStages,
+          customPipeline,
+        );
+        const sortMachinery =
+          sortStages.length > 0 ? buildSortMachinery(sortObj) : null;
+
+        // Resolve the cursor anchor THROUGH the sort pipeline: the sort key
+        // may only exist after those stages run (e.g. a $lookup'ed field), so
+        // a raw findOne would yield `undefined` anchor values and a cursor
+        // that restarts at page 1. Fail loud on a missing/dropped anchor —
+        // this API is new, no silent page-1 restart to preserve.
+        const resolveSortAnchor = async (
+          anchorId: string | m.ObjectId,
+          label: "afterId" | "beforeId",
+        ): Promise<Record<string, unknown>> => {
+          const rows = await collection
+            .aggregate(
+              [{ $match: { _id: anchorId } }, ...sortStages, { $limit: 1 }],
+              { session },
+            )
+            .toArray();
+          if (rows[0]) return rows[0] as Record<string, unknown>;
+          const exists = await collection.findOne(
+            { _id: anchorId } as m.Filter<TInput>,
+            { session },
+          );
+          throw new Error(
+            exists
+              ? `paginate: ${label} was dropped by \`sortPipeline\` — cannot ` +
+                  `anchor the page (the anchor must survive the sort pipeline)`
+              : `paginate: ${label} was not found — cannot anchor the page`,
+          );
+        };
+
+        // Add pagination filters. With a sortPipeline, the cursor is an $expr
+        // ladder over the hidden normalized sort keys (see paginate-sort.ts) —
+        // query operators would silently drop docs whose sort key is missing.
+        // Otherwise the cursor DNF is composed as a ROOTED $or with the user
+        // filter folded per branch (see composeCursorQuery) — the composed
+        // query REPLACES `query`, never merges into it: a spread once let the
+        // cursor's $or silently overwrite a user filter's own $or.
+        // Anchor-not-found is a DIVERGENT contract, deliberately: here (and
+        // on multiCollection) a ghost anchor silently RESTARTS — afterId
+        // yields page 1 with position 1, beforeId yields the LAST page with
+        // position 0 — because the pinned consumer relies on the restart.
+        // scopedMultiCollection throws instead, and the sortPipeline path
+        // throws on every surface. Pinned by paginate-anchor-not-found.test.
+        let exprCursor: AggregationStage | null = null;
+        let cursorBranches: Record<string, unknown>[] | null = null;
+        if (afterId) {
+          if (sortMachinery) {
+            const anchor = await resolveSortAnchor(afterId, "afterId");
+            exprCursor = buildExprCursorFilter(sortMachinery, anchor, "after");
+          } else {
+            cursorBranches = await buildCursorBranches(afterId, "after");
+            if (cursorBranches) {
+              query = composeCursorQuery(
+                [baseQuery as Record<string, unknown>],
+                cursorBranches,
+              ) as m.Filter<TInput>;
+            }
+          }
+        } else if (beforeId) {
+          if (sortMachinery) {
+            const anchor = await resolveSortAnchor(beforeId, "beforeId");
+            exprCursor = buildExprCursorFilter(sortMachinery, anchor, "before");
+          } else {
+            cursorBranches = await buildCursorBranches(beforeId, "before");
+            if (cursorBranches) {
+              query = composeCursorQuery(
+                [baseQuery as Record<string, unknown>],
+                cursorBranches,
+              ) as m.Filter<TInput>;
+            }
+          }
+          // Reverse the sort for beforeId to get items in reverse order
+          const reversedSort: Record<string, 1 | -1> = {};
+          for (const [field, dir] of Object.entries(sortObj)) {
+            reversedSort[field] = (dir === 1 ? -1 : 1) as 1 | -1;
+          }
+          sort = reversedSort;
+        }
+
+        // Count helper for the sortPipeline path. Counts MUST mirror the data
+        // assembly (base → sortPipeline → normalize → cursor): applying the
+        // $expr cursor to a pipeline that never ran the sort stages would
+        // compare against fields that don't exist and corrupt `position`.
+        const countViaSortPipeline = async (
+          machinery: SortMachinery,
+          cursor: AggregationStage | null,
+        ): Promise<number> => {
+          const rows = await collection
+            .aggregate(
+              buildSortPaginateStages({
+                baseMatch: baseQuery as Record<string, unknown>,
+                sortStages,
+                machinery,
+                cursorFilter: cursor,
+                pipeline: customPipeline,
+                count: true,
+              }),
+              { session },
+            )
+            .toArray();
+          return (rows[0]?.total as number | undefined) ?? 0;
+        };
 
         // Count total + position. When a custom pipeline is present, the
         // count must reflect docs that pass through the WHOLE pipeline
@@ -1003,28 +1086,46 @@ export async function collection<
         let total: number | undefined;
         let position: number | undefined;
         if (!skipTotal) {
-          if (customPipeline.length > 0) {
+          if (sortMachinery) {
+            total = await countViaSortPipeline(sortMachinery, null);
+            if (afterId) {
+              position =
+                total - (await countViaSortPipeline(sortMachinery, exprCursor));
+            } else if (beforeId) {
+              position = -1;
+            } else {
+              position = 0;
+            }
+          } else if (customPipeline.length > 0) {
             const countPipeline: m.Document[] = [
               { $match: baseQuery },
               ...customPipeline,
               { $count: "total" },
             ];
-            const totalResult = await collection.aggregate(countPipeline, {
-              session,
-            }).toArray();
+            const totalResult = await collection
+              .aggregate(countPipeline, {
+                session,
+              })
+              .toArray();
             total = (totalResult[0]?.total as number | undefined) ?? 0;
 
             if (afterId) {
-              const afterFilter = await buildCursorFilter(afterId, "after");
-              if (afterFilter) {
+              if (cursorBranches) {
                 const afterPipeline: m.Document[] = [
-                  { $match: { ...baseQuery, ...afterFilter } },
+                  {
+                    $match: composeCursorQuery(
+                      [baseQuery as Record<string, unknown>],
+                      cursorBranches,
+                    ),
+                  },
                   ...customPipeline,
                   { $count: "total" },
                 ];
-                const afterResult = await collection.aggregate(afterPipeline, {
-                  session,
-                }).toArray();
+                const afterResult = await collection
+                  .aggregate(afterPipeline, {
+                    session,
+                  })
+                  .toArray();
                 const afterCount =
                   (afterResult[0]?.total as number | undefined) ?? 0;
                 position = total - afterCount;
@@ -1041,10 +1142,12 @@ export async function collection<
             total = await collection.countDocuments(baseQuery, { session });
 
             if (afterId) {
-              const afterFilter = await buildCursorFilter(afterId, "after");
-              if (afterFilter) {
+              if (cursorBranches) {
                 const afterCount = await collection.countDocuments(
-                  { ...baseQuery, ...afterFilter } as m.Filter<TInput>,
+                  composeCursorQuery(
+                    [baseQuery as Record<string, unknown>],
+                    cursorBranches,
+                  ) as m.Filter<TInput>,
                   { session },
                 );
                 position = total - afterCount;
@@ -1063,18 +1166,26 @@ export async function collection<
         const elements: R[] = [];
 
         // Use aggregation pipeline when custom pipeline is provided
-        if (customPipeline.length > 0) {
-          const aggregationPipeline: m.Document[] = [
-            { $match: query },
-            { $sort: sort },
-            ...customPipeline,
-          ];
+        if (sortMachinery || customPipeline.length > 0) {
+          const aggregationPipeline: m.Document[] = sortMachinery
+            ? // sortPipeline path: the stages the sort depends on run over the
+              // whole filtered set (the sort needs every value); the after-sort
+              // `pipeline` stays lazy over the ~`limit` docs the loop consumes.
+              buildSortPaginateStages({
+                baseMatch: baseQuery as Record<string, unknown>,
+                sortStages,
+                machinery: sortMachinery,
+                cursorFilter: exprCursor,
+                pipeline: customPipeline,
+                reverse: Boolean(beforeId),
+              })
+            : [{ $match: query }, { $sort: sort }, ...customPipeline];
 
           const cursor = collection.aggregate(aggregationPipeline, { session });
 
           try {
             while (hardLimit-- > 0 && limit > 0) {
-              const doc = await cursor.next() as WithId<TOutput> | null;
+              const doc = (await cursor.next()) as WithId<TOutput> | null;
               if (!doc) break;
 
               // Validate document with schema (only original fields, not lookup fields)
@@ -1084,23 +1195,24 @@ export async function collection<
               }
 
               // Merge original doc (with lookup fields) with validated output
-              const validatedDoc = { ...doc, ...validation.output } as WithId<
-                TOutput
-              >;
+              const validatedDoc = {
+                ...doc,
+                ...validation.output,
+              } as WithId<TOutput>;
 
               // Step 1: Prepare - enrich document with external data
               const enrichedDoc = prepare
                 ? await prepare(validatedDoc)
-                : validatedDoc as unknown as E;
+                : (validatedDoc as unknown as E);
 
               // Step 2: Filter - apply custom filtering logic
-              const isValid = await customFilter?.(enrichedDoc) ?? true;
+              const isValid = (await customFilter?.(enrichedDoc)) ?? true;
               if (!isValid) continue;
 
               // Step 3: Format - transform document to final output format
               const finalDoc = format
                 ? await format(enrichedDoc)
-                : enrichedDoc as unknown as R;
+                : (enrichedDoc as unknown as R);
 
               elements.push(finalDoc);
               limit--;
@@ -1110,13 +1222,13 @@ export async function collection<
           }
         } else {
           // Use simple find for non-pipeline queries
-          const cursor = collection.find(query, { session }).sort(
-            sort as m.Sort,
-          );
+          const cursor = collection
+            .find(query, { session })
+            .sort(sort as m.Sort);
 
           try {
             while (hardLimit-- > 0 && limit > 0) {
-              const doc = await cursor.next() as WithId<TOutput> | null;
+              const doc = (await cursor.next()) as WithId<TOutput> | null;
               if (!doc) break;
 
               // Validate document with schema
@@ -1130,16 +1242,16 @@ export async function collection<
               // Step 1: Prepare - enrich document with external data
               const enrichedDoc = prepare
                 ? await prepare(validatedDoc)
-                : validatedDoc as unknown as E;
+                : (validatedDoc as unknown as E);
 
               // Step 2: Filter - apply custom filtering logic
-              const isValid = await customFilter?.(enrichedDoc) ?? true;
+              const isValid = (await customFilter?.(enrichedDoc)) ?? true;
               if (!isValid) continue;
 
               // Step 3: Format - transform document to final output format
               const finalDoc = format
                 ? await format(enrichedDoc)
-                : enrichedDoc as unknown as R;
+                : (enrichedDoc as unknown as R);
 
               elements.push(finalDoc);
               limit--;
@@ -1167,12 +1279,41 @@ export async function collection<
           // After reverse, elements[0] is the earliest in the sorted order
           // Position = total elements before anchor - elements returned
           if (!skipTotal) {
-            const beforeFilter = await buildCursorFilter(beforeId, "before");
-            if (beforeFilter) {
-              const beforeCount = await collection.countDocuments(
-                { ...baseQuery, ...beforeFilter } as m.Filter<TInput>,
-                { session },
+            if (sortMachinery) {
+              // exprCursor is always set here — resolveSortAnchor throws
+              // instead of returning null.
+              const beforeCount = exprCursor
+                ? await countViaSortPipeline(sortMachinery, exprCursor)
+                : 0;
+              position = Math.max(0, beforeCount - elements.length);
+            } else if (cursorBranches) {
+              // Counted through the SAME shape as `total`: with a filtering
+              // `pipeline`, a bare countDocuments would count dropped docs
+              // too and `position` would overshoot (multi and scoped already
+              // count through the pipeline).
+              const beforeQuery = composeCursorQuery(
+                [baseQuery as Record<string, unknown>],
+                cursorBranches,
               );
+              let beforeCount: number;
+              if (customPipeline.length > 0) {
+                const rows = await collection
+                  .aggregate(
+                    [
+                      { $match: beforeQuery },
+                      ...customPipeline,
+                      { $count: "total" },
+                    ],
+                    { session },
+                  )
+                  .toArray();
+                beforeCount = (rows[0]?.total as number | undefined) ?? 0;
+              } else {
+                beforeCount = await collection.countDocuments(
+                  beforeQuery as m.Filter<TInput>,
+                  { session },
+                );
+              }
               position = Math.max(0, beforeCount - elements.length);
             } else {
               position = 0;
@@ -1267,25 +1408,28 @@ export async function collection<
     updateOne(filter, update, options?) {
       // @TODO: check if update is valid
       const run = (op?: OpContext) =>
-        retryOnWriteConflict(async () => {
-          // Process removeField() symbols in $set before sanitization
-          const processedUpdate = processUpdateWithRemoveField(
-            update as Record<string, unknown>,
-          );
-          const sanitizedUpdate = sanitizeForMongoDB(processedUpdate, {
-            undefinedBehavior: opts.undefinedBehavior || "remove",
-            deep: true,
-          });
-          const session = sessionContext.getSession();
-          return await collection.updateOne(
-            filter as any,
-            sanitizedUpdate as any,
-            {
-              session,
-              ...options,
-            },
-          );
-        }, op ? { onRetry: op.onRetry } : undefined);
+        retryOnWriteConflict(
+          async () => {
+            // Process removeField() symbols in $set before sanitization
+            const processedUpdate = processUpdateWithRemoveField(
+              update as Record<string, unknown>,
+            );
+            const sanitizedUpdate = sanitizeForMongoDB(processedUpdate, {
+              undefinedBehavior: opts.undefinedBehavior || "remove",
+              deep: true,
+            });
+            const session = sessionContext.getSession();
+            return await collection.updateOne(
+              filter as any,
+              sanitizedUpdate as any,
+              {
+                session,
+                ...options,
+              },
+            );
+          },
+          op ? { onRetry: op.onRetry } : undefined,
+        );
       return traced(
         tele,
         "updateOne",
@@ -1304,21 +1448,24 @@ export async function collection<
     updateMany(filter, update, options?) {
       // @TODO: check if update is valid
       const run = (op?: OpContext) =>
-        retryOnWriteConflict(async () => {
-          // Process removeField() symbols in $set before sanitization
-          const processedUpdate = processUpdateWithRemoveField(
-            update as Record<string, unknown>,
-          );
-          const sanitizedUpdate = sanitizeForMongoDB(processedUpdate, {
-            undefinedBehavior: opts.undefinedBehavior || "remove",
-            deep: true,
-          });
-          const session = sessionContext.getSession();
-          return await collection.updateMany(filter, sanitizedUpdate as any, {
-            session,
-            ...options,
-          });
-        }, op ? { onRetry: op.onRetry } : undefined);
+        retryOnWriteConflict(
+          async () => {
+            // Process removeField() symbols in $set before sanitization
+            const processedUpdate = processUpdateWithRemoveField(
+              update as Record<string, unknown>,
+            );
+            const sanitizedUpdate = sanitizeForMongoDB(processedUpdate, {
+              undefinedBehavior: opts.undefinedBehavior || "remove",
+              deep: true,
+            });
+            const session = sessionContext.getSession();
+            return await collection.updateMany(filter, sanitizedUpdate as any, {
+              session,
+              ...options,
+            });
+          },
+          op ? { onRetry: op.onRetry } : undefined,
+        );
       return traced(
         tele,
         "updateMany",

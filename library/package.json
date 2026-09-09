@@ -1,0 +1,113 @@
+{
+  "name": "mongodbee",
+  "version": "0.23.0-beta.18",
+  "description": "A type-safe MongoDB wrapper with built-in validation powered by Valibot",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "keywords": [
+    "mongodb",
+    "odm",
+    "valibot",
+    "typescript",
+    "validation",
+    "migrations"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/diister-dev/mongodbee.git",
+    "directory": "library"
+  },
+  "homepage": "https://github.com/diister-dev/mongodbee#readme",
+  "bugs": "https://github.com/diister-dev/mongodbee/issues",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "bin": {
+    "mongodbee": "./dist/src/migration/cli/bin.js"
+  },
+  "files": [
+    "dist",
+    "src",
+    "types",
+    "mod.ts",
+    "schema.ts",
+    "session.ts",
+    "telemetry.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/mod.d.ts",
+      "default": "./dist/mod.js"
+    },
+    "./schema": {
+      "types": "./dist/schema.d.ts",
+      "default": "./dist/schema.js"
+    },
+    "./session": {
+      "types": "./dist/session.d.ts",
+      "default": "./dist/session.js"
+    },
+    "./telemetry": {
+      "types": "./dist/telemetry.d.ts",
+      "default": "./dist/telemetry.js"
+    },
+    "./ids": {
+      "types": "./dist/src/ids.d.ts",
+      "default": "./dist/src/ids.js"
+    },
+    "./indexes": {
+      "types": "./dist/src/indexes.d.ts",
+      "default": "./dist/src/indexes.js"
+    },
+    "./schema-navigator": {
+      "types": "./dist/src/schema-navigator.d.ts",
+      "default": "./dist/src/schema-navigator.js"
+    },
+    "./types": {
+      "types": "./dist/src/types.d.ts",
+      "default": "./dist/src/types.js"
+    },
+    "./migration": {
+      "types": "./dist/src/migration/mod.d.ts",
+      "default": "./dist/src/migration/mod.js"
+    },
+    "./migration/cli": {
+      "types": "./dist/src/migration/cli/mod.d.ts",
+      "default": "./dist/src/migration/cli/mod.js"
+    },
+    "./migration/cli/bin": {
+      "types": "./dist/src/migration/cli/bin.d.ts",
+      "default": "./dist/src/migration/cli/bin.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@diister/valibot-mock": "^0.1.8",
+    "@opentelemetry/api": "^1.9.0",
+    "mongodb": "^6.21.0",
+    "valibot": "^1.4.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.12",
+    "@opentelemetry/context-async-hooks": "^2.1.0",
+    "@opentelemetry/sdk-trace-base": "^2.1.0",
+    "@types/bun": "^1.4.1",
+    "@types/node": "^22.15.0",
+    "typescript": "^5.9.3"
+  },
+  "scripts": {
+    "check:package": "bun run scripts/check-package.ts",
+    "version:set": "bun run scripts/check-package.ts --write",
+    "prebuild": "bun run check:package",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "lint": "biome lint .",
+    "fmt": "biome format --write .",
+    "fmt:check": "biome format .",
+    "test": "bun test",
+    "migrate": "bun run src/migration/cli/bin.ts"
+  }
+}

@@ -11,7 +11,8 @@
  * is a document carrying BOTH a root-only field and an instance-only field —
  * it can only exist if the merge branch ran.
  */
-import { assert, assertEquals } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals } from "../+assert.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import { createSimulationValidator } from "../../src/migration/validators/simulation.ts";
 import {
@@ -76,14 +77,15 @@ function consolidationChild() {
     parent,
     schemas: CHILD_SCHEMAS,
     migrate: (b) =>
-      b.flowToScope({
-        // global roots → `information` docs (scope = their own _id)
-        from: { kind: "collection", name: "+expositions" },
-        into: { collection: "+expositions_scoped" },
-        toType: () => "information",
-        scope: (d) => d._id as string,
-        source: "consume",
-      })
+      b
+        .flowToScope({
+          // global roots → `information` docs (scope = their own _id)
+          from: { kind: "collection", name: "+expositions" },
+          into: { collection: "+expositions_scoped" },
+          toType: () => "information",
+          scope: (d) => d._id as string,
+          source: "consume",
+        })
         .flowToScope({
           // each instance's docs → its scope (= instance name)
           from: { kind: "multiModelInstances", model: "exposition" },
@@ -101,9 +103,10 @@ function consolidationChild() {
   });
 }
 
-Deno.test("simulation: correlated identities make the root↔instance merge branch executable", async () => {
-  const result = await createSimulationValidator({ powerLevel: "quick" })
-    .validateMigration(consolidationChild());
+test("simulation: correlated identities make the root↔instance merge branch executable", async () => {
+  const result = await createSimulationValidator({
+    powerLevel: "quick",
+  }).validateMigration(consolidationChild());
 
   assertEquals(
     result.errors,
@@ -151,15 +154,17 @@ Deno.test("simulation: correlated identities make the root↔instance merge bran
   }
 });
 
-Deno.test("simulation: a validation replays identically — same migration, same state", async () => {
+test("simulation: a validation replays identically — same migration, same state", async () => {
   // The session RNG replaced the engine's bare Math.random draws; the seed
   // derives from the migration id. Two standalone validations of the same
   // migration must therefore produce byte-identical simulated states — the
   // property that makes two simulation runs diffable.
-  const first = await createSimulationValidator({ powerLevel: "quick" })
-    .validateMigration(consolidationChild());
-  const second = await createSimulationValidator({ powerLevel: "quick" })
-    .validateMigration(consolidationChild());
+  const first = await createSimulationValidator({
+    powerLevel: "quick",
+  }).validateMigration(consolidationChild());
+  const second = await createSimulationValidator({
+    powerLevel: "quick",
+  }).validateMigration(consolidationChild());
 
   assertEquals(
     first.data?.stateAfterMigration,
@@ -167,7 +172,7 @@ Deno.test("simulation: a validation replays identically — same migration, same
   );
 });
 
-Deno.test("severity: a correlation finding is never blocking, even on an empty declared target", () => {
+test("severity: a correlation finding is never blocking, even on an empty declared target", () => {
   // A generation failure on a declared-but-empty target is a blocking error
   // (zero documents = zero assertions). A correlation finding under the SAME
   // conditions stays a warning: the documents' identities are degraded, not

@@ -8,7 +8,8 @@
 // silently killing "next/prev/load-more" on EVERY exposition-scoped list while
 // still rendering "1–25 / 58". Page 1 `position` MUST be `0`.
 
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals, assertRejects } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";
@@ -21,6 +22,7 @@ async function makeCatalog(
   db: Parameters<Parameters<typeof withDatabase>[1]>[0],
 ) {
   return await scopedMultiCollection(db, "catalog", {
+    schemaManagement: "auto",
     scope: refId("exposition"),
     types: {
       participant: {
@@ -38,7 +40,6 @@ async function makeCatalog(
 
 /** Seed `count` participants in `expo`, returns their ids in insertion order. */
 async function seedParticipants(
-  // deno-lint-ignore no-explicit-any
   catalog: any,
   expo: string,
   count: number,
@@ -63,18 +64,16 @@ function hasMore(page: { position?: number; data: unknown[]; total?: number }) {
     : false;
 }
 
-Deno.test("paginate: page 1 exposes position=0 + total (the verrou)", async () => {
+test("paginate: page 1 exposes position=0 + total (the verrou)", async () => {
   await withDatabase("smc-paginate-pos", async (db) => {
     const catalog = await makeCatalog(db);
     await seedParticipants(catalog, EXPO_A, 58);
 
-    const page = await catalog.scope(EXPO_A).paginate(
-      "participant",
-      undefined,
-      {
+    const page = await catalog
+      .scope(EXPO_A)
+      .paginate("participant", undefined, {
         limit: 25,
-      },
-    );
+      });
 
     assertEquals(page.total, 58);
     assertEquals(page.position, 0, "page 1 position must be 0, not undefined");
@@ -84,7 +83,7 @@ Deno.test("paginate: page 1 exposes position=0 + total (the verrou)", async () =
   });
 });
 
-Deno.test("paginate: afterId advances position + returns the next slice", async () => {
+test("paginate: afterId advances position + returns the next slice", async () => {
   await withDatabase("smc-paginate-after", async (db) => {
     const catalog = await makeCatalog(db);
     await seedParticipants(catalog, EXPO_A, 58);
@@ -93,9 +92,9 @@ Deno.test("paginate: afterId advances position + returns the next slice", async 
     // Authoritative default (_id-asc) order. ULIDs are NOT insertion-monotonic
     // within the same millisecond, so the order must be read from the DB rather
     // than assumed to equal the insertion order.
-    const ordered: string[] =
-      (await view.paginate("participant", undefined, { limit: 1000 }))
-        .data.map((d: { _id: string }) => d._id);
+    const ordered: string[] = (
+      await view.paginate("participant", undefined, { limit: 1000 })
+    ).data.map((d: { _id: string }) => d._id);
 
     const p1 = await view.paginate("participant", undefined, { limit: 25 });
     const lastOfP1 = p1.data[p1.data.length - 1]._id as string;
@@ -122,16 +121,16 @@ Deno.test("paginate: afterId advances position + returns the next slice", async 
   });
 });
 
-Deno.test("paginate: beforeId returns the prior page in forward order", async () => {
+test("paginate: beforeId returns the prior page in forward order", async () => {
   await withDatabase("smc-paginate-before", async (db) => {
     const catalog = await makeCatalog(db);
     await seedParticipants(catalog, EXPO_A, 58);
     const view = catalog.scope(EXPO_A);
 
     // Authoritative _id-asc order (ULIDs aren't insertion-monotonic, see above).
-    const ordered: string[] =
-      (await view.paginate("participant", undefined, { limit: 1000 }))
-        .data.map((d: { _id: string }) => d._id);
+    const ordered: string[] = (
+      await view.paginate("participant", undefined, { limit: 1000 })
+    ).data.map((d: { _id: string }) => d._id);
 
     // Anchor at the 26th doc in that order, walk back → must rebuild page 1.
     const back = await view.paginate("participant", undefined, {
@@ -147,7 +146,7 @@ Deno.test("paginate: beforeId returns the prior page in forward order", async ()
   });
 });
 
-Deno.test("paginate: peek sets hasMore without a count", async () => {
+test("paginate: peek sets hasMore without a count", async () => {
   await withDatabase("smc-paginate-peek", async (db) => {
     const catalog = await makeCatalog(db);
     await seedParticipants(catalog, EXPO_A, 30);
@@ -174,7 +173,7 @@ Deno.test("paginate: peek sets hasMore without a count", async () => {
   });
 });
 
-Deno.test("paginate: stays scoped — never bleeds across expositions", async () => {
+test("paginate: stays scoped — never bleeds across expositions", async () => {
   await withDatabase("smc-paginate-scope", async (db) => {
     const catalog = await makeCatalog(db);
     await seedParticipants(catalog, EXPO_A, 30);
@@ -193,31 +192,27 @@ Deno.test("paginate: stays scoped — never bleeds across expositions", async ()
   });
 });
 
-Deno.test("paginate: filter(doc) shrinks the page, position/total untouched", async () => {
+test("paginate: filter(doc) shrinks the page, position/total untouched", async () => {
   await withDatabase("smc-paginate-filter", async (db) => {
     const catalog = await makeCatalog(db);
     await seedParticipants(catalog, EXPO_A, 30);
 
-    const page = await catalog.scope(EXPO_A).paginate(
-      "participant",
-      undefined,
-      {
+    const page = await catalog
+      .scope(EXPO_A)
+      .paginate("participant", undefined, {
         limit: 25,
-        // deno-lint-ignore no-explicit-any
         filter: (doc: any) => doc.vip === true,
-      },
-    );
+      });
 
     assertEquals(page.total, 30, "total reflects the DB query, not the filter");
     assertEquals(page.position, 0);
     // 1 in 5 is vip among the first scanned window.
     assert(page.data.length > 0 && page.data.length < 25);
-    // deno-lint-ignore no-explicit-any
     for (const row of page.data) assertEquals((row as any).vip, true);
   });
 });
 
-Deno.test("paginate: pipeline count reflects docs surviving the JOIN", async () => {
+test("paginate: pipeline count reflects docs surviving the JOIN", async () => {
   await withDatabase("smc-paginate-pipeline", async (db) => {
     const catalog = await makeCatalog(db);
     const ids = await seedParticipants(catalog, EXPO_A, 30);
@@ -234,7 +229,6 @@ Deno.test("paginate: pipeline count reflects docs surviving the JOIN", async () 
     // INNER-JOIN-style filter: keep participants that have ≥1 membership.
     const page = await view.paginate("participant", undefined, {
       limit: 25,
-      // deno-lint-ignore no-explicit-any
       pipeline: (stage: any) => [
         stage.lookup("membership", "_id", "participantId", "memberships"),
         { $match: { "memberships.0": { $exists: true } } },
@@ -254,7 +248,7 @@ Deno.test("paginate: pipeline count reflects docs surviving the JOIN", async () 
 // [N9] An afterId/beforeId that does not resolve to an anchor within the bound
 // scope+type must FAIL LOUD — naming the id, type and scope — instead of
 // silently restarting at page 1 with a bogus position.
-Deno.test("paginate: afterId with no anchor throws, naming id + scope (N9)", async () => {
+test("paginate: afterId with no anchor throws, naming id + scope (N9)", async () => {
   await withDatabase("smc-paginate-afterid-missing", async (db) => {
     const catalog = await makeCatalog(db);
     await seedParticipants(catalog, EXPO_A, 10);
@@ -274,11 +268,9 @@ Deno.test("paginate: afterId with no anchor throws, naming id + scope (N9)", asy
     assert(err.message.includes(EXPO_A));
 
     // An id that exists only in ANOTHER scope must not silently reset to page 1.
-    const bPage = await catalog.scope(EXPO_B).paginate(
-      "participant",
-      undefined,
-      { limit: 5 },
-    );
+    const bPage = await catalog
+      .scope(EXPO_B)
+      .paginate("participant", undefined, { limit: 5 });
     const bId = bPage.data[0]._id as string;
     await assertRejects(
       () => view.paginate("participant", undefined, { limit: 5, afterId: bId }),
@@ -287,7 +279,7 @@ Deno.test("paginate: afterId with no anchor throws, naming id + scope (N9)", asy
   });
 });
 
-Deno.test("paginate: beforeId with no anchor throws, naming id + scope (N9)", async () => {
+test("paginate: beforeId with no anchor throws, naming id + scope (N9)", async () => {
   await withDatabase("smc-paginate-beforeid-missing", async (db) => {
     const catalog = await makeCatalog(db);
     await seedParticipants(catalog, EXPO_A, 10);
@@ -310,7 +302,7 @@ Deno.test("paginate: beforeId with no anchor throws, naming id + scope (N9)", as
 // computed through the SAME aggregate($count) shape as `total` — otherwise a
 // plain countDocuments counts docs that the pipeline drops, and `position`
 // disagrees with the pipeline-aware `total`.
-Deno.test("paginate: beforeId position is pipeline-aware (N6)", async () => {
+test("paginate: beforeId position is pipeline-aware (N6)", async () => {
   await withDatabase("smc-paginate-before-pipeline", async (db) => {
     const catalog = await makeCatalog(db);
     const view = catalog.scope(EXPO_A);
@@ -335,7 +327,6 @@ Deno.test("paginate: beforeId position is pipeline-aware (N6)", async () => {
       });
     }
 
-    // deno-lint-ignore no-explicit-any
     const pipeline = (stage: any) => [
       stage.lookup("membership", "_id", "participantId", "m"),
       { $match: { "m.0": { $exists: true } } },
@@ -367,6 +358,9 @@ Deno.test("paginate: beforeId position is pipeline-aware (N6)", async () => {
       beforeId: anchor,
     });
     assertEquals(back.position, 0, "beforeId position must be pipeline-aware");
-    assertEquals(back.data.map((d: { _id: string }) => d._id), p1ids);
+    assertEquals(
+      back.data.map((d: { _id: string }) => d._id),
+      p1ids,
+    );
   });
 });

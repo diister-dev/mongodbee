@@ -9,8 +9,9 @@
 import process from "node:process";
 import * as fs from "node:fs/promises";
 import { existsSync } from "node:fs";
-import * as path from "@std/path";
-import { bold, dim, green, yellow } from "@std/fmt/colors";
+import * as path from "node:path";
+import { resolveImportSpecifier } from "../../utils/package-info.ts";
+import { bold, dim, green, yellow } from "../../../utils/colors.ts";
 import { prettyText } from "../utils.ts";
 
 export interface InitCommandOptions {
@@ -28,6 +29,8 @@ export async function initCommand(
   console.log();
 
   const cwd = options.cwd || process.cwd();
+  // Generated files must import the name that resolves in THIS project.
+  const pkg = resolveImportSpecifier(cwd);
   const configFilePath = path.resolve(cwd, "./mongodbee.config.ts");
   const schemasFilePath = path.resolve(cwd, "./schemas.ts");
   const migrationsDir = path.resolve(cwd, "./migrations");
@@ -61,7 +64,7 @@ export async function initCommand(
        *
        * @module
        */
-      import { type SchemasDefinition } from "@diister/mongodbee";
+      import { type SchemasDefinition } from "${pkg}";
 
       export const schemas = {
         collections: {
@@ -86,7 +89,7 @@ export async function initCommand(
   await fs.writeFile(
     configFilePath,
     prettyText(`
-    import { defineConfig } from "@diister/mongodbee";
+    import { defineConfig } from "${pkg}";
 
     export default defineConfig({
       database: {

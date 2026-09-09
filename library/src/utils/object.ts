@@ -31,8 +31,10 @@ export function deepSortObject(obj: any): any {
   }
 
   const sorted: Record<string, any> = {};
-  Object.keys(obj).sort().forEach((key) => {
-    sorted[key] = deepSortObject(obj[key]);
-  });
+  Object.keys(obj)
+    .sort()
+    .forEach((key) => {
+      sorted[key] = deepSortObject(obj[key]);
+    });
   return sorted;
 }

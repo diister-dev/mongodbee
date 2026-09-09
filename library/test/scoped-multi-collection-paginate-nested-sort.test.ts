@@ -9,7 +9,8 @@
 // tiny pages (>=3 pages), and assert the concatenation equals MongoDB's own
 // single-page authoritative order.
 
-import { assertEquals } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assertEquals } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";
@@ -21,6 +22,7 @@ async function makeCatalog(
   db: Parameters<Parameters<typeof withDatabase>[1]>[0],
 ) {
   return await scopedMultiCollection(db, "catalog", {
+    schemaManagement: "auto",
     scope: refId("exposition"),
     types: {
       participant: {
@@ -36,11 +38,7 @@ async function makeCatalog(
  * Seed `count` participants whose nested `meta.rank` repeats (rank = floor(i/3))
  * so many docs share a sort value and the `_id` tie-breaker decides their order.
  */
-async function seed(
-  // deno-lint-ignore no-explicit-any
-  view: any,
-  count: number,
-): Promise<void> {
+async function seed(view: any, count: number): Promise<void> {
   for (let i = 0; i < count; i++) {
     await view.insertOne("participant", {
       name: `P${String(i).padStart(3, "0")}`,
@@ -51,7 +49,6 @@ async function seed(
 
 /** Walk every page via afterId in pages of `limit`; return concatenated ids. */
 async function walkAll(
-  // deno-lint-ignore no-explicit-any
   view: any,
   sort: Record<string, 1 | -1>,
   limit: number,
@@ -75,7 +72,6 @@ async function walkAll(
 
 /** Ground truth: a single page large enough to hold everything = Mongo's order. */
 async function groundTruth(
-  // deno-lint-ignore no-explicit-any
   view: any,
   sort: Record<string, 1 | -1>,
 ): Promise<string[]> {
@@ -86,7 +82,7 @@ async function groundTruth(
   return (page.data as { _id: string }[]).map((d) => d._id);
 }
 
-Deno.test("paginate nested-path sort ASC: afterId walk over 3+ pages == Mongo's (meta.rank asc, _id asc)", async () => {
+test("paginate nested-path sort ASC: afterId walk over 3+ pages == Mongo's (meta.rank asc, _id asc)", async () => {
   await withDatabase("smc2-pag-nested-sort-asc", async (db) => {
     const catalog = await makeCatalog(db);
     const view = catalog.scope(EXPO);
@@ -106,7 +102,7 @@ Deno.test("paginate nested-path sort ASC: afterId walk over 3+ pages == Mongo's 
   });
 });
 
-Deno.test("paginate nested-path sort DESC: afterId walk over 3+ pages == Mongo's (meta.rank desc, _id desc)", async () => {
+test("paginate nested-path sort DESC: afterId walk over 3+ pages == Mongo's (meta.rank desc, _id desc)", async () => {
   await withDatabase("smc2-pag-nested-sort-desc", async (db) => {
     const catalog = await makeCatalog(db);
     const view = catalog.scope(EXPO);
@@ -126,7 +122,7 @@ Deno.test("paginate nested-path sort DESC: afterId walk over 3+ pages == Mongo's
   });
 });
 
-Deno.test("paginate nested-path sort: position advances correctly across afterId pages", async () => {
+test("paginate nested-path sort: position advances correctly across afterId pages", async () => {
   await withDatabase("smc2-pag-nested-sort-pos", async (db) => {
     const catalog = await makeCatalog(db);
     const view = catalog.scope(EXPO);

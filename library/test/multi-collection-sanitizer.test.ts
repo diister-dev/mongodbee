@@ -1,14 +1,17 @@
+import { test } from "./+harness.ts";
+import process from "node:process";
 import * as v from "../src/schema.ts";
 import { collection } from "../src/collection.ts";
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "./+assert.ts";
 import { MongoClient } from "../src/mongodb.ts";
+import { TEST_URI } from "./+shared.ts";
 
 // Mock MongoDB setup for testing
 let client: MongoClient;
 let db: ReturnType<MongoClient["db"]>;
 
 async function setupTestDb() {
-  const mongoUrl = Deno.env.get("MONGODB_URL") || "mongodb://localhost:27017";
+  const mongoUrl = process.env.MONGODB_URL || TEST_URI;
   client = new MongoClient(mongoUrl);
   await client.connect();
   db = client.db("test_multi_collection_sanitizer");
@@ -39,7 +42,7 @@ const productSchema = {
   tags: v.optional(v.array(v.string())),
 };
 
-Deno.test("Multi-collection: Different undefined behaviors", async () => {
+test("Multi-collection: Different undefined behaviors", async () => {
   await setupTestDb();
 
   try {
@@ -124,7 +127,7 @@ Deno.test("Multi-collection: Different undefined behaviors", async () => {
   }
 });
 
-Deno.test("Multi-collection: Same schema, different configurations", async () => {
+test("Multi-collection: Same schema, different configurations", async () => {
   await setupTestDb();
 
   try {
@@ -167,7 +170,7 @@ Deno.test("Multi-collection: Same schema, different configurations", async () =>
   }
 });
 
-Deno.test("Multi-collection: insertMany with different behaviors", async () => {
+test("Multi-collection: insertMany with different behaviors", async () => {
   await setupTestDb();
 
   try {
@@ -225,7 +228,7 @@ Deno.test("Multi-collection: insertMany with different behaviors", async () => {
   }
 });
 
-Deno.test("Multi-collection: replaceOne with different behaviors", async () => {
+test("Multi-collection: replaceOne with different behaviors", async () => {
   await setupTestDb();
 
   try {
@@ -286,7 +289,7 @@ Deno.test("Multi-collection: replaceOne with different behaviors", async () => {
   }
 });
 
-Deno.test("Multi-collection: Cross-collection data consistency", async () => {
+test("Multi-collection: Cross-collection data consistency", async () => {
   await setupTestDb();
 
   try {
@@ -344,7 +347,7 @@ Deno.test("Multi-collection: Cross-collection data consistency", async () => {
   }
 });
 
-Deno.test("Multi-collection: Performance with large number of collections", async () => {
+test("Multi-collection: Performance with large number of collections", async () => {
   await setupTestDb();
 
   try {
@@ -400,7 +403,7 @@ Deno.test("Multi-collection: Performance with large number of collections", asyn
   }
 });
 
-Deno.test("Multi-collection: Mixed undefined behaviors in transactions", async () => {
+test("Multi-collection: Mixed undefined behaviors in transactions", async () => {
   await setupTestDb();
 
   try {
@@ -453,7 +456,7 @@ Deno.test("Multi-collection: Mixed undefined behaviors in transactions", async (
   }
 });
 
-Deno.test("Multi-collection: Null validation", async () => {
+test("Multi-collection: Null validation", async () => {
   await setupTestDb();
 
   try {
@@ -487,10 +490,7 @@ Deno.test("Multi-collection: Null validation", async () => {
     assert(!("status" in noStatusUser)); // status should not be present
 
     // Test updating to null
-    await users.updateOne(
-      { name: "NoStatusUser" },
-      { $set: { status: null } },
-    );
+    await users.updateOne({ name: "NoStatusUser" }, { $set: { status: null } });
 
     const updatedUser = await users.findOne({ name: "NoStatusUser" });
     assert(updatedUser !== null);

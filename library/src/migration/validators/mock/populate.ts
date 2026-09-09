@@ -63,10 +63,23 @@ export interface MockPopulateContext {
    * entry points drain into {@link MockPopulateContext.failures}.
    */
   session: CorrelationSession;
+
+  /**
+   * Optional progress channel — see the validator's `onProgress` option. It
+   * is called from inside the generation loops because that is where a
+   * `check` spends most of its wall time, and none of that time yields to the
+   * event loop. Observational only: it never influences what gets generated.
+   */
+  onProgress?: (note: string) => void;
 }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Reports a note when the caller asked for progress; no-op otherwise. */
+function report(ctx: MockPopulateContext, note: string): void {
+  ctx.onProgress?.(note);
 }
 
 /**
@@ -77,10 +90,12 @@ function errorMessage(error: unknown): string {
  */
 function drawDocCount(ctx: MockPopulateContext): number {
   const { config } = ctx;
-  return Math.floor(
-    ctx.session.random() *
-      (config.DOCS_PER_COLLECTION_MAX - config.DOCS_PER_COLLECTION_MIN + 1),
-  ) + config.DOCS_PER_COLLECTION_MIN;
+  return (
+    Math.floor(
+      ctx.session.random() *
+        (config.DOCS_PER_COLLECTION_MAX - config.DOCS_PER_COLLECTION_MIN + 1),
+    ) + config.DOCS_PER_COLLECTION_MIN
+  );
 }
 
 /**
@@ -132,22 +147,26 @@ function appendPlainDocs(
 ): void {
   // Mint every `_id` BEFORE generating any document, so reference fields of
   // the batch (self-references included) find the pool already filled.
+  report(ctx, `minting ids for collections/${collectionName}`);
   const ids = ctx.session.mintIds({
     bucket: "collections",
     collection: collectionName,
     scopes: Array.from({ length: count }, () => null),
   });
   for (let i = 0; i < count; i++) {
+    report(ctx, `mocking collections/${collectionName} ${i + 1}/${count}`);
     try {
-      content.push(generateMockDocument(
-        schema,
-        ctx.session.docOptions({
-          bucket: "collections",
-          collection: collectionName,
-          scope: null,
-          assignedId: ids?.[i],
-        }),
-      ));
+      content.push(
+        generateMockDocument(
+          schema,
+          ctx.session.docOptions({
+            bucket: "collections",
+            collection: collectionName,
+            scope: null,
+            assignedId: ids?.[i],
+          }),
+        ),
+      );
     } catch (error) {
       ctx.failures.push({
         bucket: "collections",
@@ -196,6 +215,7 @@ function appendTypedBatches(
   const scope = bucket === "multiModels" ? collectionName : null;
   const typeNames = Object.keys(types);
 
+  report(ctx, `minting ids for ${bucket}/${collectionName}`);
   const scopes = Array.from({ length: batchCount }, () => scope);
   const minted = new Map<string, string[] | undefined>();
   for (const typeName of typeNames) {
@@ -211,6 +231,10 @@ function appendTypedBatches(
   }
 
   for (let i = 0; i < batchCount; i++) {
+    report(
+      ctx,
+      `mocking ${bucket}/${collectionName} batch ${i + 1}/${batchCount}`,
+    );
     for (const typeName of typeNames) {
       try {
         content.push({
@@ -261,6 +285,7 @@ function appendTypedDocs(
   const planCollection = modelType ?? collectionName;
   const scope = bucket === "multiModels" ? collectionName : null;
 
+  report(ctx, `minting ids for ${bucket}/${collectionName}`);
   const sequence = cycledTypeNames(typeNames, count);
   const minted = new Map<string, string[]>();
   for (const typeName of typeNames) {
@@ -275,7 +300,12 @@ function appendTypedDocs(
     if (ids) minted.set(typeName, ids);
   }
 
+  let generated = 0;
   for (const typeName of sequence) {
+    report(
+      ctx,
+      `mocking ${bucket}/${collectionName} ${++generated}/${sequence.length}`,
+    );
     try {
       content.push({
         ...generateMockDocument(
@@ -316,6 +346,7 @@ function appendScopedBatches(
   ctx: MockPopulateContext,
   collectionName: string,
 ): void {
+  report(ctx, `realizing scopes for scopedMultiCollections/${collectionName}`);
   let scopes: string[];
   try {
     scopes = ctx.session.realizeScopes(
@@ -332,6 +363,7 @@ function appendScopedBatches(
     return;
   }
 
+  report(ctx, `minting ids for scopedMultiCollections/${collectionName}`);
   const typeNames = Object.keys(scopedSchema.types);
   const minted = new Map<string, string[] | undefined>();
   for (const typeName of typeNames) {
@@ -347,6 +379,12 @@ function appendScopedBatches(
   }
 
   for (let i = 0; i < batchCount; i++) {
+    report(
+      ctx,
+      `mocking scopedMultiCollections/${collectionName} batch ${
+        i + 1
+      }/${batchCount}`,
+    );
     for (const typeName of typeNames) {
       try {
         content.push({
@@ -390,6 +428,7 @@ function appendScopedDocs(
   const typeNames = Object.keys(scopedSchema.types);
   if (typeNames.length === 0) return;
 
+  report(ctx, `realizing scopes for scopedMultiCollections/${collectionName}`);
   const cycles = Math.ceil(count / typeNames.length);
   let scopes: string[];
   try {
@@ -407,6 +446,7 @@ function appendScopedDocs(
     return;
   }
 
+  report(ctx, `minting ids for scopedMultiCollections/${collectionName}`);
   // Position i of the cycling sequence lives in scope `scopes[floor(i / n)]`
   // — one scope per cycle.
   const sequence = cycledTypeNames(typeNames, count);
@@ -429,6 +469,12 @@ function appendScopedDocs(
   }
 
   for (let i = 0; i < sequence.length; i++) {
+    report(
+      ctx,
+      `mocking scopedMultiCollections/${collectionName} ${
+        i + 1
+      }/${sequence.length}`,
+    );
     const typeName = sequence[i];
     const scope = scopes[Math.floor(i / typeNames.length)];
     try {
@@ -540,6 +586,7 @@ export function populateSyntheticMultiModelInstances(
   }
 
   for (const [modelType, schema] of Object.entries(multiModels)) {
+    report(ctx, `covering multiModels/${modelType}`);
     // Entity coverage IS the population decision: production creates one
     // instance per root entity, so every pooled id lacking an instance gets
     // one — under EVERY policy, because a preparation step that refreshed the
@@ -547,7 +594,8 @@ export function populateSyntheticMultiModelInstances(
     // The single-instance fallback only remains for a model whose space
     // pools nothing.
     const taken = new Set(Object.keys(state.multiModels));
-    const uncovered = ctx.session.pooledIds(modelType)
+    const uncovered = ctx.session
+      .pooledIds(modelType)
       .filter((id) => !taken.has(id));
     const existing = Object.values(state.multiModels).filter(
       (instance) => instance.modelType === modelType,
@@ -557,7 +605,8 @@ export function populateSyntheticMultiModelInstances(
     if (uncovered.length > 0) {
       count = uncovered.length;
     } else if (
-      existing === 0 && ctx.session.pooledIds(modelType).length === 0
+      existing === 0 &&
+      ctx.session.pooledIds(modelType).length === 0
     ) {
       count = INSTANCES_PER_MODEL;
     } else {
@@ -607,6 +656,7 @@ export function populateExistingMultiModelInstances(
   // documents reference REAL post-migration identities. This entry point is
   // called standalone (after a migration ran), hence it harvests and drains
   // like the other two engine entry points.
+  report(ctx, "harvesting identities");
   ctx.session.harvest(state);
 
   const modelCounts = new Map<string, number>();
@@ -625,9 +675,10 @@ export function populateExistingMultiModelInstances(
     // Sparse for an instance = below one full batch (every type once): the
     // volume budget is per MODEL, so the per-collection minimum would top
     // every instance of a large pool up to a quadratic total.
-    const sparse = policy === "ifSparse"
-      ? instance.content.length < typeCount
-      : shouldPopulate(instance.content.length, policy, ctx.config);
+    const sparse =
+      policy === "ifSparse"
+        ? instance.content.length < typeCount
+        : shouldPopulate(instance.content.length, policy, ctx.config);
     if (!sparse) continue;
     appendTypedBatches(
       instance.content,
@@ -695,6 +746,7 @@ export function populateDeclaredBuckets(
   // Real identities first: parent seeds and pre-existing documents fill the
   // pools BEFORE anything generates, so fresh references and instance names
   // can coincide with them (harvest is idempotent — pools deduplicate).
+  report(ctx, "harvesting identities");
   ctx.session.harvest(state);
 
   if (schemas.collections) {
@@ -776,19 +828,20 @@ export function retainAndRefreshBuckets(
       modelType,
       new Set(
         (state.collections[rootCollection]?.content ?? []).map((doc) =>
-          String(doc._id)
+          String(doc._id),
         ),
       ),
     );
   }
 
+  report(ctx, "applying retention");
   const collectionNeeds = applyRetention(state.collections);
 
   for (const [modelType, before] of preRetentionRoots) {
     const rootCollection = ctx.session.contributorCollection(modelType)!;
     const surviving = new Set(
       (state.collections[rootCollection]?.content ?? []).map((doc) =>
-        String(doc._id)
+        String(doc._id),
       ),
     );
     for (const [name, instance] of Object.entries(state.multiModels)) {
@@ -805,6 +858,7 @@ export function retainAndRefreshBuckets(
 
   // Surviving documents feed the pools, so refreshed documents reference
   // retained identities instead of a disjoint fresh universe.
+  report(ctx, "harvesting identities");
   ctx.session.harvest(state);
 
   for (const [collectionName, need] of collectionNeeds) {

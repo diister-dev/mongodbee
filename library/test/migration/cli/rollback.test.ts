@@ -11,7 +11,10 @@
  * @module
  */
 
-import { assert, assertEquals } from "@std/assert";
+import { test } from "../../+harness.ts";
+import process from "node:process";
+import { readFile as readFileRaw, writeFile } from "node:fs/promises";
+import { assert, assertEquals, assertStringIncludes } from "../../+assert.ts";
 import { MongoClient } from "../../../src/mongodb.ts";
 import { initCommand } from "../../../src/migration/cli/commands/init.ts";
 import { generateCommand } from "../../../src/migration/cli/commands/generate.ts";
@@ -28,16 +31,19 @@ import {
 } from "./shared.ts";
 
 // MongoDB test connection
-const TEST_MONGODB_URI = Deno.env.get("TEST_MONGODB_URI") ||
+const TEST_MONGODB_URI =
+  process.env.TEST_MONGODB_URI ||
+  process.env.MONGODBEE_TEST_URI ||
   "mongodb://localhost:27017";
 
 /**
  * Generate a unique database name for each test to avoid collisions
  */
 function generateTestDbName(): string {
-  return `mongodbee_test_rollback_${
-    crypto.randomUUID().replace(/-/g, "").substring(0, 8)
-  }`;
+  return `mongodbee_test_rollback_${crypto
+    .randomUUID()
+    .replace(/-/g, "")
+    .substring(0, 8)}`;
 }
 
 /**
@@ -77,13 +83,13 @@ async function withTestDb(
  * Setup test configuration
  */
 async function setupTestConfig(tempDir: string, dbName: string) {
-  await Deno.writeTextFile(
+  await writeFile(
     `${tempDir}/mongodbee.config.ts`,
     `export default { database: { connection: { uri: "${TEST_MONGODB_URI}" }, name: "${dbName}" }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
   );
 }
 
-Deno.test("rollback - rolls back the last applied migration", async () => {
+test("rollback - rolls back the last applied migration", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -111,7 +117,7 @@ Deno.test("rollback - rolls back the last applied migration", async () => {
   });
 });
 
-Deno.test("rollback - can rollback multiple times", async () => {
+test("rollback - can rollback multiple times", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -149,7 +155,7 @@ Deno.test("rollback - can rollback multiple times", async () => {
   });
 });
 
-Deno.test("rollback - fails gracefully when no migrations to rollback", async () => {
+test("rollback - fails gracefully when no migrations to rollback", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       // Setup
@@ -170,7 +176,7 @@ Deno.test("rollback - fails gracefully when no migrations to rollback", async ()
   });
 });
 
-Deno.test("rollback - can re-apply after rollback", async () => {
+test("rollback - can re-apply after rollback", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -200,7 +206,7 @@ Deno.test("rollback - can re-apply after rollback", async () => {
   });
 });
 
-Deno.test("rollback - handles migration with operations", async () => {
+test("rollback - handles migration with operations", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -235,7 +241,7 @@ Deno.test("rollback - handles migration with operations", async () => {
         migration.createCollection("users");`,
       );
 
-      await Deno.writeTextFile(migrationPath, content);
+      await writeFile(migrationPath, content);
 
       // Update the schema file to include the new collection
       const schemaPath = `${tempDir}/schemas.ts`;
@@ -252,7 +258,7 @@ Deno.test("rollback - handles migration with operations", async () => {
           },`,
       );
 
-      await Deno.writeTextFile(schemaPath, schemaContent);
+      await writeFile(schemaPath, schemaContent);
 
       // Apply migration
       await migrateCommand({ cwd: tempDir, force: true });
@@ -273,7 +279,7 @@ Deno.test("rollback - handles migration with operations", async () => {
   });
 });
 
-Deno.test("rollback - respects dry run mode (if supported)", async () => {
+test("rollback - respects dry run mode (if supported)", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -299,7 +305,7 @@ Deno.test("rollback - respects dry run mode (if supported)", async () => {
   });
 });
 
-Deno.test("rollback - uses custom config path when provided", async () => {
+test("rollback - uses custom config path when provided", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -307,7 +313,7 @@ Deno.test("rollback - uses custom config path when provided", async () => {
 
       // Create both configs
       await setupTestConfig(tempDir, dbName); // Standard config for generate
-      await Deno.writeTextFile(
+      await writeFile(
         `${tempDir}/custom.config.ts`,
         `export default { database: { connection: { uri: "${TEST_MONGODB_URI}" }, name: "${dbName}" }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
       );
@@ -337,7 +343,7 @@ Deno.test("rollback - uses custom config path when provided", async () => {
   });
 });
 
-Deno.test("rollback - maintains migration order", async () => {
+test("rollback - maintains migration order", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -368,4 +374,38 @@ Deno.test("rollback - maintains migration order", async () => {
       assertEquals(afterRollback[1], initialIds[1]);
     });
   });
+});
+
+// Verrou — rollback must surface the applier's progress events.
+//
+// Regression it guards: rollback rewrites a REAL database and can run for
+// minutes on a large collection, yet it built its applier without an
+// `onProgress` callback and ran completely silent. `migrate` had surfaced the
+// same events since it landed, from the same seam, one call site over — the
+// most stressful command to run was the only blind one.
+test("rollback - the live progress line is wired and documented", async () => {
+  const src = await readFileRaw(
+    new URL("../../../src/migration/cli/commands/rollback.ts", import.meta.url),
+    "utf8",
+  );
+  assertStringIncludes(
+    src,
+    "onProgress: progress.onProgress",
+    "rollback built its applier without the progress callback",
+  );
+  assertStringIncludes(
+    src,
+    "progress.finish()",
+    "the progress line is never closed",
+  );
+
+  const help = await readFileRaw(
+    new URL("../../../src/migration/cli/main.ts", import.meta.url),
+    "utf8",
+  );
+  assertStringIncludes(
+    help,
+    "ROLLBACK OPTIONS:",
+    "rollback options are undocumented",
+  );
 });

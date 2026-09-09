@@ -61,12 +61,18 @@ export async function checkTransactionEnabled(
     const collectionId = `transaction_test_${crypto.randomUUID()}`;
     try {
       session.startTransaction();
-      await mongoDb.collection(collectionId).insertOne({ test: true }, {
-        session,
-      });
-      await mongoDb.collection(collectionId).deleteOne({ test: true }, {
-        session,
-      });
+      await mongoDb.collection(collectionId).insertOne(
+        { test: true },
+        {
+          session,
+        },
+      );
+      await mongoDb.collection(collectionId).deleteOne(
+        { test: true },
+        {
+          session,
+        },
+      );
       await session.commitTransaction();
       transactionSupportCache.set(mongoClient, true);
       return true;
@@ -76,7 +82,10 @@ export async function checkTransactionEnabled(
       return false;
     } finally {
       await session.endSession();
-      await mongoDb.collection(collectionId).drop().catch(() => {}); // Ignore drop errors
+      await mongoDb
+        .collection(collectionId)
+        .drop()
+        .catch(() => {}); // Ignore drop errors
     }
   }
 }

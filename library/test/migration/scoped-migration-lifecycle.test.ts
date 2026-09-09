@@ -4,7 +4,8 @@
  *   migration #2 — add a field to a type via transform (all scopes / filtered)
  * Verified on both the in-memory simulator and a real MongoDB.
  */
-import { assert, assertEquals } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals } from "../+assert.ts";
 import { withDatabase } from "../+shared.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import { migrationBuilder } from "../../src/migration/builder.ts";
@@ -46,7 +47,8 @@ function migrationV1() {
     parent: null,
     schemas: SCHEMAS_V1,
     migrate: (b) =>
-      b.createScopedMultiCollection("catalog")
+      b
+        .createScopedMultiCollection("catalog")
         .type("artwork")
         .seed(EXPO_A, [{ title: "Mona Lisa", year: 1503 }])
         .seed(EXPO_B, [
@@ -64,7 +66,8 @@ function migrationV2(parent: ReturnType<typeof migrationDefinition>) {
     parent,
     schemas: SCHEMAS_V2,
     migrate: (b) =>
-      b.scopedMultiCollection("catalog")
+      b
+        .scopedMultiCollection("catalog")
         .type("artwork")
         .transform({
           up: (doc) => ({ ...doc, featured: false }),
@@ -79,7 +82,7 @@ function migrationV2(parent: ReturnType<typeof migrationDefinition>) {
   });
 }
 
-Deno.test("memory: create scoped + seed two scopes, then rollback", async () => {
+test("memory: create scoped + seed two scopes, then rollback", async () => {
   const state = createEmptyDatabaseState();
   const m = migrationV1();
   const ops = m.migrate(migrationBuilder({ schemas: SCHEMAS_V1 })).operations;
@@ -91,8 +94,8 @@ Deno.test("memory: create scoped + seed two scopes, then rollback", async () => 
   assertEquals(docs.filter((d) => d._scope === EXPO_A).length, 1);
   assertEquals(docs.filter((d) => d._scope === EXPO_B).length, 2);
   assert(
-    docs.every((d) =>
-      d._type === "artwork" && String(d._id).startsWith("artwork:")
+    docs.every(
+      (d) => d._type === "artwork" && String(d._id).startsWith("artwork:"),
     ),
   );
 
@@ -101,7 +104,7 @@ Deno.test("memory: create scoped + seed two scopes, then rollback", async () => 
   assertEquals(state.scopedMultiCollections.catalog, undefined);
 });
 
-Deno.test("memory: transform adds field across all scopes, reversible", async () => {
+test("memory: transform adds field across all scopes, reversible", async () => {
   const state = createEmptyDatabaseState();
   const m1 = migrationV1();
   const m2 = migrationV2(m1);
@@ -119,20 +122,23 @@ Deno.test("memory: transform adds field across all scopes, reversible", async ()
 
   await applier2.applyMigration(state, ops2, "up");
   const docs = state.scopedMultiCollections.catalog.content;
-  assert(docs.every((d) => d.featured === false), "all docs got featured");
+  assert(
+    docs.every((d) => d.featured === false),
+    "all docs got featured",
+  );
   // meta preserved
   assert(docs.every((d) => d._type === "artwork" && d._scope));
 
   await applier2.applyMigration(state, ops2, "down");
   assert(
-    state.scopedMultiCollections.catalog.content.every((d) =>
-      !("featured" in d)
+    state.scopedMultiCollections.catalog.content.every(
+      (d) => !("featured" in d),
     ),
     "featured removed on rollback",
   );
 });
 
-Deno.test("memory: transform with scopeFilter only touches listed scopes", async () => {
+test("memory: transform with scopeFilter only touches listed scopes", async () => {
   const state = createEmptyDatabaseState();
   const m1 = migrationV1();
   await createMemoryApplier(m1).applyMigration(
@@ -145,7 +151,8 @@ Deno.test("memory: transform with scopeFilter only touches listed scopes", async
     parent: m1,
     schemas: SCHEMAS_V2,
     migrate: (b) =>
-      b.scopedMultiCollection("catalog")
+      b
+        .scopedMultiCollection("catalog")
         .type("artwork")
         .transform({
           up: (doc) => ({ ...doc, featured: true }),
@@ -176,28 +183,29 @@ Deno.test("memory: transform with scopeFilter only touches listed scopes", async
   );
 });
 
-Deno.test("mongodb: full scoped lifecycle create+seed+transform, then rollback", async () => {
+test("mongodb: full scoped lifecycle create+seed+transform, then rollback", async () => {
   await withDatabase("scoped-migration-lifecycle", async (db) => {
     const m1 = migrationV1();
     const m2 = migrationV2(m1);
 
     // Apply migration #1 (create + seed)
-    await createMongodbApplier(db, m1, { currentMigrationId: m1.id })
-      .applyMigration(
-        m1.migrate(migrationBuilder({ schemas: SCHEMAS_V1 })).operations,
-        "up",
-      );
+    await createMongodbApplier(db, m1, {
+      currentMigrationId: m1.id,
+    }).applyMigration(
+      m1.migrate(migrationBuilder({ schemas: SCHEMAS_V1 })).operations,
+      "up",
+    );
 
     assertEquals(
-      await db.collection("catalog").countDocuments(
-        { _type: "artwork" } as never,
-      ),
+      await db
+        .collection("catalog")
+        .countDocuments({ _type: "artwork" } as never),
       3,
     );
     assertEquals(
-      await db.collection("catalog").countDocuments(
-        { _scope: EXPO_A } as never,
-      ),
+      await db
+        .collection("catalog")
+        .countDocuments({ _scope: EXPO_A } as never),
       1,
     );
 
@@ -205,21 +213,27 @@ Deno.test("mongodb: full scoped lifecycle create+seed+transform, then rollback",
     const ops2 = m2.migrate(
       migrationBuilder({ schemas: SCHEMAS_V2, parentSchemas: SCHEMAS_V1 }),
     ).operations;
-    await createMongodbApplier(db, m2, { currentMigrationId: m2.id })
-      .applyMigration(ops2, "up");
+    await createMongodbApplier(db, m2, {
+      currentMigrationId: m2.id,
+    }).applyMigration(ops2, "up");
 
-    const afterTransform = await db.collection("catalog").find({} as never)
+    const afterTransform = await db
+      .collection("catalog")
+      .find({} as never)
       .toArray();
     assert(
-      afterTransform.every((d) =>
-        (d as { featured?: boolean }).featured === false
+      afterTransform.every(
+        (d) => (d as { featured?: boolean }).featured === false,
       ),
     );
 
     // Rollback migration #2 → featured removed
-    await createMongodbApplier(db, m2, { currentMigrationId: m2.id })
-      .applyMigration(ops2, "down");
-    const afterRollback = await db.collection("catalog").find({} as never)
+    await createMongodbApplier(db, m2, {
+      currentMigrationId: m2.id,
+    }).applyMigration(ops2, "down");
+    const afterRollback = await db
+      .collection("catalog")
+      .find({} as never)
       .toArray();
     assert(afterRollback.every((d) => !("featured" in (d as object))));
     assertEquals(afterRollback.length, 3);

@@ -1,5 +1,6 @@
+import { test } from "./+harness.ts";
 import * as v from "../src/schema.ts";
-import { assertEquals, assertExists, assertRejects } from "@std/assert";
+import { assertEquals, assertExists, assertRejects } from "./+assert.ts";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { withIndex } from "../src/indexes.ts";
@@ -7,7 +8,7 @@ import { withDatabase } from "./+shared.ts";
 import { MongoServerError } from "mongodb";
 import { defineModel } from "../src/multi-collection-model.ts";
 
-Deno.test("withIndex - Basic index creation", async (t) => {
+test("withIndex - Basic index creation", async (t) => {
   await withDatabase(t.name, async (db) => {
     const userSchema = {
       username: withIndex(v.string()),
@@ -37,7 +38,7 @@ Deno.test("withIndex - Basic index creation", async (t) => {
   });
 });
 
-Deno.test("withIndex - Unique index constraint", async (t) => {
+test("withIndex - Unique index constraint", async (t) => {
   await withDatabase(t.name, async (db) => {
     const userSchema = {
       username: v.string(),
@@ -69,7 +70,7 @@ Deno.test("withIndex - Unique index constraint", async (t) => {
   });
 });
 
-Deno.test("withIndex - Case insensitive index", async (t) => {
+test("withIndex - Case insensitive index", async (t) => {
   await withDatabase(t.name, async (db) => {
     const userSchema = {
       username: v.string(),
@@ -101,7 +102,7 @@ Deno.test("withIndex - Case insensitive index", async (t) => {
   });
 });
 
-Deno.test("withIndex - Custom collation", async (t) => {
+test("withIndex - Custom collation", async (t) => {
   await withDatabase(t.name, async (db) => {
     const userSchema = {
       name: withIndex(v.string(), {
@@ -136,7 +137,7 @@ Deno.test("withIndex - Custom collation", async (t) => {
   });
 });
 
-Deno.test("withIndex - Multiple indexes on different fields", async (t) => {
+test("withIndex - Multiple indexes on different fields", async (t) => {
   await withDatabase(t.name, async (db) => {
     const userSchema = {
       username: withIndex(v.string(), { unique: true }),
@@ -156,11 +157,11 @@ Deno.test("withIndex - Multiple indexes on different fields", async (t) => {
     // Should have default _id index plus our 3 custom indexes
     assertEquals(indexes.length, 4);
 
-    const usernameIndex = indexes.find((idx) =>
-      idx.key?.username === 1 && idx.unique === true
+    const usernameIndex = indexes.find(
+      (idx) => idx.key?.username === 1 && idx.unique === true,
     );
-    const emailIndex = indexes.find((idx) =>
-      idx.key?.email === 1 && idx.unique === true
+    const emailIndex = indexes.find(
+      (idx) => idx.key?.email === 1 && idx.unique === true,
     );
     const ageIndex = indexes.find((idx) => idx.key?.age === 1 && !idx.unique);
 
@@ -170,7 +171,7 @@ Deno.test("withIndex - Multiple indexes on different fields", async (t) => {
   });
 });
 
-Deno.test("withIndex - Multi-collection with type scoped indexes", async (t) => {
+test("withIndex - Multi-collection with type scoped indexes", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalogSchema = {
       product: {
@@ -252,7 +253,7 @@ Deno.test("withIndex - Multi-collection with type scoped indexes", async (t) => 
   });
 });
 
-Deno.test("withIndex - Multi-collection with scoped indexes by type", async (e) => {
+test("withIndex - Multi-collection with scoped indexes by type", async (e) => {
   await withDatabase(e.name, async (db) => {
     const catalogSchema = {
       products: {
@@ -334,7 +335,7 @@ Deno.test("withIndex - Multi-collection with scoped indexes by type", async (e) 
   });
 });
 
-Deno.test("withIndex - Multi-collection with scoped deep indexes by type", async (t) => {
+test("withIndex - Multi-collection with scoped deep indexes by type", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalogSchema = {
       products: {
@@ -430,7 +431,7 @@ Deno.test("withIndex - Multi-collection with scoped deep indexes by type", async
   });
 });
 
-Deno.test("withIndex - Automatic type field in multi-collection", async (t) => {
+test("withIndex - Automatic type field in multi-collection", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalogSchema = {
       product: {
@@ -470,7 +471,7 @@ Deno.test("withIndex - Automatic type field in multi-collection", async (t) => {
   });
 });
 
-Deno.test("withIndex - Union schemas with unique constraints", async (t) => {
+test("withIndex - Union schemas with unique constraints", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Test union schema like SIRET/SIREN
     const NumberOrString = v.union([v.string(), v.number()]);
@@ -530,7 +531,7 @@ Deno.test("withIndex - Union schemas with unique constraints", async (t) => {
   });
 });
 
-Deno.test("withIndex - TTL index creation", async (t) => {
+test("withIndex - TTL index creation", async (t) => {
   await withDatabase(t.name, async (db) => {
     const eventSchema = {
       expiresAt: withIndex(v.date(), { expireAfterSeconds: 3600 }),
@@ -548,7 +549,7 @@ Deno.test("withIndex - TTL index creation", async (t) => {
   });
 });
 
-Deno.test("withIndex - TTL with partialFilterExpression", async (t) => {
+test("withIndex - TTL with partialFilterExpression", async (t) => {
   await withDatabase(t.name, async (db) => {
     const emailSchema = {
       sentAt: withIndex(v.date(), {

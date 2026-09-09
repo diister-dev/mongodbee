@@ -53,6 +53,18 @@ export type MigrationOperation = {
 
   /** Version of MongoDBee that executed this operation */
   mongodbeeVersion: string;
+
+  /**
+   * Set when the migration was declared already applied rather than executed
+   * here, which is how an existing database is adopted into the chain.
+   *
+   * The status stays "applied" because the schema really is at that point, and
+   * every consumer that asks "what is left to run" must agree. What differs is
+   * the provenance, and folding it into the status would leave no way to tell
+   * an operator that these operations were never actually run against this
+   * database.
+   */
+  adopted?: boolean;
 };
 
 /**
@@ -78,6 +90,7 @@ export function getMigrationOperationsCollection(
  * @param operation - Type of operation (applied, reverted, failed)
  * @param duration - Duration in milliseconds
  * @param error - Error message if operation failed
+ * @param options - Extra provenance carried by the record
  */
 export async function recordOperation(
   db: Db,
@@ -86,6 +99,7 @@ export async function recordOperation(
   operation: MigrationOperationType,
   duration?: number,
   error?: string,
+  options?: { adopted?: boolean },
 ): Promise<void> {
   const collection = getMigrationOperationsCollection(db);
   const mongodbeeVersion = getCurrentVersion();
@@ -99,9 +113,9 @@ export async function recordOperation(
     error,
     status: error ? "failure" : "success",
     mongodbeeVersion,
+    ...(options?.adopted ? { adopted: true } : {}),
   };
 
-  // deno-lint-ignore no-explicit-any
   await collection.insertOne(record as any);
 }
 
@@ -155,10 +169,7 @@ export async function getLastOperation(
 export async function getAllOperations(db: Db): Promise<MigrationOperation[]> {
   const collection = getMigrationOperationsCollection(db);
 
-  return await collection
-    .find({})
-    .sort({ executedAt: 1 })
-    .toArray();
+  return await collection.find({}).sort({ executedAt: 1 }).toArray();
 }
 
 /**
@@ -190,10 +201,13 @@ export function calculateMigrationState(
  * @returns Map of migration ID to current state
  */
 export async function getCurrentState(db: Db): Promise<
-  Map<string, {
-    status: "pending" | "applied" | "failed" | "reverted";
-    lastOperation?: MigrationOperation;
-  }>
+  Map<
+    string,
+    {
+      status: "pending" | "applied" | "failed" | "reverted";
+      lastOperation?: MigrationOperation;
+    }
+  >
 > {
   const allOperations = await getAllOperations(db);
 
@@ -266,8 +280,8 @@ export async function getLastAppliedMigration(
     return null;
   }
 
-  appliedMigrations.sort((a, b) =>
-    b.executedAt.getTime() - a.executedAt.getTime()
+  appliedMigrations.sort(
+    (a, b) => b.executedAt.getTime() - a.executedAt.getTime(),
   );
   return appliedMigrations[0];
 }

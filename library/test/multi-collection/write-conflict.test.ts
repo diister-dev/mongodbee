@@ -1,5 +1,6 @@
+import { test } from "../+harness.ts";
 import * as v from "../../src/schema.ts";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "../+assert.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import { defineModel } from "../../src/multi-collection-model.ts";
@@ -38,9 +39,8 @@ const testModel = defineModel("test", {
   },
 });
 
-Deno.test({
-  name:
-    "Write Conflict: Concurrent updateOne on same document with Promise.all",
+test({
+  name: "Write Conflict: Concurrent updateOne on same document with Promise.all",
   sanitizeOps: false, // Disable sanitizer due to expected timer leaks from concurrent retries
   sanitizeResources: false,
   fn: async (t) => {
@@ -55,25 +55,23 @@ Deno.test({
 
       // Simulate multiple concurrent updates to the same document
       // This is a common pattern that can cause write conflicts
-      const updatePromises = Array.from(
-        { length: 5 },
-        (_, i) =>
-          store.withSession(async () => {
-            const current = await store.findOne("counter", { _id: counterId });
-            assert(current !== null);
+      const updatePromises = Array.from({ length: 5 }, (_, i) =>
+        store.withSession(async () => {
+          const current = await store.findOne("counter", { _id: counterId });
+          assert(current !== null);
 
-            // Simulate some processing time
-            await new Promise((resolve) =>
-              setTimeout(resolve, Math.random() * 50)
-            );
+          // Simulate some processing time
+          await new Promise((resolve) =>
+            setTimeout(resolve, Math.random() * 50),
+          );
 
-            // Update the counter
-            await store.updateOne("counter", counterId, {
-              value: current.value + 1,
-            });
+          // Update the counter
+          await store.updateOne("counter", counterId, {
+            value: current.value + 1,
+          });
 
-            return i;
-          }),
+          return i;
+        }),
       );
 
       // This will likely trigger write conflicts in a transactional environment
@@ -97,7 +95,8 @@ Deno.test({
 
         // Verify it's a write conflict error
         if (error instanceof Error) {
-          const isWriteConflict = error.message.includes("Write conflict") ||
+          const isWriteConflict =
+            error.message.includes("Write conflict") ||
             error.message.includes("plan execution");
           if (isWriteConflict) {
             console.log("✓ Write conflict error detected as expected");
@@ -108,7 +107,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name: "Write Conflict: Sequential vs concurrent updates comparison",
   sanitizeOps: false, // Disable sanitizer due to expected timer leaks from concurrent retries
   sanitizeResources: false,
@@ -148,16 +147,14 @@ Deno.test({
         value: 0,
       });
 
-      const concurrentUpdates = Array.from(
-        { length: 5 },
-        () =>
-          store.withSession(async () => {
-            const current = await store.findOne("counter", { _id: counterId2 });
-            assert(current !== null);
-            await store.updateOne("counter", counterId2, {
-              value: current.value + 1,
-            });
-          }),
+      const concurrentUpdates = Array.from({ length: 5 }, () =>
+        store.withSession(async () => {
+          const current = await store.findOne("counter", { _id: counterId2 });
+          assert(current !== null);
+          await store.updateOne("counter", counterId2, {
+            value: current.value + 1,
+          });
+        }),
       );
 
       try {
@@ -179,7 +176,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name: "Write Conflict: Multiple updateOne in same withSession (should work)",
   sanitizeOps: false, // Disable sanitizer due to expected timer leaks from concurrent retries
   sanitizeResources: false,
@@ -230,7 +227,7 @@ Deno.test({
   },
 });
 
-Deno.test("Write Conflict: Nested withSession calls on same document", async (t) => {
+test("Write Conflict: Nested withSession calls on same document", async (t) => {
   await withDatabase(t.name, async (db) => {
     const store = await multiCollection(db, "store", testModel);
 
@@ -266,7 +263,7 @@ Deno.test("Write Conflict: Nested withSession calls on same document", async (t)
   });
 });
 
-Deno.test("Write Conflict: UpdateMany with concurrent operations", async (t) => {
+test("Write Conflict: UpdateMany with concurrent operations", async (t) => {
   await withDatabase(t.name, async (db) => {
     const store = await multiCollection(db, "store", testModel);
 
@@ -297,7 +294,7 @@ Deno.test("Write Conflict: UpdateMany with concurrent operations", async (t) => 
   });
 });
 
-Deno.test({
+test({
   name: "Write Conflict: Concurrent transactions on same document",
   sanitizeOps: false, // Disable sanitizer due to expected timer leaks from concurrent retries
   sanitizeResources: false,
@@ -361,7 +358,8 @@ Deno.test({
 
         // This is expected - concurrent transactions on the same document can conflict
         if (error instanceof Error) {
-          const isWriteConflict = error.message.includes("Write conflict") ||
+          const isWriteConflict =
+            error.message.includes("Write conflict") ||
             error.message.includes("plan execution");
           if (isWriteConflict) {
             console.log(
@@ -374,7 +372,7 @@ Deno.test({
   },
 });
 
-Deno.test("Write Conflict: Rapid fire updates without sessions", async (t) => {
+test("Write Conflict: Rapid fire updates without sessions", async (t) => {
   await withDatabase(t.name, async (db) => {
     const store = await multiCollection(db, "store", testModel);
 
@@ -385,12 +383,10 @@ Deno.test("Write Conflict: Rapid fire updates without sessions", async (t) => {
 
     // Rapid updates to the same document
     // Note: These still use sessions internally via sessionContext.getSession()
-    const updates = Array.from(
-      { length: 10 },
-      (_, i) =>
-        store.updateOne("counter", counterId, {
-          value: i + 1,
-        }),
+    const updates = Array.from({ length: 10 }, (_, i) =>
+      store.updateOne("counter", counterId, {
+        value: i + 1,
+      }),
     );
 
     try {
@@ -408,7 +404,7 @@ Deno.test("Write Conflict: Rapid fire updates without sessions", async (t) => {
   });
 });
 
-Deno.test("Write Conflict: UpdateOne with version field (optimistic locking pattern)", async (t) => {
+test("Write Conflict: UpdateOne with version field (optimistic locking pattern)", async (t) => {
   await withDatabase(t.name, async (db) => {
     const store = await multiCollection(db, "store", testModel);
 
@@ -439,7 +435,7 @@ Deno.test("Write Conflict: UpdateOne with version field (optimistic locking patt
   });
 });
 
-Deno.test("Write Conflict: Stress test with many concurrent operations", async (t) => {
+test("Write Conflict: Stress test with many concurrent operations", async (t) => {
   await withDatabase(t.name, async (db) => {
     const store = await multiCollection(db, "store", testModel);
 
@@ -449,7 +445,8 @@ Deno.test("Write Conflict: Stress test with many concurrent operations", async (
         store.insertOne("counter", {
           name: `counter_${i}`,
           value: 0,
-        })),
+        }),
+      ),
     );
 
     // Generate lots of concurrent updates across multiple documents

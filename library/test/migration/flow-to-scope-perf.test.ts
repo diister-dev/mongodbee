@@ -17,6 +17,8 @@
  * Opt-in via env var `RUN_PERF_MIGRATION=1`. Scale with `DOCS` / `SCOPES`:
  *   RUN_PERF_MIGRATION=1 DOCS=50000 SCOPES=500 deno test -A test/migration/flow-to-scope-perf.test.ts
  */
+import { test } from "../+harness.ts";
+import process from "node:process";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import { migrationBuilder } from "../../src/migration/builder.ts";
 import {
@@ -25,26 +27,27 @@ import {
 } from "../../src/migration/appliers/mongodb.ts";
 import { MongoClient } from "../../src/mongodb.ts";
 import * as v from "../../src/schema.ts";
+import { TEST_URI } from "../+shared.ts";
 
-const DOCS = Number(Deno.env.get("DOCS") ?? "20000");
-const SCOPES = Number(Deno.env.get("SCOPES") ?? "200");
-const BATCH_SIZE = Number(Deno.env.get("BATCH_SIZE") ?? "1000");
+const DOCS = Number(process.env.DOCS ?? "20000");
+const SCOPES = Number(process.env.SCOPES ?? "200");
+const BATCH_SIZE = Number(process.env.BATCH_SIZE ?? "1000");
 
 const DB_PREFIX = "@TEST_perf_migration@";
 const SRC = "bench_src";
 const DST = "bench_scoped";
 
-Deno.test({
-  name:
-    `PERF MIGRATION — flow_to_scope ${DOCS.toLocaleString()} docs → ${SCOPES} scopes`,
-  ignore: !Deno.env.get("RUN_PERF_MIGRATION"),
+test({
+  name: `PERF MIGRATION — flow_to_scope ${DOCS.toLocaleString()} docs → ${SCOPES} scopes`,
+  ignore: !process.env.RUN_PERF_MIGRATION,
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
-    const dbName = `${DB_PREFIX}${
-      crypto.randomUUID().replace(/-/g, "").substring(0, 8)
-    }`;
-    const client = new MongoClient("mongodb://localhost:27017");
+    const dbName = `${DB_PREFIX}${crypto
+      .randomUUID()
+      .replace(/-/g, "")
+      .substring(0, 8)}`;
+    const client = new MongoClient(TEST_URI);
     const db = client.db(dbName);
 
     console.log("");
@@ -73,14 +76,13 @@ Deno.test({
             };
           },
         );
-        // deno-lint-ignore no-explicit-any
         await src.insertMany(batch as any);
       }
       const seedMs = performance.now() - tSeed;
       console.log(
-        `  seeded ${DOCS.toLocaleString()} docs in ${
-          (seedMs / 1000).toFixed(1)
-        }s`,
+        `  seeded ${DOCS.toLocaleString()} docs in ${(seedMs / 1000).toFixed(
+          1,
+        )}s`,
       );
 
       // -- build the consolidation migration ------------------------------
@@ -89,17 +91,22 @@ Deno.test({
         parent: null,
         schemas: S,
         migrate: (b) =>
-          b.flowToScope({
-            from: { kind: "collection", name: SRC },
-            into: { collection: DST },
-            toType: () => "artwork",
-            scope: (d) => `exposition:e${(d as { bucket: number }).bucket}`,
-            map: (d) => {
-              const { bucket: _bucket, ...rest } = d as Record<string, unknown>;
-              return rest;
-            },
-            source: "consume",
-          }).compile(),
+          b
+            .flowToScope({
+              from: { kind: "collection", name: SRC },
+              into: { collection: DST },
+              toType: () => "artwork",
+              scope: (d) => `exposition:e${(d as { bucket: number }).bucket}`,
+              map: (d) => {
+                const { bucket: _bucket, ...rest } = d as Record<
+                  string,
+                  unknown
+                >;
+                return rest;
+              },
+              source: "consume",
+            })
+            .compile(),
       });
       const ops = m.migrate(migrationBuilder({ schemas: S })).operations;
 

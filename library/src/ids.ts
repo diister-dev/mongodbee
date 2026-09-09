@@ -1,5 +1,5 @@
 import * as v from "./schema.ts";
-import { ulid } from "@std/ulid";
+import { ulid } from "./utils/ulid.ts";
 
 /**
  * Generates a new unique ID using ULID

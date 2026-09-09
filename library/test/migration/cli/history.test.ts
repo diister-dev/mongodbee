@@ -11,7 +11,10 @@
  * @module
  */
 
-import { assertEquals } from "@std/assert";
+import { test } from "../../+harness.ts";
+import process from "node:process";
+import { writeFile } from "node:fs/promises";
+import { assertEquals } from "../../+assert.ts";
 import { MongoClient } from "../../../src/mongodb.ts";
 import { initCommand } from "../../../src/migration/cli/commands/init.ts";
 import { generateCommand } from "../../../src/migration/cli/commands/generate.ts";
@@ -22,16 +25,19 @@ import { getAppliedMigrationIds } from "../../../src/migration/state.ts";
 import { delay, withTempDir } from "./shared.ts";
 
 // MongoDB test connection
-const TEST_MONGODB_URI = Deno.env.get("TEST_MONGODB_URI") ||
+const TEST_MONGODB_URI =
+  process.env.TEST_MONGODB_URI ||
+  process.env.MONGODBEE_TEST_URI ||
   "mongodb://localhost:27017";
 
 /**
  * Generate a unique database name for each test to avoid collisions
  */
 function generateTestDbName(): string {
-  return `mongodbee_test_history_${
-    crypto.randomUUID().replace(/-/g, "").substring(0, 8)
-  }`;
+  return `mongodbee_test_history_${crypto
+    .randomUUID()
+    .replace(/-/g, "")
+    .substring(0, 8)}`;
 }
 
 /**
@@ -71,13 +77,13 @@ async function withTestDb(
  * Setup test configuration
  */
 async function setupTestConfig(tempDir: string, dbName: string) {
-  await Deno.writeTextFile(
+  await writeFile(
     `${tempDir}/mongodbee.config.ts`,
     `export default { database: { connection: { uri: "${TEST_MONGODB_URI}" }, name: "${dbName}" }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
   );
 }
 
-Deno.test("history - shows empty history when no migrations run", async () => {
+test("history - shows empty history when no migrations run", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       // Setup
@@ -91,7 +97,7 @@ Deno.test("history - shows empty history when no migrations run", async () => {
   });
 });
 
-Deno.test("history - shows applied migrations in history", async () => {
+test("history - shows applied migrations in history", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -117,7 +123,7 @@ Deno.test("history - shows applied migrations in history", async () => {
   });
 });
 
-Deno.test("history - shows rollback operations in history", async () => {
+test("history - shows rollback operations in history", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -148,7 +154,7 @@ Deno.test("history - shows rollback operations in history", async () => {
   });
 });
 
-Deno.test("history - shows multiple operations chronologically", async () => {
+test("history - shows multiple operations chronologically", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       // Setup
@@ -174,7 +180,7 @@ Deno.test("history - shows multiple operations chronologically", async () => {
   });
 });
 
-Deno.test("history - uses custom config path when provided", async () => {
+test("history - uses custom config path when provided", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       // Setup
@@ -182,7 +188,7 @@ Deno.test("history - uses custom config path when provided", async () => {
       await setupTestConfig(tempDir, dbName); // Standard config for generate
 
       // Create custom config
-      await Deno.writeTextFile(
+      await writeFile(
         `${tempDir}/custom.config.ts`,
         `export default { database: { connection: { uri: "${TEST_MONGODB_URI}" }, name: "${dbName}" }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
       );
@@ -203,7 +209,7 @@ Deno.test("history - uses custom config path when provided", async () => {
   });
 });
 
-Deno.test({
+test({
   name: "history - handles connection errors gracefully",
   sanitizeResources: false, // MongoDB connection attempt leaves resources
   sanitizeOps: false, // DNS resolution doesn't complete
@@ -211,7 +217,7 @@ Deno.test({
     await withTempDir(async (tempDir) => {
       // Setup with invalid connection (with short timeout)
       await initCommand({ cwd: tempDir });
-      await Deno.writeTextFile(
+      await writeFile(
         `${tempDir}/mongodbee.config.ts`,
         `export default { db: { uri: "mongodb://invalid:27017?serverSelectionTimeoutMS=1000&connectTimeoutMS=1000", name: "test" }, paths: { migrationsDir: "./migrations" } };`,
       );
@@ -229,7 +235,7 @@ Deno.test({
   },
 });
 
-Deno.test("history - shows operations for specific migrations", async () => {
+test("history - shows operations for specific migrations", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -256,7 +262,7 @@ Deno.test("history - shows operations for specific migrations", async () => {
   });
 });
 
-Deno.test("history - reflects current database state", async () => {
+test("history - reflects current database state", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup

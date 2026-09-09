@@ -1,8 +1,9 @@
+import { test } from "./+harness.ts";
 import { toMongoValidator } from "../src/validator.ts";
 import * as v from "../src/schema.ts";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "./+assert.ts";
 
-Deno.test("Simple schema test", () => {
+test("Simple schema test", () => {
   const schema = v.object({
     a: v.string(),
     b: v.object({
@@ -13,7 +14,7 @@ Deno.test("Simple schema test", () => {
   const validator = toMongoValidator(schema);
 
   assertEquals(validator, {
-    "$jsonSchema": {
+    $jsonSchema: {
       bsonType: "object",
       properties: {
         a: {
@@ -28,20 +29,15 @@ Deno.test("Simple schema test", () => {
               description: "must be a number",
             },
           },
-          required: [
-            "c",
-          ],
+          required: ["c"],
         },
       },
-      required: [
-        "a",
-        "b",
-      ],
+      required: ["a", "b"],
     },
   });
 });
 
-Deno.test("Basic types schemas", () => {
+test("Basic types schemas", () => {
   const schema = v.object({
     stringField: v.string(),
     numberField: v.number(),
@@ -79,7 +75,7 @@ Deno.test("Basic types schemas", () => {
   });
 });
 
-Deno.test("String validations", () => {
+test("String validations", () => {
   const schema = v.object({
     minLength: v.pipe(v.string(), v.minLength(5)),
     maxLength: v.pipe(v.string(), v.maxLength(10)),
@@ -130,7 +126,7 @@ Deno.test("String validations", () => {
   });
 });
 
-Deno.test("Number validations", () => {
+test("Number validations", () => {
   const schema = v.object({
     min: v.pipe(v.number(), v.minValue(5)),
     max: v.pipe(v.number(), v.maxValue(10)),
@@ -160,7 +156,7 @@ Deno.test("Number validations", () => {
   });
 });
 
-Deno.test("Array schema", () => {
+test("Array schema", () => {
   const schema = v.object({
     simpleArray: v.array(v.string()),
     typedArray: v.array(v.number()),
@@ -220,7 +216,7 @@ Deno.test("Array schema", () => {
   });
 });
 
-Deno.test("Optional fields", () => {
+test("Optional fields", () => {
   const schema = v.object({
     required: v.string(),
     optional: v.optional(v.string()),
@@ -250,7 +246,7 @@ Deno.test("Optional fields", () => {
   });
 });
 
-Deno.test("Union schema", () => {
+test("Union schema", () => {
   const schema = v.object({
     stringOrNumber: v.union([v.string(), v.number()]),
     optionalField: v.union([v.string(), v.undefined()]),
@@ -275,7 +271,7 @@ Deno.test("Union schema", () => {
   assertEquals(jsonSchema.required!.includes("optionalField"), false);
 });
 
-Deno.test("Variant schema (discriminated union)", () => {
+test("Variant schema (discriminated union)", () => {
   // Variants are discriminated unions where one literal field selects the
   // branch. From the JSON Schema POV they map to `anyOf` like a plain
   // `v.union`, with the discriminator naturally enforced by each branch's
@@ -337,7 +333,7 @@ Deno.test("Variant schema (discriminated union)", () => {
   });
 });
 
-Deno.test("Intersect schema", () => {
+test("Intersect schema", () => {
   const nameSchema = v.object({ name: v.string() });
   const ageSchema = v.object({ age: v.number() });
 
@@ -374,7 +370,7 @@ Deno.test("Intersect schema", () => {
   });
 });
 
-Deno.test("Complex nested schema", () => {
+test("Complex nested schema", () => {
   const schema = v.object({
     user: v.object({
       name: v.string(),
@@ -418,7 +414,7 @@ Deno.test("Complex nested schema", () => {
   assertEquals(metadataProps.updatedAt.bsonType, "date");
 });
 
-Deno.test("Multiple regex patterns should be combined correctly", () => {
+test("Multiple regex patterns should be combined correctly", () => {
   const schema = v.object({
     username: v.pipe(
       v.string(),
@@ -440,7 +436,7 @@ Deno.test("Multiple regex patterns should be combined correctly", () => {
   assert(usernameProps.pattern!.includes("[a-z0-9]+$"));
 });
 
-Deno.test("Any schema type", () => {
+test("Any schema type", () => {
   const schema = v.object({
     anyField: v.any(),
   });
@@ -452,7 +448,7 @@ Deno.test("Any schema type", () => {
   assertEquals(jsonSchema.required!.includes("anyField"), true); // still a required field
 });
 
-Deno.test("Literal schema", () => {
+test("Literal schema", () => {
   const schema = v.object({
     stringLiteral: v.literal("active"),
     numberLiteral: v.literal(42),
@@ -481,18 +477,26 @@ Deno.test("Literal schema", () => {
   });
 });
 
-Deno.test("Enum schema", () => {
-  enum StringEnum {
-    Option1 = "option1",
-    Option2 = "option2",
-    Option3 = "option3",
-  }
+test("Enum schema", () => {
+  // Written as the objects TypeScript actually emits rather than with the
+  // `enum` keyword, which Node refuses to strip. Spelling them out keeps the
+  // test runnable on every runtime AND makes its point explicit: a numeric
+  // enum carries a reverse mapping, and filtering that back out is exactly
+  // what `toMongoValidator` has to get right below.
+  const StringEnum = {
+    Option1: "option1",
+    Option2: "option2",
+    Option3: "option3",
+  } as const;
 
-  enum NumericEnum {
-    One = 1,
-    Two = 2,
-    Three = 3,
-  }
+  const NumericEnum = {
+    1: "One",
+    2: "Two",
+    3: "Three",
+    One: 1,
+    Two: 2,
+    Three: 3,
+  } as const;
 
   const schema = v.object({
     stringEnum: v.enum(StringEnum),
@@ -515,12 +519,9 @@ Deno.test("Enum schema", () => {
   });
 });
 
-Deno.test("Literal with pipes", () => {
+test("Literal with pipes", () => {
   const schema = v.object({
-    status: v.pipe(
-      v.string(),
-      v.literal("active"),
-    ),
+    status: v.pipe(v.string(), v.literal("active")),
   });
 
   const validator = toMongoValidator(schema);
@@ -535,7 +536,7 @@ Deno.test("Literal with pipes", () => {
   });
 });
 
-Deno.test("Record schema - string keys and number values", () => {
+test("Record schema - string keys and number values", () => {
   const schema = v.object({
     map: v.record(v.string(), v.number()),
   });
@@ -553,7 +554,7 @@ Deno.test("Record schema - string keys and number values", () => {
   });
 });
 
-Deno.test("Record schema with key regex", () => {
+test("Record schema with key regex", () => {
   const schema = v.object({
     mapRegex: v.record(v.pipe(v.string(), v.regex(/^[a-z]+$/)), v.string()),
   });
@@ -571,7 +572,7 @@ Deno.test("Record schema with key regex", () => {
   assertEquals(jsonSchema.properties!.mapRegex.additionalProperties, false);
 });
 
-Deno.test("Record validation should accept valid and reject invalid values", () => {
+test("Record validation should accept valid and reject invalid values", () => {
   const schema = v.object({
     map: v.record(v.string(), v.number()),
   });
@@ -589,7 +590,7 @@ Deno.test("Record validation should accept valid and reject invalid values", () 
   assert(!nokType.success);
 });
 
-Deno.test("Record key regex validation should accept and reject keys", () => {
+test("Record key regex validation should accept and reject keys", () => {
   const schema = v.object({
     mapRegex: v.record(v.pipe(v.string(), v.regex(/^[a-z]+$/)), v.string()),
   });
@@ -601,7 +602,7 @@ Deno.test("Record key regex validation should accept and reject keys", () => {
   assert(!nok.success);
 });
 
-Deno.test("Deep nested record schema: toMongoValidator structure and valibot validation", () => {
+test("Deep nested record schema: toMongoValidator structure and valibot validation", () => {
   const schema = v.object({
     level1: v.object({
       level2: v.record(v.string(), v.object({ x: v.number() })),
@@ -637,7 +638,7 @@ Deno.test("Deep nested record schema: toMongoValidator structure and valibot val
   assert(!nok.success);
 });
 
-Deno.test("Record schema complex cases", () => {
+test("Record schema complex cases", () => {
   // Record with enum keys
   const enumSchema = v.object({
     enumRecord: v.record(v.picklist(["a", "b", "c"]), v.number()),
@@ -693,7 +694,7 @@ Deno.test("Record schema complex cases", () => {
   });
 });
 
-Deno.test("Nullable schema", () => {
+test("Nullable schema", () => {
   const schema = v.object({
     nullableString: v.nullable(v.string()),
     nullableNumber: v.nullable(v.number()),
@@ -769,7 +770,7 @@ Deno.test("Nullable schema", () => {
   assert(jsonSchema.required!.includes("nullableStringWithDefault"));
 });
 
-Deno.test("Nullish schema", () => {
+test("Nullish schema", () => {
   const schema = v.object({
     nullishString: v.nullish(v.string()),
     nullishNumber: v.nullish(v.number()),
@@ -834,7 +835,7 @@ Deno.test("Nullish schema", () => {
   assert(jsonSchema.required!.includes("nullishStringWithDefault"));
 });
 
-Deno.test("Nullable with validations", () => {
+test("Nullable with validations", () => {
   const schema = v.object({
     nullableEmail: v.nullable(v.pipe(v.string(), v.regex(/^.+@.+\..+$/))),
     nullableAge: v.nullable(v.pipe(v.number(), v.minValue(0), v.maxValue(120))),
@@ -895,7 +896,7 @@ Deno.test("Nullable with validations", () => {
   });
 });
 
-Deno.test("Nullable validation with Valibot", () => {
+test("Nullable validation with Valibot", () => {
   // Test that nullable schemas work correctly with Valibot validation
   const schema = v.object({
     nullableString: v.nullable(v.string()),
@@ -938,12 +939,14 @@ Deno.test("Nullable validation with Valibot", () => {
   assert(mixedValid.success);
 });
 
-Deno.test("Nested nullable schemas", () => {
+test("Nested nullable schemas", () => {
   const schema = v.object({
-    user: v.nullable(v.object({
-      name: v.string(),
-      age: v.nullable(v.number()),
-    })),
+    user: v.nullable(
+      v.object({
+        name: v.string(),
+        age: v.nullable(v.number()),
+      }),
+    ),
     tags: v.array(v.nullable(v.string())),
   });
 
@@ -998,7 +1001,7 @@ Deno.test("Nested nullable schemas", () => {
   });
 });
 
-Deno.test("Record validation edge cases", () => {
+test("Record validation edge cases", () => {
   // Test that patternProperties validation works
   const schema = v.object({
     data: v.record(v.pipe(v.string(), v.regex(/^[a-z]+$/)), v.number()),
@@ -1021,7 +1024,7 @@ Deno.test("Record validation edge cases", () => {
   assert(valid2.success);
 });
 
-Deno.test("Integer validation produces multipleOf: 1", () => {
+test("Integer validation produces multipleOf: 1", () => {
   const schema = v.object({
     count: v.pipe(v.number(), v.integer()),
     nonNegInt: v.pipe(v.number(), v.integer(), v.minValue(0)),
@@ -1044,7 +1047,7 @@ Deno.test("Integer validation produces multipleOf: 1", () => {
   });
 });
 
-Deno.test("Finite validation is silently ignored (MongoDB has no equivalent)", () => {
+test("Finite validation is silently ignored (MongoDB has no equivalent)", () => {
   const schema = v.object({
     price: v.pipe(v.number(), v.finite()),
     amount: v.pipe(v.number(), v.finite(), v.minValue(0)),
@@ -1066,7 +1069,7 @@ Deno.test("Finite validation is silently ignored (MongoDB has no equivalent)", (
   });
 });
 
-Deno.test("Unknown schema type", () => {
+test("Unknown schema type", () => {
   const schema = v.object({
     payload: v.unknown(),
   });
@@ -1078,7 +1081,7 @@ Deno.test("Unknown schema type", () => {
   assertEquals(jsonSchema.required!.includes("payload"), true);
 });
 
-Deno.test("Lazy schema (non-recursive) resolves to wrapped schema", () => {
+test("Lazy schema (non-recursive) resolves to wrapped schema", () => {
   const schema = v.object({
     name: v.lazy(() => v.string()),
   });
@@ -1093,7 +1096,7 @@ Deno.test("Lazy schema (non-recursive) resolves to wrapped schema", () => {
   assert(jsonSchema.required!.includes("name"));
 });
 
-Deno.test("Lazy schema (recursive in array) breaks cycle without throwing", () => {
+test("Lazy schema (recursive in array) breaks cycle without throwing", () => {
   type Tree = { value: string; children: Tree[] };
   const Tree: v.GenericSchema<Tree> = v.object({
     value: v.string(),

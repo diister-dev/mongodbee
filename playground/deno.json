@@ -1,8 +1,12 @@
 {
-    "imports": {
-        "valibot": "npm:valibot@^1.0.0",
-        "mongodb": "npm:mongodb@^6.16.0",
-        "@std/ulid": "jsr:@std/ulid@1",
-        "@diister/mongodbee": "../library/mod.ts"
-    }
+  "imports": {
+    "valibot": "npm:valibot@^1.0.0",
+    "mongodb": "npm:mongodb@^6.16.0",
+    "@std/ulid": "jsr:@std/ulid@1",
+    "@diister/mongodbee": "../library/mod.ts",
+    "ulid": "npm:ulid@^3.0.1",
+    "mongodbee": "../library/mod.ts",
+    "mongodbee/": "../library/",
+    "@opentelemetry/api": "npm:@opentelemetry/api@^1.9.0"
+  }
 }

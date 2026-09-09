@@ -4,7 +4,8 @@ type UnknownSchema = v.BaseSchema<any, any, any>;
 type UnknownValidation = v.BaseValidation<any, any, any>;
 
 function buildPipelineResult(pipe: any) {
-  return pipe.filter((v: any) => v.kind == "validation" || v.type == "literal")
+  return pipe
+    .filter((v: any) => v.kind == "validation" || v.type == "literal")
     .map(constructorToValidator)
     .filter(Boolean)
     .reduce((acc: any, value: any) => {
@@ -17,12 +18,16 @@ function buildPipelineResult(pipe: any) {
             // For enum values, we keep them as they are
             acc[key] = val;
           } else if (
-            key == "minLength" || key == "minItems" || key == "minimum"
+            key == "minLength" ||
+            key == "minItems" ||
+            key == "minimum"
           ) {
             // For minimum constraints, take the maximum value (most restrictive)
             acc[key] = Math.max(acc[key], val as number);
           } else if (
-            key == "maxLength" || key == "maxItems" || key == "maximum"
+            key == "maxLength" ||
+            key == "maxItems" ||
+            key == "maximum"
           ) {
             // For maximum constraints, take the minimum value (most restrictive)
             acc[key] = Math.min(acc[key], val as number);
@@ -60,12 +65,10 @@ function constructorToValidator(
         const required: string[] = [];
         const properties: Record<string, any> = {};
 
-        for (
-          const [key, value] of Object.entries(s.entries) as [
-            string,
-            UnknownSchema,
-          ][]
-        ) {
+        for (const [key, value] of Object.entries(s.entries) as [
+          string,
+          UnknownSchema,
+        ][]) {
           if (value === undefined) {
             // Field is removed
             continue;
@@ -91,9 +94,9 @@ function constructorToValidator(
             }
             if (type == "union") {
               const s = value as v.UnionSchema<any, any>;
-              isRequired = s.options.some((v: UnknownSchema) =>
-                v.type == "undefined"
-              ) == false;
+              isRequired =
+                s.options.some((v: UnknownSchema) => v.type == "undefined") ==
+                false;
             }
 
             if (isRequired) {
@@ -107,9 +110,8 @@ function constructorToValidator(
           }
         }
 
-        const strict = type === "strict_object"
-          ? { additionalProperties: false }
-          : {};
+        const strict =
+          type === "strict_object" ? { additionalProperties: false } : {};
         if (required.length == 0) {
           return {
             bsonType: "object",
@@ -212,17 +214,12 @@ function constructorToValidator(
 
         if (!wrappedValidator) {
           return {
-            anyOf: [
-              { bsonType: "null" },
-            ],
+            anyOf: [{ bsonType: "null" }],
           };
         }
 
         return {
-          anyOf: [
-            wrappedValidator,
-            { bsonType: "null" },
-          ],
+          anyOf: [wrappedValidator, { bsonType: "null" }],
         };
       }
       case "nullish": {
@@ -231,17 +228,12 @@ function constructorToValidator(
 
         if (!wrappedValidator) {
           return {
-            anyOf: [
-              { bsonType: "null" },
-            ],
+            anyOf: [{ bsonType: "null" }],
           };
         }
 
         return {
-          anyOf: [
-            wrappedValidator,
-            { bsonType: "null" },
-          ],
+          anyOf: [wrappedValidator, { bsonType: "null" }],
         };
       }
       case "union": {
@@ -315,8 +307,8 @@ function constructorToValidator(
         const s = schema as v.EnumSchema<any, any>;
 
         // Get all the enum values (filtering out the keys in numeric enums)
-        const enumValues = s.options.filter((value) =>
-          typeof value === "string" || typeof value === "number"
+        const enumValues = s.options.filter(
+          (value) => typeof value === "string" || typeof value === "number",
         );
 
         // Determine bsonType based on the actual values
@@ -503,10 +495,9 @@ function constructorToValidator(
             firstSlashIndex + 1,
             lastSlashIndex,
           );
-          const flags = regexString.substring(lastSlashIndex + 1).replace(
-            "u",
-            "",
-          );
+          const flags = regexString
+            .substring(lastSlashIndex + 1)
+            .replace("u", "");
           if (flags.length > 0) {
             console.warn(
               `[WARN] Unsupported regex flags: ${flags} for "${schema.type}" schema`,

@@ -98,17 +98,17 @@ export function extractSchemaPaths(
   schema: v.BaseSchema<any, any, any>,
 ): SchemaPathEntry[] {
   const entries: SchemaPathEntry[] = [];
-  const toProcess: Array<
-    { key: KeyFullPath; value: v.BaseSchema<any, any, any> }
-  > = [
-    { key: [], value: schema },
-  ];
+  const toProcess: Array<{
+    key: KeyFullPath;
+    value: v.BaseSchema<any, any, any>;
+  }> = [{ key: [], value: schema }];
 
   while (toProcess.length > 0) {
     const { key, value } = toProcess.pop()!;
 
     if (
-      value.type === "object" || value.type === "loose_object" ||
+      value.type === "object" ||
+      value.type === "loose_object" ||
       value.type === "strict_object"
     ) {
       // loose/strict objects expose the same .entries shape as object.
@@ -245,7 +245,9 @@ export function getNestedValue(
   let current: unknown = obj;
   for (const part of parts) {
     if (
-      current === null || current === undefined || typeof current !== "object"
+      current === null ||
+      current === undefined ||
+      typeof current !== "object"
     ) {
       return undefined;
     }

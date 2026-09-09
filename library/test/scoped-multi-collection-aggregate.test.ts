@@ -1,4 +1,5 @@
-import { assert, assertEquals } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";
@@ -11,6 +12,7 @@ async function makeCatalog(
   db: Parameters<Parameters<typeof withDatabase>[1]>[0],
 ) {
   return await scopedMultiCollection(db, "catalog", {
+    schemaManagement: "auto",
     scope: refId("exposition"),
     types: {
       artwork: {
@@ -25,7 +27,7 @@ async function makeCatalog(
   });
 }
 
-Deno.test("aggregate: scope is injected — never leaks docs from other scopes", async () => {
+test("aggregate: scope is injected — never leaks docs from other scopes", async () => {
   await withDatabase("smc-agg-isolation", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);
@@ -51,7 +53,7 @@ Deno.test("aggregate: scope is injected — never leaks docs from other scopes",
   });
 });
 
-Deno.test("aggregate: group by year in scope A only", async () => {
+test("aggregate: group by year in scope A only", async () => {
   await withDatabase("smc-agg-group", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);
@@ -78,7 +80,7 @@ Deno.test("aggregate: group by year in scope A only", async () => {
   });
 });
 
-Deno.test("aggregate: lookup is scope-isolated — does not match docs from other scopes", async () => {
+test("aggregate: lookup is scope-isolated — does not match docs from other scopes", async () => {
   await withDatabase("smc-agg-lookup", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);
@@ -111,7 +113,7 @@ Deno.test("aggregate: lookup is scope-isolated — does not match docs from othe
   });
 });
 
-Deno.test("paginate: limit + sort", async () => {
+test("paginate: limit + sort", async () => {
   await withDatabase("smc-paginate-basic", async (db) => {
     const catalog = await makeCatalog(db);
     const expo = catalog.scope(EXPO_A);
@@ -132,7 +134,7 @@ Deno.test("paginate: limit + sort", async () => {
   });
 });
 
-Deno.test("paginate: afterId pagination is scope-bounded", async () => {
+test("paginate: afterId pagination is scope-bounded", async () => {
   await withDatabase("smc-agg-paginate-after", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);
@@ -153,16 +155,20 @@ Deno.test("paginate: afterId pagination is scope-bounded", async () => {
     ids.sort();
 
     // After first 2 docs of A: page 3+
-    const page = await expoA.paginate("artwork", {}, {
-      limit: 10,
-      afterId: ids[1],
-    });
+    const page = await expoA.paginate(
+      "artwork",
+      {},
+      {
+        limit: 10,
+        afterId: ids[1],
+      },
+    );
     assertEquals(page.data.length, 3);
     assert(page.data.every((d) => d._scope === EXPO_A));
   });
 });
 
-Deno.test("paginate: cross-scope isolation — totals reflect scope", async () => {
+test("paginate: cross-scope isolation — totals reflect scope", async () => {
   await withDatabase("smc-paginate-isolation", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);

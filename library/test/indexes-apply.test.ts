@@ -1,12 +1,13 @@
+import { test } from "./+harness.ts";
 import * as v from "../src/schema.ts";
-import { assertEquals, assertExists } from "@std/assert";
+import { assertEquals, assertExists } from "./+assert.ts";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { withIndex } from "../src/indexes.ts";
 import { withDatabase } from "./+shared.ts";
 import { defineModel } from "../src/multi-collection-model.ts";
 
-Deno.test("applyIndexes - skip recreate when index spec and options identical", async (t) => {
+test("applyIndexes - skip recreate when index spec and options identical", async (t) => {
   await withDatabase(t.name, async (db) => {
     const schema1 = {
       username: withIndex(v.string(), {
@@ -20,8 +21,8 @@ Deno.test("applyIndexes - skip recreate when index spec and options identical", 
       schemaManagement: "auto",
     });
     const indexesBefore = await coll1.collection.listIndexes().toArray();
-    const idx = indexesBefore.find((i: { key?: Record<string, number> }) =>
-      i.key && i.key.username === 1
+    const idx = indexesBefore.find(
+      (i: { key?: Record<string, number> }) => i.key && i.key.username === 1,
     );
     assertExists(idx);
 
@@ -30,8 +31,8 @@ Deno.test("applyIndexes - skip recreate when index spec and options identical", 
       schemaManagement: "auto",
     });
     const indexesAfter = await coll2.collection.listIndexes().toArray();
-    const idxAfter = indexesAfter.find((i: { key?: Record<string, number> }) =>
-      i.key && i.key.username === 1
+    const idxAfter = indexesAfter.find(
+      (i: { key?: Record<string, number> }) => i.key && i.key.username === 1,
     );
     assertExists(idxAfter);
 
@@ -45,7 +46,7 @@ Deno.test("applyIndexes - skip recreate when index spec and options identical", 
   });
 });
 
-Deno.test("applyIndexes - recreate index when options change", async (t) => {
+test("applyIndexes - recreate index when options change", async (t) => {
   await withDatabase(t.name, async (db) => {
     const schemaA = {
       name: withIndex(v.string(), {
@@ -65,18 +66,18 @@ Deno.test("applyIndexes - recreate index when options change", async (t) => {
     const cA = await collection(db, "people", schemaA, {
       schemaManagement: "auto",
     });
-    const before = (await cA.collection.listIndexes().toArray()).find((
-      i: { key?: Record<string, number> },
-    ) => i.key && i.key.name === 1)!;
+    const before = (await cA.collection.listIndexes().toArray()).find(
+      (i: { key?: Record<string, number> }) => i.key && i.key.name === 1,
+    )!;
     assertExists(before);
 
     // Re-init with modified options
     const cB = await collection(db, "people", schemaB, {
       schemaManagement: "auto",
     });
-    const after = (await cB.collection.listIndexes().toArray()).find((
-      i: { key?: Record<string, number> },
-    ) => i.key && i.key.name === 1)!;
+    const after = (await cB.collection.listIndexes().toArray()).find(
+      (i: { key?: Record<string, number> }) => i.key && i.key.name === 1,
+    )!;
     assertExists(after);
 
     // Collation should have been updated (compare important fields only)
@@ -89,7 +90,7 @@ Deno.test("applyIndexes - recreate index when options change", async (t) => {
   });
 });
 
-Deno.test("multiCollection - index is created with partialFilterExpression scoped by type", async (t) => {
+test("multiCollection - index is created with partialFilterExpression scoped by type", async (t) => {
   await withDatabase(t.name, async (db) => {
     const schema = {
       product: {
@@ -101,21 +102,24 @@ Deno.test("multiCollection - index is created with partialFilterExpression scope
       },
     };
 
-    await multiCollection(
-      db,
-      "catalog",
-      defineModel("catalog", { schema }),
-      { schemaManagement: "auto" },
-    );
+    await multiCollection(db, "catalog", defineModel("catalog", { schema }), {
+      schemaManagement: "auto",
+    });
     const indexes = await db.collection("catalog").listIndexes().toArray();
 
     // find product sku index by key
-    const skuIndex = indexes.find((
-      i: { key?: Record<string, number>; partialFilterExpression?: unknown },
-    ) => i.key && i.key.sku === 1);
-    const slugIndex = indexes.find((
-      i: { key?: Record<string, number>; partialFilterExpression?: unknown },
-    ) => i.key && i.key.slug === 1);
+    const skuIndex = indexes.find(
+      (i: {
+        key?: Record<string, number>;
+        partialFilterExpression?: unknown;
+      }) => i.key && i.key.sku === 1,
+    );
+    const slugIndex = indexes.find(
+      (i: {
+        key?: Record<string, number>;
+        partialFilterExpression?: unknown;
+      }) => i.key && i.key.slug === 1,
+    );
 
     assertExists(skuIndex);
     assertExists(slugIndex);
@@ -132,7 +136,7 @@ Deno.test("multiCollection - index is created with partialFilterExpression scope
   });
 });
 
-Deno.test("applyIndexes - schema delta: adding an index creates it; removing from schema drops existing index", async (t) => {
+test("applyIndexes - schema delta: adding an index creates it; removing from schema drops existing index", async (t) => {
   await withDatabase(t.name, async (db) => {
     const schemaA = {
       a: withIndex(v.string(), { unique: true }),
@@ -144,8 +148,8 @@ Deno.test("applyIndexes - schema delta: adding an index creates it; removing fro
       schemaManagement: "auto",
     });
     let idxs = await cA.collection.listIndexes().toArray();
-    const aIdx = idxs.find((i: { key?: Record<string, number> }) =>
-      i.key && i.key.a === 1
+    const aIdx = idxs.find(
+      (i: { key?: Record<string, number> }) => i.key && i.key.a === 1,
     );
     assertExists(aIdx);
 
@@ -161,11 +165,11 @@ Deno.test("applyIndexes - schema delta: adding an index creates it; removing fro
     idxs = await cB.collection.listIndexes().toArray();
 
     // New behavior: orphaned index 'a' is automatically removed, new index 'c' is created
-    const aIdxAfter = idxs.find((i: { key?: Record<string, number> }) =>
-      i.key && i.key.a === 1
+    const aIdxAfter = idxs.find(
+      (i: { key?: Record<string, number> }) => i.key && i.key.a === 1,
     );
-    const cIdx = idxs.find((i: { key?: Record<string, number> }) =>
-      i.key && i.key.c === 1
+    const cIdx = idxs.find(
+      (i: { key?: Record<string, number> }) => i.key && i.key.c === 1,
     );
 
     // Expect old index to be gone and new index to exist
@@ -174,7 +178,7 @@ Deno.test("applyIndexes - schema delta: adding an index creates it; removing fro
   });
 });
 
-Deno.test("applyIndexes - changing expireAfterSeconds triggers recreate", async (t) => {
+test("applyIndexes - changing expireAfterSeconds triggers recreate", async (t) => {
   await withDatabase(t.name, async (db) => {
     const schemaA = {
       ts: withIndex(v.date(), { expireAfterSeconds: 3600 }),
@@ -186,8 +190,8 @@ Deno.test("applyIndexes - changing expireAfterSeconds triggers recreate", async 
     const cA = await collection(db, "ttl_change", schemaA, {
       schemaManagement: "auto",
     });
-    const before = (await cA.collection.listIndexes().toArray()).find((i) =>
-      i.key?.ts === 1
+    const before = (await cA.collection.listIndexes().toArray()).find(
+      (i) => i.key?.ts === 1,
     );
     assertExists(before);
     assertEquals(before?.expireAfterSeconds, 3600);
@@ -195,15 +199,15 @@ Deno.test("applyIndexes - changing expireAfterSeconds triggers recreate", async 
     const cB = await collection(db, "ttl_change", schemaB, {
       schemaManagement: "auto",
     });
-    const after = (await cB.collection.listIndexes().toArray()).find((i) =>
-      i.key?.ts === 1
+    const after = (await cB.collection.listIndexes().toArray()).find(
+      (i) => i.key?.ts === 1,
     );
     assertExists(after);
     assertEquals(after?.expireAfterSeconds, 7200);
   });
 });
 
-Deno.test("applyIndexes - identical TTL spec does not recreate", async (t) => {
+test("applyIndexes - identical TTL spec does not recreate", async (t) => {
   await withDatabase(t.name, async (db) => {
     const schema = {
       ts: withIndex(v.date(), { expireAfterSeconds: 3600 }),
@@ -212,16 +216,16 @@ Deno.test("applyIndexes - identical TTL spec does not recreate", async (t) => {
     const c1 = await collection(db, "ttl_idempotent", schema, {
       schemaManagement: "auto",
     });
-    const before = (await c1.collection.listIndexes().toArray()).find((i) =>
-      i.key?.ts === 1
+    const before = (await c1.collection.listIndexes().toArray()).find(
+      (i) => i.key?.ts === 1,
     );
     assertExists(before);
 
     const c2 = await collection(db, "ttl_idempotent", schema, {
       schemaManagement: "auto",
     });
-    const after = (await c2.collection.listIndexes().toArray()).find((i) =>
-      i.key?.ts === 1
+    const after = (await c2.collection.listIndexes().toArray()).find(
+      (i) => i.key?.ts === 1,
     );
     assertExists(after);
 
@@ -231,7 +235,7 @@ Deno.test("applyIndexes - identical TTL spec does not recreate", async (t) => {
   });
 });
 
-Deno.test("applyMultiCollectionIndexes - merges user partialFilterExpression with type filter", async (t) => {
+test("applyMultiCollectionIndexes - merges user partialFilterExpression with type filter", async (t) => {
   await withDatabase(t.name, async (db) => {
     const schema = {
       email: {
@@ -243,29 +247,23 @@ Deno.test("applyMultiCollectionIndexes - merges user partialFilterExpression wit
       },
     };
 
-    await multiCollection(
-      db,
-      "mailbox",
-      defineModel("mailbox", { schema }),
-      { schemaManagement: "auto" },
-    );
+    await multiCollection(db, "mailbox", defineModel("mailbox", { schema }), {
+      schemaManagement: "auto",
+    });
 
     const indexes = await db.collection("mailbox").listIndexes().toArray();
-    const ttl = indexes.find((i: { name?: string }) =>
-      i.name === "email_sentAt"
+    const ttl = indexes.find(
+      (i: { name?: string }) => i.name === "email_sentAt",
     );
     assertExists(ttl);
     assertEquals(ttl?.expireAfterSeconds, 7776000);
     assertEquals(ttl?.partialFilterExpression, {
-      $and: [
-        { status: { $eq: "SENT" } },
-        { _type: { $eq: "email" } },
-      ],
+      $and: [{ status: { $eq: "SENT" } }, { _type: { $eq: "email" } }],
     });
   });
 });
 
-Deno.test("applyMultiCollectionIndexes - bare type filter when no user filter", async (t) => {
+test("applyMultiCollectionIndexes - bare type filter when no user filter", async (t) => {
   await withDatabase(t.name, async (db) => {
     const schema = {
       email: {
@@ -281,8 +279,8 @@ Deno.test("applyMultiCollectionIndexes - bare type filter when no user filter", 
     );
 
     const indexes = await db.collection("mailbox_bare").listIndexes().toArray();
-    const ttl = indexes.find((i: { name?: string }) =>
-      i.name === "email_sentAt"
+    const ttl = indexes.find(
+      (i: { name?: string }) => i.name === "email_sentAt",
     );
     assertExists(ttl);
     assertEquals(ttl?.expireAfterSeconds, 7776000);

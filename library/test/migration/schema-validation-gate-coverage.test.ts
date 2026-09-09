@@ -19,7 +19,8 @@
  *  4. A project schema containing ONLY scoped multi-collections is not
  *     reported as "empty".
  */
-import { assert, assertEquals } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals } from "../+assert.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import { validateLastMigrationMatchesProjectSchema } from "../../src/migration/schema-validation.ts";
 import { SimulationValidator } from "../../src/migration/validators/simulation.ts";
@@ -53,7 +54,7 @@ function lastMigrationWith(schemas: ReturnType<typeof scopedSchemas>) {
   });
 }
 
-Deno.test("gate: scoped multi-collection missing in snapshot fails with a speaking error", () => {
+test("gate: scoped multi-collection missing in snapshot fails with a speaking error", () => {
   const lastMigration = migrationDefinition("001", "baseline-no-scans", {
     parent: null,
     schemas: {
@@ -70,16 +71,17 @@ Deno.test("gate: scoped multi-collection missing in snapshot fails with a speaki
 
   assertEquals(result.valid, false);
   assert(
-    result.errors.some((e) =>
-      e.includes("Scoped multi-collections missing") && e.includes("+scans")
+    result.errors.some(
+      (e) =>
+        e.includes("Scoped multi-collections missing") && e.includes("+scans"),
     ),
-    `expected a missing-scoped error naming "+scans", got: ${
-      result.errors.join(" | ")
-    }`,
+    `expected a missing-scoped error naming "+scans", got: ${result.errors.join(
+      " | ",
+    )}`,
   );
 });
 
-Deno.test("gate: scoped type drift fails naming the collection and the type", () => {
+test("gate: scoped type drift fails naming the collection and the type", () => {
   const lastMigration = lastMigrationWith(scopedSchemas());
 
   const projectWithDriftedType = scopedSchemas({
@@ -99,16 +101,17 @@ Deno.test("gate: scoped type drift fails naming the collection and the type", ()
 
   assertEquals(result.valid, false);
   assert(
-    result.errors.some((e) =>
-      e.includes('Scoped multi-collection "+scans"') && e.includes('"scan"')
+    result.errors.some(
+      (e) =>
+        e.includes('Scoped multi-collection "+scans"') && e.includes('"scan"'),
     ),
-    `expected a scoped type diff naming "+scans"/"scan", got: ${
-      result.errors.join(" | ")
-    }`,
+    `expected a scoped type diff naming "+scans"/"scan", got: ${result.errors.join(
+      " | ",
+    )}`,
   );
 });
 
-Deno.test("gate: scoped missing TYPE (not just field drift) is named explicitly", () => {
+test("gate: scoped missing TYPE (not just field drift) is named explicitly", () => {
   const lastMigration = lastMigrationWith(scopedSchemas());
 
   const projectWithExtraType = scopedSchemas({
@@ -123,16 +126,16 @@ Deno.test("gate: scoped missing TYPE (not just field drift) is named explicitly"
 
   assertEquals(result.valid, false);
   assert(
-    result.errors.some((e) =>
-      e.includes("missing types") && e.includes("checkpoint")
+    result.errors.some(
+      (e) => e.includes("missing types") && e.includes("checkpoint"),
     ),
-    `expected a missing-types error naming "checkpoint", got: ${
-      result.errors.join(" | ")
-    }`,
+    `expected a missing-types error naming "checkpoint", got: ${result.errors.join(
+      " | ",
+    )}`,
   );
 });
 
-Deno.test("gate: identical scoped snapshot validates cleanly", () => {
+test("gate: identical scoped snapshot validates cleanly", () => {
   const lastMigration = lastMigrationWith(scopedSchemas());
   const result = validateLastMigrationMatchesProjectSchema(
     lastMigration,
@@ -145,7 +148,7 @@ Deno.test("gate: identical scoped snapshot validates cleanly", () => {
   );
 });
 
-Deno.test("gate: index metadata drift (withIndex) is detected", () => {
+test("gate: index metadata drift (withIndex) is detected", () => {
   const lastMigration = migrationDefinition("001", "baseline-no-index", {
     parent: null,
     schemas: {
@@ -177,13 +180,13 @@ Deno.test("gate: index metadata drift (withIndex) is detected", () => {
   );
   assert(
     result.errors.some((e) => e.includes('"users"')),
-    `expected the diff to name the "users" collection, got: ${
-      result.errors.join(" | ")
-    }`,
+    `expected the diff to name the "users" collection, got: ${result.errors.join(
+      " | ",
+    )}`,
   );
 });
 
-Deno.test("gate: identical index metadata on both sides validates cleanly", () => {
+test("gate: identical index metadata on both sides validates cleanly", () => {
   const schemas = () => ({
     collections: {
       users: {
@@ -210,7 +213,7 @@ Deno.test("gate: identical index metadata on both sides validates cleanly", () =
   );
 });
 
-Deno.test("gate: index CONFIG drift (TTL added) is detected, not just presence", () => {
+test("gate: index CONFIG drift (TTL added) is detected, not just presence", () => {
   const snapshotSchemas = {
     collections: {
       sessions: {
@@ -245,7 +248,7 @@ Deno.test("gate: index CONFIG drift (TTL added) is detected, not just presence",
   );
 });
 
-Deno.test("simulation: declared-but-not-created scoped multi-collection is flagged", async () => {
+test("simulation: declared-but-not-created scoped multi-collection is flagged", async () => {
   const m = migrationDefinition("001", "declare-scoped-without-create", {
     parent: null,
     schemas: scopedSchemas(),
@@ -257,23 +260,27 @@ Deno.test("simulation: declared-but-not-created scoped multi-collection is flagg
   const result = await new SimulationValidator().validateMigration(m);
   assertEquals(result.success, false);
   assert(
-    result.errors.some((e) =>
-      e.includes('Scoped multi-collection "+scans"') &&
-      e.includes("not created")
+    result.errors.some(
+      (e) =>
+        e.includes('Scoped multi-collection "+scans"') &&
+        e.includes("not created"),
     ),
-    `expected a scoped declared-but-not-created error, got: ${
-      result.errors.join(" | ")
-    }`,
+    `expected a scoped declared-but-not-created error, got: ${result.errors.join(
+      " | ",
+    )}`,
   );
 });
 
-Deno.test("simulation: properly created scoped multi-collection validates cleanly", async () => {
+test("simulation: properly created scoped multi-collection validates cleanly", async () => {
   const m = migrationDefinition("001", "create-scoped-properly", {
     parent: null,
     schemas: scopedSchemas(),
     migrate: (b) =>
-      b.createCollection("users").end()
-        .createScopedMultiCollection("+scans").end()
+      b
+        .createCollection("users")
+        .end()
+        .createScopedMultiCollection("+scans")
+        .end()
         .compile(),
   });
 

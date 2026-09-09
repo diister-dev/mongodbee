@@ -8,8 +8,8 @@
  */
 
 import process from "node:process";
-import { parseArgs } from "@std/cli/parse-args";
-import { blue, bold, green, red, yellow } from "@std/fmt/colors";
+import { parseArgs } from "../../utils/parse-args.ts";
+import { blue, bold, green, red, yellow } from "../../utils/colors.ts";
 
 import { generateCommand } from "./commands/generate.ts";
 import { migrateCommand } from "./commands/migrate.ts";
@@ -19,10 +19,10 @@ import { historyCommand } from "./commands/history.ts";
 import { initCommand } from "./commands/init.ts";
 import { checkCommand } from "./commands/check.ts";
 import { syncCommand } from "./commands/sync.ts";
+import { baselineCommand } from "./commands/baseline.ts";
 
-import packageInfo from "../../../deno.json" with { type: "json" };
-
-const VERSION = packageInfo.version;
+import { VERSION } from "../../version.ts";
+import { isMainModule } from "../utils/platform.ts";
 
 const commands = [
   {
@@ -68,6 +68,11 @@ const commands = [
     handler: rollbackCommand,
   },
   {
+    name: "baseline",
+    description: "Record migrations as applied without running them",
+    handler: baselineCommand,
+  },
+  {
     name: "history",
     description: "Show migration operation history",
     handler: historyCommand,
@@ -93,6 +98,7 @@ ${yellow("COMMANDS:")}
   ${green("status")}    Show migration status
   ${green("history")}   Show migration operation history
   ${green("rollback")}  Rollback the last applied migration
+  ${green("baseline")}  Record migrations as applied without running them
 
 ${yellow("GLOBAL OPTIONS:")}
   -h, --help        Show this help message
@@ -103,6 +109,8 @@ ${yellow("GLOBAL OPTIONS:")}
 ${yellow("CHECK OPTIONS:")}
   -m, --mode        Simulation mode: quick, normal, hard (default: normal)
   -l, --last        Only validate the last N migrations
+  --verbose         Print every warning under the migration that raised it
+                    (default: warnings are deduplicated into a single digest)
   --check-indexes   Check database indexes against schema (requires database connection)
 
 ${yellow("STATUS OPTIONS:")}
@@ -118,10 +126,29 @@ ${yellow("MIGRATE OPTIONS:")}
   --progress        Force the live progress line (auto-detected on a TTY; use --no-progress to disable)
   -m, --mode        Simulation mode: quick, normal, hard (default: normal)
   -l, --last        Only validate the last N migrations
+  --target          Stop after this migration (id, name, or unambiguous
+                    substring); the later ones stay pending
+  --skip-privilege-check
+                    Do not verify the account's privileges before starting
+                    (by default the run is refused when the account lacks an
+                    action migrations need, e.g. collMod from dbAdmin)
+
+${yellow("BASELINE OPTIONS:")}
+  --target          Migration the database is already at, inclusive
+                    (default: the last one in the chain)
+  --force           Skip the confirmation
+
+${yellow("ROLLBACK OPTIONS:")}
+  --force           Skip all confirmations (use with caution!)
+  --progress        Force the live progress line (auto-detected on a TTY; use --no-progress to disable)
+  --skip-privilege-check
+                    Do not verify the account's privileges before starting
 
 ${yellow("SYNC OPTIONS:")}
   --force           Sync even if pending migrations exist (not recommended)
   --verbose         Show detailed schema information
+  --skip-privilege-check
+                    Do not verify the account's privileges before starting
 `);
 }
 
@@ -147,13 +174,14 @@ async function main(): Promise<void> {
       "check-indexes",
       "validate",
       "progress",
+      "skip-privilege-check",
     ],
     // `progress` stays tri-state: `--progress` forces the live line on,
     // `--no-progress` forces it off, and omitting it leaves `undefined` so the
     // command falls back to TTY auto-detection.
     negatable: ["progress"],
     default: { progress: undefined },
-    string: ["config", "env", "name", "mode"],
+    string: ["config", "env", "name", "mode", "target"],
     alias: {
       v: "version",
       h: "help",
@@ -180,12 +208,16 @@ async function main(): Promise<void> {
   }
 
   try {
-    // deno-lint-ignore no-explicit-any
-    await cmd.handler(args as any);
+    // The flag is spelled `--config` but every command reads `configPath`.
+    // Mapping it here is what makes it a GLOBAL option: each command used to
+    // do the mapping itself, and only `migrate` actually did, so `--config`
+    // was silently ignored by the six others and they ran against whichever
+    // configuration file auto-discovery happened to find.
+    const commandOptions = { ...args, configPath: args.config };
+    await cmd.handler(commandOptions as any);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(red(bold("Error:")), message);
-    // deno-lint-ignore no-explicit-any
     const cause = (error as any).cause;
     if (cause) {
       // Errors:
@@ -193,15 +225,18 @@ async function main(): Promise<void> {
         console.error(red(` - ${err}`));
       }
     }
+    // A failing subcommand MUST fail the process. This catch printed the error
+    // and returned normally, so `main()` resolved, the outer handler never ran,
+    // and EVERY subcommand exited 0 — `check` reported "Migration chain
+    // validation failed" and returned success, `migrate` the same. No pipeline
+    // step could gate on either. `exitCode` rather than `exit()`: the latter
+    // would cut short an in-flight client teardown.
+    process.exitCode = 1;
   }
 }
 
 // Run main function if this is the main module
-const isMain =
-  import.meta.url === `file://${process.argv[1]?.replace(/\\/g, "/")}` ||
-  (import.meta as any).main === true;
-
-if (isMain) {
+if (isMainModule(import.meta.url)) {
   try {
     await main();
   } catch (error) {

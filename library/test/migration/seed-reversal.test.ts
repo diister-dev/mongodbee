@@ -8,7 +8,8 @@
  * context (migration id + document index) so apply and reverse compute
  * the same id, even across process restarts.
  */
-import { assert, assertEquals } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals } from "../+assert.ts";
 import { withDatabase } from "../+shared.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import { migrationBuilder } from "../../src/migration/builder.ts";
@@ -28,13 +29,14 @@ const SCHEMAS = {
   },
 };
 
-Deno.test("memory applier: seed without _id can be reversed cleanly", async () => {
+test("memory applier: seed without _id can be reversed cleanly", async () => {
   const state = createEmptyDatabaseState();
   const m = migrationDefinition("001", "seed-users", {
     parent: null,
     schemas: SCHEMAS,
     migrate: (b) =>
-      b.createCollection("users")
+      b
+        .createCollection("users")
         .seed([
           { name: "Alice", email: "a@x" },
           { name: "Bob", email: "b@x" },
@@ -59,7 +61,7 @@ Deno.test("memory applier: seed without _id can be reversed cleanly", async () =
   );
 });
 
-Deno.test("memory applier: seed-only rollback empties collection without dropping it", async () => {
+test("memory applier: seed-only rollback empties collection without dropping it", async () => {
   // Isolate seed reversal: collection pre-exists, migration only seeds.
   const state = createEmptyDatabaseState();
   state.collections.users = { content: [] };
@@ -68,7 +70,8 @@ Deno.test("memory applier: seed-only rollback empties collection without droppin
     parent: null,
     schemas: SCHEMAS,
     migrate: (b) =>
-      b.collection("users")
+      b
+        .collection("users")
         .seed([
           { name: "Alice", email: "a@x" },
           { name: "Bob", email: "b@x" },
@@ -90,7 +93,7 @@ Deno.test("memory applier: seed-only rollback empties collection without droppin
   );
 });
 
-Deno.test("memory applier: seed IDs are deterministic across replays", async () => {
+test("memory applier: seed IDs are deterministic across replays", async () => {
   // Build the same migration twice and run apply both times. The
   // generated `_id`s should be identical, which is what makes rollback
   // safe across process boundaries.
@@ -99,7 +102,8 @@ Deno.test("memory applier: seed IDs are deterministic across replays", async () 
       parent: null,
       schemas: SCHEMAS,
       migrate: (b) =>
-        b.createCollection("users")
+        b
+          .createCollection("users")
           .seed([
             { name: "Alice", email: "a@x" },
             { name: "Bob", email: "b@x" },
@@ -129,7 +133,7 @@ Deno.test("memory applier: seed IDs are deterministic across replays", async () 
   );
 });
 
-Deno.test("mongodb applier: bare refId _id schema (no default) gets a valid prefixed id", async () => {
+test("mongodb applier: bare refId _id schema (no default) gets a valid prefixed id", async () => {
   // Regression: when the _id schema is a bare refId (no auto-default), the
   // deterministic id must still carry the "user:" prefix so it satisfies the
   // schema's own `^user:` validator — not a prefix-less ":abc" id.
@@ -147,15 +151,17 @@ Deno.test("mongodb applier: bare refId _id schema (no default) gets a valid pref
       parent: null,
       schemas: REFID_SCHEMAS,
       migrate: (b) =>
-        b.createCollection("members")
+        b
+          .createCollection("members")
           .seed([{ name: "Alice" }, { name: "Bob" }])
           .end()
           .compile(),
     });
 
     const applier = createMongodbApplier(db, m, { currentMigrationId: m.id });
-    const ops =
-      m.migrate(migrationBuilder({ schemas: REFID_SCHEMAS })).operations;
+    const ops = m.migrate(
+      migrationBuilder({ schemas: REFID_SCHEMAS }),
+    ).operations;
 
     // Would throw on insert if the generated id were ":abc" (fails ^member:)
     await applier.applyMigration(ops, "up");
@@ -174,13 +180,14 @@ Deno.test("mongodb applier: bare refId _id schema (no default) gets a valid pref
   });
 });
 
-Deno.test("mongodb applier: seed without _id can be reversed cleanly", async () => {
+test("mongodb applier: seed without _id can be reversed cleanly", async () => {
   await withDatabase("seed-reversal-mongo", async (db) => {
     const m = migrationDefinition("001", "seed-users", {
       parent: null,
       schemas: SCHEMAS,
       migrate: (b) =>
-        b.createCollection("users")
+        b
+          .createCollection("users")
           .seed([
             { name: "Alice", email: "a@x" },
             { name: "Bob", email: "b@x" },

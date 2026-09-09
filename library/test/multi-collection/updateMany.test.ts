@@ -1,12 +1,13 @@
+import { test } from "../+harness.ts";
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects } from "../+assert.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import assert from "node:assert";
 import { defineModel } from "../../src/multi-collection-model.ts";
 import { removeField } from "../../src/sanitizer.ts";
 
-Deno.test("updateMany: Basic multiple update", async (t) => {
+test("updateMany: Basic multiple update", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
@@ -47,7 +48,7 @@ Deno.test("updateMany: Basic multiple update", async (t) => {
   });
 });
 
-Deno.test("updateMany: Update nested and array fields", async (t) => {
+test("updateMany: Update nested and array fields", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
@@ -87,7 +88,7 @@ Deno.test("updateMany: Update nested and array fields", async (t) => {
   });
 });
 
-Deno.test("updateMany: Error on wrong id or type", async (t) => {
+test("updateMany: Error on wrong id or type", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
@@ -133,7 +134,7 @@ Deno.test("updateMany: Error on wrong id or type", async (t) => {
   });
 });
 
-Deno.test("updateMany: Remove fields with removeField()", async (t) => {
+test("updateMany: Remove fields with removeField()", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {
@@ -227,7 +228,7 @@ Deno.test("updateMany: Remove fields with removeField()", async (t) => {
   });
 });
 
-Deno.test("updateMany: Mix updates and removes across different types", async (t) => {
+test("updateMany: Mix updates and removes across different types", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {

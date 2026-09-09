@@ -74,11 +74,11 @@ export interface SchemaVisitor {
    * Called after traversing all children of a container
    * @param node - The navigation node for the container
    */
-  exitContainer?(node: NavigationNode): void; /**
+  exitContainer?(node: NavigationNode): void /**
    * Called for each validation in a pipe
    * @param node - The navigation node for the validation
    * @returns Visit result
-   */
+   */;
 
   visitValidation?(node: NavigationNode): VisitResult;
 }
@@ -661,8 +661,8 @@ export class SchemaNavigator {
     visitor: SchemaVisitor,
     context: NavigationContext,
   ): void {
-    const pipes =
-      (schema as UnknownSchema & { pipe?: UnknownValidation[] }).pipe;
+    const pipes = (schema as UnknownSchema & { pipe?: UnknownValidation[] })
+      .pipe;
     if (pipes && Array.isArray(pipes)) {
       pipes.forEach((pipe: UnknownValidation, index: number) => {
         const pipeContext: NavigationContext = {
@@ -765,9 +765,10 @@ export function createSimpleVisitor(handlers: {
 export function extractSchemaPaths(
   schema: UnknownSchema,
 ): Array<{ path: string[]; schema: UnknownSchema | UnknownValidation }> {
-  const paths: Array<
-    { path: string[]; schema: UnknownSchema | UnknownValidation }
-  > = [];
+  const paths: Array<{
+    path: string[];
+    schema: UnknownSchema | UnknownValidation;
+  }> = [];
   const navigator = new SchemaNavigator();
 
   const visitor = createSimpleVisitor({
@@ -988,21 +989,19 @@ export function computePathWithSchema(
   const navigator = new SchemaNavigator();
 
   // Navigate to build accurate schema context for each path element
-  const pathSchemas: Array<
-    {
-      element: string | number;
-      schema: UnknownSchema | UnknownValidation;
-      context: NavigationContext;
-    }
-  > = [];
+  const pathSchemas: Array<{
+    element: string | number;
+    schema: UnknownSchema | UnknownValidation;
+    context: NavigationContext;
+  }> = [];
   const visitor = createSimpleVisitor({
     onNode: (node) => {
       // Check if this context path is a prefix of our target path
       if (node.path.length <= targetContext.path.length) {
-        const isPrefix = node.path.every((
-          element: string | number,
-          index: number,
-        ) => element === targetContext.path[index]);
+        const isPrefix = node.path.every(
+          (element: string | number, index: number) =>
+            element === targetContext.path[index],
+        );
         if (isPrefix && node.path.length > 0) {
           pathSchemas.push({
             element: node.path[node.path.length - 1],
@@ -1066,31 +1065,32 @@ export const PathProcessors = {
   /**
    * Custom processor with options
    */
-  custom: (options: {
-    skipInternal?: boolean;
-    transformArrays?: boolean;
-    renameMap?: Record<string, string>;
-  }): PathProcessor =>
-  (element, _schema, _context) => {
-    const str = element.toString();
+  custom:
+    (options: {
+      skipInternal?: boolean;
+      transformArrays?: boolean;
+      renameMap?: Record<string, string>;
+    }): PathProcessor =>
+    (element, _schema, _context) => {
+      const str = element.toString();
 
-    // Skip internal notations
-    if (options.skipInternal && str.startsWith("$")) {
-      return false;
-    }
+      // Skip internal notations
+      if (options.skipInternal && str.startsWith("$")) {
+        return false;
+      }
 
-    // Transform arrays
-    if (options.transformArrays && element === "$[]") {
-      return "[]";
-    }
+      // Transform arrays
+      if (options.transformArrays && element === "$[]") {
+        return "[]";
+      }
 
-    // Apply rename map
-    if (options.renameMap && str in options.renameMap) {
-      return options.renameMap[str];
-    }
+      // Apply rename map
+      if (options.renameMap && str in options.renameMap) {
+        return options.renameMap[str];
+      }
 
-    return true;
-  },
+      return true;
+    },
 };
 
 /**

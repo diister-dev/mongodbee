@@ -7,6 +7,7 @@
  * is to validate the design hypothesis that scopedMultiCollection scales
  * better than per-scope collections at high cardinality of scopes.
  */
+import { test } from "./+harness.ts";
 import { withDatabase } from "./+shared.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
@@ -37,7 +38,7 @@ async function measure<T>(
   return { label, ms, result };
 }
 
-Deno.test({
+test({
   name: "PERF — N multiCollections vs 1 scopedMultiCollection",
   // The perf test is informative ; it must not break CI on flaky runs.
   sanitizeOps: false,
@@ -64,7 +65,6 @@ Deno.test({
           > = [];
           for (let i = 0; i < SCOPES; i++) {
             collections.push(
-              // deno-lint-ignore no-explicit-any
               await multiCollection<any>(db, `legacy_${i}`, typesShape),
             );
           }
@@ -103,13 +103,12 @@ Deno.test({
       }
 
       // -------- Scenario B: 1 scopedMultiCollection --------
-      const setupB = await measure(
-        "setup 1 scopedMultiCollection",
-        () =>
-          scopedMultiCollection(db, "catalog", {
-            scope: refId("exposition"),
-            types: typesShape,
-          }),
+      const setupB = await measure("setup 1 scopedMultiCollection", () =>
+        scopedMultiCollection(db, "catalog", {
+          schemaManagement: "auto",
+          scope: refId("exposition"),
+          types: typesShape,
+        }),
       );
 
       const insertB = await measure(
@@ -151,35 +150,35 @@ Deno.test({
       );
       console.log("-".repeat(72));
       console.log(
-        `setup                                       ${fmt(setupA.ms)}  | ${
-          fmt(setupB.ms)
-        }`,
+        `setup                                       ${fmt(setupA.ms)}  | ${fmt(
+          setupB.ms,
+        )}`,
       );
       console.log(
-        `insert ${totalDocs} docs                            ${
-          fmt(insertA.ms)
-        }  | ${fmt(insertB.ms)}`,
+        `insert ${totalDocs} docs                            ${fmt(
+          insertA.ms,
+        )}  | ${fmt(insertB.ms)}`,
       );
       console.log(
-        `query 1 scope × ${QUERY_ITERATIONS} iterations              ${
-          fmt(queryA.ms)
-        }  | ${fmt(queryB.ms)}`,
+        `query 1 scope × ${QUERY_ITERATIONS} iterations              ${fmt(
+          queryA.ms,
+        )}  | ${fmt(queryB.ms)}`,
       );
       console.log(
-        `indexes total                              ${
-          String(totalIndexesA).padStart(8)
-        }   |   ${String(indexesB.length).padStart(6)}`,
+        `indexes total                              ${String(
+          totalIndexesA,
+        ).padStart(8)}   |   ${String(indexesB.length).padStart(6)}`,
       );
       console.log("=".repeat(72));
       console.log(
-        `setup ratio:  scopedColl is ${
-          (setupA.ms / setupB.ms).toFixed(1)
-        }× faster`,
+        `setup ratio:  scopedColl is ${(setupA.ms / setupB.ms).toFixed(
+          1,
+        )}× faster`,
       );
       console.log(
-        `index count : scopedColl uses ${
-          (totalIndexesA / indexesB.length).toFixed(1)
-        }× fewer indexes`,
+        `index count : scopedColl uses ${(
+          totalIndexesA / indexesB.length
+        ).toFixed(1)}× fewer indexes`,
       );
       console.log("");
     });

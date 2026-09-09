@@ -182,6 +182,21 @@ export type {
   MigrationValidationDetails,
 } from "./check-status.ts";
 
+// Pre-flight privilege check (what the connected account may do vs. what a run needs)
+export {
+  checkMigrationPrivileges,
+  DB_ADMIN_ONLY_ACTIONS,
+  evaluatePrivileges,
+  MIGRATION_PRIVILEGE_ACTIONS,
+} from "./privileges.ts";
+export type {
+  CheckMigrationPrivilegesOptions,
+  ConnectionAuthInfo,
+  MigrationPrivilegeCheck,
+  PrivilegeEvaluation,
+  ServerPrivilege,
+} from "./privileges.ts";
+
 /**
  * Version information for the migration system
  */

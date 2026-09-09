@@ -2,7 +2,8 @@
  * `{ validate: false }` opt-out on scoped reads — skips the per-document
  * `v.safeParse` for trusted hot-path reads, returning the raw stored docs.
  */
-import { assert, assertEquals } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";
@@ -10,9 +11,10 @@ import { refId } from "../src/ids.ts";
 
 const EXPO = "exposition:validateoptout";
 
-Deno.test("validate:false returns the same docs as the validated read (transform-free schema)", async () => {
+test("validate:false returns the same docs as the validated read (transform-free schema)", async () => {
   await withDatabase("smc-validate-optout", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: { artwork: { title: v.string(), year: v.number() } },
       allowUnscoped: true,
@@ -40,9 +42,10 @@ Deno.test("validate:false returns the same docs as the validated read (transform
   });
 });
 
-Deno.test("validate:false works on findAny and the multi-scope view", async () => {
+test("validate:false works on findAny and the multi-scope view", async () => {
   await withDatabase("smc-validate-optout-any", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: { artwork: { title: v.string() }, artist: { name: v.string() } },
       allowUnscoped: true,
@@ -54,9 +57,13 @@ Deno.test("validate:false works on findAny and the multi-scope view", async () =
     const any = await expo.findAny({}, { validate: false });
     assertEquals(any.length, 2);
 
-    const viaScopes = await catalog.scopes([EXPO]).find("artwork", {}, {
-      validate: false,
-    });
+    const viaScopes = await catalog.scopes([EXPO]).find(
+      "artwork",
+      {},
+      {
+        validate: false,
+      },
+    );
     assertEquals(viaScopes.length, 1);
     assertEquals((viaScopes[0] as { title: string }).title, "Starry Night");
   });

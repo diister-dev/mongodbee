@@ -10,12 +10,13 @@
  * @module
  */
 
-import { assertEquals } from "@std/assert";
+import { test } from "../../+harness.ts";
+import { assertEquals } from "../../+assert.ts";
 import * as v from "valibot";
 import { migrationDefinition } from "../../../src/migration/definition.ts";
 import { validateMigrationWithSimulation } from "../../../src/migration/validators/simulation.ts";
 
-Deno.test("Schema Evolution: Optional to required field progression", async () => {
+test("Schema Evolution: Optional to required field progression", async () => {
   // Step 1: Initial schema
   const m1 = migrationDefinition("2025_01_01_INIT", "init_products", {
     parent: null,
@@ -124,7 +125,7 @@ Deno.test("Schema Evolution: Optional to required field progression", async () =
   );
 });
 
-Deno.test("Schema Evolution: Type migration (string → enum)", async () => {
+test("Schema Evolution: Type migration (string → enum)", async () => {
   // Step 1: Status as free-form string
   const m1 = migrationDefinition("2025_01_01_ORDERS", "create_orders", {
     parent: null,
@@ -176,13 +177,13 @@ Deno.test("Schema Evolution: Type migration (string → enum)", async () => {
             const status = (doc.status as string).toLowerCase();
             // Map old values to new enum values
             const statusMap: Record<string, string> = {
-              "pending": "pending",
+              pending: "pending",
               "in progress": "processing",
-              "processing": "processing",
-              "done": "completed",
-              "completed": "completed",
-              "canceled": "cancelled",
-              "cancelled": "cancelled",
+              processing: "processing",
+              done: "completed",
+              completed: "completed",
+              canceled: "cancelled",
+              cancelled: "cancelled",
             };
             return {
               ...doc,
@@ -210,7 +211,7 @@ Deno.test("Schema Evolution: Type migration (string → enum)", async () => {
   );
 });
 
-Deno.test("Schema Evolution: Restructuring (flat → nested)", async () => {
+test("Schema Evolution: Restructuring (flat → nested)", async () => {
   // Step 1: Flat structure
   const m1 = migrationDefinition("2025_01_01_USERS_FLAT", "create_users_flat", {
     parent: null,
@@ -254,7 +255,8 @@ Deno.test("Schema Evolution: Restructuring (flat → nested)", async () => {
             _id: v.string(),
             name: v.string(),
             email: v.string(),
-            address: v.object({ // ← NESTED structure
+            address: v.object({
+              // ← NESTED structure
               street: v.string(),
               city: v.string(),
               country: v.string(),
@@ -301,7 +303,7 @@ Deno.test("Schema Evolution: Restructuring (flat → nested)", async () => {
   );
 });
 
-Deno.test("Schema Evolution: Number to formatted string", async () => {
+test("Schema Evolution: Number to formatted string", async () => {
   // Step 1: Price as number
   const m1 = migrationDefinition("2025_01_01_PRICE_NUM", "price_as_number", {
     parent: null,
@@ -371,7 +373,7 @@ Deno.test("Schema Evolution: Number to formatted string", async () => {
   );
 });
 
-Deno.test("Schema Evolution: Adding validation constraints progressively", async () => {
+test("Schema Evolution: Adding validation constraints progressively", async () => {
   // Step 1: Basic email field
   const m1 = migrationDefinition(
     "2025_01_01_EMAIL_BASIC",
@@ -444,7 +446,7 @@ Deno.test("Schema Evolution: Adding validation constraints progressively", async
   );
 });
 
-Deno.test("Schema Evolution: Array field addition and transformation", async () => {
+test("Schema Evolution: Array field addition and transformation", async () => {
   // Step 1: Single tag as string
   const m1 = migrationDefinition("2025_01_01_TAG_SINGLE", "single_tag", {
     parent: null,
@@ -491,7 +493,7 @@ Deno.test("Schema Evolution: Array field addition and transformation", async () 
         down: (doc) => ({
           _id: doc._id,
           title: doc.title,
-          tag: ((doc.tags as string[])[0]) || "untagged", // Take first tag
+          tag: (doc.tags as string[])[0] || "untagged", // Take first tag
         }),
       });
       return m.compile();

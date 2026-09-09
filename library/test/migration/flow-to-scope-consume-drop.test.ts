@@ -10,7 +10,8 @@
  * The fix tolerates ONLY "collection does not exist" (idempotent re-run) and
  * rethrows anything else.
  */
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals, assertRejects } from "../+assert.ts";
 import { withDatabase } from "../+shared.ts";
 import type { Db } from "../../src/mongodb.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
@@ -28,13 +29,15 @@ function consumeMigration() {
       parent: null,
       schemas: S,
       migrate: (b) =>
-        b.flowToScope({
-          from: { kind: "collection", name: "roots" },
-          into: { collection: "scoped" },
-          toType: () => "info",
-          scope: (d) => d._id as string,
-          source: "consume",
-        }).compile(),
+        b
+          .flowToScope({
+            from: { kind: "collection", name: "roots" },
+            into: { collection: "scoped" },
+            toType: () => "info",
+            scope: (d) => d._id as string,
+            source: "consume",
+          })
+          .compile(),
     },
   );
 }
@@ -48,13 +51,10 @@ function dbWithDropFailure(realDb: Db, targetName: string, error: unknown): Db {
   return new Proxy(realDb, {
     get(target, prop, _receiver) {
       if (prop === "collection") {
-        // deno-lint-ignore no-explicit-any
         return (name: string, ...args: any[]) => {
-          const coll =
-            (target.collection as (n: string, ...a: unknown[]) => unknown)(
-              name,
-              ...args,
-            );
+          const coll = (
+            target.collection as (n: string, ...a: unknown[]) => unknown
+          )(name, ...args);
           if (name !== targetName) return coll;
           return new Proxy(coll as object, {
             get(ct, cprop) {
@@ -71,7 +71,7 @@ function dbWithDropFailure(realDb: Db, targetName: string, error: unknown): Db {
   }) as unknown as Db;
 }
 
-Deno.test("mongodb flowToScope consume: a real drop() failure fails the migration loudly (not green)", async () => {
+test("mongodb flowToScope consume: a real drop() failure fails the migration loudly (not green)", async () => {
   await withDatabase("flow-consume-drop-fail", async (db) => {
     await db.collection("roots").insertMany([
       { _id: "exposition:A", v: 1 },
@@ -90,8 +90,9 @@ Deno.test("mongodb flowToScope consume: a real drop() failure fails the migratio
 
     await assertRejects(
       () =>
-        createMongodbApplier(wrapped, m, { currentMigrationId: m.id })
-          .applyMigration(ops, "up"),
+        createMongodbApplier(wrapped, m, {
+          currentMigrationId: m.id,
+        }).applyMigration(ops, "up"),
       Error,
       "simulated drop failure",
     );
@@ -102,11 +103,11 @@ Deno.test("mongodb flowToScope consume: a real drop() failure fails the migratio
   });
 });
 
-Deno.test("mongodb flowToScope consume: NamespaceNotFound on drop is tolerated (idempotent re-run)", async () => {
+test("mongodb flowToScope consume: NamespaceNotFound on drop is tolerated (idempotent re-run)", async () => {
   await withDatabase("flow-consume-drop-missing", async (db) => {
-    await db.collection("roots").insertMany([
-      { _id: "exposition:A", v: 1 },
-    ] as never);
+    await db
+      .collection("roots")
+      .insertMany([{ _id: "exposition:A", v: 1 }] as never);
 
     const m = consumeMigration();
     const ops = m.migrate(migrationBuilder({ schemas: S })).operations;
@@ -119,11 +120,15 @@ Deno.test("mongodb flowToScope consume: NamespaceNotFound on drop is tolerated (
 
     // Should NOT throw: a missing source collection means it was already
     // consumed; the consolidation goal still holds.
-    await createMongodbApplier(wrapped, m, { currentMigrationId: m.id })
-      .applyMigration(ops, "up");
+    await createMongodbApplier(wrapped, m, {
+      currentMigrationId: m.id,
+    }).applyMigration(ops, "up");
 
     // The flow still happened: docs landed in the scoped target.
-    const scoped = await db.collection("scoped").find({} as never).toArray();
+    const scoped = await db
+      .collection("scoped")
+      .find({} as never)
+      .toArray();
     assert(
       scoped.length >= 1,
       "documents should have been flowed into the scoped collection",

@@ -1,9 +1,10 @@
+import { test } from "./+harness.ts";
 import * as v from "../src/schema.ts";
-import { assertEquals, assertExists } from "@std/assert";
+import { assertEquals, assertExists } from "./+assert.ts";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
 
-Deno.test("Paginate basic functionality", async (t) => {
+test("Paginate basic functionality", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Define a simple schema
     const itemSchema = {
@@ -40,7 +41,7 @@ Deno.test("Paginate basic functionality", async (t) => {
   });
 });
 
-Deno.test("Paginate with afterId", async (t) => {
+test("Paginate with afterId", async (t) => {
   await withDatabase(t.name, async (db) => {
     const itemSchema = {
       name: v.string(),
@@ -65,10 +66,13 @@ Deno.test("Paginate with afterId", async (t) => {
     assertEquals(firstPage.data.length, 5);
 
     // Get second page using afterId (keeping same type as original)
-    const secondPage = await items.paginate({}, {
-      limit: 5,
-      afterId: firstPage.data[firstPage.data.length - 1]._id, // Pass ObjectId as-is
-    });
+    const secondPage = await items.paginate(
+      {},
+      {
+        limit: 5,
+        afterId: firstPage.data[firstPage.data.length - 1]._id, // Pass ObjectId as-is
+      },
+    );
 
     assertEquals(secondPage.data.length, 5);
 
@@ -87,7 +91,7 @@ Deno.test("Paginate with afterId", async (t) => {
   });
 });
 
-Deno.test("Paginate with beforeId", async (t) => {
+test("Paginate with beforeId", async (t) => {
   await withDatabase(t.name, async (db) => {
     const itemSchema = {
       name: v.string(),
@@ -112,10 +116,13 @@ Deno.test("Paginate with beforeId", async (t) => {
     const anchorId = allItems.data[10]._id; // Use 11th item as anchor
 
     // Get items before the anchor
-    const beforePage = await items.paginate({}, {
-      limit: 5,
-      beforeId: anchorId,
-    });
+    const beforePage = await items.paginate(
+      {},
+      {
+        limit: 5,
+        beforeId: anchorId,
+      },
+    );
 
     assertEquals(beforePage.data.length, 5);
 
@@ -128,7 +135,7 @@ Deno.test("Paginate with beforeId", async (t) => {
   });
 });
 
-Deno.test("Paginate with filter", async (t) => {
+test("Paginate with filter", async (t) => {
   await withDatabase(t.name, async (db) => {
     const itemSchema = {
       name: v.string(),
@@ -151,10 +158,7 @@ Deno.test("Paginate with filter", async (t) => {
     await items.insertMany(testData);
 
     // Test pagination with filter - only get even items
-    const evenItems = await items.paginate(
-      { category: "even" },
-      { limit: 10 },
-    );
+    const evenItems = await items.paginate({ category: "even" }, { limit: 10 });
 
     assertEquals(evenItems.data.length, 7); // 2,4,6,8,10,12,14
 
@@ -165,7 +169,7 @@ Deno.test("Paginate with filter", async (t) => {
   });
 });
 
-Deno.test("Paginate with sorting", async (t) => {
+test("Paginate with sorting", async (t) => {
   await withDatabase(t.name, async (db) => {
     const itemSchema = {
       name: v.string(),
@@ -186,10 +190,13 @@ Deno.test("Paginate with sorting", async (t) => {
     await items.insertMany(testData);
 
     // Test pagination with sorting by value ascending
-    const sortedItems = await items.paginate({}, {
-      limit: 5,
-      sort: { value: 1 },
-    });
+    const sortedItems = await items.paginate(
+      {},
+      {
+        limit: 5,
+        sort: { value: 1 },
+      },
+    );
 
     assertEquals(sortedItems.data.length, 5);
 
@@ -210,7 +217,7 @@ Deno.test("Paginate with sorting", async (t) => {
   });
 });
 
-Deno.test("Paginate edge cases", async (t) => {
+test("Paginate edge cases", async (t) => {
   await withDatabase(t.name, async (db) => {
     const itemSchema = {
       name: v.string(),
@@ -236,9 +243,12 @@ Deno.test("Paginate edge cases", async (t) => {
     assertEquals(emptyPage.total, 0);
 
     // Test no match filter
-    const noMatchPage = await items.paginate({ name: "NonExistent" }, {
-      limit: 10,
-    });
+    const noMatchPage = await items.paginate(
+      { name: "NonExistent" },
+      {
+        limit: 10,
+      },
+    );
     assertEquals(noMatchPage.data.length, 0);
 
     // Test limit larger than data
@@ -256,7 +266,7 @@ Deno.test("Paginate edge cases", async (t) => {
   });
 });
 
-Deno.test("Paginate complex queries", async (t) => {
+test("Paginate complex queries", async (t) => {
   await withDatabase(t.name, async (db) => {
     const itemSchema = {
       name: v.string(),
@@ -299,7 +309,7 @@ Deno.test("Paginate complex queries", async (t) => {
   });
 });
 
-Deno.test("Paginate performance with large dataset", async (t) => {
+test("Paginate performance with large dataset", async (t) => {
   await withDatabase(t.name, async (db) => {
     const itemSchema = {
       name: v.string(),
@@ -327,7 +337,7 @@ Deno.test("Paginate performance with large dataset", async (t) => {
   });
 });
 
-Deno.test("Paginate with string IDs", async (t) => {
+test("Paginate with string IDs", async (t) => {
   await withDatabase(t.name, async (db) => {
     const itemSchema = {
       _id: v.string(),
@@ -352,10 +362,13 @@ Deno.test("Paginate with string IDs", async (t) => {
     }
 
     // Test pagination with string IDs
-    const firstPage = await items.paginate({}, {
-      limit: 3,
-      sort: { _id: 1 },
-    });
+    const firstPage = await items.paginate(
+      {},
+      {
+        limit: 3,
+        sort: { _id: 1 },
+      },
+    );
 
     assertEquals(firstPage.data.length, 3);
     assertEquals(firstPage.data[0]._id, "item:001");
@@ -363,11 +376,14 @@ Deno.test("Paginate with string IDs", async (t) => {
     assertEquals(firstPage.data[2]._id, "item:003");
 
     // Test afterId with string ID
-    const secondPage = await items.paginate({}, {
-      limit: 3,
-      afterId: firstPage.data[firstPage.data.length - 1]._id, // "item:003"
-      sort: { _id: 1 },
-    });
+    const secondPage = await items.paginate(
+      {},
+      {
+        limit: 3,
+        afterId: firstPage.data[firstPage.data.length - 1]._id, // "item:003"
+        sort: { _id: 1 },
+      },
+    );
 
     assertEquals(secondPage.data.length, 3);
     assertEquals(secondPage.data[0]._id, "item:004");
@@ -376,11 +392,14 @@ Deno.test("Paginate with string IDs", async (t) => {
 
     // Test beforeId with string ID
     // With beforeId, items are returned in the same order as forward pagination
-    const beforePage = await items.paginate({}, {
-      limit: 3,
-      beforeId: "item:003",
-      sort: { _id: 1 },
-    });
+    const beforePage = await items.paginate(
+      {},
+      {
+        limit: 3,
+        beforeId: "item:003",
+        sort: { _id: 1 },
+      },
+    );
 
     assertEquals(beforePage.data.length, 2);
     assertEquals(beforePage.data[0]._id, "item:001");
@@ -388,7 +407,7 @@ Deno.test("Paginate with string IDs", async (t) => {
   });
 });
 
-Deno.test("Paginate with ObjectId IDs", async (t) => {
+test("Paginate with ObjectId IDs", async (t) => {
   await withDatabase(t.name, async (db) => {
     const itemSchema = {
       name: v.string(),
@@ -412,16 +431,19 @@ Deno.test("Paginate with ObjectId IDs", async (t) => {
     assertEquals(firstPage.data.length, 2);
 
     // Test afterId with ObjectId
-    const secondPage = await items.paginate({}, {
-      limit: 2,
-      afterId: firstPage.data[firstPage.data.length - 1]._id, // ObjectId
-    });
+    const secondPage = await items.paginate(
+      {},
+      {
+        limit: 2,
+        afterId: firstPage.data[firstPage.data.length - 1]._id, // ObjectId
+      },
+    );
 
     assertEquals(secondPage.data.length, 2);
   });
 });
 
-Deno.test("Paginate with mixed ID types", async (t) => {
+test("Paginate with mixed ID types", async (t) => {
   await withDatabase(t.name, async (db) => {
     const itemSchema = {
       name: v.string(),
@@ -449,16 +471,19 @@ Deno.test("Paginate with mixed ID types", async (t) => {
     assertEquals(firstPage.data.length, 2);
 
     // Test afterId
-    const secondPage = await items.paginate({}, {
-      limit: 2,
-      afterId: firstPage.data[firstPage.data.length - 1]._id,
-    });
+    const secondPage = await items.paginate(
+      {},
+      {
+        limit: 2,
+        afterId: firstPage.data[firstPage.data.length - 1]._id,
+      },
+    );
 
     assertEquals(secondPage.data.length, 2);
   });
 });
 
-Deno.test("Paginate with custom sort and afterId", async (t) => {
+test("Paginate with custom sort and afterId", async (t) => {
   await withDatabase(t.name, async (db) => {
     const itemSchema = {
       name: v.string(),
@@ -487,10 +512,13 @@ Deno.test("Paginate with custom sort and afterId", async (t) => {
     }
 
     // Test 1: Paginate with custom sort (createdAt descending) - first page
-    const firstPage = await items.paginate({}, {
-      limit: 3,
-      sort: { createdAt: -1 },
-    });
+    const firstPage = await items.paginate(
+      {},
+      {
+        limit: 3,
+        sort: { createdAt: -1 },
+      },
+    );
 
     assertEquals(firstPage.data.length, 3);
     assertEquals(firstPage.total, 6);
@@ -502,11 +530,14 @@ Deno.test("Paginate with custom sort and afterId", async (t) => {
 
     // Test 2: Get second page using afterId with custom sort
     // This should return items with createdAt < 400 (Item C, B, A)
-    const secondPage = await items.paginate({}, {
-      limit: 3,
-      sort: { createdAt: -1 },
-      afterId: firstPage.data[firstPage.data.length - 1]._id,
-    });
+    const secondPage = await items.paginate(
+      {},
+      {
+        limit: 3,
+        sort: { createdAt: -1 },
+        afterId: firstPage.data[firstPage.data.length - 1]._id,
+      },
+    );
 
     assertEquals(secondPage.data.length, 3);
 
@@ -529,7 +560,7 @@ Deno.test("Paginate with custom sort and afterId", async (t) => {
   });
 });
 
-Deno.test("Paginate with custom sort and beforeId", async (t) => {
+test("Paginate with custom sort and beforeId", async (t) => {
   await withDatabase(t.name, async (db) => {
     const itemSchema = {
       name: v.string(),
@@ -554,10 +585,13 @@ Deno.test("Paginate with custom sort and beforeId", async (t) => {
     }
 
     // Get all items sorted by score descending to find anchor point
-    const allItems = await items.paginate({}, {
-      limit: 6,
-      sort: { score: -1 },
-    });
+    const allItems = await items.paginate(
+      {},
+      {
+        limit: 6,
+        sort: { score: -1 },
+      },
+    );
 
     // allItems should be: VeryHigh(100), High(90), MediumHigh(70), Medium(50), Low(10), VeryLow(5)
     assertEquals(allItems.data[0].score, 100);
@@ -566,11 +600,14 @@ Deno.test("Paginate with custom sort and beforeId", async (t) => {
 
     // Use beforeId with the 4th item (Medium, score=50) as anchor
     // Should return items BEFORE it in the sorted order (higher scores)
-    const beforePage = await items.paginate({}, {
-      limit: 3,
-      sort: { score: -1 },
-      beforeId: allItems.data[3]._id, // Medium (score=50)
-    });
+    const beforePage = await items.paginate(
+      {},
+      {
+        limit: 3,
+        sort: { score: -1 },
+        beforeId: allItems.data[3]._id, // Medium (score=50)
+      },
+    );
 
     assertEquals(beforePage.data.length, 3);
 
@@ -584,7 +621,7 @@ Deno.test("Paginate with custom sort and beforeId", async (t) => {
   });
 });
 
-Deno.test("Paginate with multi-field custom sort and afterId", async (t) => {
+test("Paginate with multi-field custom sort and afterId", async (t) => {
   await withDatabase(t.name, async (db) => {
     const itemSchema = {
       category: v.string(),
@@ -612,10 +649,13 @@ Deno.test("Paginate with multi-field custom sort and afterId", async (t) => {
     // Expected order with { category: 1, value: -1 }:
     // A-High(A,100), A-Mid(A,50), A-Low(A,10), B-High(B,90), B-Low(B,20), C-Only(C,60)
 
-    const firstPage = await items.paginate({}, {
-      limit: 3,
-      sort: { category: 1, value: -1 },
-    });
+    const firstPage = await items.paginate(
+      {},
+      {
+        limit: 3,
+        sort: { category: 1, value: -1 },
+      },
+    );
 
     assertEquals(firstPage.data.length, 3);
     assertEquals(firstPage.data[0].name, "A-High");
@@ -623,11 +663,14 @@ Deno.test("Paginate with multi-field custom sort and afterId", async (t) => {
     assertEquals(firstPage.data[2].name, "A-Low");
 
     // Get second page
-    const secondPage = await items.paginate({}, {
-      limit: 3,
-      sort: { category: 1, value: -1 },
-      afterId: firstPage.data[firstPage.data.length - 1]._id,
-    });
+    const secondPage = await items.paginate(
+      {},
+      {
+        limit: 3,
+        sort: { category: 1, value: -1 },
+        afterId: firstPage.data[firstPage.data.length - 1]._id,
+      },
+    );
 
     assertEquals(secondPage.data.length, 3);
     assertEquals(secondPage.data[0].name, "B-High");
@@ -636,7 +679,7 @@ Deno.test("Paginate with multi-field custom sort and afterId", async (t) => {
   });
 });
 
-Deno.test("Paginate with duplicate sort values", async (t) => {
+test("Paginate with duplicate sort values", async (t) => {
   await withDatabase(t.name, async (db) => {
     const itemSchema = {
       name: v.string(),
@@ -661,10 +704,13 @@ Deno.test("Paginate with duplicate sort values", async (t) => {
     }
 
     // First page with sort on duplicate field
-    const firstPage = await items.paginate({}, {
-      limit: 3,
-      sort: { category: 1 },
-    });
+    const firstPage = await items.paginate(
+      {},
+      {
+        limit: 3,
+        sort: { category: 1 },
+      },
+    );
 
     assertEquals(firstPage.data.length, 3);
     assertEquals(firstPage.total, 6);
@@ -673,11 +719,14 @@ Deno.test("Paginate with duplicate sort values", async (t) => {
     const firstPageNames = firstPage.data.map((item) => item.name);
 
     // Second page should get remaining items, no duplicates
-    const secondPage = await items.paginate({}, {
-      limit: 3,
-      sort: { category: 1 },
-      afterId: firstPage.data[firstPage.data.length - 1]._id,
-    });
+    const secondPage = await items.paginate(
+      {},
+      {
+        limit: 3,
+        sort: { category: 1 },
+        afterId: firstPage.data[firstPage.data.length - 1]._id,
+      },
+    );
 
     assertEquals(secondPage.data.length, 3);
 
@@ -704,7 +753,7 @@ Deno.test("Paginate with duplicate sort values", async (t) => {
   });
 });
 
-Deno.test("Paginate with duplicate sort values and beforeId", async (t) => {
+test("Paginate with duplicate sort values and beforeId", async (t) => {
   await withDatabase(t.name, async (db) => {
     const itemSchema = {
       name: v.string(),
@@ -729,19 +778,25 @@ Deno.test("Paginate with duplicate sort values and beforeId", async (t) => {
     }
 
     // Get all items to find anchor
-    const allItems = await items.paginate({}, {
-      limit: 6,
-      sort: { status: 1 },
-    });
+    const allItems = await items.paginate(
+      {},
+      {
+        limit: 6,
+        sort: { status: 1 },
+      },
+    );
 
     assertEquals(allItems.data.length, 6);
 
     // Use beforeId with the 4th item as anchor
-    const beforePage = await items.paginate({}, {
-      limit: 3,
-      sort: { status: 1 },
-      beforeId: allItems.data[3]._id,
-    });
+    const beforePage = await items.paginate(
+      {},
+      {
+        limit: 3,
+        sort: { status: 1 },
+        beforeId: allItems.data[3]._id,
+      },
+    );
 
     assertEquals(beforePage.data.length, 3);
 
@@ -761,7 +816,7 @@ Deno.test("Paginate with duplicate sort values and beforeId", async (t) => {
   });
 });
 
-Deno.test("Paginate with _id descending sort", async (t) => {
+test("Paginate with _id descending sort", async (t) => {
   await withDatabase(t.name, async (db) => {
     const itemSchema = {
       name: v.string(),
@@ -779,10 +834,13 @@ Deno.test("Paginate with _id descending sort", async (t) => {
     }
 
     // First page with _id descending (newest first)
-    const firstPage = await items.paginate({}, {
-      limit: 4,
-      sort: { _id: -1 },
-    });
+    const firstPage = await items.paginate(
+      {},
+      {
+        limit: 4,
+        sort: { _id: -1 },
+      },
+    );
 
     assertEquals(firstPage.data.length, 4);
     assertEquals(firstPage.total, 10);
@@ -799,11 +857,14 @@ Deno.test("Paginate with _id descending sort", async (t) => {
     );
 
     // Second page
-    const secondPage = await items.paginate({}, {
-      limit: 4,
-      sort: { _id: -1 },
-      afterId: firstPage.data[firstPage.data.length - 1]._id,
-    });
+    const secondPage = await items.paginate(
+      {},
+      {
+        limit: 4,
+        sort: { _id: -1 },
+        afterId: firstPage.data[firstPage.data.length - 1]._id,
+      },
+    );
 
     assertEquals(secondPage.data.length, 4);
 
@@ -823,11 +884,14 @@ Deno.test("Paginate with _id descending sort", async (t) => {
     }
 
     // Third page
-    const thirdPage = await items.paginate({}, {
-      limit: 4,
-      sort: { _id: -1 },
-      afterId: secondPage.data[secondPage.data.length - 1]._id,
-    });
+    const thirdPage = await items.paginate(
+      {},
+      {
+        limit: 4,
+        sort: { _id: -1 },
+        afterId: secondPage.data[secondPage.data.length - 1]._id,
+      },
+    );
 
     assertEquals(thirdPage.data.length, 2); // Only 2 remaining
 
@@ -854,7 +918,7 @@ Deno.test("Paginate with _id descending sort", async (t) => {
   });
 });
 
-Deno.test("Paginate with _id descending sort and beforeId", async (t) => {
+test("Paginate with _id descending sort and beforeId", async (t) => {
   await withDatabase(t.name, async (db) => {
     const itemSchema = {
       name: v.string(),
@@ -870,20 +934,26 @@ Deno.test("Paginate with _id descending sort and beforeId", async (t) => {
     }
 
     // Get all items with _id descending to find anchor
-    const allItems = await items.paginate({}, {
-      limit: 10,
-      sort: { _id: -1 },
-    });
+    const allItems = await items.paginate(
+      {},
+      {
+        limit: 10,
+        sort: { _id: -1 },
+      },
+    );
 
     // Order: Item 10, 9, 8, 7, 6, 5, 4, 3, 2, 1
 
     // Use beforeId with Item 5 (index 5) as anchor
     // Should return items BEFORE it in the sorted order: Item 10, 9, 8, 7, 6
-    const beforePage = await items.paginate({}, {
-      limit: 5,
-      sort: { _id: -1 },
-      beforeId: allItems.data[5]._id, // Item 5
-    });
+    const beforePage = await items.paginate(
+      {},
+      {
+        limit: 5,
+        sort: { _id: -1 },
+        beforeId: allItems.data[5]._id, // Item 5
+      },
+    );
 
     assertEquals(beforePage.data.length, 5);
 
@@ -896,7 +966,7 @@ Deno.test("Paginate with _id descending sort and beforeId", async (t) => {
   });
 });
 
-Deno.test("Paginate accumulation with _id descending - no duplicates across 5+ pages", async (t) => {
+test("Paginate accumulation with _id descending - no duplicates across 5+ pages", async (t) => {
   await withDatabase(t.name, async (db) => {
     const itemSchema = {
       name: v.string(),
@@ -915,21 +985,27 @@ Deno.test("Paginate accumulation with _id descending - no duplicates across 5+ p
     const allCollectedNames: string[] = [];
 
     // Page 1
-    const page1 = await items.paginate({}, {
-      limit: 5,
-      sort: { _id: -1 },
-    });
+    const page1 = await items.paginate(
+      {},
+      {
+        limit: 5,
+        sort: { _id: -1 },
+      },
+    );
     for (const item of page1.data) {
       allCollectedIds.push(item._id.toString());
       allCollectedNames.push(item.name);
     }
 
     // Page 2
-    const page2 = await items.paginate({}, {
-      limit: 5,
-      sort: { _id: -1 },
-      afterId: page1.data[page1.data.length - 1]._id,
-    });
+    const page2 = await items.paginate(
+      {},
+      {
+        limit: 5,
+        sort: { _id: -1 },
+        afterId: page1.data[page1.data.length - 1]._id,
+      },
+    );
     for (const item of page2.data) {
       const idStr = item._id.toString();
       if (allCollectedIds.includes(idStr)) {
@@ -940,11 +1016,14 @@ Deno.test("Paginate accumulation with _id descending - no duplicates across 5+ p
     }
 
     // Page 3
-    const page3 = await items.paginate({}, {
-      limit: 5,
-      sort: { _id: -1 },
-      afterId: page2.data[page2.data.length - 1]._id,
-    });
+    const page3 = await items.paginate(
+      {},
+      {
+        limit: 5,
+        sort: { _id: -1 },
+        afterId: page2.data[page2.data.length - 1]._id,
+      },
+    );
     for (const item of page3.data) {
       const idStr = item._id.toString();
       if (allCollectedIds.includes(idStr)) {
@@ -955,11 +1034,14 @@ Deno.test("Paginate accumulation with _id descending - no duplicates across 5+ p
     }
 
     // Page 4
-    const page4 = await items.paginate({}, {
-      limit: 5,
-      sort: { _id: -1 },
-      afterId: page3.data[page3.data.length - 1]._id,
-    });
+    const page4 = await items.paginate(
+      {},
+      {
+        limit: 5,
+        sort: { _id: -1 },
+        afterId: page3.data[page3.data.length - 1]._id,
+      },
+    );
     for (const item of page4.data) {
       const idStr = item._id.toString();
       if (allCollectedIds.includes(idStr)) {
@@ -970,11 +1052,14 @@ Deno.test("Paginate accumulation with _id descending - no duplicates across 5+ p
     }
 
     // Page 5
-    const page5 = await items.paginate({}, {
-      limit: 5,
-      sort: { _id: -1 },
-      afterId: page4.data[page4.data.length - 1]._id,
-    });
+    const page5 = await items.paginate(
+      {},
+      {
+        limit: 5,
+        sort: { _id: -1 },
+        afterId: page4.data[page4.data.length - 1]._id,
+      },
+    );
     for (const item of page5.data) {
       const idStr = item._id.toString();
       if (allCollectedIds.includes(idStr)) {
@@ -1005,7 +1090,7 @@ Deno.test("Paginate accumulation with _id descending - no duplicates across 5+ p
   });
 });
 
-Deno.test("Paginate skipTotal omits total and position", async (t) => {
+test("Paginate skipTotal omits total and position", async (t) => {
   await withDatabase(t.name, async (db) => {
     const itemSchema = { name: v.string(), value: v.number() };
     const items = await collection(db, "items", itemSchema);
@@ -1023,7 +1108,7 @@ Deno.test("Paginate skipTotal omits total and position", async (t) => {
   });
 });
 
-Deno.test("Paginate peek returns hasMore and drops the extra row", async (t) => {
+test("Paginate peek returns hasMore and drops the extra row", async (t) => {
   await withDatabase(t.name, async (db) => {
     const itemSchema = { name: v.string(), value: v.number() };
     const items = await collection(db, "items", itemSchema);
@@ -1052,7 +1137,7 @@ Deno.test("Paginate peek returns hasMore and drops the extra row", async (t) => 
   });
 });
 
-Deno.test("Paginate skipTotal + peek is fully count-free", async (t) => {
+test("Paginate skipTotal + peek is fully count-free", async (t) => {
   await withDatabase(t.name, async (db) => {
     const itemSchema = { name: v.string(), value: v.number() };
     const items = await collection(db, "items", itemSchema);
@@ -1062,11 +1147,14 @@ Deno.test("Paginate skipTotal + peek is fully count-free", async (t) => {
     }
     await items.insertMany(testData);
 
-    const page = await items.paginate({}, {
-      limit: 5,
-      skipTotal: true,
-      peek: true,
-    });
+    const page = await items.paginate(
+      {},
+      {
+        limit: 5,
+        skipTotal: true,
+        peek: true,
+      },
+    );
     assertEquals(page.data.length, 5);
     assertEquals(page.total, undefined);
     assertEquals(page.position, undefined);
@@ -1074,7 +1162,7 @@ Deno.test("Paginate skipTotal + peek is fully count-free", async (t) => {
   });
 });
 
-Deno.test("Paginate peek with afterId paginates without losing rows", async (t) => {
+test("Paginate peek with afterId paginates without losing rows", async (t) => {
   await withDatabase(t.name, async (db) => {
     const itemSchema = { name: v.string(), value: v.number() };
     const items = await collection(db, "items", itemSchema);
@@ -1088,27 +1176,35 @@ Deno.test("Paginate peek with afterId paginates without losing rows", async (t) 
     assertEquals(firstPage.data.length, 4);
     assertEquals(firstPage.hasMore, true);
 
-    const secondPage = await items.paginate({}, {
-      limit: 4,
-      peek: true,
-      afterId: firstPage.data[firstPage.data.length - 1]._id,
-    });
+    const secondPage = await items.paginate(
+      {},
+      {
+        limit: 4,
+        peek: true,
+        afterId: firstPage.data[firstPage.data.length - 1]._id,
+      },
+    );
     assertEquals(secondPage.data.length, 4);
     assertEquals(secondPage.hasMore, true);
 
-    const thirdPage = await items.paginate({}, {
-      limit: 4,
-      peek: true,
-      afterId: secondPage.data[secondPage.data.length - 1]._id,
-    });
+    const thirdPage = await items.paginate(
+      {},
+      {
+        limit: 4,
+        peek: true,
+        afterId: secondPage.data[secondPage.data.length - 1]._id,
+      },
+    );
     assertEquals(thirdPage.data.length, 2);
     assertEquals(thirdPage.hasMore, false);
 
     // Together they cover all 10 rows with no overlap
     const seen = new Set<string>();
-    for (
-      const d of [...firstPage.data, ...secondPage.data, ...thirdPage.data]
-    ) {
+    for (const d of [
+      ...firstPage.data,
+      ...secondPage.data,
+      ...thirdPage.data,
+    ]) {
       seen.add(d._id.toString());
     }
     assertEquals(seen.size, 10);

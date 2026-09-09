@@ -73,7 +73,7 @@ const BUCKET_PROBES: {
       schemas.scopedMultiCollections?.[failure.collection] !== undefined,
     hasDocuments: (state, failure) =>
       (state.scopedMultiCollections[failure.collection]?.content.length ?? 0) >
-        0,
+      0,
   },
 };
 
@@ -112,8 +112,7 @@ export function foldMockGenerationFailures(
       continue;
     }
 
-    const message =
-      `Mock data generation failed for ${label} "${failure.collection}": ${failure.message}`;
+    const message = `Mock data generation failed for ${label} "${failure.collection}": ${failure.message}`;
 
     if (
       probe.isDeclared(schemas, failure) &&

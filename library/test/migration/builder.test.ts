@@ -4,8 +4,9 @@
  * Tests the migration builder API for creating migrations
  */
 
+import { test } from "../+harness.ts";
 import * as v from "../../src/schema.ts";
-import { assert, assertEquals, assertExists } from "@std/assert";
+import { assert, assertEquals, assertExists } from "../+assert.ts";
 import {
   getMigrationSummary,
   isCreateCollectionRule,
@@ -18,7 +19,7 @@ import {
 // Basic Builder Tests
 // ============================================================================
 
-Deno.test("MigrationBuilder - compile returns migration state", () => {
+test("MigrationBuilder - compile returns migration state", () => {
   const schemas = {
     collections: {
       users: {
@@ -37,7 +38,7 @@ Deno.test("MigrationBuilder - compile returns migration state", () => {
   assertEquals(typeof state.hasProperty, "function");
 });
 
-Deno.test("MigrationBuilder - createCollection adds create operation", () => {
+test("MigrationBuilder - createCollection adds create operation", () => {
   const schemas = {
     collections: {
       users: {
@@ -57,7 +58,7 @@ Deno.test("MigrationBuilder - createCollection adds create operation", () => {
   assertEquals(state.operations[0].collectionName, "users");
 });
 
-Deno.test("MigrationBuilder - createCollection marks as lossy", () => {
+test("MigrationBuilder - createCollection marks as lossy", () => {
   const schemas = {
     collections: {
       users: {
@@ -74,7 +75,7 @@ Deno.test("MigrationBuilder - createCollection marks as lossy", () => {
   assert(state.hasProperty("lossy"));
 });
 
-Deno.test("MigrationBuilder - seed adds seed operation", () => {
+test("MigrationBuilder - seed adds seed operation", () => {
   const schemas = {
     collections: {
       users: {
@@ -101,7 +102,7 @@ Deno.test("MigrationBuilder - seed adds seed operation", () => {
   assertEquals(state.operations[1].documents.length, 2);
 });
 
-Deno.test("MigrationBuilder - transform adds transform operation", () => {
+test("MigrationBuilder - transform adds transform operation", () => {
   const schemas = {
     collections: {
       users: {
@@ -129,7 +130,7 @@ Deno.test("MigrationBuilder - transform adds transform operation", () => {
   assertEquals(state.operations[0].collectionName, "users");
 });
 
-Deno.test("MigrationBuilder - chain multiple operations", () => {
+test("MigrationBuilder - chain multiple operations", () => {
   const schemas = {
     collections: {
       users: {
@@ -161,7 +162,7 @@ Deno.test("MigrationBuilder - chain multiple operations", () => {
 // Multi-Collection Builder Tests
 // ============================================================================
 
-Deno.test("MigrationBuilder - newMultiCollection creates instance", () => {
+test("MigrationBuilder - newMultiCollection creates instance", () => {
   const schemas = {
     collections: {},
     multiModels: {
@@ -189,7 +190,7 @@ Deno.test("MigrationBuilder - newMultiCollection creates instance", () => {
   assertEquals(op0.modelType, "catalog");
 });
 
-Deno.test("MigrationBuilder - seedType adds seed for multi-collection", () => {
+test("MigrationBuilder - seedType adds seed for multi-collection", () => {
   const schemas = {
     collections: {},
     multiModels: {
@@ -209,7 +210,9 @@ Deno.test("MigrationBuilder - seedType adds seed for multi-collection", () => {
 
   const state = migrationBuilder({ schemas })
     .createMultiModelInstance("catalog_main", "catalog")
-    .type("product").seed(products).end()
+    .type("product")
+    .seed(products)
+    .end()
     .end()
     .compile();
 
@@ -225,7 +228,7 @@ Deno.test("MigrationBuilder - seedType adds seed for multi-collection", () => {
   assertEquals(op1.documentType, "product");
 });
 
-Deno.test("MigrationBuilder - multiCollection type transform", () => {
+test("MigrationBuilder - multiCollection type transform", () => {
   const schemas = {
     collections: {},
     multiCollections: {
@@ -267,7 +270,7 @@ Deno.test("MigrationBuilder - multiCollection type transform", () => {
 // Schema Validation Tests
 // ============================================================================
 
-Deno.test("MigrationBuilder - seed validates documents against schema", () => {
+test("MigrationBuilder - seed validates documents against schema", () => {
   const schemas = {
     collections: {
       users: {
@@ -309,7 +312,7 @@ Deno.test("MigrationBuilder - seed validates documents against schema", () => {
 // Update Indexes Tests
 // ============================================================================
 
-Deno.test("MigrationBuilder - updateIndexes adds update operation", () => {
+test("MigrationBuilder - updateIndexes adds update operation", () => {
   const schemas = {
     collections: {
       users: {
@@ -319,9 +322,7 @@ Deno.test("MigrationBuilder - updateIndexes adds update operation", () => {
     },
   };
 
-  const state = migrationBuilder({ schemas })
-    .updateIndexes("users")
-    .compile();
+  const state = migrationBuilder({ schemas }).updateIndexes("users").compile();
 
   assertEquals(state.operations.length, 1);
   assertEquals(state.operations[0].type, "update_indexes");
@@ -329,15 +330,13 @@ Deno.test("MigrationBuilder - updateIndexes adds update operation", () => {
   assertEquals(op0.collectionName, "users");
 });
 
-Deno.test("MigrationBuilder - updateIndexes throws if collection schema not found", () => {
+test("MigrationBuilder - updateIndexes throws if collection schema not found", () => {
   const schemas = {
     collections: {},
   };
 
   try {
-    migrationBuilder({ schemas })
-      .updateIndexes("users")
-      .compile();
+    migrationBuilder({ schemas }).updateIndexes("users").compile();
 
     throw new Error("Should have thrown error");
   } catch (error) {
@@ -350,7 +349,7 @@ Deno.test("MigrationBuilder - updateIndexes throws if collection schema not foun
 // Migration Summary Tests
 // ============================================================================
 
-Deno.test("getMigrationSummary - returns correct counts", () => {
+test("getMigrationSummary - returns correct counts", () => {
   const schemas = {
     collections: {
       users: {
@@ -387,7 +386,7 @@ Deno.test("getMigrationSummary - returns correct counts", () => {
   assert(summary.properties.includes("lossy"));
 });
 
-Deno.test("getMigrationSummary - shows reversible when no create operations", () => {
+test("getMigrationSummary - shows reversible when no create operations", () => {
   const schemas = {
     collections: {
       users: {

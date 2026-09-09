@@ -2,8 +2,10 @@
  * Tests for migration status checking utilities
  */
 
-import { assertEquals, assertRejects } from "@std/assert";
-import * as path from "@std/path";
+import { test } from "../+harness.ts";
+import process from "node:process";
+import { assertEquals, assertRejects } from "../+assert.ts";
+import * as path from "node:path";
 import {
   assertMigrationSystemHealthy,
   checkMigrationStatus,
@@ -59,18 +61,18 @@ function createMockDb(options?: {
 }
 
 const testMigrationsDir = path.resolve(
-  Deno.cwd(),
+  process.cwd(),
   "test/fixtures/migrations",
 );
-const testSchemaPath = path.resolve(Deno.cwd(), "test/fixtures/schemas.ts");
+const testSchemaPath = path.resolve(process.cwd(), "test/fixtures/schemas.ts");
 
 // ============================================================================
 // checkMigrationStatus - without database
 // ============================================================================
 
-Deno.test("checkMigrationStatus - without database - handles no migrations", async () => {
+test("checkMigrationStatus - without database - handles no migrations", async () => {
   const status = await checkMigrationStatus({
-    migrationsDir: path.resolve(Deno.cwd(), "test/fixtures/empty"),
+    migrationsDir: path.resolve(process.cwd(), "test/fixtures/empty"),
     schemaPath: testSchemaPath,
   });
 
@@ -78,7 +80,7 @@ Deno.test("checkMigrationStatus - without database - handles no migrations", asy
   assertEquals(status.database, undefined);
 });
 
-Deno.test("checkMigrationStatus - without database - validates schema", async () => {
+test("checkMigrationStatus - without database - validates schema", async () => {
   const status = await checkMigrationStatus({
     migrationsDir: testMigrationsDir,
     schemaPath: testSchemaPath,
@@ -89,7 +91,7 @@ Deno.test("checkMigrationStatus - without database - validates schema", async ()
   assertEquals(typeof status.validation.isSchemaConsistent, "boolean");
 });
 
-Deno.test("checkMigrationStatus - without database - includes verbose info", async () => {
+test("checkMigrationStatus - without database - includes verbose info", async () => {
   const status = await checkMigrationStatus({
     migrationsDir: testMigrationsDir,
     schemaPath: testSchemaPath,
@@ -113,7 +115,7 @@ Deno.test("checkMigrationStatus - without database - includes verbose info", asy
   }
 });
 
-Deno.test("checkMigrationStatus - without database - reports warnings", async () => {
+test("checkMigrationStatus - without database - reports warnings", async () => {
   const status = await checkMigrationStatus({
     migrationsDir: testMigrationsDir,
     schemaPath: testSchemaPath,
@@ -128,7 +130,7 @@ Deno.test("checkMigrationStatus - without database - reports warnings", async ()
 // checkMigrationStatus - with database
 // ============================================================================
 
-Deno.test("checkMigrationStatus - with database - checks db status", async () => {
+test("checkMigrationStatus - with database - checks db status", async () => {
   const mockDb = createMockDb();
 
   const status = await checkMigrationStatus({
@@ -147,7 +149,7 @@ Deno.test("checkMigrationStatus - with database - checks db status", async () =>
   }
 });
 
-Deno.test("checkMigrationStatus - with database - includes pending IDs", async () => {
+test("checkMigrationStatus - with database - includes pending IDs", async () => {
   const mockDb = createMockDb();
 
   const status = await checkMigrationStatus({
@@ -162,7 +164,7 @@ Deno.test("checkMigrationStatus - with database - includes pending IDs", async (
   }
 });
 
-Deno.test("checkMigrationStatus - with database - marks applied in verbose", async () => {
+test("checkMigrationStatus - with database - marks applied in verbose", async () => {
   const mockDb = createMockDb();
 
   const status = await checkMigrationStatus({
@@ -183,7 +185,7 @@ Deno.test("checkMigrationStatus - with database - marks applied in verbose", asy
 // checkMigrationStatus - strict validation
 // ============================================================================
 
-Deno.test("checkMigrationStatus - strict validation - validates with simulation", async () => {
+test("checkMigrationStatus - strict validation - validates with simulation", async () => {
   const status = await checkMigrationStatus({
     migrationsDir: testMigrationsDir,
     schemaPath: testSchemaPath,
@@ -193,7 +195,7 @@ Deno.test("checkMigrationStatus - strict validation - validates with simulation"
   assertEquals(typeof status.validation.areMigrationsValid, "boolean");
 });
 
-Deno.test("checkMigrationStatus - strict validation - skips when not strict", async () => {
+test("checkMigrationStatus - strict validation - skips when not strict", async () => {
   const status = await checkMigrationStatus({
     migrationsDir: testMigrationsDir,
     schemaPath: testSchemaPath,
@@ -208,7 +210,7 @@ Deno.test("checkMigrationStatus - strict validation - skips when not strict", as
 // checkMigrationStatus - summary generation
 // ============================================================================
 
-Deno.test("checkMigrationStatus - summary - generates human-readable text", async () => {
+test("checkMigrationStatus - summary - generates human-readable text", async () => {
   const status = await checkMigrationStatus({
     migrationsDir: testMigrationsDir,
     schemaPath: testSchemaPath,
@@ -219,7 +221,7 @@ Deno.test("checkMigrationStatus - summary - generates human-readable text", asyn
   assertEquals(status.message.length > 0, true);
 });
 
-Deno.test("checkMigrationStatus - summary - includes errors when unhealthy", async () => {
+test("checkMigrationStatus - summary - includes errors when unhealthy", async () => {
   // Test with invalid path to force errors
   const status = await checkMigrationStatus({
     migrationsDir: "/nonexistent/path",
@@ -236,7 +238,7 @@ Deno.test("checkMigrationStatus - summary - includes errors when unhealthy", asy
 // assertMigrationSystemHealthy
 // ============================================================================
 
-Deno.test("assertMigrationSystemHealthy - does not throw when healthy", async () => {
+test("assertMigrationSystemHealthy - does not throw when healthy", async () => {
   // This test depends on having valid test fixtures
   // For now, we'll just test the function doesn't crash
   try {
@@ -250,7 +252,7 @@ Deno.test("assertMigrationSystemHealthy - does not throw when healthy", async ()
   }
 });
 
-Deno.test("assertMigrationSystemHealthy - throws when unhealthy", async () => {
+test("assertMigrationSystemHealthy - throws when unhealthy", async () => {
   await assertRejects(
     async () => {
       await assertMigrationSystemHealthy({
@@ -264,7 +266,7 @@ Deno.test("assertMigrationSystemHealthy - throws when unhealthy", async () => {
   );
 });
 
-Deno.test("assertMigrationSystemHealthy - includes error details", async () => {
+test("assertMigrationSystemHealthy - includes error details", async () => {
   try {
     await assertMigrationSystemHealthy({
       migrationsDir: "/nonexistent/path",
@@ -282,7 +284,7 @@ Deno.test("assertMigrationSystemHealthy - includes error details", async () => {
 // checkMigrationStatus - index validation
 // ============================================================================
 
-Deno.test("checkMigrationStatus - index validation - does not validate without db", async () => {
+test("checkMigrationStatus - index validation - does not validate without db", async () => {
   const status = await checkMigrationStatus({
     migrationsDir: testMigrationsDir,
     schemaPath: testSchemaPath,
@@ -293,7 +295,7 @@ Deno.test("checkMigrationStatus - index validation - does not validate without d
   assertEquals(status.indexes, undefined);
 });
 
-Deno.test("checkMigrationStatus - index validation - validates with db", async () => {
+test("checkMigrationStatus - index validation - validates with db", async () => {
   const mockDb = createMockDb();
 
   const status = await checkMigrationStatus({
@@ -316,7 +318,7 @@ Deno.test("checkMigrationStatus - index validation - validates with db", async (
   }
 });
 
-Deno.test("checkMigrationStatus - index validation - reports index issues", async () => {
+test("checkMigrationStatus - index validation - reports index issues", async () => {
   const mockDb = createMockDb();
 
   const status = await checkMigrationStatus({
@@ -343,7 +345,7 @@ Deno.test("checkMigrationStatus - index validation - reports index issues", asyn
   }
 });
 
-Deno.test("checkMigrationStatus - index validation - affects ok status", async () => {
+test("checkMigrationStatus - index validation - affects ok status", async () => {
   const mockDb = createMockDb();
 
   const status = await checkMigrationStatus({
@@ -360,7 +362,7 @@ Deno.test("checkMigrationStatus - index validation - affects ok status", async (
   }
 });
 
-Deno.test("checkMigrationStatus - index validation - includes detailed issues in verbose", async () => {
+test("checkMigrationStatus - index validation - includes detailed issues in verbose", async () => {
   const mockDb = createMockDb();
 
   const status = await checkMigrationStatus({
@@ -373,8 +375,8 @@ Deno.test("checkMigrationStatus - index validation - includes detailed issues in
 
   // In verbose mode with index issues, warnings should include index details
   if (status.indexes && !status.indexes.areIndexesValid) {
-    const hasIndexWarnings = status.validation.warnings.some((w) =>
-      w.includes("Index") || w.includes("index")
+    const hasIndexWarnings = status.validation.warnings.some(
+      (w) => w.includes("Index") || w.includes("index"),
     );
     assertEquals(hasIndexWarnings, true);
   }

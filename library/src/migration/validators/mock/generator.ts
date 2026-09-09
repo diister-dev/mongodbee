@@ -81,20 +81,19 @@ export function generateMockDocument(
   options?: MockDocumentOptions,
 ): Record<string, unknown> {
   // Wrap the schema in v.object() for valibot-mock
-  // deno-lint-ignore no-explicit-any
   const schemaObject = v.object(
     schema as Record<string, v.BaseSchema<any, any, any>>,
   );
 
   // Use valibot-mock to generate realistic test data from schema
-  // deno-lint-ignore no-explicit-any
   const generator = createMockGenerator(
     schemaObject as any,
     toGeneratorOptions(options),
   );
-  const mockData = stripUndefinedKeys(
-    generator.generate(),
-  ) as Record<string, unknown>;
+  const mockData = stripUndefinedKeys(generator.generate()) as Record<
+    string,
+    unknown
+  >;
 
   // Validate the generated data matches the schema
   const validation = v.safeParse(schemaObject, mockData);
@@ -118,7 +117,6 @@ export function generateMockScopeValue(
   schema: v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>,
   options?: MockDocumentOptions,
 ): unknown {
-  // deno-lint-ignore no-explicit-any
   const generator = createMockGenerator(
     schema as any,
     toGeneratorOptions(options),

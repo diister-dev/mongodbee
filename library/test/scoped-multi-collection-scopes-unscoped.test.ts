@@ -1,4 +1,5 @@
-import { assert, assertEquals, assertExists } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals, assertExists } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";
@@ -13,6 +14,7 @@ async function seed(
   opts?: { allowUnscoped?: boolean },
 ) {
   const catalog = await scopedMultiCollection(db, "catalog", {
+    schemaManagement: "auto",
     scope: refId("exposition"),
     types: {
       artwork: { title: v.string(), year: v.number() },
@@ -36,7 +38,7 @@ async function seed(
 
 // -------- .scopes([ids]) (read-only) -----------------------------------
 
-Deno.test(".scopes([ids]).find returns docs from those scopes only", async () => {
+test(".scopes([ids]).find returns docs from those scopes only", async () => {
   await withDatabase("smc-scopes-find", async (db) => {
     const { catalog } = await seed(db);
     const view = catalog.scopes([EXPO_A, EXPO_B]);
@@ -50,7 +52,7 @@ Deno.test(".scopes([ids]).find returns docs from those scopes only", async () =>
   });
 });
 
-Deno.test(".scopes([id]) single-scope read view works like .scope but read-only", async () => {
+test(".scopes([id]) single-scope read view works like .scope but read-only", async () => {
   await withDatabase("smc-scopes-single", async (db) => {
     const { catalog } = await seed(db);
     const view = catalog.scopes([EXPO_A]);
@@ -60,7 +62,7 @@ Deno.test(".scopes([id]) single-scope read view works like .scope but read-only"
   });
 });
 
-Deno.test(".scopes([]) returns empty results", async () => {
+test(".scopes([]) returns empty results", async () => {
   await withDatabase("smc-scopes-empty", async (db) => {
     const { catalog } = await seed(db);
     const view = catalog.scopes([]);
@@ -69,7 +71,7 @@ Deno.test(".scopes([]) returns empty results", async () => {
   });
 });
 
-Deno.test(".scopes(ids).findOne picks first match across scopes", async () => {
+test(".scopes(ids).findOne picks first match across scopes", async () => {
   await withDatabase("smc-scopes-findone", async (db) => {
     const { catalog } = await seed(db);
     const view = catalog.scopes([EXPO_A, EXPO_B]);
@@ -80,17 +82,14 @@ Deno.test(".scopes(ids).findOne picks first match across scopes", async () => {
   });
 });
 
-Deno.test(".scopes(ids).countDocuments counts only inside the given scopes", async () => {
+test(".scopes(ids).countDocuments counts only inside the given scopes", async () => {
   await withDatabase("smc-scopes-count", async (db) => {
     const { catalog } = await seed(db);
     assertEquals(
       await catalog.scopes([EXPO_A, EXPO_B]).countDocuments("artwork"),
       4,
     );
-    assertEquals(
-      await catalog.scopes([EXPO_A]).countDocuments("artwork"),
-      2,
-    );
+    assertEquals(await catalog.scopes([EXPO_A]).countDocuments("artwork"), 2);
     assertEquals(
       await catalog.scopes([EXPO_A, EXPO_C]).countDocuments("artwork"),
       3,
@@ -98,7 +97,7 @@ Deno.test(".scopes(ids).countDocuments counts only inside the given scopes", asy
   });
 });
 
-Deno.test(".scopes(ids).aggregate is scope-bounded", async () => {
+test(".scopes(ids).aggregate is scope-bounded", async () => {
   await withDatabase("smc-scopes-agg", async (db) => {
     const { catalog } = await seed(db);
     const view = catalog.scopes([EXPO_A, EXPO_B]);
@@ -115,11 +114,10 @@ Deno.test(".scopes(ids).aggregate is scope-bounded", async () => {
   });
 });
 
-Deno.test(".scopes(ids) rejects invalid scope ids (one bad apple)", async () => {
+test(".scopes(ids) rejects invalid scope ids (one bad apple)", async () => {
   await withDatabase("smc-scopes-invalid-id", async (db) => {
     const { catalog } = await seed(db);
     assertRejectsLike(
-      // deno-lint-ignore no-explicit-any
       () => catalog.scopes([EXPO_A, "not-a-valid-scope" as any]),
       "exposition",
     );
@@ -128,17 +126,14 @@ Deno.test(".scopes(ids) rejects invalid scope ids (one bad apple)", async () => 
 
 // -------- .unscoped (admin) --------------------------------------------
 
-Deno.test(".unscoped throws when allowUnscoped is not enabled (default)", async () => {
+test(".unscoped throws when allowUnscoped is not enabled (default)", async () => {
   await withDatabase("smc-unscoped-disabled", async (db) => {
     const { catalog } = await seed(db);
-    assertRejectsLike(
-      () => catalog.unscoped.find("artwork"),
-      "allowUnscoped",
-    );
+    assertRejectsLike(() => catalog.unscoped.find("artwork"), "allowUnscoped");
   });
 });
 
-Deno.test(".unscoped returns ALL docs across scopes when enabled", async () => {
+test(".unscoped returns ALL docs across scopes when enabled", async () => {
   await withDatabase("smc-unscoped-enabled", async (db) => {
     const { catalog } = await seed(db, { allowUnscoped: true });
     const all = await catalog.unscoped.find("artwork");
@@ -148,14 +143,14 @@ Deno.test(".unscoped returns ALL docs across scopes when enabled", async () => {
   });
 });
 
-Deno.test(".unscoped countDocuments returns total across scopes", async () => {
+test(".unscoped countDocuments returns total across scopes", async () => {
   await withDatabase("smc-unscoped-count", async (db) => {
     const { catalog } = await seed(db, { allowUnscoped: true });
     assertEquals(await catalog.unscoped.countDocuments("artwork"), 5);
   });
 });
 
-Deno.test(".unscoped aggregate sees everything", async () => {
+test(".unscoped aggregate sees everything", async () => {
   await withDatabase("smc-unscoped-agg", async (db) => {
     const { catalog } = await seed(db, { allowUnscoped: true });
     const counts = await catalog.unscoped.aggregate((stage) => [
@@ -164,14 +159,14 @@ Deno.test(".unscoped aggregate sees everything", async () => {
       stage.sort({ _id: 1 }),
     ]);
     assertEquals(counts.length, 3);
-    assertEquals(counts.map((c: { count: number }) => c.count), [2, 2, 1]);
+    assertEquals(
+      counts.map((c: { count: number }) => c.count),
+      [2, 2, 1],
+    );
   });
 });
 
-function assertRejectsLike(
-  fn: () => unknown,
-  msgIncludes: string,
-) {
+function assertRejectsLike(fn: () => unknown, msgIncludes: string) {
   try {
     fn();
   } catch (err) {

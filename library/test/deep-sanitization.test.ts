@@ -1,8 +1,11 @@
+import { test } from "./+harness.ts";
+import process from "node:process";
 import * as v from "../src/schema.ts";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "./+assert.ts";
 import { MongoClient } from "../src/mongodb.ts";
+import { TEST_URI } from "./+shared.ts";
 import { defineModel } from "../src/multi-collection-model.ts";
 
 // Mock MongoDB setup for testing
@@ -10,7 +13,7 @@ let client: MongoClient;
 let db: ReturnType<MongoClient["db"]>;
 
 async function setupTestDb() {
-  const mongoUrl = Deno.env.get("MONGODB_URL") || "mongodb://localhost:27017";
+  const mongoUrl = process.env.MONGODB_URL || TEST_URI;
   client = new MongoClient(mongoUrl);
   await client.connect();
   db = client.db("test_deep_sanitization");
@@ -27,30 +30,44 @@ async function cleanupTestDb() {
 
 const deepSchema = {
   name: v.string(),
-  profile: v.optional(v.object({
-    bio: v.optional(v.string()),
-    settings: v.optional(v.object({
-      theme: v.optional(v.string()),
-      notifications: v.optional(v.object({
-        email: v.optional(v.boolean()),
-        push: v.optional(v.boolean()),
-      })),
-    })),
-    tags: v.optional(v.array(v.string())),
-  })),
-  metadata: v.optional(v.array(v.object({
-    key: v.string(),
-    value: v.optional(v.string()),
-    nested: v.optional(v.object({
-      level1: v.optional(v.string()),
-      level2: v.optional(v.object({
-        deepValue: v.optional(v.string()),
-      })),
-    })),
-  }))),
+  profile: v.optional(
+    v.object({
+      bio: v.optional(v.string()),
+      settings: v.optional(
+        v.object({
+          theme: v.optional(v.string()),
+          notifications: v.optional(
+            v.object({
+              email: v.optional(v.boolean()),
+              push: v.optional(v.boolean()),
+            }),
+          ),
+        }),
+      ),
+      tags: v.optional(v.array(v.string())),
+    }),
+  ),
+  metadata: v.optional(
+    v.array(
+      v.object({
+        key: v.string(),
+        value: v.optional(v.string()),
+        nested: v.optional(
+          v.object({
+            level1: v.optional(v.string()),
+            level2: v.optional(
+              v.object({
+                deepValue: v.optional(v.string()),
+              }),
+            ),
+          }),
+        ),
+      }),
+    ),
+  ),
 };
 
-Deno.test("Deep sanitization: Collection removes nested undefined values", async () => {
+test("Deep sanitization: Collection removes nested undefined values", async () => {
   await setupTestDb();
 
   try {
@@ -141,7 +158,7 @@ Deno.test("Deep sanitization: Collection removes nested undefined values", async
   }
 });
 
-Deno.test("Deep sanitization: MultiCollection removes nested undefined values", async () => {
+test("Deep sanitization: MultiCollection removes nested undefined values", async () => {
   await setupTestDb();
 
   const model = defineModel("deep_docs", {
@@ -225,19 +242,25 @@ Deno.test("Deep sanitization: MultiCollection removes nested undefined values", 
   }
 });
 
-Deno.test("Deep sanitization: Arrays with undefined items", async () => {
+test("Deep sanitization: Arrays with undefined items", async () => {
   await setupTestDb();
 
   try {
     const arraySchema = {
       name: v.string(),
-      items: v.optional(v.array(v.object({
-        id: v.string(),
-        data: v.optional(v.string()),
-        nested: v.optional(v.object({
-          value: v.optional(v.string()),
-        })),
-      }))),
+      items: v.optional(
+        v.array(
+          v.object({
+            id: v.string(),
+            data: v.optional(v.string()),
+            nested: v.optional(
+              v.object({
+                value: v.optional(v.string()),
+              }),
+            ),
+          }),
+        ),
+      ),
     };
 
     const coll = await collection(db, "array_test", arraySchema, {
@@ -298,16 +321,18 @@ Deno.test("Deep sanitization: Arrays with undefined items", async () => {
   }
 });
 
-Deno.test("Deep sanitization: Comparison with shallow mode", async () => {
+test("Deep sanitization: Comparison with shallow mode", async () => {
   await setupTestDb();
 
   try {
     // Test that our fix ensures deep sanitization by default
     const simpleSchema = {
       name: v.string(),
-      nested: v.optional(v.object({
-        value: v.optional(v.string()),
-      })),
+      nested: v.optional(
+        v.object({
+          value: v.optional(v.string()),
+        }),
+      ),
     };
 
     const coll = await collection(db, "deep_test", simpleSchema, {

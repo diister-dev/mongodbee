@@ -10,13 +10,16 @@
  *
  * Opt-in via env var `RUN_PERF_READ=1`. Scale with `DOCS` / `ITERS`.
  */
+import { test } from "./+harness.ts";
+import process from "node:process";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";
 import { refId } from "../src/ids.ts";
 import { MongoClient } from "../src/mongodb.ts";
+import { TEST_URI } from "./+shared.ts";
 
-const DOCS = Number(Deno.env.get("DOCS") ?? "50000");
-const ITERS = Number(Deno.env.get("ITERS") ?? "10");
+const DOCS = Number(process.env.DOCS ?? "50000");
+const ITERS = Number(process.env.ITERS ?? "10");
 const DB_PREFIX = "@TEST_perf_read@";
 const SCOPE = "exposition:read-bench";
 
@@ -25,16 +28,17 @@ function fmt(ms: number, docs: number) {
   return `${(ms / 1000).toFixed(2)}s → ${rate.toFixed(0)} docs/s`;
 }
 
-Deno.test({
+test({
   name: `PERF READ — scoped find over ${DOCS} docs × ${ITERS} iters`,
-  ignore: !Deno.env.get("RUN_PERF_READ"),
+  ignore: !process.env.RUN_PERF_READ,
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
-    const dbName = `${DB_PREFIX}${
-      crypto.randomUUID().replace(/-/g, "").substring(0, 8)
-    }`;
-    const client = new MongoClient("mongodb://localhost:27017");
+    const dbName = `${DB_PREFIX}${crypto
+      .randomUUID()
+      .replace(/-/g, "")
+      .substring(0, 8)}`;
+    const client = new MongoClient(TEST_URI);
     const db = client.db(dbName);
 
     console.log("");
@@ -46,6 +50,7 @@ Deno.test({
     try {
       // Moderately rich schema so per-doc parse cost is realistic.
       const catalog = await scopedMultiCollection(db, "readbench", {
+        schemaManagement: "auto",
         scope: refId("exposition"),
         types: {
           artwork: {
@@ -72,9 +77,9 @@ Deno.test({
         await view.insertMany("artwork", docs.slice(i, i + 1000));
       }
       console.log(
-        `  seeded ${DOCS} docs in ${
-          ((performance.now() - tSeed) / 1000).toFixed(1)
-        }s`,
+        `  seeded ${DOCS} docs in ${(
+          (performance.now() - tSeed) / 1000
+        ).toFixed(1)}s`,
       );
 
       const rawColl = db.collection("readbench");
@@ -94,9 +99,14 @@ Deno.test({
       const tB = performance.now();
       let lastLenB = 0;
       for (let k = 0; k < ITERS; k++) {
-        lastLenB = (await rawColl.find(
-          { _scope: SCOPE, _type: "artwork" } as Record<string, unknown>,
-        ).toArray()).length;
+        lastLenB = (
+          await rawColl
+            .find({ _scope: SCOPE, _type: "artwork" } as Record<
+              string,
+              unknown
+            >)
+            .toArray()
+        ).length;
       }
       const msB = performance.now() - tB;
 
@@ -104,9 +114,8 @@ Deno.test({
       const tC = performance.now();
       let lastLenC = 0;
       for (let k = 0; k < ITERS; k++) {
-        lastLenC =
-          // deno-lint-ignore no-explicit-any
-          (await view.find("artwork", {}, { validate: false } as any)).length;
+        lastLenC = (await view.find("artwork", {}, { validate: false } as any))
+          .length;
       }
       const msC = performance.now() - tC;
 
@@ -115,8 +124,8 @@ Deno.test({
       const tD = performance.now();
       let lastLenD = 0;
       for (let k = 0; k < ITERS; k++) {
-        lastLenD =
-          (await view.findProject("artwork", ["title", "year"])).length;
+        lastLenD = (await view.findProject("artwork", ["title", "year"]))
+          .length;
       }
       const msD = performance.now() - tD;
 
@@ -126,19 +135,22 @@ Deno.test({
         `  A validated        : ${fmt(msA, totalA)}  (${lastLenA} docs/read)`,
       );
       console.log(
-        `  B raw floor        : ${
-          fmt(msB, lastLenB * ITERS)
-        }  (${lastLenB} docs/read)`,
+        `  B raw floor        : ${fmt(
+          msB,
+          lastLenB * ITERS,
+        )}  (${lastLenB} docs/read)`,
       );
       console.log(
-        `  C validate:false   : ${
-          fmt(msC, lastLenC * ITERS)
-        }  (${lastLenC} docs/read)`,
+        `  C validate:false   : ${fmt(
+          msC,
+          lastLenC * ITERS,
+        )}  (${lastLenC} docs/read)`,
       );
       console.log(
-        `  D projected(2/6)   : ${
-          fmt(msD, lastLenD * ITERS)
-        }  (${lastLenD} docs/read)`,
+        `  D projected(2/6)   : ${fmt(
+          msD,
+          lastLenD * ITERS,
+        )}  (${lastLenD} docs/read)`,
       );
       console.log(`  validation overhead (A vs B): ${(msA / msB).toFixed(2)}×`);
       console.log(`  projection speedup  (A vs D): ${(msA / msD).toFixed(2)}×`);

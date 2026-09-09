@@ -18,6 +18,8 @@
  * same namespace, which makes hangs easy to spot.
  */
 
+import process from "node:process";
+
 type Level = "trace" | "debug" | "info" | "warn" | "error";
 
 const LEVEL_ORDER: Record<Level, number> = {
@@ -30,23 +32,13 @@ const LEVEL_ORDER: Record<Level, number> = {
 
 function readEnv(name: string): string | undefined {
   try {
-    // Deno first (this lib targets Deno primarily)
-    // deno-lint-ignore no-explicit-any
-    const denoGlobal = (globalThis as any).Deno;
-    if (denoGlobal?.env?.get) {
-      const value = denoGlobal.env.get(name);
-      if (value !== undefined && value !== "") return value;
-    }
-  } catch {
-    // Permission denied in Deno without --allow-env: ignore.
-  }
-  try {
-    // deno-lint-ignore no-explicit-any
-    const proc = (globalThis as any).process;
-    const value = proc?.env?.[name];
+    // `node:process` is the one env surface every target runtime implements —
+    // Deno populates `process.env` too, so this needs no per-runtime branch.
+    const value = process.env[name];
     if (typeof value === "string" && value !== "") return value;
   } catch {
-    // ignore
+    // Deno without --allow-env throws on access rather than returning
+    // undefined; a logger must never be the reason a program dies.
   }
   return undefined;
 }
@@ -55,8 +47,9 @@ const debugSpec = readEnv("MONGODBEE_DEBUG");
 // If MONGODBEE_DEBUG is set, default level is "debug" (the whole point is to see
 // debug logs); otherwise default to "info" so warn/error still surface.
 const defaultLevel: Level = debugSpec ? "debug" : "info";
-const levelSpec = (readEnv("MONGODBEE_LOG_LEVEL") || defaultLevel)
-  .toLowerCase() as Level;
+const levelSpec = (
+  readEnv("MONGODBEE_LOG_LEVEL") || defaultLevel
+).toLowerCase() as Level;
 const minLevel = LEVEL_ORDER[levelSpec] ?? LEVEL_ORDER[defaultLevel];
 
 const includePatterns: string[] = [];
@@ -117,8 +110,7 @@ function emit(level: Level, namespace: string, args: unknown[]): void {
   const now = Date.now();
   const delta = formatDelta(namespace, now);
   const message = args.map(formatArg).join(" ");
-  const line =
-    `[mongodbee:${namespace}] ${level.toUpperCase()} ${message} (${delta})`;
+  const line = `[mongodbee:${namespace}] ${level.toUpperCase()} ${message} (${delta})`;
   console.log(line);
 }
 

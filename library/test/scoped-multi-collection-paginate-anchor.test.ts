@@ -8,7 +8,8 @@
 // scoped-multi-collection-paginate.test.ts (N9); here we hit the DELETED-anchor
 // path specifically, plus the beforeId option combinations.
 
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals, assertRejects } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";
@@ -20,6 +21,7 @@ async function makeCatalog(
   db: Parameters<Parameters<typeof withDatabase>[1]>[0],
 ) {
   return await scopedMultiCollection(db, "catalog", {
+    schemaManagement: "auto",
     scope: refId("exposition"),
     types: {
       participant: { name: v.string(), seat: v.number() },
@@ -28,11 +30,7 @@ async function makeCatalog(
 }
 
 /** Seed participants with deterministic, lexicographically-sortable ids. */
-async function seedDeterministic(
-  // deno-lint-ignore no-explicit-any
-  view: any,
-  count: number,
-): Promise<string[]> {
+async function seedDeterministic(view: any, count: number): Promise<string[]> {
   const ids: string[] = [];
   for (let i = 0; i < count; i++) {
     const id = `participant:p${String(i).padStart(2, "0")}`;
@@ -42,7 +40,7 @@ async function seedDeterministic(
   return ids;
 }
 
-Deno.test("paginate: afterId anchoring a now-DELETED doc throws (naming id + scope)", async () => {
+test("paginate: afterId anchoring a now-DELETED doc throws (naming id + scope)", async () => {
   await withDatabase("smc2-pag-anchor-deleted-after", async (db) => {
     const catalog = await makeCatalog(db);
     const view = catalog.scope(EXPO_A);
@@ -73,7 +71,7 @@ Deno.test("paginate: afterId anchoring a now-DELETED doc throws (naming id + sco
   });
 });
 
-Deno.test("paginate: beforeId anchoring a now-DELETED doc throws (naming id + scope)", async () => {
+test("paginate: beforeId anchoring a now-DELETED doc throws (naming id + scope)", async () => {
   await withDatabase("smc2-pag-anchor-deleted-before", async (db) => {
     const catalog = await makeCatalog(db);
     const view = catalog.scope(EXPO_A);
@@ -92,7 +90,7 @@ Deno.test("paginate: beforeId anchoring a now-DELETED doc throws (naming id + sc
   });
 });
 
-Deno.test("paginate: beforeId + peek — hasMore reflects rows still before the page, extra row dropped", async () => {
+test("paginate: beforeId + peek — hasMore reflects rows still before the page, extra row dropped", async () => {
   await withDatabase("smc2-pag-before-peek", async (db) => {
     const catalog = await makeCatalog(db);
     const view = catalog.scope(EXPO_A);
@@ -106,7 +104,10 @@ Deno.test("paginate: beforeId + peek — hasMore reflects rows still before the 
       peek: true,
     });
     assertEquals(back.data.length, 10, "the peeked extra row is dropped");
-    assertEquals(back.data.map((d) => d._id), ids.slice(10, 20));
+    assertEquals(
+      back.data.map((d) => d._id),
+      ids.slice(10, 20),
+    );
     assertEquals(back.hasMore, true, "more rows exist before this page");
 
     // Anchor near the start: the page before p08 (limit 10) is p00..p07 — only
@@ -116,12 +117,15 @@ Deno.test("paginate: beforeId + peek — hasMore reflects rows still before the 
       beforeId: ids[8],
       peek: true,
     });
-    assertEquals(start.data.map((d) => d._id), ids.slice(0, 8));
+    assertEquals(
+      start.data.map((d) => d._id),
+      ids.slice(0, 8),
+    );
     assertEquals(start.hasMore, false, "no rows before the first page");
   });
 });
 
-Deno.test("paginate: beforeId + skipTotal — forward-ordered page, total/position omitted", async () => {
+test("paginate: beforeId + skipTotal — forward-ordered page, total/position omitted", async () => {
   await withDatabase("smc2-pag-before-skiptotal", async (db) => {
     const catalog = await makeCatalog(db);
     const view = catalog.scope(EXPO_A);
@@ -134,7 +138,10 @@ Deno.test("paginate: beforeId + skipTotal — forward-ordered page, total/positi
     });
 
     // Data is still the correct page in forward order …
-    assertEquals(back.data.map((d) => d._id), ids.slice(10, 20));
+    assertEquals(
+      back.data.map((d) => d._id),
+      ids.slice(10, 20),
+    );
     // … but the counts are skipped.
     assertEquals(back.total, undefined, "skipTotal omits total");
     assertEquals(back.position, undefined, "skipTotal omits position");

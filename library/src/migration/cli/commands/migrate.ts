@@ -7,9 +7,9 @@
  */
 
 import process from "node:process";
-import { blue, bold, dim, green, red, yellow } from "@std/fmt/colors";
+import { blue, bold, dim, green, red, yellow } from "../../../utils/colors.ts";
 import { MongoClient } from "../../../mongodb.ts";
-import * as path from "@std/path";
+import * as path from "node:path";
 
 import { loadConfig } from "../../config/loader.ts";
 import {
@@ -28,6 +28,8 @@ import { validateMigrationsWithSimulation } from "../utils/validate-migrations.t
 import type { SimulationPowerLevel } from "../../validators/simulation.ts";
 import { migrationBuilder } from "../../builder.ts";
 import { confirm } from "../utils/confirm.ts";
+import { ensureMigrationPrivileges } from "../utils/privileges.ts";
+import { resolveMigrationRef } from "../utils/resolve-ref.ts";
 import { createProgressReporter } from "../utils/progress.ts";
 import {
   detectInstancesNeedingCatchUp,
@@ -44,6 +46,8 @@ interface CliArgs {
   "auto-sync"?: boolean;
   mode?: string;
   last?: number;
+  target?: string;
+  "skip-privilege-check"?: boolean;
   [key: string]: unknown;
 }
 
@@ -67,10 +71,21 @@ export interface MigrateCommandOptions {
    */
   last?: number;
   /**
+   * Stop after applying this migration, leaving the rest pending.
+   * Accepts an id, a name, or an unambiguous substring of either.
+   */
+  target?: string;
+  /**
    * Render a live progress line during each migration's execution.
    * Defaults to auto-detection (on when stdout is a TTY).
    */
   progress?: boolean;
+  /**
+   * Skip the pre-flight check of the account's privileges (`connectionStatus`).
+   * The check refuses to start when the account lacks an action a migration
+   * needs — typically `collMod`, granted by `dbAdmin` but not by `readWrite`.
+   */
+  skipPrivilegeCheck?: boolean;
 }
 
 /**
@@ -80,7 +95,9 @@ function parseSimulationMode(mode?: string): SimulationPowerLevel {
   if (!mode) return "normal";
   const normalized = mode.toLowerCase();
   if (
-    normalized === "quick" || normalized === "normal" || normalized === "hard"
+    normalized === "quick" ||
+    normalized === "normal" ||
+    normalized === "hard"
   ) {
     return normalized;
   }
@@ -111,6 +128,9 @@ export async function migrateCommand(
       autoSync: options.autoSync || cliArgs["auto-sync"],
       mode: options.mode || cliArgs.mode,
       last: options.last || cliArgs.last,
+      target: options.target || cliArgs.target,
+      skipPrivilegeCheck:
+        options.skipPrivilegeCheck || cliArgs["skip-privilege-check"],
     };
 
     // Load configuration
@@ -121,8 +141,8 @@ export async function migrateCommand(
       cwd,
       config.paths?.migrations || "./migrations",
     );
-    const connectionUri = config.database?.connection?.uri ||
-      "mongodb://localhost:27017";
+    const connectionUri =
+      config.database?.connection?.uri || "mongodb://localhost:27017";
     const dbName = config.database?.name || "myapp";
 
     console.log(dim(`Migrations directory: ${migrationsDir}`));
@@ -133,6 +153,15 @@ export async function migrateCommand(
     await client.connect();
 
     const db = client.db(dbName);
+
+    // Pre-flight: refuse to start when the account cannot finish. Every
+    // migration disables and restores validators with `collMod`, an action
+    // `readWrite` does NOT grant — without this check the failure surfaces
+    // half-way through, after documents were rewritten.
+    await ensureMigrationPrivileges(db, {
+      skip: opts.skipPrivilegeCheck,
+      dryRun: opts.dryRun,
+    });
 
     // Discover and load migrations
     const migrationsWithFiles = await loadAllMigrations(migrationsDir);
@@ -184,7 +213,29 @@ export async function migrateCommand(
     console.log(dim(`Applied migrations: ${appliedIds.length}`));
 
     // Calculate pending migrations
-    const pendingMigrations = getPendingMigrations(allMigrations, appliedIds);
+    let pendingMigrations = getPendingMigrations(allMigrations, appliedIds);
+
+    // `--target` stops the run part-way through the pending chain. Only ever a
+    // PREFIX of it: applying a migration while an earlier one stays pending
+    // would leave the database in a state that matches no point of the chain,
+    // and nothing downstream could describe where it stands. Validation is
+    // deliberately left untouched, so the deferred migrations are still
+    // simulated before anything is written.
+    let deferredCount = 0;
+    if (opts.target) {
+      const target = resolveMigrationRef(allMigrations, opts.target);
+      const targetIndex = pendingMigrations.findIndex(
+        (m) => m.id === target.id,
+      );
+      if (targetIndex === -1) {
+        throw new Error(
+          `Migration ${target.id} (${target.name}) is not pending, it is already applied. ` +
+            `Nothing to do for --target ${opts.target}.`,
+        );
+      }
+      deferredCount = pendingMigrations.length - (targetIndex + 1);
+      pendingMigrations = pendingMigrations.slice(0, targetIndex + 1);
+    }
 
     if (pendingMigrations.length === 0) {
       console.log(green("✓ No pending migrations. Database is up to date."));
@@ -231,15 +282,16 @@ export async function migrateCommand(
           console.log(bold(blue("\n📦 Catching up multi-model instances...")));
           console.log();
 
-          for (
-            const [modelType, instances] of catchUpSummary.instancesByModel
-          ) {
+          for (const [
+            modelType,
+            instances,
+          ] of catchUpSummary.instancesByModel) {
             for (const instance of instances) {
               console.log(
                 bold(
-                  `Catching up: ${blue(instance.collectionName)} ${
-                    dim(`(${modelType})`)
-                  }`,
+                  `Catching up: ${blue(instance.collectionName)} ${dim(
+                    `(${modelType})`,
+                  )}`,
                 ),
               );
 
@@ -358,6 +410,13 @@ export async function migrateCommand(
     }
 
     console.log(yellow(`⚡ Pending migrations: ${pendingMigrations.length}`));
+    if (deferredCount > 0) {
+      console.log(
+        dim(
+          `  --target ${opts.target}: ${deferredCount} later migration(s) stay pending`,
+        ),
+      );
+    }
     console.log();
 
     // STEP 0: Check for multi-model instances needing catch-up
@@ -428,15 +487,16 @@ export async function migrateCommand(
           console.log(bold(blue("\n📦 Catching up multi-model instances...")));
           console.log();
 
-          for (
-            const [modelType, instances] of catchUpSummary.instancesByModel
-          ) {
+          for (const [
+            modelType,
+            instances,
+          ] of catchUpSummary.instancesByModel) {
             for (const instance of instances) {
               console.log(
                 bold(
-                  `Catching up: ${blue(instance.collectionName)} ${
-                    dim(`(${modelType})`)
-                  }`,
+                  `Catching up: ${blue(instance.collectionName)} ${dim(
+                    `(${modelType})`,
+                  )}`,
                 ),
               );
 
@@ -510,9 +570,8 @@ export async function migrateCommand(
                   );
                 } catch (error) {
                   const duration = Date.now() - startTime;
-                  const errorMessage = error instanceof Error
-                    ? error.message
-                    : String(error);
+                  const errorMessage =
+                    error instanceof Error ? error.message : String(error);
 
                   console.log(red(`    ✗ Failed: ${errorMessage}`));
 
@@ -532,9 +591,7 @@ export async function migrateCommand(
                 }
               }
 
-              console.log(
-                green(`  ✓ Caught up ${instance.collectionName}`),
-              );
+              console.log(green(`  ✓ Caught up ${instance.collectionName}`));
               console.log();
             }
           }
@@ -567,9 +624,9 @@ export async function migrateCommand(
           for (const instance of instances) {
             console.log(
               bold(
-                `Catching up: ${blue(instance.collectionName)} ${
-                  dim(`(${modelType})`)
-                }`,
+                `Catching up: ${blue(instance.collectionName)} ${dim(
+                  `(${modelType})`,
+                )}`,
               ),
             );
 
@@ -643,9 +700,8 @@ export async function migrateCommand(
                 );
               } catch (error) {
                 const duration = Date.now() - startTime;
-                const errorMessage = error instanceof Error
-                  ? error.message
-                  : String(error);
+                const errorMessage =
+                  error instanceof Error ? error.message : String(error);
 
                 console.log(red(`    ✗ Failed: ${errorMessage}`));
 
@@ -665,9 +721,7 @@ export async function migrateCommand(
               }
             }
 
-            console.log(
-              green(`  ✓ Caught up ${instance.collectionName}`),
-            );
+            console.log(green(`  ✓ Caught up ${instance.collectionName}`));
             console.log();
           }
         }
@@ -686,7 +740,35 @@ export async function migrateCommand(
 
     // STEP 1: Validate ALL pending migrations BEFORE applying any
     const powerLevel = parseSimulationMode(opts.mode);
-    const lastN = opts.last && opts.last > 0 ? opts.last : undefined;
+    const requestedLastN = opts.last && opts.last > 0 ? opts.last : undefined;
+
+    // `--last N` narrows what gets validated, never what gets applied: STEP 4
+    // below applies every pending migration regardless. So the window is
+    // widened to cover them — nothing is ever applied to a real database
+    // without having been simulated first. Above that floor the flag still
+    // does its job: the migrations already in history stay out of the run,
+    // which is the whole point of asking for a window while iterating on a
+    // chantier migration.
+    // Measured from the EARLIEST pending migration, not from their count:
+    // `getPendingMigrations` filters rather than slices, so a hole in the
+    // history (a migration applied out of order) would leave a pending
+    // migration outside a count-sized window.
+    const pendingIds = new Set(pendingMigrations.map((m) => m.id));
+    const firstPendingIndex = allMigrations.findIndex((m) =>
+      pendingIds.has(m.id),
+    );
+    const lastN =
+      requestedLastN !== undefined
+        ? Math.max(requestedLastN, allMigrations.length - firstPendingIndex)
+        : undefined;
+
+    if (lastN !== undefined && lastN !== requestedLastN) {
+      console.log(
+        dim(
+          `  --last ${requestedLastN} widened to ${lastN}: every pending migration is validated before it is applied`,
+        ),
+      );
+    }
 
     await validateMigrationsWithSimulation(allMigrations, {
       verbose: opts.verbose,
@@ -696,7 +778,7 @@ export async function migrateCommand(
 
     // STEP 2: Check for irreversible or lossy migrations
     const migrationsWithIssues: Array<{
-      migration: typeof pendingMigrations[0];
+      migration: (typeof pendingMigrations)[0];
       irreversible: boolean;
       lossyTransforms: string[];
     }> = [];
@@ -712,59 +794,59 @@ export async function migrateCommand(
       const isLossy = state.hasProperty("lossy");
       const lossyTransforms = isLossy
         ? state.operations
-          .filter((op) => {
-            if (op.type === "create_collection") return true;
-            if (op.type === "create_multicollection") return true;
-            if (op.type === "create_multimodel_instance") return true;
-            if (op.type === "create_scoped_multicollection") return true;
-            if (op.type === "update_indexes") return true;
-            if (op.type === "rename_collection" && op.lossy) return true;
-            if (op.type === "flow" && op.lossy) return true;
-            if (op.type === "flow_to_scope" && op.lossy) return true;
-            if (
-              (op.type === "transform_collection" ||
-                op.type === "transform_multicollection_type" ||
-                op.type === "transform_multimodel_instance_type" ||
-                op.type === "transform_multimodel_instances_type" ||
-                op.type === "transform_scoped_multicollection_type") &&
-              op.lossy
-            ) {
-              return true;
-            }
-            return false;
-          })
-          .map((op) => {
-            if (op.type === "create_collection") {
-              return `Create collection: ${op.collectionName}`;
-            } else if (op.type === "create_multicollection") {
-              return `Create multi-collection: ${op.collectionName}`;
-            } else if (op.type === "create_multimodel_instance") {
-              return `Create multi-model instance: ${op.collectionName}`;
-            } else if (op.type === "create_scoped_multicollection") {
-              return `Create scoped multi-collection: ${op.collectionName}`;
-            } else if (op.type === "update_indexes") {
-              return `Update indexes: ${op.collectionName}`;
-            } else if (op.type === "rename_collection") {
-              return `Rename collection: ${op.from} → ${op.to} (drops existing "${op.to}")`;
-            } else if (op.type === "flow") {
-              return `Flow documents into: ${op.into.collection}`;
-            } else if (op.type === "flow_to_scope") {
-              return `Flow documents into scoped collection: ${op.into.collection}`;
-            } else if (op.type === "transform_collection") {
-              return `Transform collection: ${op.collectionName}`;
-            } else if (op.type === "transform_multicollection_type") {
-              return `Transform multi-collection type: ${op.collectionName}.${op.documentType}`;
-            } else if (op.type === "transform_multimodel_instance_type") {
-              return `Transform multi-model instance type: ${op.collectionName}.${op.documentType}`;
-            } else if (op.type === "transform_multimodel_instances_type") {
-              return `Transform multi-model instances type: ${op.modelType}.${op.documentType}`;
-            } else if (op.type === "transform_scoped_multicollection_type") {
-              return `Transform scoped multi-collection type: ${op.collectionName}.${op.documentType}`;
-            } else if (op.type === "seed_scoped_multicollection_type") {
-              return `Seed scoped multi-collection type: ${op.collectionName}.${op.documentType}`;
-            }
-            return "";
-          })
+            .filter((op) => {
+              if (op.type === "create_collection") return true;
+              if (op.type === "create_multicollection") return true;
+              if (op.type === "create_multimodel_instance") return true;
+              if (op.type === "create_scoped_multicollection") return true;
+              if (op.type === "update_indexes") return true;
+              if (op.type === "rename_collection" && op.lossy) return true;
+              if (op.type === "flow" && op.lossy) return true;
+              if (op.type === "flow_to_scope" && op.lossy) return true;
+              if (
+                (op.type === "transform_collection" ||
+                  op.type === "transform_multicollection_type" ||
+                  op.type === "transform_multimodel_instance_type" ||
+                  op.type === "transform_multimodel_instances_type" ||
+                  op.type === "transform_scoped_multicollection_type") &&
+                op.lossy
+              ) {
+                return true;
+              }
+              return false;
+            })
+            .map((op) => {
+              if (op.type === "create_collection") {
+                return `Create collection: ${op.collectionName}`;
+              } else if (op.type === "create_multicollection") {
+                return `Create multi-collection: ${op.collectionName}`;
+              } else if (op.type === "create_multimodel_instance") {
+                return `Create multi-model instance: ${op.collectionName}`;
+              } else if (op.type === "create_scoped_multicollection") {
+                return `Create scoped multi-collection: ${op.collectionName}`;
+              } else if (op.type === "update_indexes") {
+                return `Update indexes: ${op.collectionName}`;
+              } else if (op.type === "rename_collection") {
+                return `Rename collection: ${op.from} → ${op.to} (drops existing "${op.to}")`;
+              } else if (op.type === "flow") {
+                return `Flow documents into: ${op.into.collection}`;
+              } else if (op.type === "flow_to_scope") {
+                return `Flow documents into scoped collection: ${op.into.collection}`;
+              } else if (op.type === "transform_collection") {
+                return `Transform collection: ${op.collectionName}`;
+              } else if (op.type === "transform_multicollection_type") {
+                return `Transform multi-collection type: ${op.collectionName}.${op.documentType}`;
+              } else if (op.type === "transform_multimodel_instance_type") {
+                return `Transform multi-model instance type: ${op.collectionName}.${op.documentType}`;
+              } else if (op.type === "transform_multimodel_instances_type") {
+                return `Transform multi-model instances type: ${op.modelType}.${op.documentType}`;
+              } else if (op.type === "transform_scoped_multicollection_type") {
+                return `Transform scoped multi-collection type: ${op.collectionName}.${op.documentType}`;
+              } else if (op.type === "seed_scoped_multicollection_type") {
+                return `Seed scoped multi-collection type: ${op.collectionName}.${op.documentType}`;
+              }
+              return "";
+            })
         : [];
 
       if (isIrreversible || isLossy) {
@@ -777,11 +859,11 @@ export async function migrateCommand(
     }
 
     // Separate irreversible from lossy
-    const irreversibleMigrations = migrationsWithIssues.filter((m) =>
-      m.irreversible
+    const irreversibleMigrations = migrationsWithIssues.filter(
+      (m) => m.irreversible,
     );
-    const lossyOnlyMigrations = migrationsWithIssues.filter((m) =>
-      !m.irreversible && m.lossyTransforms.length > 0
+    const lossyOnlyMigrations = migrationsWithIssues.filter(
+      (m) => !m.irreversible && m.lossyTransforms.length > 0,
     );
 
     // Show irreversible warnings and require confirmation
@@ -893,9 +975,8 @@ export async function migrateCommand(
         );
       } catch (error) {
         console.error(error);
-        const errorMessage = error instanceof Error
-          ? error.message
-          : String(error);
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
         console.error(red(`  ✗ Failed: ${errorMessage}`));
 
         // Mark as failed
