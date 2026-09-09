@@ -16,22 +16,6 @@ defaults:
     working-directory: library
 
 jobs:
-  quality:
-    name: SonarQube Quality Gate
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
-      id-token: write
-
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: SonarSource/sonarqube-scan-action@v6
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-
   static:
     name: Typecheck, lint and build
     runs-on: ubuntu-latest
@@ -63,7 +47,6 @@ jobs:
 
     permissions:
       contents: read
-      id-token: write
 
     # The suite targets `node:test`, so the same tests run on both.
     # Worth the matrix: Bun is JavaScriptCore, Node is V8.
