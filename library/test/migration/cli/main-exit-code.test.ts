@@ -24,15 +24,15 @@ async function writeDivergentChain(dir: string): Promise<void> {
   );
   await writeFile(
     `${dir}/schemas.ts`,
-    `import * as v from "mongodbee/schema";\n` +
-      `import { dbId } from "mongodbee/ids";\n` +
+    `import * as v from "@diister/mongodbee/schema";\n` +
+      `import { dbId } from "@diister/mongodbee/ids";\n` +
       `export default { collections: { "+t": { _id: dbId("t"), label: v.string() } } };\n`,
   );
   await writeFile(
     `${dir}/migrations/2025_01_01_000000_AAAAAAAAAA.ts`,
-    `import { migrationDefinition } from "mongodbee/migration";\n` +
-      `import * as v from "mongodbee/schema";\n` +
-      `import { dbId } from "mongodbee/ids";\n` +
+    `import { migrationDefinition } from "@diister/mongodbee/migration";\n` +
+      `import * as v from "@diister/mongodbee/schema";\n` +
+      `import { dbId } from "@diister/mongodbee/ids";\n` +
       // `label` is a number here and a string in schemas.ts — the chain cannot
       // be consistent, so `check` must fail.
       `export default migrationDefinition("2025_01_01_000000_AAAAAAAAAA", "init", {\n` +

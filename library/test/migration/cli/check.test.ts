@@ -59,7 +59,7 @@ export const schemas = {
     // Create valid migration
     await writeFile(
       path.join(testDir, "migrations", "2025_01_01_000000_create_users.ts"),
-      `import { migrationDefinition } from "mongodbee/migration";
+      `import { migrationDefinition } from "@diister/mongodbee/migration";
 import * as v from "valibot";
 
 export default migrationDefinition("2025_01_01_000000", "create_users", {
@@ -136,7 +136,7 @@ export const schemas = {
     // Create root migration
     await writeFile(
       path.join(testDir, "migrations", "2025_01_01_000000_create_users.ts"),
-      `import { migrationDefinition } from "mongodbee/migration";
+      `import { migrationDefinition } from "@diister/mongodbee/migration";
 import * as v from "valibot";
 
 export default migrationDefinition("2025_01_01_000000", "create_users", {
@@ -165,7 +165,7 @@ export default migrationDefinition("2025_01_01_000000", "create_users", {
     // Create invalid migration (schema change without transformation)
     await writeFile(
       path.join(testDir, "migrations", "2025_01_02_000000_add_age.ts"),
-      `import { migrationDefinition } from "mongodbee/migration";
+      `import { migrationDefinition } from "@diister/mongodbee/migration";
 import * as v from "valibot";
 import rootMigration from "./2025_01_01_000000_create_users.ts";
 
@@ -251,7 +251,7 @@ export const schemas = {
     // Create migration
     await writeFile(
       path.join(testDir, "migrations", "2025_01_01_000000_create_users.ts"),
-      `import { migrationDefinition } from "mongodbee/migration";
+      `import { migrationDefinition } from "@diister/mongodbee/migration";
 import * as v from "valibot";
 
 export default migrationDefinition("2025_01_01_000000", "create_users", {

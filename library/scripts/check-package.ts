@@ -65,8 +65,15 @@ if (requested) {
 const manifest = JSON.parse(packageSource);
 const jsr = JSON.parse(jsrSource);
 
-// The two registries carry different names on purpose — `mongodbee` on npm,
-// `@diister/mongodbee` on JSR — so only the version is compared.
+// npm refused the unscoped `mongodbee` as too close to `mongodb`, so both
+// registries carry the scoped name and a mismatch is a mistake.
+if (jsr.name !== manifest.name) {
+  throw new Error(
+    `name mismatch — package.json says ${String(manifest.name)}, jsr.json says ${String(
+      jsr.name,
+    )}`,
+  );
+}
 
 if (jsr.version !== manifest.version) {
   throw new Error(

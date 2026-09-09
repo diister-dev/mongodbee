@@ -15,7 +15,7 @@ import { generateMigrationId } from "../../definition.ts";
 import { prettyText } from "../utils.ts";
 import { loadConfig } from "../../config/loader.ts";
 import { pathToFileUrl } from "../../utils/platform.ts";
-import { resolveImportSpecifier } from "../../utils/package-info.ts";
+import { importSpecifier } from "../../utils/package-info.ts";
 
 async function extractMigrationDefinitions(
   migrationsDir: string,
@@ -59,8 +59,7 @@ export async function generateCommand(
   options: GenerateCommandOptions,
 ): Promise<void> {
   const cwd = options.cwd || process.cwd();
-  // Generated files must import the name that resolves in THIS project.
-  const pkg = resolveImportSpecifier(cwd);
+  const pkg = importSpecifier();
   const config = await loadConfig({ configPath: options.configPath, cwd });
 
   const migrationsDir = config.paths?.migrations || "./migrations";

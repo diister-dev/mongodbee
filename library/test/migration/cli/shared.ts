@@ -28,7 +28,7 @@ import * as path from "node:path";
 const LIBRARY_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 /**
- * Makes a scratch project able to resolve `mongodbee`, the way a real one can.
+ * Makes a scratch project able to resolve `@diister/mongodbee`, as a real one can.
  *
  * The CLI generates migration and config files that import the package by
  * name, and those files are then loaded by a dynamic `import()`. Under Deno
@@ -45,11 +45,11 @@ const LIBRARY_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
  * three without needing `dist/` to be built first.
  */
 export async function installLibrary(projectDir: string): Promise<void> {
-  const stub = path.join(projectDir, "node_modules", "mongodbee");
+  const stub = path.join(projectDir, "node_modules", "@diister", "mongodbee");
   await mkdir(stub, { recursive: true });
 
-  // A package.json also tells the generator this is an npm-flavoured project,
-  // so the files it writes import `mongodbee` rather than the JSR name.
+  // A package.json makes the scratch directory look like a real project, so
+  // node resolution finds the stub the way it would find an install.
   await writeFile(
     path.join(projectDir, "package.json"),
     JSON.stringify({ name: "scratch", type: "module", private: true }, null, 2),
@@ -78,7 +78,7 @@ export async function installLibrary(projectDir: string): Promise<void> {
     path.join(stub, "package.json"),
     JSON.stringify(
       {
-        name: "mongodbee",
+        name: "@diister/mongodbee",
         version: "0.0.0-test",
         type: "module",
         exports: {

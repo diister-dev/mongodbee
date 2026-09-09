@@ -70,8 +70,8 @@ export type IndexDatabase = {
  *
  * @example
  * ```typescript
- * import * as v from "mongodbee/schema";
- * import { uniqueIndex } from "mongodbee";
+ * import * as v from "@diister/mongodbee/schema";
+ * import { uniqueIndex } from "@diister/mongodbee";
  *
  * const userSchema = {
  *   email: uniqueIndex(v.string()),

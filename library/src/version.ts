@@ -14,8 +14,8 @@
  * @module
  */
 
-/** The package name, as published to npm. */
-export const NAME = "mongodbee";
+/** The package name, identical on npm and JSR. */
+export const NAME = "@diister/mongodbee";
 
 /** The package version, mirroring `package.json`. */
 export const VERSION = "0.23.0-beta.19";

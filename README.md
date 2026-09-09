@@ -20,8 +20,8 @@
   </p>
 
 <p align="center">
-    <a href="https://www.npmjs.com/package/mongodbee">
-      <img src="https://img.shields.io/npm/v/mongodbee" alt="npm version">
+    <a href="https://www.npmjs.com/package/@diister/mongodbee">
+      <img src="https://img.shields.io/npm/v/%40diister%2Fmongodbee" alt="npm version">
     </a>
     <a href="https://jsr.io/@diister/mongodbee">
       <img src="https://jsr.io/badges/@diister/mongodbee" alt="JSR Score">
@@ -114,15 +114,15 @@ MongoDBee runs on **Bun, Node.js (22.18+) and Deno**. It is published to npm as
 ### Bun / Node.js / npm
 
 ```bash
-bun add mongodbee mongodb     # or: npm install / pnpm add / yarn add
+bun add @diister/mongodbee mongodb     # or: npm install / pnpm add / yarn add
 ```
 
 ```ts
-import { collection, multiCollection, withIndex } from "mongodbee";
-import * as v from "mongodbee/schema";
+import { collection, multiCollection, withIndex } from "@diister/mongodbee";
+import * as v from "@diister/mongodbee/schema";
 
 // For migrations
-import { migrationDefinition } from "mongodbee/migration";
+import { migrationDefinition } from "@diister/mongodbee/migration";
 ```
 
 The migration CLI ships as a binary, so no path juggling:
@@ -138,11 +138,11 @@ deno add jsr:@diister/mongodbee
 ```
 
 ```ts
-import { collection, multiCollection, withIndex } from "mongodbee";
-import * as v from "mongodbee/schema";
+import { collection, multiCollection, withIndex } from "@diister/mongodbee";
+import * as v from "@diister/mongodbee/schema";
 
 // For migrations
-import { migrationDefinition } from "mongodbee/migration";
+import { migrationDefinition } from "@diister/mongodbee/migration";
 ```
 
 > **Node.js 22.18 or newer.** The migration CLI loads your migration files
@@ -162,8 +162,8 @@ import { migrationDefinition } from "mongodbee/migration";
 ### Basic Collection
 
 ```typescript
-import { collection, MongoClient } from "mongodbee";
-import * as v from "mongodbee/schema";
+import { collection, MongoClient } from "@diister/mongodbee";
+import * as v from "@diister/mongodbee/schema";
 
 // Connect to MongoDB
 const client = new MongoClient("mongodb://localhost:27017");
@@ -197,8 +197,8 @@ The MultiCollection API allows you to store different document types in a single
 MongoDB collection while maintaining strong type safety:
 
 ```typescript
-import { multiCollection } from "mongodbee";
-import * as v from "mongodbee/schema";
+import { multiCollection } from "@diister/mongodbee";
+import * as v from "@diister/mongodbee/schema";
 
 // Define a catalog schema with multiple document types in a single collection
 const catalog = await multiCollection(db, "catalog", {
@@ -259,8 +259,8 @@ schemas, and they are injected for you on insert.
 ### Quickstart
 
 ```typescript
-import { refId, scopedMultiCollection, withIndex } from "mongodbee";
-import * as v from "mongodbee/schema";
+import { refId, scopedMultiCollection, withIndex } from "@diister/mongodbee";
+import * as v from "@diister/mongodbee/schema";
 
 // The `scope` schema validates every scope id on `.scope(id)`.
 const catalog = await scopedMultiCollection(db, "catalog", {
@@ -419,7 +419,7 @@ This creates:
 **Configuration**: The generated `mongodbee.config.ts` uses a simple structure:
 
 ```typescript
-import { defineConfig } from "mongodbee";
+import { defineConfig } from "@diister/mongodbee";
 import process from "node:process";
 
 export default defineConfig({
@@ -447,8 +447,8 @@ bunx mongodbee generate --name initial_schema
 This creates a migration file in `migrations/` with this structure:
 
 ```typescript
-import { migrationDefinition } from "mongodbee/migration";
-import { dbId } from "mongodbee";
+import { migrationDefinition } from "@diister/mongodbee/migration";
+import { dbId } from "@diister/mongodbee";
 import * as v from "valibot";
 
 const id = "2025_10_14_1234_ABC123@initial_schema";
@@ -486,9 +486,9 @@ export default migrationDefinition(id, name, {
 match:
 
 ```typescript
-import { dbId } from "mongodbee";
+import { dbId } from "@diister/mongodbee";
 import * as v from "valibot";
-import { type SchemasDefinition } from "mongodbee/migration";
+import { type SchemasDefinition } from "@diister/mongodbee/migration";
 
 export const schemas = {
   collections: {
@@ -629,7 +629,7 @@ Perfect for per-user workspaces, tenant isolation, or per-entity data:
 
 ```typescript
 // In your schemas.ts or a separate file
-import { defineModel } from "mongodbee";
+import { defineModel } from "@diister/mongodbee";
 import * as v from "valibot";
 
 export const workspaceModel = defineModel("workspace", {
@@ -708,8 +708,8 @@ export default migrationDefinition(id, name, {
 **3. Use in your application:**
 
 ```typescript
-import { multiCollection } from "mongodbee";
-import { discoverMultiCollectionInstances } from "mongodbee/migration";
+import { multiCollection } from "@diister/mongodbee";
+import { discoverMultiCollectionInstances } from "@diister/mongodbee/migration";
 import { workspaceModel } from "./schemas.ts";
 
 // Discover all workspace instances
@@ -768,7 +768,7 @@ Validate your migration system at application startup to catch issues before
 they become problems:
 
 ```typescript
-import { checkMigrationStatus } from "mongodbee/migration";
+import { checkMigrationStatus } from "@diister/mongodbee/migration";
 
 // Automatically loads paths from mongodbee.config.ts
 const status = await checkMigrationStatus({ db });
@@ -817,7 +817,7 @@ if (status.database && !status.database.isUpToDate) {
 **Fail-fast mode:**
 
 ```typescript
-import { assertMigrationSystemHealthy } from "mongodbee/migration";
+import { assertMigrationSystemHealthy } from "@diister/mongodbee/migration";
 
 // Throws if unhealthy - loads from config automatically
 await assertMigrationSystemHealthy({ db });
@@ -834,7 +834,7 @@ function. Indexes are automatically created and managed based on your schema
 definition:
 
 ```typescript
-import { withIndex } from "mongodbee";
+import { withIndex } from "@diister/mongodbee";
 
 // Basic unique index
 const users = await collection(db, "users", {

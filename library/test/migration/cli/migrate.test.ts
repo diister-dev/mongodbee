@@ -373,8 +373,8 @@ export default {
       // Make first migration valid
       const migration1Path = getMigrationPath(tempDir, files[0]);
       const migration1Content = `
-import { migrationDefinition } from "mongodbee/migration";
-import { migrationBuilder } from "mongodbee/migration";
+import { migrationDefinition } from "@diister/mongodbee/migration";
+import { migrationBuilder } from "@diister/mongodbee/migration";
 import * as v from "valibot";
 
 const userSchema = {
@@ -394,8 +394,8 @@ export default migrationDefinition({
       // Make second migration valid
       const migration2Path = getMigrationPath(tempDir, files[1]);
       const migration2Content = `
-import { migrationDefinition } from "mongodbee/migration";
-import { migrationBuilder } from "mongodbee/migration";
+import { migrationDefinition } from "@diister/mongodbee/migration";
+import { migrationBuilder } from "@diister/mongodbee/migration";
 import * as v from "valibot";
 
 const userSchema = {
@@ -420,8 +420,8 @@ export default migrationDefinition({
       // Make third migration INVALID (schema change without transformation)
       const migration3Path = getMigrationPath(tempDir, files[2]);
       const migration3Content = `
-import { migrationDefinition } from "mongodbee/migration";
-import { migrationBuilder } from "mongodbee/migration";
+import { migrationDefinition } from "@diister/mongodbee/migration";
+import { migrationBuilder } from "@diister/mongodbee/migration";
 import * as v from "valibot";
 
 const userSchema = {

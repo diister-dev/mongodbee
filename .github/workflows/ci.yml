@@ -127,15 +127,15 @@ jobs:
           # Until @diister/valibot-mock is on npmjs.org, it resolves through
           # JSR's npm compatibility registry. Drop this once it is published.
           echo '@jsr:registry=https://npm.jsr.io' > .npmrc
-          npm install /tmp/mongodbee-*.tgz
+          npm install /tmp/diister-mongodbee-*.tgz
 
       - name: Import every entry point
         working-directory: /tmp/consumer
         run: |
           cat > check.js <<'EOF'
-          import { collection, multiCollection, scopedMultiCollection } from "mongodbee";
-          import * as v from "mongodbee/schema";
-          import { migrationDefinition } from "mongodbee/migration";
+          import { collection, multiCollection, scopedMultiCollection } from "@diister/mongodbee";
+          import * as v from "@diister/mongodbee/schema";
+          import { migrationDefinition } from "@diister/mongodbee/migration";
           for (const [name, value] of Object.entries({ collection, multiCollection, scopedMultiCollection, object: v.object, migrationDefinition })) {
             if (typeof value !== "function") throw new Error(`${name} did not load`);
           }
