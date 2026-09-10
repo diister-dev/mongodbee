@@ -7,7 +7,7 @@
  *
  * @example
  * ```typescript
- * import { createSimulationValidator } from "@diister/mongodbee/migration/validators";
+ * import { createSimulationValidator } from "@diister/mongodbee/migration";
  *
  * const validator = createSimulationValidator();
  * const result = await validator.validateMigration(migrationDefinition);
@@ -1325,7 +1325,7 @@ export class SimulationValidator implements MigrationValidator {
  *
  * @example
  * ```typescript
- * import { createSimulationValidator } from "@diister/mongodbee/migration/validators";
+ * import { createSimulationValidator } from "@diister/mongodbee/migration";
  *
  * const validator = createSimulationValidator({
  *   maxOperations: 500,
@@ -1351,7 +1351,7 @@ export function createSimulationValidator(
  *
  * @example
  * ```typescript
- * import { validateMigrationWithSimulation } from "@diister/mongodbee/migration/validators";
+ * import { validateMigrationWithSimulation } from "@diister/mongodbee/migration";
  *
  * const result = await validateMigrationWithSimulation(migration, {
  *   powerLevel: "quick"

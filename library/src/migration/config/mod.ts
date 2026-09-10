@@ -6,7 +6,7 @@
  *
  * @example
  * ```typescript
- * import { loadConfig, createConfig, validateConfigPaths } from "@diister/mongodbee/migration/config";
+ * import { loadConfig, createConfig, validateConfigPaths } from "@diister/mongodbee/migration";
  *
  * // Load configuration with auto-discovery
  * const { config, warnings } = await loadConfig();
@@ -30,8 +30,6 @@
 // Re-export all types
 export type {
   CliConfig,
-  ConfigLoadOptions,
-  ConfigResult,
   DatabaseConfig,
   EnvironmentConfig,
   MigrationConfig,

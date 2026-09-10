@@ -63,18 +63,21 @@ export async function initCommand(
        *
        * @module
        */
-      import { type SchemasDefinition } from "${pkg}";
+      import { type SchemasDefinition } from "${pkg}/migration";
+      // Uncomment as you start declaring schemas:
+      // import * as v from "${pkg}/schema";
+      // import { dbId } from "${pkg}";
 
       export const schemas = {
-        collections: {
-          // @see @TODO
-        },
-        multiCollections: {
-          // @see @TODO
-        },
-        multiModels: {
-          // @see @TODO
-        }
+        // Plain collections: one document type each.
+        //   users: { _id: dbId("user"), name: v.string() },
+        collections: {},
+        // Multi-collections: several document types in one collection.
+        //   catalog: { product: { name: v.string() }, category: { name: v.string() } },
+        multiCollections: {},
+        // Multi-models: one shape, many collection instances.
+        //   workspace: { info: { _id: v.literal("info:0") }, task: { title: v.string() } },
+        multiModels: {}
       } satisfies SchemasDefinition;
     `),
       "utf-8",

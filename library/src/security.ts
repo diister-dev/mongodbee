@@ -49,7 +49,7 @@ export interface ApplySecurityOptions {
  *
  * @example
  * ```typescript
- * import { applySecurityToCollection } from "@diister/mongodbee/security";
+ * import { applySecurityToCollection } from "@diister/mongodbee";
  * import * as v from "valibot";
  *
  * const userSchema = {
@@ -165,7 +165,7 @@ export async function applySecurityToCollection(
  *
  * @example
  * ```typescript
- * import { applySecurityToMultiCollection } from "@diister/mongodbee/security";
+ * import { applySecurityToMultiCollection } from "@diister/mongodbee";
  *
  * const commentsSchema = {
  *   user_comment: {

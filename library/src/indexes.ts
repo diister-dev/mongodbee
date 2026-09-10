@@ -71,11 +71,11 @@ export type IndexDatabase = {
  * @example
  * ```typescript
  * import * as v from "@diister/mongodbee/schema";
- * import { uniqueIndex } from "@diister/mongodbee";
+ * import { withIndex } from "@diister/mongodbee";
  *
  * const userSchema = {
- *   email: uniqueIndex(v.string()),
- *   username: uniqueIndex(v.pipe(v.string(), v.minLength(3)))
+ *   email: withIndex(v.string(), { unique: true }),
+ *   username: withIndex(v.pipe(v.string(), v.minLength(3)), { unique: true })
  * };
  * ```
  */
