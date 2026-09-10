@@ -43,6 +43,12 @@ export interface TestDefinition {
   sanitizeOps?: boolean;
   /** Accepted and ignored. See {@link TestDefinition.sanitizeOps}. */
   sanitizeResources?: boolean;
+  /**
+   * Milliseconds to allow before the case fails, when the default (5 s under
+   * `bun test`) is too tight — a case that spawns a compiler or a CLI is
+   * comfortably under it on a warm machine and over it on a cold CI runner.
+   */
+  timeout?: number;
 }
 
 /**
@@ -61,16 +67,21 @@ export function test(
   nameOrDefinition: string | TestDefinition,
   maybeFn?: TestFn,
 ): void {
-  const { name, fn, ignore, only } =
+  const { name, fn, ignore, only, timeout } =
     typeof nameOrDefinition === "string"
       ? {
           name: nameOrDefinition,
           fn: maybeFn as TestFn,
           ignore: false,
           only: false,
+          timeout: undefined,
         }
       : nameOrDefinition;
 
   const run = ignore ? nodeTest.skip : only ? nodeTest.only : nodeTest;
-  run(name, () => fn({ name }));
+  if (timeout === undefined) {
+    run(name, () => fn({ name }));
+  } else {
+    run(name, { timeout }, () => fn({ name }));
+  }
 }

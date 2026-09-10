@@ -132,43 +132,49 @@ test("init - creates empty migrations directory", async () => {
  * needs no packing or install, and `typeRoots` points at the suite's own
  * `@types` because the temp project has no `node_modules`.
  */
-test("init - the files it scaffolds typecheck against the package", async () => {
-  await withTempDir(async (tempDir) => {
-    await initCommand({ cwd: tempDir });
+test({
+  name: "init - the files it scaffolds typecheck against the package",
+  // Spawning tsc over the package's own sources takes ~0.6 s warm and runs
+  // past the 5 s default on a cold CI runner.
+  timeout: 120_000,
+  fn: async () => {
+    await withTempDir(async (tempDir) => {
+      await initCommand({ cwd: tempDir });
 
-    const libRoot = fileURLToPath(new URL("../../../", import.meta.url));
-    const tsconfig = {
-      compilerOptions: {
-        target: "esnext",
-        module: "nodenext",
-        moduleResolution: "nodenext",
-        lib: ["esnext", "dom"],
-        strict: true,
-        noEmit: true,
-        skipLibCheck: true,
-        typeRoots: [path.join(libRoot, "node_modules/@types")],
-        types: ["node"],
-        allowImportingTsExtensions: true,
-        baseUrl: ".",
-        paths: {
-          "@diister/mongodbee": [path.join(libRoot, "mod.ts")],
-          "@diister/mongodbee/*": [path.join(libRoot, "src/*/mod.ts")],
+      const libRoot = fileURLToPath(new URL("../../../", import.meta.url));
+      const tsconfig = {
+        compilerOptions: {
+          target: "esnext",
+          module: "nodenext",
+          moduleResolution: "nodenext",
+          lib: ["esnext", "dom"],
+          strict: true,
+          noEmit: true,
+          skipLibCheck: true,
+          typeRoots: [path.join(libRoot, "node_modules/@types")],
+          types: ["node"],
+          allowImportingTsExtensions: true,
+          baseUrl: ".",
+          paths: {
+            "@diister/mongodbee": [path.join(libRoot, "mod.ts")],
+            "@diister/mongodbee/*": [path.join(libRoot, "src/*/mod.ts")],
+          },
         },
-      },
-      include: ["schemas.ts", "mongodbee.config.ts"],
-    };
-    await writeFile(
-      path.join(tempDir, "tsconfig.json"),
-      JSON.stringify(tsconfig, null, 2),
-      "utf-8",
-    );
+        include: ["schemas.ts", "mongodbee.config.ts"],
+      };
+      await writeFile(
+        path.join(tempDir, "tsconfig.json"),
+        JSON.stringify(tsconfig, null, 2),
+        "utf-8",
+      );
 
-    const tsc = path.join(libRoot, "node_modules/typescript/bin/tsc");
-    const { code, stdout } = await runScript(
-      tsc,
-      ["-p", "tsconfig.json"],
-      tempDir,
-    );
-    assertEquals(code, 0, `scaffolded files do not typecheck:\n${stdout}`);
-  });
+      const tsc = path.join(libRoot, "node_modules/typescript/bin/tsc");
+      const { code, stdout } = await runScript(
+        tsc,
+        ["-p", "tsconfig.json"],
+        tempDir,
+      );
+      assertEquals(code, 0, `scaffolded files do not typecheck:\n${stdout}`);
+    });
+  },
 });
