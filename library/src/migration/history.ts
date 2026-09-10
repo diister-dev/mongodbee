@@ -280,8 +280,14 @@ export async function getLastAppliedMigration(
     return null;
   }
 
+  // Newest execution first. One `migrate` run applies several migrations
+  // within the same millisecond, and a tie on executedAt used to leave them
+  // in Map order — so rollback could revert the earlier one. Their ids carry
+  // the chain order, and break the tie.
   appliedMigrations.sort(
-    (a, b) => b.executedAt.getTime() - a.executedAt.getTime(),
+    (a, b) =>
+      b.executedAt.getTime() - a.executedAt.getTime() ||
+      b.migrationId.localeCompare(a.migrationId),
   );
   return appliedMigrations[0];
 }
