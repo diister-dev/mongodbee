@@ -4,7 +4,7 @@ import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
 import { EventEmitter } from "./events.ts";
 import { watchEvent } from "./change-stream.ts";
 import { getSessionContext } from "./session.ts";
-import { dirtyEquivalent } from "./utils/object.ts";
+import { ensureValidator } from "./utils/ensure-validator.ts";
 import { mongoOperationQueue } from "./operation.ts";
 import { applyCollectionIndexes } from "./indexes-applier.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
@@ -441,34 +441,7 @@ export async function collection<
   const invalidValidation = { $nor: [validator] };
 
   async function applyValidator() {
-    const collections = await db
-      .listCollections({ name: collectionName })
-      .toArray();
-
-    if (collections.length === 0) {
-      // Create the collection with the validator
-      await db.createCollection(collectionName, {
-        validator,
-      });
-    } else {
-      // Check collection options
-      const existingOptions = await db.command({
-        listCollections: 1,
-        filter: { name: collectionName },
-      });
-      const currentSchema =
-        existingOptions.cursor?.firstBatch?.[0]?.options?.validator || {};
-      const sameSchema = dirtyEquivalent(currentSchema, validator);
-      if (sameSchema) {
-        return; // No need to update
-      }
-
-      // Update the collection with the validator
-      await db.command({
-        collMod: collectionName,
-        validator,
-      });
-    }
+    await ensureValidator(db, collectionName, validator);
   }
 
   async function applyIndexes() {

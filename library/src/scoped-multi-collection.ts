@@ -27,8 +27,7 @@ import {
 } from "./paginate-sort.ts";
 import { assertLetDoesNotShadowJoinBinding } from "./stage-builder.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
-import { dirtyEquivalent } from "./utils/object.ts";
-import { createLogger } from "./utils/logger.ts";
+import { ensureValidator } from "./utils/ensure-validator.ts";
 import { applyScopedMultiCollectionIndexes } from "./indexes-applier.ts";
 import { mongoOperationQueue } from "./operation.ts";
 import { isSchemaManaged } from "./runtime-config.ts";
@@ -43,7 +42,6 @@ import {
   traced,
 } from "./telemetry.ts";
 
-const log = createLogger("scoped-multi-collection");
 
 // Structural fields that always exist on every stored doc — their cursor
 // rungs stay raw comparisons (no null branch).
@@ -2212,31 +2210,7 @@ async function applyValidator(
   collectionName: string,
   unionSchema: AnySchema,
 ): Promise<void> {
-  const validator = toMongoValidator(unionSchema);
-  const collections = await db
-    .listCollections({ name: collectionName })
-    .toArray();
-
-  if (collections.length === 0) {
-    log.debug(`applyValidator(${collectionName}): createCollection`);
-    await db.createCollection(collectionName, { validator });
-    return;
-  }
-
-  const existingOptions = await db.command({
-    listCollections: 1,
-    filter: { name: collectionName },
-  });
-  const currentValidator =
-    existingOptions.cursor?.firstBatch?.[0]?.options?.validator || {};
-
-  if (dirtyEquivalent(currentValidator, validator)) {
-    log.debug(`applyValidator(${collectionName}): unchanged`);
-    return;
-  }
-
-  log.debug(`applyValidator(${collectionName}): collMod`);
-  await db.command({ collMod: collectionName, validator });
+  await ensureValidator(db, collectionName, toMongoValidator(unionSchema));
 }
 
 // Internal — exported so tests can audit reserved-field handling.
