@@ -1,0 +1,22 @@
+# Supply-chain guard.
+#
+# A package version has to have existed for a week before this project will
+# install it. The npm attacks of the last year follow one shape: a maintainer
+# account is compromised, a malicious version is published, and it is pulled a
+# few hours later — but anything that ran `install` in that window is already
+# compromised. A release-age floor means the window closes before we are in it,
+# and costs nothing but installing last week's patch instead of this morning's.
+#
+# It is not a substitute for reading a changelog. It buys the time in which
+# somebody else notices.
+[install]
+minimumReleaseAge = 604800
+
+# Our own packages are exempt: we publish them, from a trusted GitHub workflow
+# with provenance, and the whole point of cutting a release is to consume it.
+# The compromise this rule guards against is somebody else's account, not ours.
+minimumReleaseAgeExcludes = [
+  "@diister/mongodbee",
+  "@diister/quick-permission",
+  "@diister/valibot-mock",
+]

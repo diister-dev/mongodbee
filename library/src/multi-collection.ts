@@ -8,7 +8,7 @@ import { getSessionContext } from "./session.ts";
 import { withIndex } from "./indexes.ts";
 import type { FlatType } from "../types/flat.ts";
 import type { Db } from "./mongodb.ts";
-import { dirtyEquivalent } from "./utils/object.ts";
+import { ensureValidator } from "./utils/ensure-validator.ts";
 import { mongoOperationQueue } from "./operation.ts";
 import type { MultiCollectionModel } from "./multi-collection-model.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
@@ -646,11 +646,6 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
   };
 
   async function applyValidator() {
-    log.debug(`applyValidator(${collectionName}): listCollections`);
-    const collections = await db
-      .listCollections({ name: collectionName })
-      .toArray();
-
     const modelValidators = createMetadataSchemas();
 
     const validator = toMongoValidator(
@@ -666,44 +661,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
       ]),
     );
 
-    if (collections.length === 0) {
-      log.debug(`applyValidator(${collectionName}): createCollection`);
-      // Create the collection with the validator
-      await db.createCollection(collectionName, {
-        validator,
-      });
-      log.debug(`applyValidator(${collectionName}): createCollection done`);
-    } else {
-      log.debug(
-        `applyValidator(${collectionName}): exists, comparing validator`,
-      );
-      // Check collection options
-      const existingOptions = await db.command({
-        listCollections: 1,
-        filter: { name: collectionName },
-      });
-      const currentSchema =
-        existingOptions.cursor?.firstBatch?.[0]?.options?.validator || {};
-
-      const sameSchema = dirtyEquivalent(currentSchema, validator);
-
-      if (sameSchema) {
-        log.debug(
-          `applyValidator(${collectionName}): validator unchanged, skipping`,
-        );
-        return; // No need to update
-      }
-
-      log.debug(
-        `applyValidator(${collectionName}): collMod (updating validator)`,
-      );
-      // Update the collection with the validator
-      await db.command({
-        collMod: collectionName,
-        validator,
-      });
-      log.debug(`applyValidator(${collectionName}): collMod done`);
-    }
+    await ensureValidator(db, collectionName, validator);
   }
 
   async function applyIndexes() {

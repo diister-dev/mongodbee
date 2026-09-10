@@ -5,7 +5,7 @@
     "": {
       "name": "mongodbee",
       "dependencies": {
-        "@diister/valibot-mock": "^0.1.8",
+        "@diister/valibot-mock": "^0.1.9",
         "@opentelemetry/api": "^1.9.0",
         "mongodb": "^6.21.0",
         "valibot": "^1.4.0",
@@ -39,7 +39,7 @@
 
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.5.12", "", { "os": "win32", "cpu": "x64" }, "sha512-B1R/l+CwEpKFSuqiwePzPNRk1EiJN8kc0UhdafNz6MZN9v5OFP9HYP1irptvWzHrwVI4blVNGMbxc5zt70m3IA=="],
 
-    "@diister/valibot-mock": ["@diister/valibot-mock@0.1.8", "", { "dependencies": { "@eslint-community/regexpp": "^4.12.2", "@faker-js/faker": "^10.0.0", "randexp": "^0.5.3" }, "peerDependencies": { "valibot": "^1.1.0" } }, "sha512-q6DptRCN6vvk7srBwjIUhCwZdydQv11K6dMmoptrubOjcvfjyKTz5wlFCuI+sg3DfK6z7pTGmaj/lFofqTuQ/A=="],
+    "@diister/valibot-mock": ["@diister/valibot-mock@0.1.9", "", { "dependencies": { "@eslint-community/regexpp": "^4.12.2", "@faker-js/faker": "^10.0.0", "randexp": "^0.5.3" }, "peerDependencies": { "valibot": "^1.1.0" } }, "sha512-+edGX30mL85AKrropHRcOf+ip4FEgpNj7G+wEoai+ipGfWyJ0nhSGLqPa1nDDtU16q71Tm/mZfD0XDiUnep3Ow=="],
 
     "@eslint-community/regexpp": ["@eslint-community/regexpp@4.12.2", "", {}, "sha512-EriSTlt5OC9/7SXkRSCAhfSxxoSUgBm33OH+IkwbdpgoqsSsUg7y3uh+IICI/Qg4BBWr3U2i39RpmycbxMq4ew=="],
 
