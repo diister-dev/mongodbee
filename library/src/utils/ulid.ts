@@ -24,6 +24,30 @@ const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const TIME_LEN = 10;
 const RANDOM_LEN = 16;
 
+/** The largest millisecond timestamp the 48-bit time field can hold. */
+const TIME_MAX = 2 ** 48 - 1;
+
+/**
+ * Character code to alphabet position, `-1` for everything else.
+ *
+ * A table rather than `ALPHABET.indexOf(char.toUpperCase())`, which was wrong
+ * twice over: `toUpperCase` is Unicode-aware and expands `ﬅ` and `ﬆ` to the two
+ * characters `"ST"`, and `indexOf` matches substrings — so those decoded as `S`
+ * instead of being rejected. Indexing by code point admits exactly the 64
+ * characters intended and nothing else.
+ */
+const DECODE = (() => {
+  const table = new Int8Array(128).fill(-1);
+  for (let i = 0; i < ALPHABET.length; i++) {
+    const code = ALPHABET.charCodeAt(i);
+    table[code] = i;
+    // The lowercase half (see decodeTime on why) — letters only. Digits sit
+    // 32 below P..Y, so shifting them too would have entered "5" under "U".
+    if (code >= 65) table[code + 32] = i;
+  }
+  return table;
+})();
+
 /**
  * Randomness is drawn in blocks and handed out one byte at a time. 1024 bytes
  * covers 64 ids per syscall; the buffer is refilled, never reused.
@@ -63,8 +87,12 @@ function encodeRandom(): string {
 /**
  * Generates a ULID for the current time.
  *
+ * Returns the canonical uppercase form. `newId()` in `ids.ts` lowercases it;
+ * `decodeTime` reads either.
+ *
  * @param seedTime Millisecond timestamp to encode; defaults to now.
  * @returns A 26-character uppercase ULID.
+ * @throws RangeError If `seedTime` is not an integer in `[0, 2**48 - 1]`.
  *
  * @example
  * ```typescript
@@ -72,50 +100,61 @@ function encodeRandom(): string {
  * ```
  */
 export function ulid(seedTime: number = Date.now()): string {
+  // Refusing a bad seed rather than encoding it: `encodeTime` divides by 32
+  // ten times and indexes the alphabet with the remainder, so `NaN` produced a
+  // 106-character string of "undefined" and a timestamp past the 48-bit field
+  // silently wrapped — either of which would have been stored as an id. This
+  // is the guard `@std/ulid` had and this implementation had dropped.
+  if (!Number.isInteger(seedTime) || seedTime < 0 || seedTime > TIME_MAX) {
+    throw new RangeError(
+      `ULID timestamp must be an integer in [0, ${TIME_MAX}], got ${seedTime}`,
+    );
+  }
   return encodeTime(seedTime) + encodeRandom();
 }
-
-/** The largest millisecond timestamp a ULID's 48-bit time field can hold. */
-const TIME_MAX = 2 ** 48 - 1;
 
 /**
  * Reads the timestamp back out of a ULID.
  *
- * Accepts either case. Crockford base32 is case-insensitive by specification,
- * and `newId()` lowercases what `ulid()` produces — so rejecting lowercase
- * would mean this could not read the ids the rest of this module hands out.
- * Every input `@std/ulid`'s `decodeTime` accepts is accepted here identically;
- * lowercase is the only addition.
+ * Accepts either case, which `@std/ulid` does not: Crockford base32 is
+ * case-insensitive by specification, and `newId()` lowercases what `ulid()`
+ * produces — a strict-uppercase decoder could not read this module's own
+ * output. That is the only intended difference; every input `@std/ulid`
+ * accepts is accepted here and yields the same value.
+ *
+ * Only the first ten characters are validated, matching `@std/ulid`: the
+ * remaining sixteen carry randomness this function never reads.
  *
  * @param id A 26-character ULID.
  * @returns The millisecond timestamp encoded in its first ten characters.
- * @throws If `id` is not 26 characters, contains a character outside the
- *   alphabet, or encodes a timestamp beyond the 48-bit range.
+ * @throws RangeError If `id` is not 26 characters, if one of its first ten is
+ *   outside the alphabet, or if they encode a timestamp beyond the 48-bit
+ *   range.
  *
  * @example
  * ```typescript
- * decodeTime("01M1RCRB9SED3TDHNNB1JAKK21"); // 1757000000000
+ * decodeTime("01M1RCRB9SED3TDHNNB1JAKK21"); // 1788598824249
  * ```
  */
 export function decodeTime(id: string): number {
   if (id.length !== TIME_LEN + RANDOM_LEN) {
-    throw new Error(
+    throw new RangeError(
       `ULID must be exactly ${TIME_LEN + RANDOM_LEN} characters long, got ${id.length}`,
     );
   }
 
   let time = 0;
   for (let i = 0; i < TIME_LEN; i++) {
-    const char = id[i]!.toUpperCase();
-    const value = ALPHABET.indexOf(char);
-    if (value === -1) {
-      throw new Error(`Invalid ULID character found: ${id[i]}`);
+    const code = id.charCodeAt(i);
+    const value = code < 128 ? DECODE[code]! : -1;
+    if (value < 0) {
+      throw new RangeError(`Invalid ULID character found: ${id[i]}`);
     }
     time = time * 32 + value;
   }
 
   if (time > TIME_MAX) {
-    throw new Error(
+    throw new RangeError(
       `ULID timestamp ${time} exceeds the maximum of ${TIME_MAX}`,
     );
   }

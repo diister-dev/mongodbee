@@ -14,19 +14,26 @@
 
 import { test } from "./+harness.ts";
 import { assert, assertEquals, assertThrows } from "./+assert.ts";
-import { decodeTime, ulid } from "../src/ids.ts";
-import { newId } from "../src/ids.ts";
+import { decodeTime, newId, ulid } from "../src/ids.ts";
 
 /**
  * Generated with `jsr:@std/ulid@1.0.0`, the implementation this one replaced:
  * `ids.map(decodeTime)` there produced exactly these timestamps.
  */
 const STD_VECTORS: ReadonlyArray<readonly [string, number]> = [
+  // Five ids drawn in the same millisecond — they differ only in the random
+  // half, which `decodeTime` never reads, so on their own they are one vector.
   ["01M2626XKER9R3CBJCP71EBXH8", 1789057529454],
   ["01M2626XKEP8SC6702HYFXV91E", 1789057529454],
   ["01M2626XKEN90VBBHTWVWD7XWQ", 1789057529454],
   ["01M2626XKEA9CPBQ9VHQ60R6CG", 1789057529454],
   ["01M2626XKEZ2R5YN9RK6PQ9ZKW", 1789057529454],
+  // …so these carry the spread: `@std/ulid`'s `encodeTime` for 0, 1, the
+  // epoch-ish middle and the 48-bit ceiling.
+  ["00000000000000000000000000", 0],
+  ["00000000010000000000000000", 1],
+  ["01JZZZZZZZ0000000000000000", 1752346656767],
+  ["7ZZZZZZZZZ0000000000000000", 281474976710655],
 ];
 
 test("ulid - shape matches the specification", () => {
@@ -66,9 +73,15 @@ test("decodeTime - accepts either case, unlike @std", () => {
   for (const [id, expected] of STD_VECTORS) {
     assertEquals(decodeTime(id.toLowerCase()), expected);
   }
+  const before = Date.now();
   const id = newId();
+  const after = Date.now();
   assertEquals(id, id.toLowerCase(), "newId is expected to be lowercase");
-  assert(Number.isFinite(decodeTime(id)), "decodeTime could not read newId()");
+  const decoded = decodeTime(id);
+  assert(
+    decoded >= before && decoded <= after,
+    `decodeTime(newId()) gave ${decoded}, outside [${before}, ${after}]`,
+  );
 });
 
 test("decodeTime - rejects what is not a ULID", () => {
@@ -108,4 +121,50 @@ test("ulid - draws distinct randomness across a pool refill", () => {
   const seen = new Set<string>();
   for (let i = 0; i < 500; i++) seen.add(ulid(1_700_000_000_000));
   assertEquals(seen.size, 500, "ulid repeated itself within one millisecond");
+});
+
+test("ulid - refuses a seed it could not encode faithfully", () => {
+  // `encodeTime` divides by 32 ten times and indexes the alphabet with the
+  // remainder. Without a guard, NaN produced a 106-character string of
+  // "undefined", a negative seed a 34-character one, and 2**50 silently
+  // wrapped its timestamp to 0 — each of which would have been stored as an
+  // id. `@std/ulid` threw RangeError for all of these; so does this.
+  for (const seed of [
+    -1,
+    1.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    2 ** 48,
+    2 ** 50,
+  ]) {
+    assertThrows(() => ulid(seed), RangeError, "ULID timestamp");
+  }
+});
+
+test("decodeTime - is not fooled by Unicode that upper-cases into the alphabet", () => {
+  // `ALPHABET.indexOf(char.toUpperCase())` accepted these: `toUpperCase` maps
+  // ſ to S, and expands ﬅ and ﬆ to the two characters "ST", which `indexOf`
+  // then matched as a substring. A code-point table admits only the 64
+  // characters intended.
+  for (const ch of [
+    "\u017F",
+    "\uFB05",
+    "\uFB06",
+    "\u0131",
+    "\uFF21",
+    " ",
+    "-",
+  ]) {
+    assertThrows(
+      () => decodeTime(`01M2626XK${ch}0000000000000000`),
+      RangeError,
+      "Invalid ULID character",
+    );
+  }
+});
+
+test("decodeTime - reports the same error class @std did", () => {
+  // A consumer catching RangeError specifically must keep catching it.
+  assertThrows(() => decodeTime(""), RangeError);
+  assertThrows(() => decodeTime("8".repeat(26)), RangeError);
 });

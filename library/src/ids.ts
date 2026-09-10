@@ -1,15 +1,11 @@
 import * as v from "./schema.ts";
 import { decodeTime, ulid } from "./utils/ulid.ts";
 
-/**
- * The ULID primitives this module builds on.
- *
- * Re-exported because a consumer that already depends on MongoDBee for
- * `newId`/`dbId`/`refId` should not have to add a second ULID implementation
- * to its process just to mint a token or read a timestamp back.
- *
- * `ulid()` returns the canonical uppercase form; `newId()` lowercases it.
- */
+// The ULID primitives this module builds on, re-exported so a consumer that
+// already depends on MongoDBee for `newId`/`dbId`/`refId` need not add a second
+// ULID implementation to its process just to mint a token or read a timestamp
+// back. A plain comment, not JSDoc: TypeScript attaches nothing to a bare
+// re-export, so their documentation lives on the functions themselves.
 export { decodeTime, ulid };
 
 /**
