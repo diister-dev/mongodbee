@@ -107,7 +107,7 @@
     "lint": "biome lint .",
     "fmt": "biome format --write .",
     "fmt:check": "biome format .",
-    "test": "bun test",
+    "test": "bun test --parallel",
     "migrate": "bun run src/migration/cli/bin.ts"
   }
 }
