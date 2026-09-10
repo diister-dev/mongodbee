@@ -1,5 +1,16 @@
 import * as v from "./schema.ts";
-import { ulid } from "./utils/ulid.ts";
+import { decodeTime, ulid } from "./utils/ulid.ts";
+
+/**
+ * The ULID primitives this module builds on.
+ *
+ * Re-exported because a consumer that already depends on MongoDBee for
+ * `newId`/`dbId`/`refId` should not have to add a second ULID implementation
+ * to its process just to mint a token or read a timestamp back.
+ *
+ * `ulid()` returns the canonical uppercase form; `newId()` lowercases it.
+ */
+export { decodeTime, ulid };
 
 /**
  * Generates a new unique ID using ULID

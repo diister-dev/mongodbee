@@ -74,3 +74,51 @@ function encodeRandom(): string {
 export function ulid(seedTime: number = Date.now()): string {
   return encodeTime(seedTime) + encodeRandom();
 }
+
+/** The largest millisecond timestamp a ULID's 48-bit time field can hold. */
+const TIME_MAX = 2 ** 48 - 1;
+
+/**
+ * Reads the timestamp back out of a ULID.
+ *
+ * Accepts either case. Crockford base32 is case-insensitive by specification,
+ * and `newId()` lowercases what `ulid()` produces — so rejecting lowercase
+ * would mean this could not read the ids the rest of this module hands out.
+ * Every input `@std/ulid`'s `decodeTime` accepts is accepted here identically;
+ * lowercase is the only addition.
+ *
+ * @param id A 26-character ULID.
+ * @returns The millisecond timestamp encoded in its first ten characters.
+ * @throws If `id` is not 26 characters, contains a character outside the
+ *   alphabet, or encodes a timestamp beyond the 48-bit range.
+ *
+ * @example
+ * ```typescript
+ * decodeTime("01M1RCRB9SED3TDHNNB1JAKK21"); // 1757000000000
+ * ```
+ */
+export function decodeTime(id: string): number {
+  if (id.length !== TIME_LEN + RANDOM_LEN) {
+    throw new Error(
+      `ULID must be exactly ${TIME_LEN + RANDOM_LEN} characters long, got ${id.length}`,
+    );
+  }
+
+  let time = 0;
+  for (let i = 0; i < TIME_LEN; i++) {
+    const char = id[i]!.toUpperCase();
+    const value = ALPHABET.indexOf(char);
+    if (value === -1) {
+      throw new Error(`Invalid ULID character found: ${id[i]}`);
+    }
+    time = time * 32 + value;
+  }
+
+  if (time > TIME_MAX) {
+    throw new Error(
+      `ULID timestamp ${time} exceeds the maximum of ${TIME_MAX}`,
+    );
+  }
+
+  return time;
+}
