@@ -42,7 +42,6 @@ import {
   traced,
 } from "./telemetry.ts";
 
-
 // Structural fields that always exist on every stored doc — their cursor
 // rungs stay raw comparisons (no null branch).
 const NON_NULLABLE_SORT_FIELDS: ReadonlySet<string> = new Set([
