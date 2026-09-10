@@ -8,14 +8,14 @@
  * @example
  * ```typescript
  * // Chain validation
- * import { validateMigrationChain } from "@diister/mongodbee/migration";
+ * import { createChainValidator } from "@diister/mongodbee/migration";
  *
  * const migrations = [
  *   { id: '001', parent: null, name: 'Initial', schemas: {}, migrate: () => ({}) },
  *   { id: '002', parent: migrations[0], name: 'Add users', schemas: {}, migrate: () => ({}) }
  * ];
  *
- * const chainResult = validateMigrationChain(migrations);
+ * const chainResult = createChainValidator().validateChain(migrations);
  * if (!chainResult.isValid) {
  *   console.error('Chain validation failed:', chainResult.errors);
  * }

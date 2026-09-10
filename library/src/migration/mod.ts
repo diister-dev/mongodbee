@@ -106,10 +106,32 @@ export type {
 // Configuration
 export * from "./config/mod.ts";
 
-// Validators. `validators/mod.ts` already curates its own surface; this used
-// to cherry-pick four names from it, which left the simulation validators —
-// the ones `mongodbee check` itself runs on — documented but unreachable.
-export * from "./validators/mod.ts";
+// Validators. This used to name only four symbols, which left the simulation
+// validators — the ones `mongodbee check` itself runs on — documented but
+// unreachable.
+//
+// Deliberately not `export *`: `validators/chain.ts` also exports a
+// `validateMigrationChain`, and `definition.ts` already exports that name from
+// here. A star export would resolve to `definition.ts`'s, silently handing
+// callers a `{ valid, errors }` where chain.ts's docs promise
+// `{ isValid, errors, warnings, metadata }`. Chain validation is reachable
+// through `createChainValidator().validateChain()` instead, which is
+// unambiguous.
+export {
+  type ChainValidationResult,
+  ChainValidator,
+  type ChainValidatorOptions,
+  createChainValidator,
+  createSimulationValidator,
+  DEFAULT_SIMULATION_VALIDATOR_OPTIONS,
+  getMockGenerationConfig,
+  type MigrationValidator,
+  SimulationValidator,
+  type SimulationValidatorOptions,
+  type SimulationPowerLevel,
+  validateMigrationWithSimulation,
+  type ValidationResult,
+} from "./validators/mod.ts";
 
 // Multi-collection registry
 export {
