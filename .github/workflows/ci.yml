@@ -77,7 +77,7 @@ jobs:
 
       - name: Test (bun)
         if: matrix.runtime == 'bun'
-        run: bun test
+        run: bun test --parallel
 
       - name: Test (node)
         if: matrix.runtime == 'node'
