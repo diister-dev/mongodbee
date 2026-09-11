@@ -417,7 +417,11 @@ bun run build      # dist/ for npm
 
 The suite targets `node:test`, so it runs unchanged under `bun test`,
 `node --test` and `deno test`. CI exercises all three, because Bun runs
-JavaScriptCore while Node and Deno run V8.
+JavaScriptCore while Node and Deno run V8 — with one exception: the
+`test/migration/cli` files generate migrations and import them at run
+time, which `deno test` refuses ("Loading unprepared module") although
+`deno run` loads them fine, so the Deno job skips that directory and the
+CLI under Deno is covered by the consumer job instead.
 
 ## License
 
