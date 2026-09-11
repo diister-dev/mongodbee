@@ -48,12 +48,13 @@ jobs:
     permissions:
       contents: read
 
-    # The suite targets `node:test`, so the same tests run on both.
-    # Worth the matrix: Bun is JavaScriptCore, Node is V8.
+    # The suite targets `node:test`, so the same tests run on all three.
+    # Worth the matrix: Bun is JavaScriptCore, Node and Deno are V8 — and
+    # Deno is what Diivento runs the library on.
     strategy:
       fail-fast: false
       matrix:
-        runtime: [bun, node]
+        runtime: [bun, node, deno]
 
     steps:
       - uses: actions/checkout@v5
@@ -73,6 +74,11 @@ jobs:
         with:
           node-version: 22.18
 
+      - uses: denoland/setup-deno@v2
+        if: matrix.runtime == 'deno'
+        with:
+          deno-version: v2.9.6
+
       - run: bun install --frozen-lockfile
 
       - name: Test (bun)
@@ -82,6 +88,15 @@ jobs:
       - name: Test (node)
         if: matrix.runtime == 'node'
         run: node --test "test/**/*.test.ts"
+
+      # test/migration/cli generates migration files and imports them at run
+      # time; `deno test` refuses modules that were not in the graph when the
+      # run started ("Loading unprepared module"), while `deno run` — how the
+      # CLI is actually used — loads them fine. The CLI under Deno is covered
+      # by the consumers job below. Types are tsc's job (the check job).
+      - name: Test (deno)
+        if: matrix.runtime == 'deno'
+        run: deno test -A --parallel --no-check --ignore=test/migration/cli test/
 
   consumers:
     name: Consume the built package (${{ matrix.runtime }})
