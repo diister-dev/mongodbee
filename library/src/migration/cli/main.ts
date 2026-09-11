@@ -236,7 +236,7 @@ async function main(): Promise<void> {
 }
 
 // Run main function if this is the main module
-if (isMainModule(import.meta.url)) {
+if (isMainModule(import.meta)) {
   try {
     await main();
   } catch (error) {

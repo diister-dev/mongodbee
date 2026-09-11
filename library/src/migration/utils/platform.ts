@@ -22,22 +22,28 @@ export function pathToFileUrl(filePath: string): string {
 }
 
 /**
- * Whether the given module is the one the runtime was asked to execute.
+ * Whether the calling module is the one the runtime was asked to execute.
  *
- * Deliberately does NOT consult `import.meta.main`: read here it would describe
- * *this* module, which is never the entry point. The caller's `import.meta.url`
- * against `process.argv[1]` is the check that holds in Node, Bun and Deno
- * alike.
+ * Takes the caller's own `import.meta` (ours would describe this module,
+ * which is never the entry point). Deno and Bun answer directly through
+ * `import.meta.main`, and that is the only answer that holds when the entry
+ * is a `jsr:` or `npm:` specifier: its URL is not a file path, so the
+ * argv comparison below can only say "no" — and
+ * `deno run jsr:@diister/mongodbee/migration/cli/bin migrate` used to exit 0
+ * having done nothing at all. Node has no such flag, so it falls back to
+ * `import.meta.url` against `process.argv[1]`.
  *
- * The comparison has to go through `realpath`: npm installs a `bin` as a
+ * That comparison has to go through `realpath`: npm installs a `bin` as a
  * symlink, so the CLI runs with `argv[1]` pointing at
  * `node_modules/.bin/mongodbee` while `import.meta.url` names the real file
  * inside the package — comparing them raw makes the entry point silently do
  * nothing.
  *
- * @param moduleUrl The caller's own `import.meta.url`.
+ * @param meta The caller's own `import.meta`.
  */
-export function isMainModule(moduleUrl: string): boolean {
+export function isMainModule(meta: { url: string; main?: boolean }): boolean {
+  if (typeof meta.main === "boolean") return meta.main;
+
   const entry = process.argv[1];
   if (!entry) return false;
 
@@ -50,7 +56,7 @@ export function isMainModule(moduleUrl: string): boolean {
   };
 
   try {
-    return resolve(fileURLToPath(moduleUrl)) === resolve(entry);
+    return resolve(fileURLToPath(meta.url)) === resolve(entry);
   } catch {
     return false;
   }
