@@ -147,3 +147,14 @@ jobs:
       - name: Run the CLI through its bin entry
         working-directory: /tmp/consumer
         run: ./node_modules/.bin/mongodbee --version
+
+      # `deno run npm:…/bin` (and `jsr:…/bin`, which cannot be exercised
+      # before publishing) runs the entry with a non-file URL: the CLI must
+      # still recognise itself as the entry point and not exit 0 silently.
+      - name: Run the CLI through a package specifier (deno)
+        if: matrix.runtime == 'deno'
+        working-directory: /tmp/consumer
+        run: |
+          out=$(deno run -A npm:@diister/mongodbee/migration/cli/bin --version)
+          echo "$out"
+          test -n "$out"

@@ -21,6 +21,6 @@ import { isMainModule } from "../utils/platform.ts";
 import { main } from "./main.ts";
 
 // Run the CLI if this is the main module
-if (isMainModule(import.meta.url)) {
+if (isMainModule(import.meta)) {
   await main();
 }
