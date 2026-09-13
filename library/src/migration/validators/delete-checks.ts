@@ -6,6 +6,9 @@ const DOCUMENT_DELETES: ReadonlySet<MigrationRule["type"]> = new Set([
   "delete_multimodel_instance_documents",
   "delete_multimodel_instances_documents",
   "delete_scoped_multicollection_documents",
+  "dedupe_collection_documents",
+  "dedupe_multicollection_documents",
+  "dedupe_scoped_multicollection_documents",
 ]);
 
 export function isDocumentDelete(operation: MigrationRule): boolean {

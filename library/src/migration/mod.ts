@@ -54,6 +54,8 @@ export type {
   CreateCollectionRule,
   // Database state
   DatabaseState,
+  DedupeKeep,
+  DedupeOptions,
   // Applier interfaces
   MigrationApplier,
   MigrationBuilder,

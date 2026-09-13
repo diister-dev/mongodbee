@@ -46,6 +46,48 @@ function resolveStateCollection(
   );
 }
 
+interface DedupePlan {
+  by: readonly string[];
+  keep: "first" | "last";
+  candidate: (doc: Record<string, unknown>) => boolean;
+  groupPrefix: (doc: Record<string, unknown>) => string;
+}
+
+function dedupeContent(
+  content: Record<string, unknown>[],
+  plan: DedupePlan,
+): Record<string, unknown>[] {
+  const groups = new Map<string, Record<string, unknown>[]>();
+  for (const doc of content) {
+    if (!plan.candidate(doc)) continue;
+    const values = plan.by.map((path) => getFieldByPath(doc, path));
+    if (values.some((value) => value === undefined)) continue;
+    const key = JSON.stringify([plan.groupPrefix(doc), ...values]);
+    const group = groups.get(key);
+    if (group) group.push(doc);
+    else groups.set(key, [doc]);
+  }
+
+  const doomed = new Set<Record<string, unknown>>();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const ordered = [...group].sort((a, b) =>
+      String(a._id) < String(b._id)
+        ? -1
+        : String(a._id) > String(b._id)
+          ? 1
+          : 0,
+    );
+    const losers =
+      plan.keep === "first" ? ordered.slice(1) : ordered.slice(0, -1);
+    for (const doc of losers) doomed.add(doc);
+  }
+
+  return doomed.size === 0
+    ? content
+    : content.filter((doc) => !doomed.has(doc));
+}
+
 function getFieldByPath(doc: Record<string, unknown>, path: string): unknown {
   if (!path.includes(".")) return doc[path];
   let current: unknown = doc;
@@ -1084,6 +1126,85 @@ export function createMemoryApplier(migration: MigrationDefinition) {
       reverse: (_state, _operation) => {
         throw new Error(
           `Cannot reverse delete_scoped_multicollection_documents: operation is irreversible`,
+        );
+      },
+    },
+    dedupe_collection_documents: {
+      apply: (state, operation) => {
+        const collection = state.collections[operation.collectionName];
+        if (!collection) {
+          throw new Error(
+            `Collection ${operation.collectionName} does not exist`,
+          );
+        }
+        collection.content = dedupeContent(collection.content, {
+          by: operation.by,
+          keep: operation.keep,
+          candidate: (doc) =>
+            operation.where === undefined || matchesWhere(doc, operation.where),
+          groupPrefix: () => "",
+        });
+        return state;
+      },
+      reverse: (_state, _operation) => {
+        throw new Error(
+          `Cannot reverse dedupe_collection_documents: operation is irreversible`,
+        );
+      },
+    },
+    dedupe_multicollection_documents: {
+      apply: (state, operation) => {
+        const multiCollection =
+          state.multiCollections[operation.collectionName];
+        if (!multiCollection) {
+          throw new Error(
+            `Multi-collection ${operation.collectionName} does not exist`,
+          );
+        }
+        multiCollection.content = dedupeContent(multiCollection.content, {
+          by: operation.by,
+          keep: operation.keep,
+          candidate: (doc) =>
+            doc._type === operation.documentType &&
+            (operation.where === undefined ||
+              matchesWhere(doc, operation.where)),
+          groupPrefix: () => "",
+        });
+        return state;
+      },
+      reverse: (_state, _operation) => {
+        throw new Error(
+          `Cannot reverse dedupe_multicollection_documents: operation is irreversible`,
+        );
+      },
+    },
+    dedupe_scoped_multicollection_documents: {
+      apply: (state, operation) => {
+        const coll = state.scopedMultiCollections[operation.collectionName];
+        if (!coll) {
+          throw new Error(
+            `Scoped multi-collection ${operation.collectionName} does not exist`,
+          );
+        }
+        const scopeSet =
+          operation.scopeFilter && operation.scopeFilter.length > 0
+            ? new Set(operation.scopeFilter)
+            : null;
+        coll.content = dedupeContent(coll.content, {
+          by: operation.by,
+          keep: operation.keep,
+          candidate: (doc) =>
+            doc._type === operation.documentType &&
+            (scopeSet === null || scopeSet.has(doc._scope as string)) &&
+            (operation.where === undefined ||
+              matchesWhere(doc, operation.where)),
+          groupPrefix: (doc) => String(doc._scope),
+        });
+        return state;
+      },
+      reverse: (_state, _operation) => {
+        throw new Error(
+          `Cannot reverse dedupe_scoped_multicollection_documents: operation is irreversible`,
         );
       },
     },

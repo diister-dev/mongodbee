@@ -29,6 +29,11 @@ import { assertLetDoesNotShadowJoinBinding } from "./stage-builder.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
 import { ensureValidator } from "./utils/ensure-validator.ts";
 import { applyScopedMultiCollectionIndexes } from "./indexes-applier.ts";
+import {
+  normalizeTypes,
+  type ResolveTypes,
+  type TypeInput,
+} from "./type-definition.ts";
 import { mongoOperationQueue } from "./operation.ts";
 import { isSchemaManaged } from "./runtime-config.ts";
 import {
@@ -72,7 +77,7 @@ export type ScopedMultiCollectionTypes = Record<
  * @template S - The Valibot schema validating scope values
  */
 export type ScopedMultiCollectionConfig<
-  T extends ScopedMultiCollectionTypes,
+  T extends Record<string, TypeInput>,
   S extends AnySchema,
 > = {
   /**
@@ -557,19 +562,27 @@ export type ScopedMultiCollectionResult<
  * ```
  */
 export async function scopedMultiCollection<
-  const T extends ScopedMultiCollectionTypes,
+  const I extends Record<string, TypeInput>,
   S extends AnySchema,
 >(
   db: Db,
   collectionName: string,
-  config: ScopedMultiCollectionConfig<T, S>,
-): Promise<ScopedMultiCollectionResult<T, S>> {
-  validateConfig(config);
+  config: ScopedMultiCollectionConfig<I, S>,
+): Promise<ScopedMultiCollectionResult<ResolveTypes<I>, S>>;
+export async function scopedMultiCollection<S extends AnySchema>(
+  db: Db,
+  collectionName: string,
+  config: ScopedMultiCollectionConfig<Record<string, TypeInput>, S>,
+): Promise<ScopedMultiCollectionResult<ScopedMultiCollectionTypes, S>> {
+  type T = ScopedMultiCollectionTypes;
+  const normalized = normalizeTypes(config.types ?? {});
+  const types = normalized.fields as T;
+  validateConfig(config.scope, types);
 
   // Per-type schemas, used for insert validation. `_type` is optional with a
   // default of the type name so the user can omit it ; `_id` is optional via
   // dbId (auto-generated) ; `_scope` is required and supplied by the view.
-  const insertSchemas = Object.entries(config.types).reduce(
+  const insertSchemas = Object.entries(types).reduce(
     (acc, [typeName, fields]) => {
       acc[typeName] = v.object({
         _id: dbId(typeName),
@@ -584,7 +597,7 @@ export async function scopedMultiCollection<
 
   // Storage schemas, used to build the MongoDB validator and to parse docs
   // read back from the database. `_type` is a strict literal here.
-  const storageSchemas = Object.entries(config.types).reduce(
+  const storageSchemas = Object.entries(types).reduce(
     (acc, [typeName, fields]) => {
       acc[typeName] = v.object({
         _id: dbId(typeName),
@@ -624,6 +637,7 @@ export async function scopedMultiCollection<
     await applyValidator(db, collectionName, storageUnion);
     await applyScopedMultiCollectionIndexes(collection, storageSchemas, {
       queue: mongoOperationQueue,
+      composites: normalized.indexes,
     });
   }
 
@@ -2175,15 +2189,15 @@ function buildUpdateOps(
   return ops;
 }
 
-function validateConfig<
-  T extends ScopedMultiCollectionTypes,
-  S extends AnySchema,
->(config: ScopedMultiCollectionConfig<T, S>): void {
-  if (!config.scope) {
+function validateConfig(
+  scope: AnySchema | undefined,
+  types: ScopedMultiCollectionTypes,
+): void {
+  if (!scope) {
     throw new Error("scopedMultiCollection: `scope` schema is required");
   }
 
-  const typeNames = Object.keys(config.types);
+  const typeNames = Object.keys(types);
   if (typeNames.length === 0) {
     throw new Error(
       "scopedMultiCollection: `types` must define at least one type",
@@ -2191,7 +2205,7 @@ function validateConfig<
   }
 
   for (const typeName of typeNames) {
-    const fields = config.types[typeName];
+    const fields = types[typeName];
     for (const fieldName of Object.keys(fields)) {
       if (RESERVED_FIELDS.has(fieldName)) {
         throw new Error(

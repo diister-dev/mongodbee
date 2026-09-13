@@ -38,6 +38,7 @@ import type {
   SchemasDefinition,
 } from "../../types.ts";
 import { extractIdPrefix, fnv1a32 } from "../../utils/seed-id.ts";
+import { fieldsOf } from "../../../type-definition.ts";
 import { simplifySchema } from "../../schema-validation.ts";
 import { refId } from "../../../ids.ts";
 import {
@@ -214,16 +215,16 @@ function buildCorrelationPlan(
   };
 
   for (const [name, schema] of Object.entries(schemas.collections ?? {})) {
-    addTarget("collections", name, undefined, schema, null);
+    addTarget("collections", name, undefined, fieldsOf(schema), null);
   }
   for (const [name, types] of Object.entries(schemas.multiCollections ?? {})) {
     for (const [type, fields] of Object.entries(types)) {
-      addTarget("multiCollections", name, type, fields, type);
+      addTarget("multiCollections", name, type, fieldsOf(fields), type);
     }
   }
   for (const [model, types] of Object.entries(schemas.multiModels ?? {})) {
     for (const [type, fields] of Object.entries(types)) {
-      addTarget("multiModels", model, type, fields, type);
+      addTarget("multiModels", model, type, fieldsOf(fields), type);
     }
   }
 
@@ -247,7 +248,7 @@ function buildCorrelationPlan(
       }
     }
     for (const [type, fields] of Object.entries(scoped.types)) {
-      addTarget("scopedMultiCollections", name, type, fields, type);
+      addTarget("scopedMultiCollections", name, type, fieldsOf(fields), type);
       const key = targetKey("scopedMultiCollections", name, type);
       const target = targets.get(key);
       if (target && target.space === scopeSpace) singletons.add(key);
@@ -561,7 +562,7 @@ export function schemasFingerprint(schemas: SchemasDefinition): string {
         const content = (
           entries as NonNullable<SchemasDefinition["collections"]>
         )[name];
-        parts.push(`${bucket}:${name}@${fieldsHash(content)}`);
+        parts.push(`${bucket}:${name}@${fieldsHash(fieldsOf(content))}`);
         continue;
       }
       const types =
@@ -576,7 +577,7 @@ export function schemasFingerprint(schemas: SchemasDefinition): string {
             ];
       const typed = Object.keys(types)
         .sort()
-        .map((type) => `${type}@${fieldsHash(types[type])}`);
+        .map((type) => `${type}@${fieldsHash(fieldsOf(types[type]))}`);
       parts.push(`${bucket}:${name}(${typed.join(",")})`);
     }
   }

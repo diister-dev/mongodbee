@@ -9,7 +9,6 @@
  */
 
 import { DEFAULT_MONGODBEE_CONFIG, type MongodbeeConfig } from "./config.ts";
-import { loadConfig } from "./migration/config/loader.ts";
 
 /**
  * Current runtime configuration
@@ -28,6 +27,7 @@ async function discoverAndLoadConfig(): Promise<void> {
   if (configLoaded) return;
 
   try {
+    const { loadConfig } = await import("./migration/config/loader.ts");
     const loadedConfig = await loadConfig();
     if (loadedConfig) {
       setRuntimeConfig(loadedConfig);

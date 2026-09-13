@@ -18,9 +18,9 @@
  * same namespace, which makes hangs easy to spot.
  */
 
-import process from "node:process";
-
 type Level = "trace" | "debug" | "info" | "warn" | "error";
+
+type EnvHolder = { process?: { env?: Record<string, string | undefined> } };
 
 const LEVEL_ORDER: Record<Level, number> = {
   trace: 10,
@@ -32,9 +32,7 @@ const LEVEL_ORDER: Record<Level, number> = {
 
 function readEnv(name: string): string | undefined {
   try {
-    // `node:process` is the one env surface every target runtime implements —
-    // Deno populates `process.env` too, so this needs no per-runtime branch.
-    const value = process.env[name];
+    const value = (globalThis as EnvHolder).process?.env?.[name];
     if (typeof value === "string" && value !== "") return value;
   } catch {
     // Deno without --allow-env throws on access rather than returning

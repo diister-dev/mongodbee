@@ -21,6 +21,12 @@ import {
   applyMultiCollectionIndexes,
 } from "../../indexes-applier.ts";
 import {
+  fieldsOf,
+  indexesOf,
+  normalizeTypes,
+  type TypeInput,
+} from "../../type-definition.ts";
+import {
   createMetadataSchemas,
   createMultiCollectionInfo,
   discoverMultiCollectionInstances,
@@ -346,12 +352,7 @@ export function createMongodbApplier(
       )) {
         if (await collectionExists(collectionName)) {
           // Update validator
-          const collectionSchema = v.object(
-            schema as Record<
-              string,
-              v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
-            >,
-          );
+          const collectionSchema = v.object(fieldsOf(schema));
           const validator = toMongoValidator(collectionSchema);
           await db.command({
             collMod: collectionName,
@@ -361,7 +362,9 @@ export function createMongodbApplier(
 
           // Synchronize indexes using shared applier
           const collection = db.collection(collectionName);
-          await applyCollectionIndexes(collection, collectionSchema);
+          await applyCollectionIndexes(collection, collectionSchema, {
+            composites: indexesOf(schema),
+          });
         }
       }
     }
@@ -377,10 +380,7 @@ export function createMongodbApplier(
             ([typeName, typeSchema]) =>
               v.object({
                 _type: v.literal(typeName),
-                ...(typeSchema as Record<
-                  string,
-                  v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
-                >),
+                ...fieldsOf(typeSchema),
               }),
           );
 
@@ -413,15 +413,12 @@ export function createMongodbApplier(
               >
             >
           >((acc, [typeName, typeSchema]) => {
-            acc[typeName] = v.object(
-              typeSchema as Record<
-                string,
-                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
-              >,
-            );
+            acc[typeName] = v.object(fieldsOf(typeSchema));
             return acc;
           }, {});
-          await applyMultiCollectionIndexes(collection, schemasPerType);
+          await applyMultiCollectionIndexes(collection, schemasPerType, {
+            composites: normalizeTypes(multiSchema).indexes,
+          });
         }
       }
     }
@@ -442,10 +439,7 @@ export function createMongodbApplier(
           ([typeName, typeSchema]) =>
             v.object({
               _type: v.literal(typeName),
-              ...(typeSchema as Record<
-                string,
-                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
-              >),
+              ...fieldsOf(typeSchema),
             }),
         );
         const allSchemas = [...typeSchemas, ...createMetadataSchemas()];
@@ -456,12 +450,7 @@ export function createMongodbApplier(
         const validator = toMongoValidator(unionSchema);
         const schemasPerType = Object.entries(multiSchema).reduce(
           (acc, [typeName, typeSchema]) => {
-            acc[typeName] = v.object(
-              typeSchema as Record<
-                string,
-                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
-              >,
-            );
+            acc[typeName] = v.object(fieldsOf(typeSchema));
             return acc;
           },
           {} as Record<
@@ -475,6 +464,8 @@ export function createMongodbApplier(
             >
           >,
         );
+
+        const modelComposites = normalizeTypes(multiSchema).indexes;
 
         // `discoverMultiCollectionInstances` only returns existing collections,
         // so the previous per-instance `collectionExists` guard was a redundant
@@ -493,6 +484,7 @@ export function createMongodbApplier(
           await applyMultiCollectionIndexes(
             db.collection(instanceName),
             schemasPerType,
+            { composites: modelComposites },
           );
           syncReporter.add(1);
         });
@@ -586,6 +578,59 @@ export function createMongodbApplier(
     return result.deletedCount;
   }
 
+  async function dedupeDocuments(
+    collectionName: string,
+    plan: {
+      clauses: Record<string, unknown>[];
+      by: readonly string[];
+      keep: "first" | "last";
+      groupOnScope: boolean;
+      operationType: MigrationRule["type"];
+    },
+  ): Promise<number> {
+    const presence = plan.by.map((path) => ({ [path]: { $exists: true } }));
+    const groupKey: Record<string, string> = {};
+    if (plan.groupOnScope) groupKey.scope = "$_scope";
+    plan.by.forEach((path, position) => {
+      groupKey[`k${position}`] = `$${path}`;
+    });
+
+    const groups = await db
+      .collection(collectionName)
+      .aggregate<{ ids: unknown[] }>([
+        { $match: { $and: [...plan.clauses, ...presence] } },
+        { $sort: { _id: 1 } },
+        { $group: { _id: groupKey, ids: { $push: "$_id" }, n: { $sum: 1 } } },
+        { $match: { n: { $gt: 1 } } },
+      ])
+      .toArray();
+
+    const doomed: unknown[] = [];
+    for (const group of groups) {
+      doomed.push(
+        ...(plan.keep === "first"
+          ? group.ids.slice(1)
+          : group.ids.slice(0, -1)),
+      );
+    }
+
+    const reporter = makeReporter(
+      plan.operationType,
+      collectionName,
+      doomed.length,
+    );
+    const BATCH = 500;
+    for (let start = 0; start < doomed.length; start += BATCH) {
+      const filter: Record<string, unknown> = {
+        _id: { $in: doomed.slice(start, start + BATCH) },
+      };
+      const result = await db.collection(collectionName).deleteMany(filter);
+      reporter.add(result.deletedCount);
+    }
+    reporter.done();
+    return doomed.length;
+  }
+
   async function transformDocuments(
     collectionName: string,
     filter: Record<string, unknown>,
@@ -667,12 +712,7 @@ export function createMongodbApplier(
 
         const collOptions: Record<string, unknown> = {};
         if (operation.schema) {
-          const wrappedSchema = v.object(
-            operation.schema as Record<
-              string,
-              v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
-            >,
-          );
+          const wrappedSchema = v.object(fieldsOf(operation.schema));
           collOptions.validator = toMongoValidator(wrappedSchema);
         }
 
@@ -687,13 +727,10 @@ export function createMongodbApplier(
           // If collection exists, still apply indexes && update validator if schema provided
           if (operation.schema) {
             const collection = db.collection(operation.collectionName);
-            const collectionSchema = v.object(
-              operation.schema as Record<
-                string,
-                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
-              >,
-            );
-            await applyCollectionIndexes(collection, collectionSchema);
+            const collectionSchema = v.object(fieldsOf(operation.schema));
+            await applyCollectionIndexes(collection, collectionSchema, {
+              composites: indexesOf(operation.schema),
+            });
 
             await db.command({
               collMod: operation.collectionName,
@@ -707,13 +744,10 @@ export function createMongodbApplier(
 
         if (operation.schema) {
           const collection = db.collection(operation.collectionName);
-          const collectionSchema = v.object(
-            operation.schema as Record<
-              string,
-              v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
-            >,
-          );
-          await applyCollectionIndexes(collection, collectionSchema);
+          const collectionSchema = v.object(fieldsOf(operation.schema));
+          await applyCollectionIndexes(collection, collectionSchema, {
+            composites: indexesOf(operation.schema),
+          });
         }
       },
       reverse: async (operation) => {
@@ -765,10 +799,7 @@ export function createMongodbApplier(
           ([typeName, typeSchema]) =>
             v.object({
               _type: v.literal(typeName),
-              ...(typeSchema as Record<
-                string,
-                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
-              >),
+              ...fieldsOf(typeSchema),
             }),
         );
 
@@ -804,12 +835,7 @@ export function createMongodbApplier(
         const collection = db.collection(operation.collectionName);
         const schemasPerType = Object.entries(operation.schema).reduce(
           (acc, [typeName, typeSchema]) => {
-            acc[typeName] = v.object(
-              typeSchema as Record<
-                string,
-                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
-              >,
-            );
+            acc[typeName] = v.object(fieldsOf(typeSchema));
             return acc;
           },
           {} as Record<
@@ -823,7 +849,9 @@ export function createMongodbApplier(
             >
           >,
         );
-        await applyMultiCollectionIndexes(collection, schemasPerType);
+        await applyMultiCollectionIndexes(collection, schemasPerType, {
+          composites: normalizeTypes(operation.schema).indexes,
+        });
       },
       reverse: async (operation) => {
         if (
@@ -855,10 +883,7 @@ export function createMongodbApplier(
           ([typeName, typeSchema]) =>
             v.object({
               _type: v.literal(typeName),
-              ...(typeSchema as Record<
-                string,
-                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
-              >),
+              ...fieldsOf(typeSchema),
             }),
         );
 
@@ -916,12 +941,7 @@ export function createMongodbApplier(
         const multiCollection = db.collection(operation.collectionName);
         const schemasPerType = Object.entries(operation.schema).reduce(
           (acc, [typeName, typeSchema]) => {
-            acc[typeName] = v.object(
-              typeSchema as Record<
-                string,
-                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
-              >,
-            );
+            acc[typeName] = v.object(fieldsOf(typeSchema));
             return acc;
           },
           {} as Record<
@@ -935,7 +955,9 @@ export function createMongodbApplier(
             >
           >,
         );
-        await applyMultiCollectionIndexes(multiCollection, schemasPerType);
+        await applyMultiCollectionIndexes(multiCollection, schemasPerType, {
+          composites: normalizeTypes(operation.schema).indexes,
+        });
       },
       reverse: async (operation) => {
         if (
@@ -987,10 +1009,7 @@ export function createMongodbApplier(
           ([typeName, typeSchema]) =>
             v.object({
               _type: v.literal(typeName),
-              ...(typeSchema as Record<
-                string,
-                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
-              >),
+              ...fieldsOf(typeSchema),
             }),
         );
 
@@ -1025,12 +1044,7 @@ export function createMongodbApplier(
         const modelCollection = db.collection(operation.collectionName);
         const schemasPerType = Object.entries(modelSchema).reduce(
           (acc, [typeName, typeSchema]) => {
-            acc[typeName] = v.object(
-              typeSchema as Record<
-                string,
-                v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
-              >,
-            );
+            acc[typeName] = v.object(fieldsOf(typeSchema));
             return acc;
           },
           {} as Record<
@@ -1044,7 +1058,9 @@ export function createMongodbApplier(
             >
           >,
         );
-        await applyMultiCollectionIndexes(modelCollection, schemasPerType);
+        await applyMultiCollectionIndexes(modelCollection, schemasPerType, {
+          composites: normalizeTypes(modelSchema).indexes,
+        });
       },
       reverse: async (operation) => {
         const collection = db.collection(operation.collectionName);
@@ -1064,10 +1080,7 @@ export function createMongodbApplier(
             ([typeName, typeSchema]) =>
               v.object({
                 _type: v.literal(typeName),
-                ...(typeSchema as Record<
-                  string,
-                  v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
-                >),
+                ...fieldsOf(typeSchema),
               }),
           );
 
@@ -2016,13 +2029,11 @@ export function createMongodbApplier(
           );
         }
         const collection = db.collection(operation.collectionName);
-        const collectionSchema = v.object(
-          operation.schema as Record<
-            string,
-            v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
-          >,
-        );
-        await applyCollectionIndexes(collection, collectionSchema);
+        const source = operation.schema as TypeInput;
+        const collectionSchema = v.object(fieldsOf(source));
+        await applyCollectionIndexes(collection, collectionSchema, {
+          composites: indexesOf(source),
+        });
       },
       reverse: (_operation) => {
         // Index updates are idempotent, no reversal needed
@@ -2173,6 +2184,91 @@ export function createMongodbApplier(
       reverse: async (_operation) => {
         throw new Error(
           `Cannot reverse delete_scoped_multicollection_documents: operation is irreversible`,
+        );
+      },
+    },
+
+    dedupe_collection_documents: {
+      apply: async (operation) => {
+        if (
+          opts.strictValidation &&
+          !(await collectionExists(operation.collectionName))
+        ) {
+          throw new Error(
+            `Collection ${operation.collectionName} does not exist`,
+          );
+        }
+        await dedupeDocuments(operation.collectionName, {
+          clauses: operation.where ? [operation.where] : [],
+          by: operation.by,
+          keep: operation.keep,
+          groupOnScope: false,
+          operationType: operation.type,
+        });
+      },
+      reverse: async (_operation) => {
+        throw new Error(
+          `Cannot reverse dedupe_collection_documents: operation is irreversible`,
+        );
+      },
+    },
+
+    dedupe_multicollection_documents: {
+      apply: async (operation) => {
+        if (
+          opts.strictValidation &&
+          !(await collectionExists(operation.collectionName))
+        ) {
+          throw new Error(
+            `Multi-collection ${operation.collectionName} does not exist`,
+          );
+        }
+        await dedupeDocuments(operation.collectionName, {
+          clauses: [
+            ...(operation.where ? [operation.where] : []),
+            { _type: operation.documentType },
+          ],
+          by: operation.by,
+          keep: operation.keep,
+          groupOnScope: false,
+          operationType: operation.type,
+        });
+      },
+      reverse: async (_operation) => {
+        throw new Error(
+          `Cannot reverse dedupe_multicollection_documents: operation is irreversible`,
+        );
+      },
+    },
+
+    dedupe_scoped_multicollection_documents: {
+      apply: async (operation) => {
+        if (
+          opts.strictValidation &&
+          !(await collectionExists(operation.collectionName))
+        ) {
+          throw new Error(
+            `Scoped multi-collection ${operation.collectionName} does not exist`,
+          );
+        }
+        const clauses: Record<string, unknown>[] = [
+          ...(operation.where ? [operation.where] : []),
+          { _type: operation.documentType },
+        ];
+        if (operation.scopeFilter && operation.scopeFilter.length > 0) {
+          clauses.push({ _scope: { $in: [...operation.scopeFilter] } });
+        }
+        await dedupeDocuments(operation.collectionName, {
+          clauses,
+          by: operation.by,
+          keep: operation.keep,
+          groupOnScope: true,
+          operationType: operation.type,
+        });
+      },
+      reverse: async (_operation) => {
+        throw new Error(
+          `Cannot reverse dedupe_scoped_multicollection_documents: operation is irreversible`,
         );
       },
     },

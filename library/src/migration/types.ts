@@ -9,6 +9,7 @@
  */
 
 import type * as v from "../schema.ts";
+import type { TypeDefinition } from "../type-definition.ts";
 
 /**
  * Represents the different properties that can be applied to a migration
@@ -29,7 +30,7 @@ export type MigrationProperty =
 export type CreateCollectionRule = {
   type: "create_collection";
   collectionName: string;
-  schema: SchemaContent;
+  schema: TypeSource;
 };
 
 export type CreateMultiCollectionRule = {
@@ -304,6 +305,41 @@ export type DeleteScopedMultiCollectionDocumentsRule = {
   scopeFilter?: readonly string[];
 };
 
+export type DedupeKeep = "first" | "last";
+
+export interface DedupeOptions {
+  by: readonly string[];
+  keep?: DedupeKeep;
+  where?: Record<string, unknown>;
+}
+
+export type DedupeCollectionDocumentsRule = {
+  type: "dedupe_collection_documents";
+  collectionName: string;
+  by: readonly string[];
+  keep: DedupeKeep;
+  where?: Record<string, unknown>;
+};
+
+export type DedupeMultiCollectionDocumentsRule = {
+  type: "dedupe_multicollection_documents";
+  collectionName: string;
+  documentType: string;
+  by: readonly string[];
+  keep: DedupeKeep;
+  where?: Record<string, unknown>;
+};
+
+export type DedupeScopedMultiCollectionDocumentsRule = {
+  type: "dedupe_scoped_multicollection_documents";
+  collectionName: string;
+  documentType: string;
+  by: readonly string[];
+  keep: DedupeKeep;
+  where?: Record<string, unknown>;
+  scopeFilter?: readonly string[];
+};
+
 /**
  * Rule for renaming a type in a multi-collection or multi-model
  *
@@ -468,6 +504,10 @@ export type MigrationRule =
   | DeleteMultiModelInstanceDocumentsRule
   | DeleteMultiModelInstancesDocumentsRule
   | DeleteScopedMultiCollectionDocumentsRule
+  // Dedupe documents
+  | DedupeCollectionDocumentsRule
+  | DedupeMultiCollectionDocumentsRule
+  | DedupeScopedMultiCollectionDocumentsRule
   // Rename type
   | RenameMultiCollectionTypeRule
   | RenameMultiModelInstancesTypeRule
@@ -554,6 +594,7 @@ export interface CollectionBuilder {
    */
   transform(rule: TransformRule): CollectionBuilder;
   deleteWhere(where: Record<string, unknown>): CollectionBuilder;
+  dedupe(options: DedupeOptions): CollectionBuilder;
 
   /**
    * Finishes configuring this collection and returns to the main builder
@@ -599,6 +640,7 @@ export interface MultiCollectionTypeBuilder {
   transform(rule: TransformRule): MultiCollectionTypeBuilder;
 
   deleteWhere(where: Record<string, unknown>): MultiCollectionTypeBuilder;
+  dedupe(options: DedupeOptions): MultiCollectionTypeBuilder;
 
   /**
    * Finishes configuring this type and returns to the multi-collection builder
@@ -754,6 +796,9 @@ export interface ScopedMultiCollectionTypeBuilder {
   deleteWhere(
     where: Record<string, unknown>,
     options?: { readonly scopeFilter?: readonly string[] },
+  ): ScopedMultiCollectionTypeBuilder;
+  dedupe(
+    options: DedupeOptions & { readonly scopeFilter?: readonly string[] },
   ): ScopedMultiCollectionTypeBuilder;
 
   /** Finishes configuring this type and returns to the scoped builder. */
@@ -933,7 +978,8 @@ export type SchemaContent = Record<
   string,
   v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
 >;
-export type MultiSchema = Record<string, SchemaContent>;
+export type TypeSource = SchemaContent | TypeDefinition;
+export type MultiSchema = Record<string, TypeSource>;
 
 /**
  * Schema shape for a scoped multi-collection inside migrations: a single
@@ -953,7 +999,7 @@ export type ScopedMultiSchema = {
  */
 export type SchemasDefinition = {
   /** Schema definitions for regular collections */
-  collections?: Record<string, SchemaContent>;
+  collections?: Record<string, TypeSource>;
 
   /** Schema definitions for regular multi-collections */
   multiCollections?: Record<

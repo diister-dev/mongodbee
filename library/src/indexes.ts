@@ -6,6 +6,16 @@ import {
 import * as v from "./schema.ts";
 import type * as m from "mongodb";
 
+export {
+  asc,
+  desc,
+  type FieldRef,
+  type FieldsOf,
+  index,
+  IndexDeclaration,
+  unique,
+} from "./index-builder.ts";
+
 /**
  * Symbol used to mark a field as requiring a unique index
  * @internal
@@ -44,6 +54,30 @@ export type IndexMetadata = {
    */
   global?: boolean;
 };
+
+export type CompositeIndexDescriptor = {
+  name?: string;
+  key: Record<string, 1 | -1>;
+  unique?: boolean;
+  insensitive?: boolean;
+  collation?: m.CollationOptions;
+  expireAfterSeconds?: number;
+  partialFilterExpression?: m.Document;
+  global?: boolean;
+};
+
+export function deriveCompositeIndexName(
+  descriptor: CompositeIndexDescriptor,
+  sanitizePath: (path: string) => string,
+): string {
+  if (descriptor.name) return sanitizePath(descriptor.name);
+  return Object.entries(descriptor.key)
+    .map(
+      ([path, direction]) =>
+        `${sanitizePath(path)}_${direction < 0 ? "desc" : "asc"}`,
+    )
+    .join("_");
+}
 
 export type IndexDatabase = {
   unique?: boolean;

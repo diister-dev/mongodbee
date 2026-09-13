@@ -20,13 +20,14 @@ import type {
   DatabaseState,
   MockGenerationFailure,
   MultiSchema,
-  SchemaContent,
   SchemasDefinition,
   ScopedMultiSchema,
+  TypeSource,
 } from "../../types.ts";
 import type { MockGenerationConfig } from "./config.ts";
 import { INSTANCES_PER_MODEL } from "./config.ts";
 import { generateMockDocument } from "./generator.ts";
+import { fieldsOf } from "../../../type-definition.ts";
 import type { CorrelationSession } from "./correlation.ts";
 
 /**
@@ -140,7 +141,7 @@ function shouldPopulate(
  */
 function appendPlainDocs(
   content: Record<string, unknown>[],
-  schema: SchemaContent,
+  schema: TypeSource,
   count: number,
   ctx: MockPopulateContext,
   collectionName: string,
@@ -158,7 +159,7 @@ function appendPlainDocs(
     try {
       content.push(
         generateMockDocument(
-          schema,
+          fieldsOf(schema),
           ctx.session.docOptions({
             bucket: "collections",
             collection: collectionName,
@@ -239,7 +240,7 @@ function appendTypedBatches(
       try {
         content.push({
           ...generateMockDocument(
-            types[typeName],
+            fieldsOf(types[typeName]),
             ctx.session.docOptions({
               bucket,
               collection: planCollection,
@@ -309,7 +310,7 @@ function appendTypedDocs(
     try {
       content.push({
         ...generateMockDocument(
-          types[typeName],
+          fieldsOf(types[typeName]),
           ctx.session.docOptions({
             bucket,
             collection: planCollection,
@@ -389,7 +390,7 @@ function appendScopedBatches(
       try {
         content.push({
           ...generateMockDocument(
-            scopedSchema.types[typeName],
+            fieldsOf(scopedSchema.types[typeName]),
             ctx.session.docOptions({
               bucket: "scopedMultiCollections",
               collection: collectionName,
@@ -480,7 +481,7 @@ function appendScopedDocs(
     try {
       content.push({
         ...generateMockDocument(
-          scopedSchema.types[typeName],
+          fieldsOf(scopedSchema.types[typeName]),
           ctx.session.docOptions({
             bucket: "scopedMultiCollections",
             collection: collectionName,

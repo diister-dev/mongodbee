@@ -7,6 +7,12 @@ import { getSessionContext } from "./session.ts";
 import { ensureValidator } from "./utils/ensure-validator.ts";
 import { mongoOperationQueue } from "./operation.ts";
 import { applyCollectionIndexes } from "./indexes-applier.ts";
+import {
+  fieldsOf,
+  indexesOf,
+  type ObjectLikeSchema,
+  type TypeDefinition,
+} from "./type-definition.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
 import { isSchemaManaged } from "./runtime-config.ts";
 import {
@@ -419,9 +425,29 @@ export async function collection<
   collectionName: string,
   collectionSchema: T,
   options?: m.CollectionOptions & CollectionOptions,
+): Promise<CollectionResult<T>>;
+export async function collection<const S extends ObjectLikeSchema>(
+  db: Db,
+  collectionName: string,
+  definition: TypeDefinition<S>,
+  options?: m.CollectionOptions & CollectionOptions,
+): Promise<CollectionResult<S["entries"]>>;
+export async function collection<
+  const T extends Record<
+    string,
+    v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+  >,
+>(
+  db: Db,
+  collectionName: string,
+  input: T | TypeDefinition,
+  options?: m.CollectionOptions & CollectionOptions,
 ): Promise<CollectionResult<T>> {
   type TInput = v.InferInput<v.ObjectSchema<T, undefined>>;
   type TOutput = WithId<v.InferOutput<v.ObjectSchema<T, undefined>>>;
+
+  const collectionSchema = fieldsOf(input) as T;
+  const composites = indexesOf(input);
 
   const schema = v.object({
     _id: v.optional(v.any()),
@@ -447,6 +473,7 @@ export async function collection<
   async function applyIndexes() {
     await applyCollectionIndexes(collection, schema, {
       queue: mongoOperationQueue,
+      composites,
     });
   }
 

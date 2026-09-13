@@ -9,17 +9,12 @@
  * @module
  */
 
-import type * as v from "./schema.ts";
-
-/**
- * Base schema type constraint
- */
-type AnySchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
+import { fieldsOf, type TypeInput } from "./type-definition.ts";
 
 /**
  * Schema definition for a multi-collection model
  */
-export type MultiModelSchema = Record<string, Record<string, AnySchema>>;
+export type MultiModelSchema = Record<string, TypeInput>;
 
 /**
  * Multi-collection model metadata
@@ -147,7 +142,7 @@ export function defineModel<
     getSummary() {
       const types = Object.keys(this.schema);
       const fieldCount = types.reduce((acc, type) => {
-        return acc + Object.keys(this.schema[type]).length;
+        return acc + Object.keys(fieldsOf(this.schema[type])).length;
       }, 0);
 
       return {

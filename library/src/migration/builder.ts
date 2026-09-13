@@ -58,6 +58,30 @@ import type {
   SeedCollectionRule,
   TransformCollectionRule,
 } from "./types.ts";
+import { fieldsOf, type TypeInput } from "../type-definition.ts";
+
+function fieldsOrUndefined<I extends TypeInput>(
+  source: I | undefined,
+): ReturnType<typeof fieldsOf<I>> | undefined {
+  return source === undefined ? undefined : fieldsOf(source);
+}
+
+const DEDUPE_RESERVED_KEYS: readonly string[] = ["_id", "_type", "_scope"];
+
+function dedupeKeys(by: readonly string[], context: string): readonly string[] {
+  if (by.length === 0) {
+    throw new Error(`${context}: dedupe needs at least one key in "by"`);
+  }
+  for (const path of by) {
+    const root = path.split(".")[0];
+    if (DEDUPE_RESERVED_KEYS.includes(root)) {
+      throw new Error(
+        `${context}: "${path}" cannot be a dedupe key; the applier groups on it already`,
+      );
+    }
+  }
+  return [...by];
+}
 
 /**
  * Options for creating a migration builder
@@ -116,7 +140,9 @@ function createCollectionBuilder(
 ): CollectionBuilder {
   const builder: CollectionBuilder = {
     seed(documents) {
-      const collectionSchema = options.schemas?.collections?.[collectionName];
+      const collectionSchema = fieldsOrUndefined(
+        options.schemas?.collections?.[collectionName],
+      );
       if (!collectionSchema) {
         throw new Error(
           `Cannot seed collection ${collectionName}: schema not found in migration.schemas.collections`,
@@ -134,9 +160,12 @@ function createCollectionBuilder(
     },
 
     transform(rule) {
-      const collectionSchema = options.schemas?.collections?.[collectionName];
-      const parentCollectionSchema =
-        options.parentSchemas?.collections?.[collectionName];
+      const collectionSchema = fieldsOrUndefined(
+        options.schemas?.collections?.[collectionName],
+      );
+      const parentCollectionSchema = fieldsOrUndefined(
+        options.parentSchemas?.collections?.[collectionName],
+      );
 
       if (!collectionSchema) {
         throw new Error(
@@ -178,6 +207,18 @@ function createCollectionBuilder(
       return builder;
     },
 
+    dedupe(options) {
+      state.operations.push({
+        type: "dedupe_collection_documents",
+        collectionName,
+        by: dedupeKeys(options.by, `collection "${collectionName}"`),
+        keep: options.keep ?? "first",
+        ...(options.where ? { where: options.where } : {}),
+      });
+      state.mark({ type: "irreversible" });
+      return builder;
+    },
+
     end() {
       return createMigrationBuilder(state, options);
     },
@@ -198,8 +239,9 @@ function createMultiCollectionTypeBuilder(
 ): MultiCollectionTypeBuilder {
   const builder: MultiCollectionTypeBuilder = {
     seed(documents) {
-      const documentSchema =
-        options.schemas?.multiCollections?.[collectionName]?.[documentType];
+      const documentSchema = fieldsOrUndefined(
+        options.schemas?.multiCollections?.[collectionName]?.[documentType],
+      );
       if (!documentSchema) {
         throw new Error(
           `Cannot seed document type "${documentType}" in multi-collection "${collectionName}": schema not found in migration.schemas.multiCollections`,
@@ -218,14 +260,16 @@ function createMultiCollectionTypeBuilder(
 
     transform(rule) {
       // Extract schema for this specific type from options
-      const typeSchema =
-        options.schemas?.multiCollections?.[collectionName]?.[documentType];
+      const typeSchema = fieldsOrUndefined(
+        options.schemas?.multiCollections?.[collectionName]?.[documentType],
+      );
 
       // Extract parent schema if available
-      const parentTypeSchema =
+      const parentTypeSchema = fieldsOrUndefined(
         options.parentSchemas?.multiCollections?.[collectionName]?.[
           documentType
-        ];
+        ],
+      );
 
       if (!typeSchema) {
         throw new Error(
@@ -269,6 +313,21 @@ function createMultiCollectionTypeBuilder(
         collectionName,
         documentType,
         where,
+      });
+      state.mark({ type: "irreversible" });
+      return builder;
+    },
+
+    dedupe(options) {
+      const context = `multiCollection "${collectionName}" type "${documentType}"`;
+      if (options.where) assertWhereKeys(options.where, ["_type"], context);
+      state.operations.push({
+        type: "dedupe_multicollection_documents",
+        collectionName,
+        documentType,
+        by: dedupeKeys(options.by, context),
+        keep: options.keep ?? "first",
+        ...(options.where ? { where: options.where } : {}),
       });
       state.mark({ type: "irreversible" });
       return builder;
@@ -362,8 +421,9 @@ function createMultiModelInstancesBuilder(
 
     deleteType(typeName) {
       // Get parent schema for this type (needed for down migration)
-      const parentTypeSchema =
-        options.parentSchemas?.multiModels?.[modelType]?.[typeName];
+      const parentTypeSchema = fieldsOrUndefined(
+        options.parentSchemas?.multiModels?.[modelType]?.[typeName],
+      );
 
       state.operations.push({
         type: "delete_multimodel_instances_type",
@@ -380,12 +440,14 @@ function createMultiModelInstancesBuilder(
 
     renameType(oldTypeName, newTypeName) {
       // Get the new schema for the renamed type
-      const typeSchema =
-        options.schemas?.multiModels?.[modelType]?.[newTypeName];
+      const typeSchema = fieldsOrUndefined(
+        options.schemas?.multiModels?.[modelType]?.[newTypeName],
+      );
 
       // Get parent schema (old type name)
-      const parentTypeSchema =
-        options.parentSchemas?.multiModels?.[modelType]?.[oldTypeName];
+      const parentTypeSchema = fieldsOrUndefined(
+        options.parentSchemas?.multiModels?.[modelType]?.[oldTypeName],
+      );
 
       if (!typeSchema) {
         throw new Error(
@@ -423,8 +485,9 @@ function createMultiModelInstanceTypeBuilder(
 ): MultiModelInstanceTypeBuilder {
   const builder: MultiModelInstanceTypeBuilder = {
     seed(documents) {
-      const documentSchema =
-        options.schemas?.multiModels?.[modelType]?.[documentType];
+      const documentSchema = fieldsOrUndefined(
+        options.schemas?.multiModels?.[modelType]?.[documentType],
+      );
       if (!documentSchema) {
         throw new Error(
           `Cannot seed document type "${documentType}" in multi-model instance "${collectionName}" (model: ${modelType}): schema not found in migration.schemas.multiModels`,
@@ -444,12 +507,14 @@ function createMultiModelInstanceTypeBuilder(
 
     transform(rule) {
       // Extract schema for this specific type from options
-      const typeSchema =
-        options.schemas?.multiModels?.[modelType]?.[documentType];
+      const typeSchema = fieldsOrUndefined(
+        options.schemas?.multiModels?.[modelType]?.[documentType],
+      );
 
       // Extract parent schema if available
-      const parentTypeSchema =
-        options.parentSchemas?.multiModels?.[modelType]?.[documentType];
+      const parentTypeSchema = fieldsOrUndefined(
+        options.parentSchemas?.multiModels?.[modelType]?.[documentType],
+      );
 
       if (!typeSchema) {
         throw new Error(
@@ -517,8 +582,9 @@ function createMultiModelInstancesTypeBuilder(
 ): MultiModelInstancesTypeBuilder {
   const builder: MultiModelInstancesTypeBuilder = {
     seed(documents) {
-      const documentSchema =
-        options.schemas?.multiModels?.[modelType]?.[documentType];
+      const documentSchema = fieldsOrUndefined(
+        options.schemas?.multiModels?.[modelType]?.[documentType],
+      );
       if (!documentSchema) {
         throw new Error(
           `Cannot seed document type "${documentType}" in multi-model instances (model: ${modelType}): schema not found in migration.schemas.multiModels`,
@@ -537,12 +603,14 @@ function createMultiModelInstancesTypeBuilder(
 
     transform(rule) {
       // Extract schema for this specific type from options
-      const typeSchema =
-        options.schemas?.multiModels?.[modelType]?.[documentType];
+      const typeSchema = fieldsOrUndefined(
+        options.schemas?.multiModels?.[modelType]?.[documentType],
+      );
 
       // Extract parent schema if available
-      const parentTypeSchema =
-        options.parentSchemas?.multiModels?.[modelType]?.[documentType];
+      const parentTypeSchema = fieldsOrUndefined(
+        options.parentSchemas?.multiModels?.[modelType]?.[documentType],
+      );
 
       if (!typeSchema) {
         throw new Error(
@@ -620,7 +688,7 @@ function createScopedMultiCollectionTypeBuilder(
           `migration.schemas.scopedMultiCollections`,
       );
     }
-    return schema;
+    return fieldsOf(schema);
   }
 
   const builder: ScopedMultiCollectionTypeBuilder = {
@@ -638,9 +706,10 @@ function createScopedMultiCollectionTypeBuilder(
 
     transform(rule) {
       const schema = typeSchema();
-      const parentSchema =
+      const parentSchema = fieldsOrUndefined(
         options.parentSchemas?.scopedMultiCollections?.[collectionName]
-          ?.types?.[documentType];
+          ?.types?.[documentType],
+      );
 
       state.operations.push({
         type: "transform_scoped_multicollection_type",
@@ -678,6 +747,24 @@ function createScopedMultiCollectionTypeBuilder(
       return builder;
     },
 
+    dedupe(options) {
+      const context = `scopedMultiCollection "${collectionName}" type "${documentType}"`;
+      if (options.where) {
+        assertWhereKeys(options.where, ["_type", "_scope"], context);
+      }
+      state.operations.push({
+        type: "dedupe_scoped_multicollection_documents",
+        collectionName,
+        documentType,
+        by: dedupeKeys(options.by, context),
+        keep: options.keep ?? "first",
+        ...(options.where ? { where: options.where } : {}),
+        ...(options.scopeFilter ? { scopeFilter: options.scopeFilter } : {}),
+      });
+      state.mark({ type: "irreversible" });
+      return builder;
+    },
+
     end() {
       return parentBuilder;
     },
@@ -706,9 +793,10 @@ function createScopedMultiCollectionBuilder(
       );
     },
     deleteType(typeName) {
-      const parentTypeSchema =
+      const parentTypeSchema = fieldsOrUndefined(
         options.parentSchemas?.scopedMultiCollections?.[collectionName]
-          ?.types?.[typeName];
+          ?.types?.[typeName],
+      );
 
       state.operations.push({
         type: "delete_scoped_multicollection_type",
@@ -877,7 +965,7 @@ function createMigrationBuilder(
         options.schemas?.scopedMultiCollections?.[targetName] !== undefined;
       const targetIdSchema = targetIsTyped
         ? undefined
-        : options.schemas?.collections?.[targetName]?._id;
+        : fieldsOrUndefined(options.schemas?.collections?.[targetName])?._id;
 
       state.operations.push({
         type: "flow",
@@ -918,7 +1006,9 @@ function createMigrationBuilder(
 
     updateIndexes(collectionName) {
       // Extract schema for this collection from options
-      const collectionSchema = options.schemas?.collections?.[collectionName];
+      const collectionSchema = fieldsOrUndefined(
+        options.schemas?.collections?.[collectionName],
+      );
 
       if (!collectionSchema) {
         throw new Error(
@@ -1044,7 +1134,10 @@ export function getIrreversibleOperations(
       op.type === "delete_collection_documents" ||
       op.type === "delete_multimodel_instance_documents" ||
       op.type === "delete_multimodel_instances_documents" ||
-      op.type === "delete_scoped_multicollection_documents",
+      op.type === "delete_scoped_multicollection_documents" ||
+      op.type === "dedupe_collection_documents" ||
+      op.type === "dedupe_multicollection_documents" ||
+      op.type === "dedupe_scoped_multicollection_documents",
   );
 }
 
@@ -1147,6 +1240,9 @@ export function getMigrationSummary(state: MigrationState): {
       case "delete_multimodel_instance_documents":
       case "delete_multimodel_instances_documents":
       case "delete_scoped_multicollection_documents":
+      case "dedupe_collection_documents":
+      case "dedupe_multicollection_documents":
+      case "dedupe_scoped_multicollection_documents":
       case "delete_multicollection_type":
       case "delete_multimodel_instances_type":
       case "delete_scoped_multicollection_type":

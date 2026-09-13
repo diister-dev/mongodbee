@@ -60,6 +60,15 @@ import { getAppliedMigrationIds, getLastAppliedMigration } from "./state.ts";
 import { loadConfig } from "./config/loader.ts";
 import * as path from "node:path";
 import { extractIndexes, keyEqual, normalizeIndexOptions } from "../indexes.ts";
+import {
+  COMPOSITE_INDEX_MARKER,
+  projectComposites,
+} from "../indexes-applier.ts";
+import {
+  indexesOf,
+  isTypeDefinition,
+  type TypeInput,
+} from "../type-definition.ts";
 import { sanitizePathName } from "../schema-navigator.ts";
 import * as v from "../schema.ts";
 
@@ -323,17 +332,25 @@ async function validateCollectionIndexes(
     const currentIndexes = await collection.indexes();
 
     // If schema is not an ObjectSchema, wrap it
-    const objectSchema =
-      (schema as any).type === "object"
+    const objectSchema = isTypeDefinition(schema)
+      ? (schema.schema as v.ObjectSchema<any, any>)
+      : (schema as any).type === "object"
         ? (schema as v.ObjectSchema<any, any>)
         : v.object(schema as any);
 
     const expectedIndexes = extractIndexes(objectSchema);
+    const expectedComposites = projectComposites(
+      indexesOf(schema as TypeInput),
+      "collection",
+    );
 
     // Build a set of expected index names
     const expectedIndexNames = new Set<string>();
     for (const index of expectedIndexes) {
       expectedIndexNames.add(sanitizePathName(index.path));
+    }
+    for (const composite of expectedComposites) {
+      expectedIndexNames.add(composite.name);
     }
 
     // Get all possible field paths from schema to detect mongodbee indexes
@@ -371,8 +388,12 @@ async function validateCollectionIndexes(
       if (!indexName || indexName === "_id_") continue;
 
       const isSchemaField = allSchemaPaths.has(indexName);
+      const isComposite = indexName.startsWith(COMPOSITE_INDEX_MARKER);
 
-      if (isSchemaField && !expectedIndexNames.has(indexName)) {
+      if (
+        (isSchemaField || isComposite) &&
+        !expectedIndexNames.has(indexName)
+      ) {
         issues.push({
           collection: collectionName,
           path: indexName,
@@ -437,6 +458,52 @@ async function validateCollectionIndexes(
         }
       }
     }
+
+    for (const composite of expectedComposites) {
+      const existingIndex = currentIndexes.find(
+        (i) => i.name === composite.name,
+      );
+      const label = composite.name.slice(COMPOSITE_INDEX_MARKER.length);
+      const desiredOptions = {
+        unique: composite.options.unique,
+        collation: composite.options.collation,
+        partialFilterExpression: composite.options.partialFilterExpression,
+      };
+
+      if (!existingIndex) {
+        issues.push({
+          collection: collectionName,
+          path: label,
+          type: "missing",
+          expected: desiredOptions,
+          description: `Index "${label}" is declared on the type but missing in database`,
+        });
+        continue;
+      }
+
+      const existingNorm = normalizeIndexOptions(existingIndex);
+      const desiredNorm = normalizeIndexOptions(desiredOptions);
+      if (
+        existingNorm.unique !== desiredNorm.unique ||
+        existingNorm.collation !== desiredNorm.collation ||
+        existingNorm.partialFilterExpression !==
+          desiredNorm.partialFilterExpression ||
+        !keyEqual(existingIndex.key || {}, composite.key)
+      ) {
+        issues.push({
+          collection: collectionName,
+          path: label,
+          type: "outdated",
+          expected: desiredOptions,
+          current: {
+            unique: existingIndex.unique,
+            collation: existingIndex.collation,
+            partialFilterExpression: existingIndex.partialFilterExpression,
+          },
+          description: `Index "${label}" exists but has different configuration than the type declares`,
+        });
+      }
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     issues.push({
@@ -469,11 +536,15 @@ async function validateAllIndexes(
     allIssues.push(...issues);
 
     // Count valid indexes (expected indexes minus issues for this collection)
-    const objectSchema =
-      (schema as any).type === "object"
+    const objectSchema = isTypeDefinition(schema)
+      ? (schema.schema as v.ObjectSchema<any, any>)
+      : (schema as any).type === "object"
         ? (schema as v.ObjectSchema<any, any>)
         : v.object(schema as any);
-    const expectedIndexes = extractIndexes(objectSchema);
+    const expectedIndexes = [
+      ...extractIndexes(objectSchema),
+      ...indexesOf(schema as TypeInput),
+    ];
     const collectionIssues = issues.filter(
       (i) =>
         i.collection === collectionName &&

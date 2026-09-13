@@ -64,6 +64,7 @@ export async function installLibrary(projectDir: string): Promise<void> {
     "types.js": "src/types.ts",
     "ids.js": "src/ids.ts",
     "indexes.js": "src/indexes.ts",
+    "type-definition.js": "src/type-definition.ts",
     "schema-navigator.js": "src/schema-navigator.ts",
   };
 
@@ -90,6 +91,7 @@ export async function installLibrary(projectDir: string): Promise<void> {
           "./types": "./types.js",
           "./ids": "./ids.js",
           "./indexes": "./indexes.js",
+          "./type-definition": "./type-definition.js",
           "./schema-navigator": "./schema-navigator.js",
         },
       },

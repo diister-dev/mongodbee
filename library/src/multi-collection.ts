@@ -19,6 +19,11 @@ import {
 } from "./migration/multicollection-registry.ts";
 import { getLastAppliedMigration } from "./migration/state.ts";
 import { applyMultiCollectionIndexes } from "./indexes-applier.ts";
+import {
+  normalizeTypes,
+  type ResolveTypes,
+  type TypeInput,
+} from "./type-definition.ts";
 import { isSchemaManaged } from "./runtime-config.ts";
 import { createLogger } from "./utils/logger.ts";
 import {
@@ -590,15 +595,36 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
   collectionName: string,
   model: T | MultiCollectionModel<T>,
   options?: m.CollectionOptions & CollectionOptions,
+): Promise<MultiCollectionResult<T>>;
+export async function multiCollection<
+  const I extends Record<string, TypeInput>,
+>(
+  db: Db,
+  collectionName: string,
+  model: I | MultiCollectionModel<I>,
+  options?: m.CollectionOptions & CollectionOptions,
+): Promise<MultiCollectionResult<ResolveTypes<I>>>;
+export async function multiCollection<const T extends MultiCollectionSchema>(
+  db: Db,
+  collectionName: string,
+  model:
+    | T
+    | MultiCollectionModel<T>
+    | Record<string, TypeInput>
+    | MultiCollectionModel,
+  options?: m.CollectionOptions & CollectionOptions,
 ): Promise<MultiCollectionResult<T>> {
-  // Extract schema from model
   const useModel =
     model &&
-    (model as MultiCollectionModel<T>).schema &&
-    typeof model.expose === "function";
-  const collectionSchema = (
-    useModel ? (model as MultiCollectionModel<T>).schema : model
-  ) as T;
+    (model as MultiCollectionModel).schema &&
+    typeof (model as MultiCollectionModel).expose === "function";
+  const normalized = normalizeTypes(
+    useModel
+      ? (model as MultiCollectionModel).schema
+      : (model as Record<string, TypeInput>),
+  );
+  const collectionSchema = normalized.fields as T;
+  const composites = normalized.indexes;
   type TOutput = Output<T>;
 
   const schemaWithId = Object.entries(collectionSchema).reduce(
@@ -668,6 +694,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     log.debug(`applyIndexes(${collectionName}): start`);
     await applyMultiCollectionIndexes(collection, schemaElements, {
       queue: mongoOperationQueue,
+      composites,
     });
     log.debug(`applyIndexes(${collectionName}): done`);
   }

@@ -9,6 +9,7 @@
 
 import * as path from "node:path";
 import { INDEX_SYMBOL } from "../indexes.ts";
+import { isTypeDefinition } from "../type-definition.ts";
 import type { MigrationDefinition, SchemasDefinition } from "./types.ts";
 import { pathToFileUrl } from "./utils/platform.ts";
 
@@ -140,6 +141,13 @@ export function simplifySchema(schema: any): any {
     return schema;
   }
 
+  if (isTypeDefinition(schema)) {
+    const simplified = simplifySchema(schema.schema.entries);
+    return schema.indexes.length > 0
+      ? { ...simplified, "@indexes": schema.indexes }
+      : simplified;
+  }
+
   // Skip schemas marked for cleanup — EXCEPT index metadata (withIndex):
   // it drives real MongoDB indexes (unique, TTL, collation, partial filters),
   // so it is structural and must survive simplification to participate in
@@ -193,6 +201,10 @@ function flattenSchema(schema: any): Record<string, any> {
     return result;
   }
 
+  if (isTypeDefinition(schema)) {
+    return flattenSchema(simplifySchema(schema));
+  }
+
   // Symbol-keyed index metadata (withIndex) is invisible to Object.keys and
   // JSON.stringify — surface it under a stable string key so schema diffs
   // can see index changes (unique/TTL/collation/partialFilter/global).
@@ -227,7 +239,8 @@ function flattenSchema(schema: any): Record<string, any> {
         }
       }
     } else if (typeof value === "object" && value !== null) {
-      for (const [subKey, subValue] of Object.entries(flattenSchema(value))) {
+      const nested = isTypeDefinition(value) ? simplifySchema(value) : value;
+      for (const [subKey, subValue] of Object.entries(flattenSchema(nested))) {
         // Skip ~standard in nested paths
         if (subKey.includes(".~standard") || subKey === "~standard") {
           continue;

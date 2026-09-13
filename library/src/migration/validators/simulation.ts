@@ -31,6 +31,7 @@ import {
   type SimulationDatabaseState,
 } from "../types.ts";
 import { getIrreversibleOperations, migrationBuilder } from "../builder.ts";
+import { fieldsOf } from "../../type-definition.ts";
 import * as v from "valibot";
 import { dirtyEquivalent } from "../../utils/object.ts";
 import { createMemoryApplier } from "../appliers/memory.ts";
@@ -552,7 +553,7 @@ export class SimulationValidator implements MigrationValidator {
             docIndex + 1
           }/${content.length}`,
         );
-        const valid = v.safeParse(v.object(currentCollSchema), doc);
+        const valid = v.safeParse(v.object(fieldsOf(currentCollSchema)), doc);
         if (!valid.success) {
           errors.push(
             `Document in collection "${collectionName}" does not match schema:\n-> ${valid.issues
@@ -606,7 +607,7 @@ export class SimulationValidator implements MigrationValidator {
             docIndex + 1
           }/${rolledBack.length}`,
         );
-        const valid = v.safeParse(v.object(parentCollSchema), doc);
+        const valid = v.safeParse(v.object(fieldsOf(parentCollSchema)), doc);
         if (!valid.success) {
           errors.push(
             `The collection "${collectionName}" not valid after rollback.\n-> ${valid.issues
@@ -678,7 +679,7 @@ export class SimulationValidator implements MigrationValidator {
         const schema = currentMultiCollSchema[elementType];
         const valid = v.safeParse(
           v.object({
-            ...schema,
+            ...fieldsOf(schema),
             _type: v.literal(elementType),
           }),
           element,
@@ -742,7 +743,7 @@ export class SimulationValidator implements MigrationValidator {
         if (!parentTypeSchema) continue; // Type was added, no validation needed
         const valid = v.safeParse(
           v.object({
-            ...parentTypeSchema,
+            ...fieldsOf(parentTypeSchema),
             _type: v.literal(docType),
           }),
           doc,
@@ -829,7 +830,7 @@ export class SimulationValidator implements MigrationValidator {
         const schema = modelSchema[elementType];
         const valid = v.safeParse(
           v.object({
-            ...schema,
+            ...fieldsOf(schema),
             _type: v.literal(elementType),
           }),
           element,
@@ -890,7 +891,7 @@ export class SimulationValidator implements MigrationValidator {
           if (!parentTypeSchema) continue; // Type was added, no validation needed
           const valid = v.safeParse(
             v.object({
-              ...parentTypeSchema,
+              ...fieldsOf(parentTypeSchema),
               _type: v.literal(docType),
             }),
             doc,
@@ -987,7 +988,7 @@ export class SimulationValidator implements MigrationValidator {
         const schema = currentScopedSchema.types[elementType];
         const valid = v.safeParse(
           v.object({
-            ...schema,
+            ...fieldsOf(schema),
             _type: v.literal(elementType),
           }),
           element,
@@ -1050,7 +1051,7 @@ export class SimulationValidator implements MigrationValidator {
         if (!parentTypeSchema) continue; // Type was added, no validation needed
         const valid = v.safeParse(
           v.object({
-            ...parentTypeSchema,
+            ...fieldsOf(parentTypeSchema),
             _type: v.literal(docType),
           }),
           doc,

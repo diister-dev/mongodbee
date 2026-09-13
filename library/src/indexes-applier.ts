@@ -10,11 +10,134 @@
 
 import * as m from "mongodb";
 import type * as v from "./schema.ts";
-import { extractIndexes, keyEqual, normalizeIndexOptions } from "./indexes.ts";
+import {
+  type CompositeIndexDescriptor,
+  deriveCompositeIndexName,
+  extractIndexes,
+  keyEqual,
+  normalizeIndexOptions,
+} from "./indexes.ts";
 import { sanitizePathName } from "./schema-navigator.ts";
 import { createLogger } from "./utils/logger.ts";
 
 const log = createLogger("indexes-applier");
+
+export const COMPOSITE_INDEX_MARKER = "_idx_";
+
+export interface CompositeProjection {
+  name: string;
+  key: Record<string, number>;
+  options: m.CreateIndexesOptions;
+}
+
+function compositeOptions(
+  descriptor: CompositeIndexDescriptor,
+  name: string,
+  partialFilterExpression?: m.Document,
+): m.CreateIndexesOptions {
+  const options: m.CreateIndexesOptions = { name };
+  if (descriptor.unique) options.unique = true;
+  if (descriptor.collation) {
+    options.collation = descriptor.collation;
+  } else if (descriptor.insensitive) {
+    options.collation = { locale: "en", strength: 2 };
+  }
+  if (descriptor.expireAfterSeconds !== undefined) {
+    options.expireAfterSeconds = descriptor.expireAfterSeconds;
+  }
+  if (partialFilterExpression) {
+    options.partialFilterExpression = partialFilterExpression;
+  } else if (descriptor.partialFilterExpression) {
+    options.partialFilterExpression = descriptor.partialFilterExpression;
+  }
+  return options;
+}
+
+export function projectComposites(
+  descriptors: readonly CompositeIndexDescriptor[],
+  family: "collection" | "multi" | "scoped",
+  typeName?: string,
+): CompositeProjection[] {
+  return descriptors.map((descriptor) => {
+    const suffix = deriveCompositeIndexName(descriptor, sanitizePathName);
+    const isGlobal = descriptor.global === true;
+
+    let name: string;
+    let key: Record<string, number>;
+    let partial: m.Document | undefined;
+
+    if (family === "collection") {
+      name = `${COMPOSITE_INDEX_MARKER}${suffix}`;
+      key = { ...descriptor.key };
+      partial = descriptor.partialFilterExpression;
+    } else {
+      const typeFilter = { _type: { $eq: typeName } };
+      partial = descriptor.partialFilterExpression
+        ? { $and: [descriptor.partialFilterExpression, typeFilter] }
+        : typeFilter;
+      if (family === "multi") {
+        name = `${typeName}_${COMPOSITE_INDEX_MARKER}${suffix}`;
+        key = { ...descriptor.key };
+      } else if (isGlobal) {
+        name = `__type_${typeName}_${COMPOSITE_INDEX_MARKER}${suffix}`;
+        key = { _type: 1, ...descriptor.key };
+      } else {
+        name = `_scope__type_${typeName}_${COMPOSITE_INDEX_MARKER}${suffix}`;
+        key = { _scope: 1, _type: 1, ...descriptor.key };
+      }
+    }
+
+    return { name, key, options: compositeOptions(descriptor, name, partial) };
+  });
+}
+
+type ExistingIndex = Awaited<
+  ReturnType<m.Collection<m.Document>["indexes"]>
+>[number];
+
+function indexKeyOf(index: ExistingIndex): Record<string, unknown> {
+  const key = index.key as unknown;
+  if (key instanceof Map) return Object.fromEntries(key);
+  return (key ?? {}) as Record<string, unknown>;
+}
+
+function reconcileIndex(
+  currentIndexes: ExistingIndex[],
+  expectedNames: Set<string>,
+  key: Record<string, number>,
+  options: m.CreateIndexesOptions,
+  toCreate: Array<{
+    key: Record<string, number>;
+    options: m.CreateIndexesOptions;
+  }>,
+  toDrop: string[],
+): void {
+  const existing =
+    currentIndexes.find((i) => i.name === options.name) ||
+    currentIndexes.find(
+      (i) => !expectedNames.has(i.name ?? "") && keyEqual(indexKeyOf(i), key),
+    );
+
+  if (existing) {
+    const existingNorm = normalizeIndexOptions(existing);
+    const desiredNorm = normalizeIndexOptions(options);
+    if (
+      existingNorm.unique === desiredNorm.unique &&
+      existingNorm.collation === desiredNorm.collation &&
+      existingNorm.partialFilterExpression ===
+        desiredNorm.partialFilterExpression &&
+      existingNorm.expireAfterSeconds === desiredNorm.expireAfterSeconds &&
+      keyEqual(indexKeyOf(existing), key)
+    ) {
+      return;
+    }
+    if (existing.name && !toDrop.includes(existing.name)) {
+      toDrop.push(existing.name);
+    }
+  }
+
+  toCreate.push({ key, options });
+}
 
 /**
  * Strip mongodbee-only sentinel keys from index metadata before the options
@@ -63,6 +186,14 @@ export interface ApplyIndexesOptions {
   queue?: {
     add<T>(fn: () => Promise<T>): Promise<T>;
   };
+  composites?: Record<string, readonly CompositeIndexDescriptor[]>;
+}
+
+export interface ApplyCollectionIndexesOptions {
+  queue?: {
+    add<T>(fn: () => Promise<T>): Promise<T>;
+  };
+  composites?: readonly CompositeIndexDescriptor[];
 }
 
 /**
@@ -94,7 +225,7 @@ export interface ApplyIndexesOptions {
 export async function applyCollectionIndexes(
   collection: m.Collection<any>,
   schema: v.ObjectSchema<any, any>,
-  options: ApplyIndexesOptions = {},
+  options: ApplyCollectionIndexesOptions = {},
 ): Promise<void> {
   const currentIndexes = await collection.indexes();
   const indexes = extractIndexes(schema);
@@ -111,6 +242,11 @@ export async function applyCollectionIndexes(
   for (const index of indexes) {
     const indexPath = sanitizePathName(index.path);
     expectedIndexNames.add(indexPath);
+  }
+
+  const composites = projectComposites(options.composites ?? [], "collection");
+  for (const composite of composites) {
+    expectedIndexNames.add(composite.name);
   }
 
   // Get all possible field paths from the current schema to detect potential mongodbee indexes
@@ -135,8 +271,9 @@ export async function applyCollectionIndexes(
 
     // Check if this index name matches any field in our schema
     const isSchemaField = allSchemaPaths.has(indexName);
+    const isComposite = indexName.startsWith(COMPOSITE_INDEX_MARKER);
 
-    if (isSchemaField && !expectedIndexNames.has(indexName)) {
+    if ((isSchemaField || isComposite) && !expectedIndexNames.has(indexName)) {
       // This is an orphaned mongodbee index that should be removed
       indexesToDrop.push(indexName);
     }
@@ -188,6 +325,17 @@ export async function applyCollectionIndexes(
       key: keySpec,
       options: desiredOptions,
     });
+  }
+
+  for (const composite of composites) {
+    reconcileIndex(
+      currentIndexes,
+      expectedIndexNames,
+      composite.key,
+      composite.options,
+      indexesToCreate,
+      indexesToDrop,
+    );
   }
 
   // Drop indexes
@@ -381,6 +529,11 @@ export async function applyScopedMultiCollectionIndexes(
     ([typeName, schema]) => ({
       typeName,
       indexes: extractIndexes(schema),
+      composites: projectComposites(
+        options.composites?.[typeName] ?? [],
+        "scoped",
+        typeName,
+      ),
     }),
   );
 
@@ -388,13 +541,16 @@ export async function applyScopedMultiCollectionIndexes(
   const expectedNames = new Set<string>();
   expectedNames.add(baseIndexName);
   expectedNames.add(typeIndexName);
-  for (const { typeName, indexes } of declaredPerType) {
+  for (const { typeName, indexes, composites } of declaredPerType) {
     for (const idx of indexes) {
       const isGlobal = idx.metadata.global === true;
       const prefix = isGlobal
         ? `__type_${typeName}`
         : `_scope__type_${typeName}`;
       expectedNames.add(`${prefix}_${sanitizePathName(idx.path)}`);
+    }
+    for (const composite of composites) {
+      expectedNames.add(composite.name);
     }
   }
 
@@ -550,6 +706,19 @@ export async function applyScopedMultiCollectionIndexes(
     }
   }
 
+  for (const { composites } of declaredPerType) {
+    for (const composite of composites) {
+      reconcileIndex(
+        currentIndexes,
+        expectedNames,
+        composite.key,
+        composite.options,
+        indexesToCreate,
+        indexesToDrop,
+      );
+    }
+  }
+
   if (indexesToDrop.length > 0) {
     const dropPromises = indexesToDrop.map((name) => {
       const dropFn = () =>
@@ -625,6 +794,11 @@ export async function applyMultiCollectionIndexes(
       return {
         type,
         indexes,
+        composites: projectComposites(
+          options.composites?.[type] ?? [],
+          "multi",
+          type,
+        ),
       };
     },
   );
@@ -638,10 +812,13 @@ export async function applyMultiCollectionIndexes(
 
   // Collect all expected index names from the current schema
   const expectedIndexNames = new Set<string>();
-  for (const { type, indexes } of allIndexes) {
+  for (const { type, indexes, composites } of allIndexes) {
     for (const index of indexes) {
       const indexName = sanitizePathName(`${type}_${index.path}`);
       expectedIndexNames.add(indexName);
+    }
+    for (const composite of composites) {
+      expectedIndexNames.add(composite.name);
     }
   }
 
@@ -732,6 +909,19 @@ export async function applyMultiCollectionIndexes(
         key: keySpec,
         options: desiredOptions,
       });
+    }
+  }
+
+  for (const { composites } of allIndexes) {
+    for (const composite of composites) {
+      reconcileIndex(
+        currentIndexes,
+        expectedIndexNames,
+        composite.key,
+        composite.options,
+        indexesToCreate,
+        indexesToDrop,
+      );
     }
   }
 
