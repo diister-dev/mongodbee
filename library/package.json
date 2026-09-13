@@ -1,6 +1,6 @@
 {
   "name": "@diister/mongodbee",
-  "version": "0.23.0-beta.24",
+  "version": "0.23.0-beta.25",
   "description": "A type-safe MongoDB wrapper with built-in validation powered by Valibot",
   "license": "MIT",
   "type": "module",
@@ -61,6 +61,10 @@
     "./indexes": {
       "types": "./dist/src/indexes.d.ts",
       "default": "./dist/src/indexes.js"
+    },
+    "./type-definition": {
+      "types": "./dist/src/type-definition.d.ts",
+      "default": "./dist/src/type-definition.js"
     },
     "./schema-navigator": {
       "types": "./dist/src/schema-navigator.d.ts",
