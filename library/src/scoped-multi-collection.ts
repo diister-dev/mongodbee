@@ -34,7 +34,7 @@ import {
   type ResolveTypes,
   type TypeInput,
 } from "./type-definition.ts";
-import { mongoOperationQueue } from "./operation.ts";
+import { withDatabaseDdlLock } from "./ddl-lock.ts";
 import { isSchemaManaged } from "./runtime-config.ts";
 import {
   createOperationTracer,
@@ -634,10 +634,11 @@ export async function scopedMultiCollection<S extends AnySchema>(
     (config.schemaManagement !== "managed" && !isSchemaManaged());
   const insideSession = !!sessionContext.getSession();
   if (shouldAutoApply && !insideSession) {
-    await applyValidator(db, collectionName, storageUnion);
-    await applyScopedMultiCollectionIndexes(collection, storageSchemas, {
-      queue: mongoOperationQueue,
-      composites: normalized.indexes,
+    await withDatabaseDdlLock(db, async () => {
+      await applyValidator(db, collectionName, storageUnion);
+      await applyScopedMultiCollectionIndexes(collection, storageSchemas, {
+        composites: normalized.indexes,
+      });
     });
   }
 

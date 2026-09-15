@@ -517,9 +517,13 @@ function fakeIndexCollection(name: string) {
   const collection = {
     collectionName: name,
     indexes: () => Promise.resolve([{ name: "_id_", key: { _id: 1 } }]),
-    createIndex: (key: unknown, options: Record<string, unknown>) => {
-      created.push({ key, options });
-      return Promise.resolve(options?.name as string);
+    createIndexes: (
+      descriptions: Array<{ key: unknown } & Record<string, unknown>>,
+    ) => {
+      for (const { key, ...options } of descriptions) {
+        created.push({ key, options });
+      }
+      return Promise.resolve(descriptions.map((d) => d.name as string));
     },
     dropIndex: (n: string) => {
       dropped.push(n);

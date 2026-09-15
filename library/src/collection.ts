@@ -5,7 +5,7 @@ import { EventEmitter } from "./events.ts";
 import { watchEvent } from "./change-stream.ts";
 import { getSessionContext } from "./session.ts";
 import { ensureValidator } from "./utils/ensure-validator.ts";
-import { mongoOperationQueue } from "./operation.ts";
+import { withDatabaseDdlLock } from "./ddl-lock.ts";
 import { applyCollectionIndexes } from "./indexes-applier.ts";
 import {
   fieldsOf,
@@ -471,10 +471,7 @@ export async function collection<
   }
 
   async function applyIndexes() {
-    await applyCollectionIndexes(collection, schema, {
-      queue: mongoOperationQueue,
-      composites,
-    });
+    await applyCollectionIndexes(collection, schema, { composites });
   }
 
   async function startWatching() {
@@ -539,8 +536,10 @@ export async function collection<
     const insideSession = !!sessionContext.getSession();
 
     if (shouldAutoApply && !insideSession) {
-      await applyValidator();
-      await applyIndexes();
+      await withDatabaseDdlLock(db, async () => {
+        await applyValidator();
+        await applyIndexes();
+      });
     }
 
     // Only start watching if explicitly enabled

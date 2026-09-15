@@ -9,7 +9,7 @@ import { withIndex } from "./indexes.ts";
 import type { FlatType } from "../types/flat.ts";
 import type { Db } from "./mongodb.ts";
 import { ensureValidator } from "./utils/ensure-validator.ts";
-import { mongoOperationQueue } from "./operation.ts";
+import { withDatabaseDdlLock } from "./ddl-lock.ts";
 import type { MultiCollectionModel } from "./multi-collection-model.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
 import {
@@ -693,7 +693,6 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
   async function applyIndexes() {
     log.debug(`applyIndexes(${collectionName}): start`);
     await applyMultiCollectionIndexes(collection, schemaElements, {
-      queue: mongoOperationQueue,
       composites,
     });
     log.debug(`applyIndexes(${collectionName}): done`);
@@ -721,8 +720,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     );
 
     if (shouldAutoApply && !insideSession) {
-      await applyValidator();
-      await applyIndexes();
+      await withDatabaseDdlLock(db, async () => {
+        await applyValidator();
+        await applyIndexes();
+      });
 
       // Auto-initialize metadata for multi-collection model (only in auto mode)
       // In managed mode, migrations handle metadata creation
