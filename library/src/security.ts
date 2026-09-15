@@ -19,7 +19,7 @@ import * as v from "valibot";
 import { toMongoValidator } from "./validator.ts";
 import { extractIndexes } from "./indexes.ts";
 import { sanitizePathName } from "./schema-navigator.ts";
-import { mongoOperationQueue } from "./operation.ts";
+import { withDatabaseDdlLock } from "./ddl-lock.ts";
 
 /**
  * Options for applying security (validators and indexes)
@@ -129,32 +129,29 @@ export async function applySecurityToCollection(
       return;
     }
 
-    await Promise.all(
-      indexes.map((index) => {
-        return mongoOperationQueue.add(async () => {
-          const indexName = sanitizePathName(index.path);
-          const keySpec: Record<string, number> = {};
-          keySpec[index.path] = 1;
+    // Same per-database lock as collection(); one createIndex at a time, in
+    // declaration order, as the former single-slot queue did. The message-based
+    // "already exists" tolerance is kept as it was: this manual path has no
+    // reconcile step, so a pre-existing index is the expected case here.
+    await withDatabaseDdlLock(db, async () => {
+      for (const index of indexes) {
+        const indexName = sanitizePathName(index.path);
+        const keySpec: Record<string, number> = {};
+        keySpec[index.path] = 1;
 
-          try {
-            await collection.createIndex(keySpec, {
-              name: indexName,
-              unique: index.metadata.unique || false,
-              sparse: false,
-            });
-          } catch (error) {
-            if (
-              error instanceof Error &&
-              error.message.includes("already exists")
-            ) {
-              // Index already exists, skip silently
-            } else {
-              throw error;
-            }
-          }
-        });
-      }),
-    );
+        try {
+          await collection.createIndex(keySpec, {
+            name: indexName,
+            unique: index.metadata.unique || false,
+            sparse: false,
+          });
+        } catch (error) {
+          const alreadyExists =
+            error instanceof Error && error.message.includes("already exists");
+          if (!alreadyExists) throw error;
+        }
+      }
+    });
   }
 }
 
@@ -249,47 +246,36 @@ export async function applySecurityToMultiCollection(
     }
   }
 
-  // Apply indexes for each type
+  // Apply indexes for each type — same lock and same sequential shape as
+  // applySecurityToCollection above.
   if (opts.applyIndexes) {
-    const indexOperations = [];
+    await withDatabaseDdlLock(db, async () => {
+      for (const [typeName, typeSchema] of Object.entries(
+        multiCollectionSchema,
+      )) {
+        const wrappedSchema = v.object(typeSchema);
+        const indexes = extractIndexes(wrappedSchema);
 
-    for (const [typeName, typeSchema] of Object.entries(
-      multiCollectionSchema,
-    )) {
-      const wrappedSchema = v.object(typeSchema);
-      const indexes = extractIndexes(wrappedSchema);
+        for (const index of indexes) {
+          const indexName = sanitizePathName(`${typeName}_${index.path}`);
+          const keySpec: Record<string, number> = {};
+          keySpec[index.path] = 1;
 
-      if (indexes.length === 0) continue;
-
-      for (const index of indexes) {
-        indexOperations.push(
-          mongoOperationQueue.add(async () => {
-            const indexName = sanitizePathName(`${typeName}_${index.path}`);
-            const keySpec: Record<string, number> = {};
-            keySpec[index.path] = 1;
-
-            try {
-              await collection.createIndex(keySpec, {
-                name: indexName,
-                unique: index.metadata.unique || false,
-                sparse: false,
-                partialFilterExpression: { _type: typeName }, // Only index docs of this type
-              });
-            } catch (error) {
-              if (
-                error instanceof Error &&
-                error.message.includes("already exists")
-              ) {
-                // Index already exists, skip silently
-              } else {
-                throw error;
-              }
-            }
-          }),
-        );
+          try {
+            await collection.createIndex(keySpec, {
+              name: indexName,
+              unique: index.metadata.unique || false,
+              sparse: false,
+              partialFilterExpression: { _type: typeName },
+            });
+          } catch (error) {
+            const alreadyExists =
+              error instanceof Error &&
+              error.message.includes("already exists");
+            if (!alreadyExists) throw error;
+          }
+        }
       }
-    }
-
-    await Promise.all(indexOperations);
+    });
   }
 }
