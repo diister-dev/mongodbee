@@ -634,6 +634,8 @@ export async function scopedMultiCollection<S extends AnySchema>(
     (config.schemaManagement !== "managed" && !isSchemaManaged());
   const insideSession = !!sessionContext.getSession();
   if (shouldAutoApply && !insideSession) {
+    // Validator and indexes are one DDL block, serialised per database (see
+    // ddl-lock.ts); both only issue driver commands, no re-entry possible.
     await withDatabaseDdlLock(db, async () => {
       await applyValidator(db, collectionName, storageUnion);
       await applyScopedMultiCollectionIndexes(collection, storageSchemas, {

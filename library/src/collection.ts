@@ -536,6 +536,9 @@ export async function collection<
     const insideSession = !!sessionContext.getSession();
 
     if (shouldAutoApply && !insideSession) {
+      // Validator and indexes are one DDL block, serialised per database
+      // (see ddl-lock.ts); both only issue driver commands, so nothing inside
+      // can re-enter the lock.
       await withDatabaseDdlLock(db, async () => {
         await applyValidator();
         await applyIndexes();

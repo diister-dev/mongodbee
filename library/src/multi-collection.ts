@@ -720,6 +720,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     );
 
     if (shouldAutoApply && !insideSession) {
+      // Validator and indexes are one DDL block, serialised per database (see
+      // ddl-lock.ts). The metadata step below stays OUTSIDE the lock on
+      // purpose: it goes through other mongodbee collections, whose own
+      // construction would take the same lock and deadlock.
       await withDatabaseDdlLock(db, async () => {
         await applyValidator();
         await applyIndexes();

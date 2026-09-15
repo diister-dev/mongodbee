@@ -188,6 +188,7 @@ export interface ApplyCollectionIndexesOptions {
   composites?: readonly CompositeIndexDescriptor[];
 }
 
+/** `codeName` on current servers; bare code 27 on legacy ones. */
 function isIndexNotFound(error: unknown): boolean {
   return (
     (error instanceof m.MongoServerError &&
@@ -196,6 +197,12 @@ function isIndexNotFound(error: unknown): boolean {
   );
 }
 
+/**
+ * Drops are the rare path (a declaration changed), so they stay parallel.
+ * IndexNotFound is tolerated: two processes booting against the same database
+ * (an api and a worker) both plan the same drop, and the loser's index is
+ * already gone — same reasoning as NamespaceExists in `ensureValidator`.
+ */
 async function dropIndexes(
   collection: m.Collection<any>,
   names: readonly string[],
@@ -209,6 +216,20 @@ async function dropIndexes(
   );
 }
 
+/**
+ * The whole create plan of a collection goes out as ONE `createIndexes`
+ * command — not one `createIndex` per spec, which is what `b3619ab` had split
+ * it into. On a replica set every DDL command costs ~30-45 ms of server-side
+ * latency regardless of the write concern (measured: `createCollection` 32 ms,
+ * `createIndexes` with three specs 45 ms, versus ~25 ms per single
+ * `createIndex`), so the round-trip count is the cost. The server builds all
+ * specs in a single index build and skips those that already exist with an
+ * identical spec, so this is also the idempotent shape.
+ *
+ * No catch here: the plan was reconciled against `listIndexes` just before, so
+ * a conflict means a concurrent booter changed the collection in between, and
+ * that must surface rather than be tolerated as "already exists".
+ */
 async function createIndexes(
   collection: m.Collection<any>,
   planned: readonly PlannedIndex[],
@@ -746,6 +767,9 @@ export async function applyMultiCollectionIndexes(
   const indexesToCreate: PlannedIndex[] = [];
   const indexesToDrop: string[] = [];
 
+  // The `_type` index every multi-collection query filters on. It used to be
+  // its own awaited `createIndex` ahead of the plan; it now rides the same
+  // single `createIndexes` command as the per-type indexes.
   if (!hasTypeIndex) {
     indexesToCreate.push({
       key: { _type: 1 },

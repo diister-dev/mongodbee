@@ -129,6 +129,10 @@ export async function applySecurityToCollection(
       return;
     }
 
+    // Same per-database lock as collection(); one createIndex at a time, in
+    // declaration order, as the former single-slot queue did. The message-based
+    // "already exists" tolerance is kept as it was: this manual path has no
+    // reconcile step, so a pre-existing index is the expected case here.
     await withDatabaseDdlLock(db, async () => {
       for (const index of indexes) {
         const indexName = sanitizePathName(index.path);
@@ -242,7 +246,8 @@ export async function applySecurityToMultiCollection(
     }
   }
 
-  // Apply indexes for each type
+  // Apply indexes for each type — same lock and same sequential shape as
+  // applySecurityToCollection above.
   if (opts.applyIndexes) {
     await withDatabaseDdlLock(db, async () => {
       for (const [typeName, typeSchema] of Object.entries(
