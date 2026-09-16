@@ -592,7 +592,9 @@ export interface CollectionBuilder {
    * @param rule - The transformation rule with up/down functions
    * @returns The collection builder for method chaining
    */
-  transform(rule: TransformRule): CollectionBuilder;
+  transform<T = Record<string, any>, U = Record<string, any>>(
+    rule: TransformRule<T, U>,
+  ): CollectionBuilder;
   deleteWhere(where: Record<string, unknown>): CollectionBuilder;
   dedupe(options: DedupeOptions): CollectionBuilder;
 
@@ -637,7 +639,9 @@ export interface MultiCollectionTypeBuilder {
    * @param rule - The transformation rule with up/down functions
    * @returns The type builder for method chaining
    */
-  transform(rule: TransformRule): MultiCollectionTypeBuilder;
+  transform<T = Record<string, any>, U = Record<string, any>>(
+    rule: TransformRule<T, U>,
+  ): MultiCollectionTypeBuilder;
 
   deleteWhere(where: Record<string, unknown>): MultiCollectionTypeBuilder;
   dedupe(options: DedupeOptions): MultiCollectionTypeBuilder;
@@ -662,7 +666,9 @@ export interface MultiModelInstanceTypeBuilder {
    * @param rule - The transformation rule with up/down functions
    * @returns The type builder for method chaining
    */
-  transform(rule: TransformRule): MultiModelInstanceTypeBuilder;
+  transform<T = Record<string, any>, U = Record<string, any>>(
+    rule: TransformRule<T, U>,
+  ): MultiModelInstanceTypeBuilder;
   deleteWhere(where: Record<string, unknown>): MultiModelInstanceTypeBuilder;
 
   /**
@@ -685,7 +691,9 @@ export interface MultiModelInstancesTypeBuilder {
    * @param rule - The transformation rule with up/down functions
    * @returns The type builder for method chaining
    */
-  transform(rule: TransformRule): MultiModelInstancesTypeBuilder;
+  transform<T = Record<string, any>, U = Record<string, any>>(
+    rule: TransformRule<T, U>,
+  ): MultiModelInstancesTypeBuilder;
   deleteWhere(where: Record<string, unknown>): MultiModelInstancesTypeBuilder;
 
   /**
@@ -790,8 +798,8 @@ export interface ScopedMultiCollectionTypeBuilder {
    * the transform spans every scope ; pass `scopeFilter` to restrict the
    * effect to a subset.
    */
-  transform(
-    rule: TransformRule & { readonly scopeFilter?: readonly string[] },
+  transform<T = Record<string, any>, U = Record<string, any>>(
+    rule: TransformRule<T, U> & { readonly scopeFilter?: readonly string[] },
   ): ScopedMultiCollectionTypeBuilder;
   deleteWhere(
     where: Record<string, unknown>,

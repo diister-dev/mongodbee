@@ -60,6 +60,17 @@ import type {
 } from "./types.ts";
 import { fieldsOf, type TypeInput } from "../type-definition.ts";
 
+/**
+ * A transform's document type is the migration's to name; the engine runs the
+ * erased form. The one place that erasure happens, so it never spreads to the
+ * call sites.
+ */
+function erased<T, U>(
+  fn: (doc: T) => U,
+): (doc: Record<string, unknown>) => Record<string, unknown> {
+  return fn as (doc: Record<string, unknown>) => Record<string, unknown>;
+}
+
 function fieldsOrUndefined<I extends TypeInput>(
   source: I | undefined,
 ): ReturnType<typeof fieldsOf<I>> | undefined {
@@ -176,8 +187,8 @@ function createCollectionBuilder(
       state.operations.push({
         type: "transform_collection",
         collectionName,
-        up: rule.up,
-        down: rule.down,
+        up: erased(rule.up),
+        down: erased(rule.down),
         schema: collectionSchema,
         parentSchema: parentCollectionSchema,
         irreversible: rule.irreversible,
@@ -281,8 +292,8 @@ function createMultiCollectionTypeBuilder(
         type: "transform_multicollection_type",
         collectionName,
         documentType,
-        up: rule.up,
-        down: rule.down,
+        up: erased(rule.up),
+        down: erased(rule.down),
         schema: typeSchema,
         parentSchema: parentTypeSchema,
         irreversible: rule.irreversible,
@@ -527,8 +538,8 @@ function createMultiModelInstanceTypeBuilder(
         collectionName,
         modelType,
         documentType,
-        up: rule.up,
-        down: rule.down,
+        up: erased(rule.up),
+        down: erased(rule.down),
         schema: typeSchema,
         parentSchema: parentTypeSchema,
         irreversible: rule.irreversible,
@@ -622,8 +633,8 @@ function createMultiModelInstancesTypeBuilder(
         type: "transform_multimodel_instances_type",
         modelType,
         documentType,
-        up: rule.up,
-        down: rule.down,
+        up: erased(rule.up),
+        down: erased(rule.down),
         schema: typeSchema,
         parentSchema: parentTypeSchema,
         irreversible: rule.irreversible,
@@ -715,8 +726,8 @@ function createScopedMultiCollectionTypeBuilder(
         type: "transform_scoped_multicollection_type",
         collectionName,
         documentType,
-        up: rule.up,
-        down: rule.down,
+        up: erased(rule.up),
+        down: erased(rule.down),
         schema,
         parentSchema,
         scopeFilter: rule.scopeFilter,
