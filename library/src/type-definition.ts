@@ -1,4 +1,4 @@
-import type * as v from "./schema.ts";
+import * as v from "./schema.ts";
 import {
   createFieldProxy,
   type FieldsOf,
@@ -122,4 +122,31 @@ export function normalizeTypes<M extends Record<string, TypeInput>>(
     if (declared.length > 0) indexes[name] = declared;
   }
   return { fields: fields as ResolveTypes<M>, indexes };
+}
+
+/**
+ * Rebuild a type source with fields added or replaced, keeping what it is: a
+ * plain field map stays one, a `defineType` keeps its indexes.
+ *
+ * Spreading the source instead is the trap: a {@link TypeDefinition} spreads to
+ * its own properties, so the result declares fields named `schema` and
+ * `indexes` and drops the real ones.
+ *
+ * Goes through {@link defineType}, so dropping a field an index points at is
+ * refused rather than carried over as a dangling index.
+ *
+ * @example
+ * ```typescript
+ * const tightened = withFields(parent.schemas.collections["+jobs"], {
+ *   content: v.union(variants),
+ * });
+ * ```
+ */
+export function withFields<I extends TypeInput>(
+  source: I,
+  fields: Record<string, AnySchema>,
+): TypeInput {
+  const merged: Record<string, AnySchema> = { ...fieldsOf(source), ...fields };
+  if (!isTypeDefinition(source)) return merged;
+  return defineType({ schema: v.object(merged), indexes: source.indexes });
 }
