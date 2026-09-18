@@ -731,6 +731,7 @@ function createScopedMultiCollectionTypeBuilder(
         schema,
         parentSchema,
         scopeFilter: rule.scopeFilter,
+        reads: rule.reads,
         irreversible: rule.irreversible,
         lossy: rule.lossy,
       });

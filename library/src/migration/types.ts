@@ -165,12 +165,15 @@ export type TransformScopedMultiCollectionTypeRule<
   type: "transform_scoped_multicollection_type";
   collectionName: string;
   documentType: string;
-  up: (doc: T) => U;
-  down: (doc: U) => T;
+  up: (doc: T, scope?: TransformScope) => U;
+  down: (doc: U, scope?: TransformScope) => T;
   schema: SchemaContent;
   parentSchema?: SchemaContent;
   /** Restrict the transform to a subset of scope values. Empty/absent = all scopes. */
   scopeFilter?: readonly string[];
+  /** Sibling document types of the same scope the transform reads, handed to
+   *  `up` and `down` as `scope.siblings[type]`. */
+  reads?: readonly string[];
   /** Marks this transformation as irreversible (cannot be rolled back) */
   irreversible?: boolean;
   /** Marks this transformation as lossy (rollback loses data) */
@@ -525,11 +528,23 @@ export type MigrationRule =
  * @template T - Input document type
  * @template U - Output document type
  */
+/**
+ * What a transform may read beside the document it rewrites: the documents
+ * of its own scope, by type, for the types the rule declared in `reads`. A
+ * créneau turning a salle name into the salle id needs the exposition's
+ * configuration, which lives in another document of the same scope. Absent
+ * outside a scoped multi-collection, and empty when the rule reads nothing.
+ */
+export type TransformScope = {
+  readonly scope?: string;
+  readonly siblings: Readonly<Record<string, readonly Record<string, unknown>[]>>;
+};
+
 export type TransformRule<T = Record<string, any>, U = Record<string, any>> = {
   /** Function to transform from old to new format */
-  readonly up: (doc: T) => U;
+  readonly up: (doc: T, scope?: TransformScope) => U;
   /** Function to transform from new to old format */
-  readonly down: (doc: U) => T;
+  readonly down: (doc: U, scope?: TransformScope) => T;
   /**
    * Marks this transformation as irreversible
    * Use when the migration cannot be rolled back (no valid down() function)
@@ -796,10 +811,14 @@ export interface ScopedMultiCollectionTypeBuilder {
   /**
    * Applies a transformation to every document of this type. By default
    * the transform spans every scope ; pass `scopeFilter` to restrict the
-   * effect to a subset.
+   * effect to a subset. `reads` names the sibling types of the same scope
+   * the transform needs, handed to `up` and `down` as `scope.siblings`.
    */
   transform<T = Record<string, any>, U = Record<string, any>>(
-    rule: TransformRule<T, U> & { readonly scopeFilter?: readonly string[] },
+    rule: TransformRule<T, U> & {
+      readonly scopeFilter?: readonly string[];
+      readonly reads?: readonly string[];
+    },
   ): ScopedMultiCollectionTypeBuilder;
   deleteWhere(
     where: Record<string, unknown>,
