@@ -13,6 +13,7 @@ import type {
   MigrationDefinition,
   MigrationRule,
   SchemasDefinition,
+  TransformScope,
 } from "../types.ts";
 import * as v from "valibot";
 import { toMongoValidator } from "../../validator.ts";
@@ -79,6 +80,32 @@ function resolveSeedDocId(
  * dry-run would pass while production silently corrupted the data. Re-pinning
  * here keeps the two appliers in lockstep: the discriminators can never be lost.
  */
+const SIBLING_READ_CAP = 1_000;
+
+/** The sibling documents of every scope a transform will walk, by scope then
+ *  by type, so `up` and `down` read them without a query per document. */
+export type SiblingsByScope = ReadonlyMap<
+  string,
+  Readonly<Record<string, readonly Record<string, unknown>[]>>
+>;
+
+/** Binds a transform to the siblings of the scope each document lives in. */
+export function withScope(
+  transform: (
+    doc: Record<string, unknown>,
+    scope?: TransformScope,
+  ) => Record<string, unknown>,
+  siblings: SiblingsByScope,
+): (doc: Record<string, unknown>) => Record<string, unknown> {
+  return (doc) => {
+    const scope = typeof doc._scope === "string" ? doc._scope : undefined;
+    return transform(doc, {
+      scope,
+      siblings: (scope !== undefined ? siblings.get(scope) : undefined) ?? {},
+    });
+  };
+}
+
 function repinScopedDiscriminators(
   transform: (doc: Record<string, unknown>) => Record<string, unknown>,
 ): (doc: Record<string, unknown>) => Record<string, unknown> {
@@ -629,6 +656,38 @@ export function createMongodbApplier(
     }
     reporter.done();
     return doomed.length;
+  }
+
+  /** The documents of the sibling types a scoped transform reads, for every
+   *  scope the transform's filter reaches. A vocabulary read this way is one
+   *  document per scope; the cap refuses a type that is not one. */
+  async function loadSiblings(
+    collectionName: string,
+    filter: Record<string, unknown>,
+    reads: readonly string[] | undefined,
+  ): Promise<SiblingsByScope> {
+    const out = new Map<string, Record<string, readonly Record<string, unknown>[]>>();
+    if (!reads || reads.length === 0) return out;
+    const collection = db.collection(collectionName);
+    const scopes = (await collection.distinct("_scope", filter)) as unknown[];
+    for (const scope of scopes) {
+      if (typeof scope !== "string") continue;
+      const byType: Record<string, readonly Record<string, unknown>[]> = {};
+      for (const type of reads) {
+        const docs = await collection
+          .find({ _scope: scope, _type: type })
+          .limit(SIBLING_READ_CAP + 1)
+          .toArray();
+        if (docs.length > SIBLING_READ_CAP) {
+          throw new Error(
+            `transform reads "${type}" of scope "${scope}": more than ${SIBLING_READ_CAP} documents; a sibling read is for a scope's few reference documents, not its rows`,
+          );
+        }
+        byType[type] = docs as Record<string, unknown>[];
+      }
+      out.set(scope, byType);
+    }
+    return out;
   }
 
   async function transformDocuments(
@@ -2448,14 +2507,11 @@ export function createMongodbApplier(
         if (operation.scopeFilter && operation.scopeFilter.length > 0) {
           filter._scope = { $in: operation.scopeFilter };
         }
+        const siblings = await loadSiblings(operation.collectionName, filter, operation.reads);
         await transformDocuments(
           operation.collectionName,
           filter,
-          repinScopedDiscriminators(
-            operation.up as (
-              doc: Record<string, unknown>,
-            ) => Record<string, unknown>,
-          ),
+          repinScopedDiscriminators(withScope(operation.up, siblings)),
           operation.type,
         );
       },
@@ -2469,14 +2525,11 @@ export function createMongodbApplier(
         if (operation.scopeFilter && operation.scopeFilter.length > 0) {
           filter._scope = { $in: operation.scopeFilter };
         }
+        const siblings = await loadSiblings(operation.collectionName, filter, operation.reads);
         await transformDocuments(
           operation.collectionName,
           filter,
-          repinScopedDiscriminators(
-            operation.down as (
-              doc: Record<string, unknown>,
-            ) => Record<string, unknown>,
-          ),
+          repinScopedDiscriminators(withScope(operation.down, siblings)),
         );
       },
     },

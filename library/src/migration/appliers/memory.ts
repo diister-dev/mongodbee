@@ -2,6 +2,7 @@ import type {
   DatabaseState,
   MigrationDefinition,
   MigrationRule,
+  TransformScope,
 } from "../types.ts";
 import {
   extractIdPrefix,
@@ -226,6 +227,35 @@ function matchesWhere(
     }
     return valuesEqual(fieldValue, condition);
   });
+}
+
+/** The sibling documents a scoped transform reads, by scope then by type,
+ *  taken from the simulated content the way the MongoDB applier reads them
+ *  from the collection. */
+function siblingsOf(
+  content: readonly Record<string, unknown>[],
+  reads: readonly string[] | undefined,
+): ReadonlyMap<string, Readonly<Record<string, readonly Record<string, unknown>[]>>> {
+  const out = new Map<string, Record<string, Record<string, unknown>[]>>();
+  if (!reads || reads.length === 0) return out;
+  const wanted = new Set(reads);
+  for (const doc of content) {
+    const scope = doc._scope;
+    const type = doc._type;
+    if (typeof scope !== "string" || typeof type !== "string" || !wanted.has(type)) continue;
+    const byType = out.get(scope) ?? {};
+    (byType[type] ??= []).push(doc);
+    out.set(scope, byType);
+  }
+  return out;
+}
+
+function scopeOf(
+  doc: Record<string, unknown>,
+  siblings: ReadonlyMap<string, Readonly<Record<string, readonly Record<string, unknown>[]>>>,
+): TransformScope {
+  const scope = typeof doc._scope === "string" ? doc._scope : undefined;
+  return { scope, siblings: (scope !== undefined ? siblings.get(scope) : undefined) ?? {} };
 }
 
 export function createMemoryApplier(migration: MigrationDefinition) {
@@ -1365,13 +1395,14 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           operation.scopeFilter && operation.scopeFilter.length > 0
             ? new Set(operation.scopeFilter)
             : null;
+        const siblings = siblingsOf(coll.content, operation.reads);
         coll.content = coll.content.map((doc) => {
           if (
             doc._type === operation.documentType &&
             (!scopeSet || scopeSet.has(doc._scope as string))
           ) {
             return {
-              ...operation.up(doc as Record<string, unknown>),
+              ...operation.up(doc as Record<string, unknown>, scopeOf(doc, siblings)),
               _type: doc._type,
               _scope: doc._scope,
               _id: doc._id,
@@ -1395,13 +1426,14 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           operation.scopeFilter && operation.scopeFilter.length > 0
             ? new Set(operation.scopeFilter)
             : null;
+        const siblings = siblingsOf(coll.content, operation.reads);
         coll.content = coll.content.map((doc) => {
           if (
             doc._type === operation.documentType &&
             (!scopeSet || scopeSet.has(doc._scope as string))
           ) {
             return {
-              ...operation.down(doc as Record<string, unknown>),
+              ...operation.down(doc as Record<string, unknown>, scopeOf(doc, siblings)),
               _type: doc._type,
               _scope: doc._scope,
               _id: doc._id,
