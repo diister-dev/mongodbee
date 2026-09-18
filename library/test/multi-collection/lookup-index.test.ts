@@ -1,12 +1,12 @@
 /**
  * Lookup sub-pipeline / index visibility regression tests (multiCollection).
  *
- * Both stage builders (aggregate + paginate) must emit the `_type` constant
- * as a query operator and keep ONLY the correlated join key in `$expr`: the
- * planner does not accept an `$expr` equality as subsuming a
- * `partialFilterExpression`, so an `$expr`-only match makes the partial
- * indexes created by `withIndex` invisible and the lookup scans every doc of
- * the type on every input row.
+ * Both stage builders (aggregate + paginate) must join on the lookup's own
+ * `localField` / `foreignField` and emit the `_type` constant as a query
+ * operator, with no `$expr` at all: an `$expr`-only match hid the partial
+ * indexes created by `withIndex`, and two `let` + `$expr` joins on one row,
+ * one on an absent local field, ran over 15 s on Mongo 8 where the keyed form
+ * runs in 0.4 s.
  */
 import { test } from "../+harness.ts";
 import { assert, assertEquals } from "../+assert.ts";
@@ -35,7 +35,7 @@ function subMatch(stage: Stage): Record<string, unknown> {
   return lookup.pipeline[0].$match as Record<string, unknown>;
 }
 
-test("lookup: aggregate + paginate builders keep _type OUT of $expr", async (t) => {
+test("lookup: aggregate + paginate builders join on the lookup's own fields, _type a query operator, no $expr", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "registry", badgeModel, {
       schemaManagement: "auto",
@@ -71,13 +71,16 @@ test("lookup: aggregate + paginate builders keep _type OUT of $expr", async (t) 
       },
     );
 
-    for (const match of [
-      subMatch(viaAggregate[1]),
-      subMatch(viaAggregate[2]),
-      subMatch(viaPaginate[0]),
-    ]) {
-      assertEquals(match._type, "badge");
-      assertEquals(match.$expr, { $eq: ["$participantId", "$$localValue"] });
+    for (const stage of [viaAggregate[1], viaAggregate[2], viaPaginate[0]]) {
+      const lookup = stage.$lookup as {
+        localField: string;
+        foreignField: string;
+        let: Record<string, unknown>;
+      };
+      assertEquals(lookup.localField, "_id");
+      assertEquals(lookup.foreignField, "participantId");
+      assertEquals(lookup.let, { localValue: "$_id" });
+      assertEquals(subMatch(stage), { _type: "badge" });
     }
   });
 });

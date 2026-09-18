@@ -2041,24 +2041,62 @@ function buildScopedStageBuilder<T extends ScopedMultiCollectionTypes>(
   scopeFilter: ScopeFilterShape,
 ): ScopedStageBuilder<T> {
   const scopeValue = scopeQueryValue(scopeFilter);
-  // First $match of a lookup sub-pipeline. Constants (_type, _scope) are
-  // emitted as query operators and only the correlated join key stays in
-  // $expr: the planner does not accept an $expr equality as subsuming a
-  // partialFilterExpression, so an $expr-only match hides the partial
-  // indexes withIndex creates and every lookup degrades to scanning the
-  // whole scope. The object is library-built and user sub-pipeline stages
-  // are appended AFTER it, so the `_scope` constraint can only be narrowed,
-  // never dropped or overridden.
-  const lookupBaseMatch = (
-    foreignField: string,
-    typeName?: string,
-  ): AggregationStage => ({
+  // First $match of a lookup sub-pipeline: the constants (_type, _scope) as
+  // query operators, nothing else. The join key is the lookup's own
+  // localField / foreignField (see lookupBaseMatch in multi-collection.ts for
+  // the measurement behind it). The object is library-built and user
+  // sub-pipeline stages are appended AFTER it, so the `_scope` constraint can
+  // only be narrowed, never dropped or overridden.
+  const lookupBaseMatch = (typeName?: string): AggregationStage => ({
     $match: {
       ...(typeName !== undefined ? { _type: typeName } : {}),
       ...(scopeValue !== null ? { _scope: scopeValue } : {}),
-      $expr: { $eq: [`$${foreignField}`, "$$localValue"] },
     },
   });
+  const joinInto = (
+    localField: string,
+    foreignField: string,
+    typeName: string | undefined,
+    asOrOptions:
+      | string
+      | {
+          as?: string;
+          pipeline?: (stage: ScopedStageBuilder<T>) => AggregationStage[];
+          let?: Record<string, unknown>;
+        }
+      | undefined,
+  ): AggregationStage => {
+    if (typeof asOrOptions === "string") {
+      return {
+        $lookup: {
+          from: collectionName,
+          localField,
+          foreignField,
+          let: { localValue: `$${localField}` },
+          pipeline: [lookupBaseMatch(typeName)],
+          as: asOrOptions,
+        },
+      };
+    }
+    const options = asOrOptions || {};
+    const as = options.as || localField;
+    assertLetDoesNotShadowJoinBinding(options.let);
+    const basePipeline: AggregationStage[] = [lookupBaseMatch(typeName)];
+    if (options.pipeline) {
+      basePipeline.push(...options.pipeline(stage));
+    }
+    return {
+      $lookup: {
+        from: collectionName,
+        localField,
+        foreignField,
+        // Join binding spread LAST so it can never be shadowed.
+        let: { ...(options.let || {}), localValue: `$${localField}` },
+        pipeline: basePipeline,
+        as,
+      },
+    };
+  };
   const stage: ScopedStageBuilder<T> = {
     match: (type, filter) => ({
       $match: {
@@ -2067,65 +2105,10 @@ function buildScopedStageBuilder<T extends ScopedMultiCollectionTypes>(
       },
     }),
     unwind: (_type, field) => ({ $unwind: `$${field}` }),
-    lookup: (type, localField, foreignField, asOrOptions) => {
-      const typeName = type as string;
-      if (typeof asOrOptions === "string") {
-        return {
-          $lookup: {
-            from: collectionName,
-            let: { localValue: `$${localField}` },
-            pipeline: [lookupBaseMatch(foreignField, typeName)],
-            as: asOrOptions,
-          },
-        };
-      }
-      const options = asOrOptions || {};
-      const as = options.as || localField;
-      assertLetDoesNotShadowJoinBinding(options.let);
-      const basePipeline: AggregationStage[] = [
-        lookupBaseMatch(foreignField, typeName),
-      ];
-      if (options.pipeline) {
-        basePipeline.push(...options.pipeline(stage));
-      }
-      return {
-        $lookup: {
-          from: collectionName,
-          // Join binding spread LAST so it can never be shadowed.
-          let: { ...(options.let || {}), localValue: `$${localField}` },
-          pipeline: basePipeline,
-          as,
-        },
-      };
-    },
-    anyLookup: (localField, foreignField, asOrOptions) => {
-      if (typeof asOrOptions === "string") {
-        return {
-          $lookup: {
-            from: collectionName,
-            let: { localValue: `$${localField}` },
-            pipeline: [lookupBaseMatch(foreignField)],
-            as: asOrOptions,
-          },
-        };
-      }
-      const options = asOrOptions || {};
-      const as = options.as || localField;
-      assertLetDoesNotShadowJoinBinding(options.let);
-      const basePipeline: AggregationStage[] = [lookupBaseMatch(foreignField)];
-      if (options.pipeline) {
-        basePipeline.push(...options.pipeline(stage));
-      }
-      return {
-        $lookup: {
-          from: collectionName,
-          // Join binding spread LAST so it can never be shadowed.
-          let: { ...(options.let || {}), localValue: `$${localField}` },
-          pipeline: basePipeline,
-          as,
-        },
-      };
-    },
+    lookup: (type, localField, foreignField, asOrOptions) =>
+      joinInto(localField, foreignField, type as string, asOrOptions),
+    anyLookup: (localField, foreignField, asOrOptions) =>
+      joinInto(localField, foreignField, undefined, asOrOptions),
     externalLookup: (fromCollection, localField, foreignField, asOrOptions) => {
       if (typeof asOrOptions === "string") {
         return {

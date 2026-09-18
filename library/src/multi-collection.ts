@@ -193,23 +193,16 @@ type StageBuilder<T extends MultiCollectionSchema> = {
 };
 
 /**
- * First `$match` of a `lookup` sub-pipeline. The `_type` constant is emitted
- * as a query operator and only the correlated join key stays in `$expr`: the
- * planner does not accept an `$expr` equality as subsuming a
- * `partialFilterExpression`, so an `$expr`-only match hides the partial
- * indexes `withIndex` creates and the lookup degrades to scanning every doc
- * of the type on every input row.
+ * First `$match` of a `lookup` sub-pipeline: the `_type` constant as a query
+ * operator, nothing else. The join key itself is the lookup's own
+ * `localField` / `foreignField`. Measured on Mongo 8 with 6000 rows against
+ * 20000: two `let` + `$expr` joins on one row, one of them on an absent local
+ * field, ran over 15 s where this form runs in 0.4 s, and this form matches an
+ * array local value element by element where `$expr` matches nothing.
+ * `$$localValue` stays bound for user sub-pipeline stages that read it.
  */
-function lookupBaseMatch(
-  foreignField: string,
-  typeName: string,
-): AggregationStage {
-  return {
-    $match: {
-      _type: typeName,
-      $expr: { $eq: [`$${foreignField}`, "$$localValue"] },
-    },
-  };
+function lookupBaseMatch(typeName: string): AggregationStage {
+  return { $match: { _type: typeName } };
 }
 
 /**
@@ -239,8 +232,10 @@ function createMultiStageBuilder<T extends MultiCollectionSchema>(
         return {
           $lookup: {
             from: collectionName,
+            localField,
+            foreignField,
             let: { localValue: `$${localField}` },
-            pipeline: [lookupBaseMatch(foreignField, lookupKey as string)],
+            pipeline: [lookupBaseMatch(lookupKey as string)],
             as: asOrOptions,
           },
         };
@@ -255,13 +250,15 @@ function createMultiStageBuilder<T extends MultiCollectionSchema>(
       // is spread LAST so it can never be shadowed.
       const lookupStage: Record<string, unknown> = {
         from: collectionName,
+        localField,
+        foreignField,
         let: { ...(options.let || {}), localValue: `$${localField}` },
         as,
       };
 
       // Build pipeline: start with _type match, then add user pipeline if provided
       const basePipeline: AggregationStage[] = [
-        lookupBaseMatch(foreignField, lookupKey as string),
+        lookupBaseMatch(lookupKey as string),
       ];
 
       // Add user-provided pipeline stages after the base filter
