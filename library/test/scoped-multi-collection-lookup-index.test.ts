@@ -65,7 +65,7 @@ function lookupStats(explain: any): {
   };
 }
 
-test("lookup: sub-pipeline match keeps constants OUT of $expr", async () => {
+test("lookup: the join key is the lookup's own fields, the constants stay query operators, and $expr is gone", async () => {
   await withDatabase("smc-lookup-shape", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);
@@ -80,20 +80,27 @@ test("lookup: sub-pipeline match keeps constants OUT of $expr", async () => {
       return captured;
     });
 
-    const subMatch = (stage: AggregationStage): Record<string, unknown> => {
-      const lookup = stage.$lookup as { pipeline: AggregationStage[] };
-      return lookup.pipeline[0].$match as Record<string, unknown>;
-    };
-    // _scope (and _type for the typed lookup) must be plain query-operator
-    // constraints (index-visible); $expr must contain ONLY the correlated
-    // join comparison.
-    const typed = subMatch(captured[1]);
-    assertEquals(typed._type, "badge");
-    assertEquals(typed._scope, EXPO_A);
-    assertEquals(typed.$expr, { $eq: ["$participantId", "$$localValue"] });
-    const any = subMatch(captured[2]);
-    assertEquals(any._scope, EXPO_A);
-    assertEquals(any.$expr, { $eq: ["$participantId", "$$localValue"] });
+    const lookupOf = (stage: AggregationStage) =>
+      stage.$lookup as {
+        localField: string;
+        foreignField: string;
+        let: Record<string, unknown>;
+        pipeline: AggregationStage[];
+      };
+    // Two `let` + `$expr` joins on one row, one on an absent local field, ran
+    // over 15 s on Mongo 8 for 6000 rows against 20000; the keyed form runs in
+    // 0.4 s and matches an array local value element by element. `_scope` (and
+    // `_type` for the typed lookup) stay plain query-operator constraints, and
+    // `$$localValue` stays bound for user stages that read it.
+    const typed = lookupOf(captured[1]);
+    assertEquals(typed.localField, "_id");
+    assertEquals(typed.foreignField, "participantId");
+    assertEquals(typed.let, { localValue: "$_id" });
+    assertEquals(typed.pipeline[0].$match, { _type: "badge", _scope: EXPO_A });
+    const any = lookupOf(captured[2]);
+    assertEquals(any.localField, "_id");
+    assertEquals(any.foreignField, "participantId");
+    assertEquals(any.pipeline[0].$match, { _scope: EXPO_A });
   });
 });
 
