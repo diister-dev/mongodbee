@@ -107,11 +107,11 @@ export type ScopedMultiCollectionConfig<
 
 // -------- Per-type schema augmentation -----------------------------------
 
-// Use the user-provided _id schema if any (literal IDs), otherwise dbId(type).
-type DynId<TField> =
-  TField extends v.LiteralSchema<infer _L, AnyMessage>
-    ? TField
-    : ReturnType<typeof dbId>;
+// Mirrors the runtime `{ _id: dbId(type), ...fields }`: a type's own `_id`
+// replaces the default. Intersecting both instead infers `_id: never`.
+type IdSchema<TFields> = "_id" extends keyof TFields
+  ? TFields["_id"]
+  : ReturnType<typeof dbId>;
 
 // Element schema with all reserved fields for **storage** (used when validating
 // docs read back from Mongo and as the source for the MongoDB JSON Schema
@@ -122,10 +122,10 @@ type StorageElementSchema<
   S extends AnySchema,
 > = v.ObjectSchema<
   {
-    _id: DynId<T[K]["_id"]>;
+    _id: IdSchema<T[K]>;
     _type: v.LiteralSchema<K & string, AnyMessage>;
     _scope: S;
-  } & T[K],
+  } & Omit<T[K], "_id">,
   any
 >;
 
@@ -138,24 +138,24 @@ type InsertElementSchema<
   S extends AnySchema,
 > = v.ObjectSchema<
   {
-    _id: DynId<T[K]["_id"]>;
+    _id: IdSchema<T[K]>;
     _type: v.OptionalSchema<
       v.LiteralSchema<K & string, AnyMessage>,
       () => K & string
     >;
     _scope: S;
-  } & T[K],
+  } & Omit<T[K], "_id">,
   any
 >;
 
-/** Input shape the user passes to insertOne (no _scope/_type). */
+/** Input shape the user passes to insertOne (no _scope/_type); `_id` is minted when omitted. */
 type UserInputDoc<
   T extends ScopedMultiCollectionTypes,
   K extends keyof T,
 > = Omit<
   v.InferInput<InsertElementSchema<T, K, AnySchema>>,
-  "_scope" | "_type"
->;
+  "_scope" | "_type" | "_id"
+> & { _id?: string };
 
 /** Output shape returned by reads. Always includes _scope. */
 type OutputDoc<

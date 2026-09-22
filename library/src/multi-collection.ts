@@ -78,17 +78,19 @@ type CollectionOptions = {
   telemetry?: TelemetryOptions;
 };
 
-// Use _id if the schema is a literal schema, otherwise use dbId
-type DynId<T> =
-  T extends v.LiteralSchema<any, AnyMessage> ? T : ReturnType<typeof dbId>;
+// Mirrors the runtime `{ _id: dbId(key), ...fields }`: an element's own `_id`
+// replaces the default. Intersecting both instead infers `_id: never`.
+type IdSchema<TFields> = "_id" extends keyof TFields
+  ? TFields["_id"]
+  : ReturnType<typeof dbId>;
 
 type AnyMessage = any;
 
 type Elements<T extends Record<string, any>> = {
   [key in keyof T]: {
-    _id: DynId<T[key]["_id"]>;
+    _id: IdSchema<T[key]>;
     _type: v.LiteralSchema<key, AnyMessage>;
-  } & T[key];
+  } & Omit<T[key], "_id">;
 }[keyof T];
 
 type OutputElementSchema<
@@ -96,9 +98,9 @@ type OutputElementSchema<
   K extends keyof T,
 > = v.ObjectSchema<
   {
-    _id: DynId<T[K]["_id"]>;
+    _id: IdSchema<T[K]>;
     _type: v.LiteralSchema<K, AnyMessage>;
-  } & T[K],
+  } & Omit<T[K], "_id">,
   any
 >;
 
@@ -107,10 +109,16 @@ type ElementSchema<
   K extends keyof T,
 > = v.ObjectSchema<
   {
-    _id: DynId<T[K]["_id"]>;
-  } & T[K],
+    _id: IdSchema<T[K]>;
+  } & Omit<T[K], "_id">,
   any
 >;
+
+/** Insert input: `_id` is minted when omitted. */
+type InsertDoc<T extends Record<string, any>, K extends keyof T> = Omit<
+  v.InferInput<ElementSchema<T, K>>,
+  "_id"
+> & { _id?: string };
 
 type AnySchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
 type MultiSchema<T extends Record<string, any>> = Elements<T>;
@@ -386,13 +394,10 @@ type ExtractByType<
  */
 type MultiCollectionResult<T extends MultiCollectionSchema> = {
   withSession: Awaited<ReturnType<typeof getSessionContext>>["withSession"];
-  insertOne<E extends keyof T>(
-    key: E,
-    doc: v.InferInput<ElementSchema<T, E>>,
-  ): Promise<string>;
+  insertOne<E extends keyof T>(key: E, doc: InsertDoc<T, E>): Promise<string>;
   insertMany<E extends keyof T>(
     key: E,
-    docs: v.InferInput<ElementSchema<T, E>>[],
+    docs: InsertDoc<T, E>[],
   ): Promise<string[]>;
   getById<E extends keyof T>(
     key: E,

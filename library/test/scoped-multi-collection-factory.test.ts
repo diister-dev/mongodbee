@@ -52,17 +52,18 @@ test("scopedMultiCollection: auto-mints _id for a refId-typed _id when omitted",
     await view.insertMany("security", [{ token: "k2" }, { token: "k3" }]);
     assertEquals((await view.find("security", {})).length, 3);
 
-    // A caller-supplied `_id` is still honored at runtime. The DynId type
-    // treats a refId `_id` as auto-generated (so callers omit it); passing one
-    // explicitly — as the exposition `information` singleton does to pin
-    // `_id == expositionId` — goes through a cast, exactly like the app.
-    await (
-      view as unknown as {
-        insertOne(t: string, d: Record<string, unknown>): Promise<string>;
-      }
-    ).insertOne("security", { _id: "security:custom", token: "k4" });
+    // A caller-supplied `_id` is honored, and typed: no cast needed.
+    await view.insertOne("security", { _id: "security:custom", token: "k4" });
     const custom = await view.findOne("security", { token: "k4" });
     assertEquals(custom?._id, "security:custom");
+
+    // A type's own `_id` schema used to be intersected with the default one,
+    // which infers `never`: every read id was assignable to anything.
+    type ReadId = NonNullable<typeof custom>["_id"];
+    const readId: [ReadId] extends [never] ? "never" : "typed" = "typed";
+    const asString: string = docs[0]._id;
+    assertEquals(readId, "typed");
+    assertEquals(typeof asString, "string");
   });
 });
 
