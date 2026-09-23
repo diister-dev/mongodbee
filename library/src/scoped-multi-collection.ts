@@ -16,6 +16,12 @@ import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
 import { getSessionContext } from "./session.ts";
 import { createDotNotationSchema } from "./dot-notation.ts";
 import {
+  type GuardedUpdateOptions,
+  guardedUpdateOps,
+  type GuardedWriteResult,
+  upsertInsertFields,
+} from "./guarded-write.ts";
+import {
   assertSortResolvableBeforePipeline,
   buildCursorLadderBranches,
   buildExprCursorFilter,
@@ -187,6 +193,8 @@ type DeepWithRemovable<X> =
     : X;
 type WithRemovable<X> = { [K in keyof X]: DeepWithRemovable<X[K]> | symbol };
 
+export type { GuardedUpdateOptions, GuardedWriteResult };
+
 // -------- Views ----------------------------------------------------------
 
 /**
@@ -303,6 +311,43 @@ export type ScopedView<
       };
     },
   ): Promise<number>;
+
+  /**
+   * Guarded single-document update: the first document of `type`, in the
+   * bound scope, that ALSO matches `filter`. The guard is part of the same
+   * atomic write, so "only if still X" needs no read-then-write.
+   *
+   * - `max`: per-field `$max` — a monotonic field only ever moves forward.
+   * - `upsert`: when nothing matches, insert. The document that would be
+   *   created (filter equalities + `setOnInsert` + `doc` + `max`) is
+   *   validated against the type's insert schema BEFORE the write, so an
+   *   upsert can never mint an invalid document. `_id` comes from a filter
+   *   equality when there is one, else it is minted like `insertOne`.
+   *
+   * Returns the match / modification counts and the upserted `_id`, if any.
+   * Unlike `updateOne`, a miss is a normal outcome (`matched: 0`), not an
+   * error. A concurrent upsert of the same unique key surfaces as the
+   * driver's duplicate-key error — the caller decides whether to retry.
+   */
+  updateWhere<K extends keyof T>(
+    type: K,
+    filter: m.Filter<OutputDoc<T, K, S>>,
+    doc: WithRemovable<Partial<UserInputDoc<T, K>>>,
+    options?: GuardedUpdateOptions<Partial<UserInputDoc<T, K>>>,
+  ): Promise<GuardedWriteResult>;
+
+  /**
+   * Atomically update the first document of `type` matching `filter` in the
+   * bound scope and return it — as it was (`"before"`) or as it became
+   * (`"after"`, the default). `null` when nothing matched. The returned
+   * document is validated against the type's storage schema.
+   */
+  findOneAndUpdate<K extends keyof T>(
+    type: K,
+    filter: m.Filter<OutputDoc<T, K, S>>,
+    doc: WithRemovable<Partial<UserInputDoc<T, K>>>,
+    options?: { returnDocument?: "before" | "after" },
+  ): Promise<OutputDoc<T, K, S> | null>;
 
   aggregate(
     stageBuilder: (stage: ScopedStageBuilder<T>) => AggregationStage[],
@@ -699,6 +744,46 @@ export async function scopedMultiCollection<S extends AnySchema>(
         );
       }
     }
+  }
+
+  /**
+   * The `$set` / `$unset` / `$max` of a guarded write, each validated against
+   * the type's dot-notation schema exactly like `updateOne`.
+   */
+  function scopedUpdateOps(
+    operation: string,
+    typeName: string,
+    doc: Record<string, unknown>,
+    max: Record<string, unknown> | undefined,
+  ) {
+    assertNoReservedFields(doc);
+    if (max) assertNoReservedFields(max);
+    const dotSchema = dotSchemaElements[typeName];
+    if (!dotSchema) throw new Error(`${operation}: unknown type "${typeName}"`);
+    return guardedUpdateOps(operation, dotSchema, doc, max);
+  }
+
+  function scopedInsertFields(
+    typeName: string,
+    scopeId: string,
+    filter: Record<string, unknown>,
+    values: Record<string, unknown>,
+    setOnInsert: Record<string, unknown> | undefined,
+    written: readonly string[],
+  ): Record<string, unknown> {
+    if (setOnInsert) assertNoReservedFields(setOnInsert);
+    return upsertInsertFields({
+      insertSchema: insertSchemas[typeName],
+      filter,
+      values,
+      setOnInsert,
+      written,
+      injected: (candidate) => ({
+        _id: candidate._id ?? `${typeName}:${newId()}`,
+        _scope: scopeId,
+      }),
+      ignored: ["_type", "_scope"],
+    });
   }
 
   function buildScopedView(scopeId: string): ScopedView<T, S> {
@@ -1211,6 +1296,121 @@ export async function scopedMultiCollection<S extends AnySchema>(
           }),
           run,
           (modified) => ({ [TA.MODIFIED_COUNT]: modified }),
+        );
+      },
+
+      async updateWhere(type, filter, doc, options) {
+        const run = async (op?: OpContext) => {
+          const typeName = type as string;
+          const record = doc as Record<string, unknown>;
+          const max = options?.max as Record<string, unknown> | undefined;
+          const { ops, set, written } = scopedUpdateOps(
+            "updateWhere",
+            typeName,
+            record,
+            max,
+          );
+          const upsert = options?.upsert === true;
+          const guard = {
+            ...(filter as Record<string, unknown>),
+            _type: typeName,
+            _scope: scopeId,
+          };
+          if (upsert) {
+            const onInsert = scopedInsertFields(
+              typeName,
+              scopeId,
+              filter as Record<string, unknown>,
+              { ...set, ...max },
+              options?.setOnInsert as Record<string, unknown> | undefined,
+              written,
+            );
+            if (Object.keys(onInsert).length > 0) ops.$setOnInsert = onInsert;
+          }
+          if (Object.keys(ops).length === 0)
+            return { matched: 0, modified: 0, upsertedId: null };
+
+          return retryOnWriteConflict(
+            async () => {
+              const session = sessionContext.getSession();
+              const result = await collection.updateOne(
+                guard as any,
+                ops as any,
+                { session, upsert },
+              );
+              if (!result.acknowledged) throw new Error("Update failed");
+              return {
+                matched: result.matchedCount,
+                modified: result.modifiedCount,
+                upsertedId:
+                  result.upsertedId === null || result.upsertedId === undefined
+                    ? null
+                    : String(result.upsertedId),
+              };
+            },
+            op ? { onRetry: op.onRetry } : undefined,
+          );
+        };
+        return traced(
+          tele,
+          "updateWhere",
+          () => ({
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: filterKeys(filter),
+            [TA.UPDATE_FIELDS]: Object.keys(doc).length,
+          }),
+          run,
+          (result) => ({ [TA.MODIFIED_COUNT]: result.modified }),
+        );
+      },
+
+      async findOneAndUpdate(type, filter, doc, options) {
+        const run = async (op?: OpContext) => {
+          const typeName = type as string;
+          const { ops } = scopedUpdateOps(
+            "findOneAndUpdate",
+            typeName,
+            doc as Record<string, unknown>,
+            undefined,
+          );
+          if (Object.keys(ops).length === 0) {
+            throw new Error(
+              `findOneAndUpdate(${typeName}): the update document writes nothing`,
+            );
+          }
+          const guard = {
+            ...(filter as Record<string, unknown>),
+            _type: typeName,
+            _scope: scopeId,
+          };
+          const raw = await retryOnWriteConflict(
+            async () => {
+              const session = sessionContext.getSession();
+              return await collection.findOneAndUpdate(
+                guard as any,
+                ops as any,
+                {
+                  session,
+                  returnDocument: options?.returnDocument ?? "after",
+                },
+              );
+            },
+            op ? { onRetry: op.onRetry } : undefined,
+          );
+          if (!raw) return null;
+          return v.parse(storageSchemas[typeName], raw) as any;
+        };
+        return traced(
+          tele,
+          "findOneAndUpdate",
+          () => ({
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: filterKeys(filter),
+            [TA.UPDATE_FIELDS]: Object.keys(doc).length,
+          }),
+          run,
         );
       },
 

@@ -1,6 +1,14 @@
 import * as v from "./schema.ts";
 import { toMongoValidator } from "./validator.ts";
 import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
+import { createDotNotationSchema } from "./dot-notation.ts";
+import {
+  insertedValues,
+  isPlainRecord,
+  upsertInsertFields,
+  VALUE_OPERATORS,
+  writtenPaths,
+} from "./guarded-write.ts";
 import { EventEmitter } from "./events.ts";
 import { watchEvent } from "./change-stream.ts";
 import { getSessionContext } from "./session.ts";
@@ -454,6 +462,8 @@ export async function collection<
     ...collectionSchema,
   });
 
+  const dotSchema = createDotNotationSchema(schema);
+
   const opts: m.CollectionOptions & CollectionOptions = {
     ...{
       safeDelete: true,
@@ -461,6 +471,47 @@ export async function collection<
     },
     ...options,
   };
+
+  /**
+   * An update document checked before it reaches the driver: the operators
+   * that store a value (`$set`, `$setOnInsert`, `$max`, `$min`) are validated
+   * against the dot-notation schema, and an upsert first validates the whole
+   * document its insert would create — its defaults land in `$setOnInsert`.
+   * A pipeline update (an array) cannot be checked statically and passes as is.
+   */
+  function checkedUpdate(
+    filter: unknown,
+    update: unknown,
+    upsert: boolean | undefined,
+  ): Record<string, unknown> | m.Document[] {
+    if (Array.isArray(update)) return update;
+    const processed = processUpdateWithRemoveField(
+      update as Record<string, unknown>,
+    );
+    for (const operator of VALUE_OPERATORS) {
+      const fields = processed[operator];
+      if (isPlainRecord(fields) && Object.keys(fields).length > 0)
+        v.parse(dotSchema, fields);
+    }
+    if (upsert) {
+      const setOnInsert = isPlainRecord(processed.$setOnInsert)
+        ? processed.$setOnInsert
+        : undefined;
+      const onInsert = upsertInsertFields({
+        insertSchema: schema,
+        filter: (filter ?? {}) as Record<string, unknown>,
+        values: insertedValues(processed),
+        setOnInsert,
+        written: writtenPaths(processed),
+      });
+      if (Object.keys(onInsert).length > 0) processed.$setOnInsert = onInsert;
+      else delete processed.$setOnInsert;
+    }
+    return sanitizeForMongoDB(processed, {
+      undefinedBehavior: opts.undefinedBehavior || "remove",
+      deep: true,
+    }) as Record<string, unknown>;
+  }
 
   const events = EventEmitter<Events<T>>();
   const validator = toMongoValidator(schema);
@@ -1408,18 +1459,10 @@ export async function collection<
       );
     },
     updateOne(filter, update, options?) {
-      // @TODO: check if update is valid
-      const run = (op?: OpContext) =>
-        retryOnWriteConflict(
+      const run = (op?: OpContext) => {
+        const sanitizedUpdate = checkedUpdate(filter, update, options?.upsert);
+        return retryOnWriteConflict(
           async () => {
-            // Process removeField() symbols in $set before sanitization
-            const processedUpdate = processUpdateWithRemoveField(
-              update as Record<string, unknown>,
-            );
-            const sanitizedUpdate = sanitizeForMongoDB(processedUpdate, {
-              undefinedBehavior: opts.undefinedBehavior || "remove",
-              deep: true,
-            });
             const session = sessionContext.getSession();
             return await collection.updateOne(
               filter as any,
@@ -1432,6 +1475,7 @@ export async function collection<
           },
           op ? { onRetry: op.onRetry } : undefined,
         );
+      };
       return traced(
         tele,
         "updateOne",
@@ -1448,18 +1492,10 @@ export async function collection<
       );
     },
     updateMany(filter, update, options?) {
-      // @TODO: check if update is valid
-      const run = (op?: OpContext) =>
-        retryOnWriteConflict(
+      const run = (op?: OpContext) => {
+        const sanitizedUpdate = checkedUpdate(filter, update, options?.upsert);
+        return retryOnWriteConflict(
           async () => {
-            // Process removeField() symbols in $set before sanitization
-            const processedUpdate = processUpdateWithRemoveField(
-              update as Record<string, unknown>,
-            );
-            const sanitizedUpdate = sanitizeForMongoDB(processedUpdate, {
-              undefinedBehavior: opts.undefinedBehavior || "remove",
-              deep: true,
-            });
             const session = sessionContext.getSession();
             return await collection.updateMany(filter, sanitizedUpdate as any, {
               session,
@@ -1468,6 +1504,7 @@ export async function collection<
           },
           op ? { onRetry: op.onRetry } : undefined,
         );
+      };
       return traced(
         tele,
         "updateMany",
@@ -1574,14 +1611,7 @@ export async function collection<
     },
     findOneAndUpdate(filter, update, options?) {
       const run = () => {
-        // Process removeField() symbols in $set before sanitization
-        const processedUpdate = processUpdateWithRemoveField(
-          update as Record<string, unknown>,
-        );
-        const sanitizedUpdate = sanitizeForMongoDB(processedUpdate, {
-          undefinedBehavior: opts.undefinedBehavior || "remove",
-          deep: true,
-        });
+        const sanitizedUpdate = checkedUpdate(filter, update, options?.upsert);
         const session = sessionContext.getSession();
         return collection.findOneAndUpdate(filter, sanitizedUpdate as any, {
           session,
