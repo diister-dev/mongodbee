@@ -64,6 +64,66 @@ read-only multi-scope views (`.scopes([...])` and `.unscoped`). It is **not** a
 `paginate` option — use `paginate`'s `pipeline` / `prepare` / `format` hooks for
 projected pagination.
 
+## Guarded writes — `updateWhere` and `findOneAndUpdate`
+
+`updateOne(type, id, doc)` targets one `_id` and throws on a miss. Concurrent
+code usually needs more: write *only if* the document is still in the state it
+was read in, move a counter forward and never back, or mint a singleton on its
+first write. Doing that as read-then-write races; these two methods make the
+guard part of the same atomic write, still narrowed to the bound scope.
+
+```typescript
+const inbox = catalog.scope(recipient);
+
+// Only if still live — a miss is { matched: 0 }, not an error.
+const { matched } = await inbox.updateWhere(
+  "notification",
+  { _id: id, supersededAt: null },
+  { body },
+);
+
+// Monotonic field + singleton minted on first write.
+await inbox.updateWhere("cursor", { _id: recipient }, { updatedAt: new Date() }, {
+  max: { seenUpTo },
+  upsert: true,
+  setOnInsert: { muted: false },
+});
+
+// Take the live head, atomically, and get what it was.
+const retired = await inbox.findOneAndUpdate(
+  "notification",
+  { groupKey, supersededAt: null },
+  { supersededAt: new Date() },
+  { returnDocument: "before" },
+);
+```
+
+- `doc` accepts `removeField()` and is validated against the type's
+  dot-notation schema, exactly like `updateOne`. `max` is validated the same
+  way; a field cannot be both set and bounded by `max` in one write.
+- **Upsert never mints an invalid document.** The document the insert would
+  create — filter equalities, `setOnInsert`, `doc`, `max` — is validated
+  against the type's insert schema before the write. `_id` comes from a filter
+  equality when there is one, else it is minted like `insertOne`. A dotted
+  write (`"a.b"`) keeps the inserted document's sibling fields.
+- **Every upsert call must be able to create.** Whether the write will insert
+  is not known in advance, so the would-be document is validated on every
+  `upsert: true` call, even when the document exists: pass the insert-only
+  fields in `setOnInsert` each time. A write to a document known to exist
+  drops `upsert`.
+- The same contract holds on `multiCollection` (`updateWhere`,
+  `findOneAndUpdate`) and on `collection`, whose `updateOne` / `updateMany` /
+  `findOneAndUpdate` validate `$set`, `$setOnInsert`, `$max` and `$min`
+  against the schema and, with `upsert`, the document the insert would create
+  (including what `$inc`, `$push` and `$currentDate` would store); its schema
+  defaults land in `$setOnInsert`. A pipeline update passes unchecked.
+- Two concurrent upserts of the same unique key surface as the driver's
+  duplicate-key error; the caller decides whether to retry (the second attempt
+  finds the document and updates it).
+- `findOneAndUpdate` returns the document validated against the storage schema,
+  or `null` when nothing matched. Of two racing calls on the same guard,
+  exactly one gets the document.
+
 ## `paginate` — options and cursor semantics
 
 ```typescript

@@ -4,6 +4,12 @@ import { toMongoValidator } from "./validator.ts";
 import { dbId, newId } from "./ids.ts";
 import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
 import { createDotNotationSchema } from "./dot-notation.ts";
+import {
+  type GuardedUpdateOptions,
+  guardedUpdateOps,
+  type GuardedWriteResult,
+  upsertInsertFields,
+} from "./guarded-write.ts";
 import { getSessionContext } from "./session.ts";
 import { withIndex } from "./indexes.ts";
 import type { FlatType } from "../types/flat.ts";
@@ -556,6 +562,37 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
       };
     },
   ): Promise<number>;
+  /**
+   * Guarded single-document update of the first `key` document matching
+   * `filter` — the guard is part of the atomic write. `max` bounds fields that
+   * only move forward; `upsert` inserts when nothing matches, after validating
+   * the document it would create. A miss is `matched: 0`, not an error.
+   * Same contract as the scoped view's `updateWhere`.
+   */
+  updateWhere<E extends keyof T>(
+    key: E,
+    filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
+    doc: Omit<
+      WithRemovable<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>>,
+      "_id" | "type"
+    >,
+    options?: GuardedUpdateOptions<
+      Omit<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>, "_id" | "type">
+    >,
+  ): Promise<GuardedWriteResult>;
+  /**
+   * Atomically update the first `key` document matching `filter` and return
+   * it, before or after (the default) the write; `null` on a miss.
+   */
+  findOneAndUpdate<E extends keyof T>(
+    key: E,
+    filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
+    doc: Omit<
+      WithRemovable<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>>,
+      "_id" | "type"
+    >,
+    options?: { returnDocument?: "before" | "after" },
+  ): Promise<v.InferOutput<OutputElementSchema<T, E>> | null>;
   aggregate(
     stageBuilder: (stage: StageBuilder<T>) => AggregationStage[],
   ): Promise<any[]>;
@@ -664,6 +701,30 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
   );
 
   const schema = v.union([...Object.values(schemaElements)]);
+
+  const GUARDED_RESERVED_FIELDS = ["_id", "_type"] as const;
+
+  function multiUpdateOps(
+    operation: string,
+    typeName: string,
+    doc: Record<string, unknown>,
+    max: Record<string, unknown> | undefined,
+    setOnInsert: Record<string, unknown> | undefined,
+  ) {
+    for (const part of [doc, max, setOnInsert]) {
+      if (!part) continue;
+      for (const reserved of GUARDED_RESERVED_FIELDS) {
+        if (reserved in part) {
+          throw new Error(
+            `${operation}: "${reserved}" cannot be written — it is owned by the multi-collection`,
+          );
+        }
+      }
+    }
+    const dotSchema = dotSchemaElements[typeName as keyof T];
+    if (!dotSchema) throw new Error(`${operation}: unknown type "${typeName}"`);
+    return guardedUpdateOps(operation, dotSchema, doc, max);
+  }
 
   const opts: m.CollectionOptions & CollectionOptions = {
     ...{
@@ -1804,6 +1865,119 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         () => ({ [TA.DOC_TYPE]: Object.keys(operation) }),
         run,
         (modified) => ({ [TA.MODIFIED_COUNT]: modified }),
+      );
+    },
+    async updateWhere(key, filter, doc, options) {
+      const run = async (op?: OpContext) => {
+        const typeName = key as string;
+        const record = doc as Record<string, unknown>;
+        const max = options?.max as Record<string, unknown> | undefined;
+        const setOnInsert = options?.setOnInsert as
+          | Record<string, unknown>
+          | undefined;
+        const { ops, set, written } = multiUpdateOps(
+          "updateWhere",
+          typeName,
+          record,
+          max,
+          setOnInsert,
+        );
+        const upsert = options?.upsert === true;
+        const guard = {
+          ...(filter as Record<string, unknown>),
+          _type: typeName,
+        };
+        if (upsert) {
+          const onInsert = upsertInsertFields({
+            insertSchema: schemaElements[key],
+            filter: filter as Record<string, unknown>,
+            values: { ...set, ...max },
+            setOnInsert,
+            written,
+            injected: (candidate) => ({
+              _id: candidate._id ?? `${typeName}:${newId()}`,
+            }),
+            ignored: ["_type"],
+          });
+          if (Object.keys(onInsert).length > 0) ops.$setOnInsert = onInsert;
+        }
+        if (Object.keys(ops).length === 0)
+          return { matched: 0, modified: 0, upsertedId: null };
+
+        return retryOnWriteConflict(
+          async () => {
+            const session = sessionContext.getSession();
+            const result = await collection.updateOne(
+              guard as any,
+              ops as any,
+              { session, upsert },
+            );
+            if (!result.acknowledged) throw new Error("Update failed");
+            return {
+              matched: result.matchedCount,
+              modified: result.modifiedCount,
+              upsertedId:
+                result.upsertedId === null || result.upsertedId === undefined
+                  ? null
+                  : String(result.upsertedId),
+            };
+          },
+          op ? { onRetry: op.onRetry } : undefined,
+        );
+      };
+      return traced(
+        tele,
+        "updateWhere",
+        () => ({
+          [TA.DOC_TYPE]: String(key),
+          [TA.FILTER_KEYS]: filterKeys(filter),
+          [TA.UPDATE_FIELDS]: Object.keys(doc).length,
+        }),
+        run,
+        (result) => ({ [TA.MODIFIED_COUNT]: result.modified }),
+      );
+    },
+    async findOneAndUpdate(key, filter, doc, options) {
+      const run = async (op?: OpContext) => {
+        const typeName = key as string;
+        const { ops } = multiUpdateOps(
+          "findOneAndUpdate",
+          typeName,
+          doc as Record<string, unknown>,
+          undefined,
+          undefined,
+        );
+        if (Object.keys(ops).length === 0) {
+          throw new Error(
+            `findOneAndUpdate(${typeName}): the update document writes nothing`,
+          );
+        }
+        const guard = {
+          ...(filter as Record<string, unknown>),
+          _type: typeName,
+        };
+        const raw = await retryOnWriteConflict(
+          async () => {
+            const session = sessionContext.getSession();
+            return await collection.findOneAndUpdate(guard as any, ops as any, {
+              session,
+              returnDocument: options?.returnDocument ?? "after",
+            });
+          },
+          op ? { onRetry: op.onRetry } : undefined,
+        );
+        if (!raw) return null;
+        return v.parse(schema, raw) as any;
+      };
+      return traced(
+        tele,
+        "findOneAndUpdate",
+        () => ({
+          [TA.DOC_TYPE]: String(key),
+          [TA.FILTER_KEYS]: filterKeys(filter),
+          [TA.UPDATE_FIELDS]: Object.keys(doc).length,
+        }),
+        run,
       );
     },
     async aggregate(stageBuilder) {
