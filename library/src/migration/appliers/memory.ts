@@ -235,14 +235,22 @@ function matchesWhere(
 function siblingsOf(
   content: readonly Record<string, unknown>[],
   reads: readonly string[] | undefined,
-): ReadonlyMap<string, Readonly<Record<string, readonly Record<string, unknown>[]>>> {
+): ReadonlyMap<
+  string,
+  Readonly<Record<string, readonly Record<string, unknown>[]>>
+> {
   const out = new Map<string, Record<string, Record<string, unknown>[]>>();
   if (!reads || reads.length === 0) return out;
   const wanted = new Set(reads);
   for (const doc of content) {
     const scope = doc._scope;
     const type = doc._type;
-    if (typeof scope !== "string" || typeof type !== "string" || !wanted.has(type)) continue;
+    if (
+      typeof scope !== "string" ||
+      typeof type !== "string" ||
+      !wanted.has(type)
+    )
+      continue;
     const byType = out.get(scope) ?? {};
     (byType[type] ??= []).push(doc);
     out.set(scope, byType);
@@ -252,10 +260,16 @@ function siblingsOf(
 
 function scopeOf(
   doc: Record<string, unknown>,
-  siblings: ReadonlyMap<string, Readonly<Record<string, readonly Record<string, unknown>[]>>>,
+  siblings: ReadonlyMap<
+    string,
+    Readonly<Record<string, readonly Record<string, unknown>[]>>
+  >,
 ): TransformScope {
   const scope = typeof doc._scope === "string" ? doc._scope : undefined;
-  return { scope, siblings: (scope !== undefined ? siblings.get(scope) : undefined) ?? {} };
+  return {
+    scope,
+    siblings: (scope !== undefined ? siblings.get(scope) : undefined) ?? {},
+  };
 }
 
 export function createMemoryApplier(migration: MigrationDefinition) {
@@ -1402,7 +1416,10 @@ export function createMemoryApplier(migration: MigrationDefinition) {
             (!scopeSet || scopeSet.has(doc._scope as string))
           ) {
             return {
-              ...operation.up(doc as Record<string, unknown>, scopeOf(doc, siblings)),
+              ...operation.up(
+                doc as Record<string, unknown>,
+                scopeOf(doc, siblings),
+              ),
               _type: doc._type,
               _scope: doc._scope,
               _id: doc._id,
@@ -1433,7 +1450,10 @@ export function createMemoryApplier(migration: MigrationDefinition) {
             (!scopeSet || scopeSet.has(doc._scope as string))
           ) {
             return {
-              ...operation.down(doc as Record<string, unknown>, scopeOf(doc, siblings)),
+              ...operation.down(
+                doc as Record<string, unknown>,
+                scopeOf(doc, siblings),
+              ),
               _type: doc._type,
               _scope: doc._scope,
               _id: doc._id,

@@ -666,7 +666,10 @@ export function createMongodbApplier(
     filter: Record<string, unknown>,
     reads: readonly string[] | undefined,
   ): Promise<SiblingsByScope> {
-    const out = new Map<string, Record<string, readonly Record<string, unknown>[]>>();
+    const out = new Map<
+      string,
+      Record<string, readonly Record<string, unknown>[]>
+    >();
     if (!reads || reads.length === 0) return out;
     const collection = db.collection(collectionName);
     const scopes = (await collection.distinct("_scope", filter)) as unknown[];
@@ -2507,7 +2510,11 @@ export function createMongodbApplier(
         if (operation.scopeFilter && operation.scopeFilter.length > 0) {
           filter._scope = { $in: operation.scopeFilter };
         }
-        const siblings = await loadSiblings(operation.collectionName, filter, operation.reads);
+        const siblings = await loadSiblings(
+          operation.collectionName,
+          filter,
+          operation.reads,
+        );
         await transformDocuments(
           operation.collectionName,
           filter,
@@ -2525,7 +2532,11 @@ export function createMongodbApplier(
         if (operation.scopeFilter && operation.scopeFilter.length > 0) {
           filter._scope = { $in: operation.scopeFilter };
         }
-        const siblings = await loadSiblings(operation.collectionName, filter, operation.reads);
+        const siblings = await loadSiblings(
+          operation.collectionName,
+          filter,
+          operation.reads,
+        );
         await transformDocuments(
           operation.collectionName,
           filter,

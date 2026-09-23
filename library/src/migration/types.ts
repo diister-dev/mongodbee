@@ -537,7 +537,9 @@ export type MigrationRule =
  */
 export type TransformScope = {
   readonly scope?: string;
-  readonly siblings: Readonly<Record<string, readonly Record<string, unknown>[]>>;
+  readonly siblings: Readonly<
+    Record<string, readonly Record<string, unknown>[]>
+  >;
 };
 
 export type TransformRule<T = Record<string, any>, U = Record<string, any>> = {
