@@ -55,6 +55,7 @@ import {
 } from "./telemetry.ts";
 import type { Db } from "./mongodb.ts";
 import type * as m from "mongodb";
+import type { StoredDocument } from "./stored-document.ts";
 
 import type { AggregationStage } from "./types.ts";
 import { createLogger } from "./utils/logger.ts";
@@ -368,17 +369,31 @@ export type CollectionResult<
   ): Promise<Array<m.Flatten<WithId<TInput<T>>[Key]>>>;
   findOneAndDelete(
     filter: m.Filter<TInput<T>>,
-    options?: m.FindOneAndDeleteOptions & { includeResultMetadata: boolean },
-  ): Promise<WithId<TInput<T>> | null>;
+    options: m.FindOneAndDeleteOptions & { includeResultMetadata: true },
+  ): Promise<m.ModifyResult<TInput<T>>>;
+  findOneAndDelete(
+    filter: m.Filter<TInput<T>>,
+    options?: m.FindOneAndDeleteOptions & { includeResultMetadata?: false },
+  ): Promise<m.WithId<TInput<T>> | null>;
   findOneAndReplace(
     filter: m.Filter<TInput<T>>,
     replacement: m.WithoutId<TInput<T>>,
-    options?: m.FindOneAndReplaceOptions & { includeResultMetadata: boolean },
-  ): Promise<m.ModifyResult<TInput<T>> | null>;
+    options: m.FindOneAndReplaceOptions & { includeResultMetadata: true },
+  ): Promise<m.ModifyResult<TInput<T>>>;
+  findOneAndReplace(
+    filter: m.Filter<TInput<T>>,
+    replacement: m.WithoutId<TInput<T>>,
+    options?: m.FindOneAndReplaceOptions & { includeResultMetadata?: false },
+  ): Promise<m.WithId<TInput<T>> | null>;
   findOneAndUpdate(
     filter: m.Filter<TInput<T>>,
     update: UpdateFilterWithRemovable<TInput<T>> | m.Document[],
-    options?: m.FindOneAndUpdateOptions & { includeResultMetadata: boolean },
+    options: m.FindOneAndUpdateOptions & { includeResultMetadata: true },
+  ): Promise<m.ModifyResult<TInput<T>>>;
+  findOneAndUpdate(
+    filter: m.Filter<TInput<T>>,
+    update: UpdateFilterWithRemovable<TInput<T>> | m.Document[],
+    options?: m.FindOneAndUpdateOptions & { includeResultMetadata?: false },
   ): Promise<m.WithId<TInput<T>> | null>;
   indexInformation(
     options: m.IndexInformationOptions & { full: true },
@@ -494,6 +509,7 @@ export async function collection<
 ): Promise<CollectionResult<T>> {
   type TInput = v.InferInput<v.ObjectSchema<T, undefined>>;
   type TOutput = WithId<v.InferOutput<v.ObjectSchema<T, undefined>>>;
+  type FindOneAndResult = m.ModifyResult<TInput> | m.WithId<TInput> | null;
 
   const collectionSchema = fieldsOf(input) as T;
   const composites = indexesOf(input);
@@ -559,7 +575,7 @@ export async function collection<
 
   const events = EventEmitter<Events<T>>();
   const validator = toMongoValidator(schema);
-  const invalidValidation = { $nor: [validator] };
+  const invalidValidation: m.Filter<TInput> = { $nor: [validator] };
 
   async function applyValidator() {
     await ensureValidator(db, collectionName, validator);
@@ -652,6 +668,12 @@ export async function collection<
     collectionName,
     COMPUTED_ROOT in collectionSchema,
   );
+  const documents = maintainedCollection(
+    db,
+    db.collection<StoredDocument>(collectionName, withReadPreference(opts)),
+    collectionName,
+    COMPUTED_ROOT in collectionSchema,
+  );
   await init();
 
   const tele = createOperationTracer(opts.telemetry, {
@@ -661,7 +683,153 @@ export async function collection<
   });
   registerClientTelemetry(db.client, opts.telemetry);
 
-  return {
+  function findOneAndDelete(
+    filter: m.Filter<TInput>,
+    options: m.FindOneAndDeleteOptions & { includeResultMetadata: true },
+  ): Promise<m.ModifyResult<TInput>>;
+  function findOneAndDelete(
+    filter: m.Filter<TInput>,
+    options?: m.FindOneAndDeleteOptions & { includeResultMetadata?: false },
+  ): Promise<m.WithId<TInput> | null>;
+  function findOneAndDelete(
+    filter: m.Filter<TInput>,
+    options?: m.FindOneAndDeleteOptions,
+  ): Promise<FindOneAndResult> {
+    const run = () => {
+      const session = sessionContext.getSession();
+      return options?.includeResultMetadata
+        ? collection.findOneAndDelete(filter, {
+            ...options,
+            session,
+            includeResultMetadata: true,
+          })
+        : collection.findOneAndDelete(filter, {
+            ...options,
+            session,
+            includeResultMetadata: false,
+          });
+    };
+    return traced<FindOneAndResult>(
+      tele,
+      "findOneAndDelete",
+      () => ({ [TA.FILTER_KEYS]: filterKeys(filter) }),
+      run,
+    );
+  }
+
+  function findOneAndReplace(
+    filter: m.Filter<TInput>,
+    replacement: m.WithoutId<TInput>,
+    options: m.FindOneAndReplaceOptions & { includeResultMetadata: true },
+  ): Promise<m.ModifyResult<TInput>>;
+  function findOneAndReplace(
+    filter: m.Filter<TInput>,
+    replacement: m.WithoutId<TInput>,
+    options?: m.FindOneAndReplaceOptions & { includeResultMetadata?: false },
+  ): Promise<m.WithId<TInput> | null>;
+  function findOneAndReplace(
+    filter: m.Filter<TInput>,
+    replacement: m.WithoutId<TInput>,
+    options?: m.FindOneAndReplaceOptions,
+  ): Promise<FindOneAndResult> {
+    const run = () => {
+      const validation = v.safeParse(schema, replacement);
+      if (!validation.success) {
+        throw {
+          message: "Validation error",
+          errors: validation,
+        };
+      }
+
+      const sanitizedReplacement = sanitizeForMongoDB(validation.output, {
+        undefinedBehavior: opts.undefinedBehavior || "remove",
+        deep: true,
+      }) as unknown as TInput;
+
+      const session = sessionContext.getSession();
+      return options?.includeResultMetadata
+        ? collection.findOneAndReplace(filter, sanitizedReplacement, {
+            ...options,
+            session,
+            includeResultMetadata: true,
+          })
+        : collection.findOneAndReplace(filter, sanitizedReplacement, {
+            ...options,
+            session,
+            includeResultMetadata: false,
+          });
+    };
+    return traced<FindOneAndResult>(
+      tele,
+      "findOneAndReplace",
+      () => ({ [TA.FILTER_KEYS]: filterKeys(filter) }),
+      run,
+    );
+  }
+
+  function findOneAndUpdate(
+    filter: m.Filter<TInput>,
+    update: UpdateFilterWithRemovable<TInput> | m.Document[],
+    options: m.FindOneAndUpdateOptions & { includeResultMetadata: true },
+  ): Promise<m.ModifyResult<TInput>>;
+  function findOneAndUpdate(
+    filter: m.Filter<TInput>,
+    update: UpdateFilterWithRemovable<TInput> | m.Document[],
+    options?: m.FindOneAndUpdateOptions & { includeResultMetadata?: false },
+  ): Promise<m.WithId<TInput> | null>;
+  function findOneAndUpdate(
+    filter: m.Filter<TInput>,
+    update: UpdateFilterWithRemovable<TInput> | m.Document[],
+    options?: m.FindOneAndUpdateOptions,
+  ): Promise<FindOneAndResult> {
+    const run = () => {
+      const sanitizedUpdate = checkedUpdate(filter, update, options?.upsert);
+      const session = sessionContext.getSession();
+      return options?.includeResultMetadata
+        ? collection.findOneAndUpdate(filter, sanitizedUpdate, {
+            ...options,
+            session,
+            includeResultMetadata: true,
+          })
+        : collection.findOneAndUpdate(filter, sanitizedUpdate, {
+            ...options,
+            session,
+            includeResultMetadata: false,
+          });
+    };
+    return traced<FindOneAndResult>(
+      tele,
+      "findOneAndUpdate",
+      () => ({
+        [TA.FILTER_KEYS]: filterKeys(filter),
+        [TA.UPDATE_OPERATORS]: updateOperators(update),
+      }),
+      run,
+    );
+  }
+
+  function indexes(
+    options: m.IndexInformationOptions & { full?: true },
+  ): Promise<m.IndexDescriptionInfo[]>;
+  function indexes(
+    options: m.IndexInformationOptions & { full: false },
+  ): Promise<m.IndexDescriptionCompact>;
+  function indexes(
+    options: m.IndexInformationOptions,
+  ): Promise<m.IndexDescriptionCompact | m.IndexDescriptionInfo[]>;
+  function indexes(
+    options?: m.ListIndexesOptions,
+  ): Promise<m.IndexDescriptionInfo[]>;
+  function indexes(
+    options?: m.IndexInformationOptions | m.ListIndexesOptions,
+  ): Promise<m.IndexDescriptionCompact | m.IndexDescriptionInfo[]> {
+    const session = sessionContext.getSession();
+    return options !== undefined && "full" in options && options.full === false
+      ? collection.indexes({ ...options, session, full: false })
+      : collection.indexes({ ...options, session, full: true });
+  }
+
+  const result: CollectionResult<T> = {
     // Raw collection
     collection,
 
@@ -678,6 +846,9 @@ export async function collection<
     },
     get collectionName() {
       return collection.collectionName;
+    },
+    get db() {
+      return collection.db;
     },
     get dbName() {
       return collection.dbName;
@@ -798,8 +969,8 @@ export async function collection<
     async getById(id, options?) {
       const run = async () => {
         const session = sessionContext.getSession();
-        const result = await collection.findOne(
-          { _id: id } as any,
+        const result = await documents.findOne(
+          { _id: id },
           readOpts(session, options),
         );
 
@@ -826,10 +997,7 @@ export async function collection<
         () => ({ [TA.RETURNED_ROWS]: 1 }),
       );
     },
-    find(
-      filter: m.Filter<TInput>,
-      options?: m.FindOptions & m.Abortable,
-    ): m.AbstractCursor<TOutput> {
+    find(filter, options) {
       const session = sessionContext.getSession();
       const cursor = collection.find(filter, readOpts(session, options));
       const originalToArray = cursor.toArray;
@@ -870,15 +1038,10 @@ export async function collection<
 
       return cursor as unknown as m.AbstractCursor<TOutput>;
     },
-    findInvalid(
-      filter: m.Filter<TInput>,
-      options?: m.FindOptions & m.Abortable,
-    ): m.AbstractCursor<TOutput> {
+    findInvalid(filter, options) {
       const session = sessionContext.getSession();
       const cursor = collection.find(
-        {
-          $and: [filter as any, invalidValidation],
-        },
+        { $and: [filter, invalidValidation] } as m.Filter<TInput>,
         readOpts(session, options),
       );
 
@@ -925,9 +1088,9 @@ export async function collection<
         afterId?: string | m.ObjectId;
         beforeId?: string | m.ObjectId;
         sort?: m.Sort | m.SortDirection;
-        prepare?: (doc: WithId<TOutput>) => Promise<E>;
+        prepare?: (doc: WithId<TOutput>) => Promise<E> | E;
         filter?: (doc: E) => Promise<boolean> | boolean;
-        format?: (doc: E) => Promise<R>;
+        format?: (doc: E) => Promise<R> | R;
         pipeline?: (stage: SimpleStageBuilder) => AggregationStage[];
         sortPipeline?: (stage: SimpleStageBuilder) => AggregationStage[];
         skipTotal?: boolean;
@@ -1519,8 +1682,8 @@ export async function collection<
           async () => {
             const session = sessionContext.getSession();
             return await collection.updateOne(
-              filter as any,
-              sanitizedUpdate as any,
+              filter as m.Filter<TInput>,
+              sanitizedUpdate,
               {
                 session,
                 ...options,
@@ -1551,7 +1714,7 @@ export async function collection<
         return retryOnWriteConflict(
           async () => {
             const session = sessionContext.getSession();
-            return await collection.updateMany(filter, sanitizedUpdate as any, {
+            return await collection.updateMany(filter, sanitizedUpdate, {
               session,
               ...options,
             });
@@ -1622,66 +1785,9 @@ export async function collection<
       );
     },
 
-    // Compound operations
-    findOneAndDelete(filter, options?) {
-      const run = () => {
-        const session = sessionContext.getSession();
-        return collection.findOneAndDelete(filter, { session, ...options });
-      };
-      return traced(
-        tele,
-        "findOneAndDelete",
-        () => ({ [TA.FILTER_KEYS]: filterKeys(filter) }),
-        run,
-      );
-    },
-    findOneAndReplace(filter, replacement, options?) {
-      const run = () => {
-        const validation = v.safeParse(schema, replacement);
-        if (!validation.success) {
-          throw {
-            message: "Validation error",
-            errors: validation,
-          };
-        }
-
-        const sanitizedReplacement = sanitizeForMongoDB(validation.output, {
-          undefinedBehavior: opts.undefinedBehavior || "remove",
-          deep: true,
-        }) as unknown as TInput;
-
-        const session = sessionContext.getSession();
-        return collection.findOneAndReplace(filter, sanitizedReplacement, {
-          session,
-          ...options,
-        });
-      };
-      return traced(
-        tele,
-        "findOneAndReplace",
-        () => ({ [TA.FILTER_KEYS]: filterKeys(filter) }),
-        run,
-      );
-    },
-    findOneAndUpdate(filter, update, options?) {
-      const run = () => {
-        const sanitizedUpdate = checkedUpdate(filter, update, options?.upsert);
-        const session = sessionContext.getSession();
-        return collection.findOneAndUpdate(filter, sanitizedUpdate as any, {
-          session,
-          ...options,
-        });
-      };
-      return traced(
-        tele,
-        "findOneAndUpdate",
-        () => ({
-          [TA.FILTER_KEYS]: filterKeys(filter),
-          [TA.UPDATE_OPERATORS]: updateOperators(update),
-        }),
-        run,
-      );
-    },
+    findOneAndDelete,
+    findOneAndReplace,
+    findOneAndUpdate,
 
     // Bulk operations
     aggregate(pipeline, options?) {
@@ -1742,10 +1848,7 @@ export async function collection<
       const session = sessionContext.getSession();
       return collection.dropIndexes({ session, ...options });
     },
-    indexes(options?) {
-      const session = sessionContext.getSession();
-      return collection.indexes({ session, ...options });
-    },
+    indexes,
     listIndexes(options?) {
       const session = sessionContext.getSession();
       return collection.listIndexes({ session, ...options });
@@ -1798,5 +1901,6 @@ export async function collection<
       const session = sessionContext.getSession();
       return collection.watch(pipeline, readOpts(session, options));
     },
-  } as CollectionResult<T>;
+  };
+  return result;
 }

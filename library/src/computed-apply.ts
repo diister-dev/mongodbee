@@ -1,5 +1,11 @@
-import { type Collection, type Document, type Filter, ObjectId } from "mongodb";
+import type { Document, Filter } from "mongodb";
 import type { ClientSession, Db } from "./mongodb.ts";
+import {
+  type DocumentId,
+  isDocumentId,
+  type StoredDocument,
+  storedCollection,
+} from "./stored-document.ts";
 import { COMPUTED_ROOT, type ComputedWhere } from "./computed.ts";
 import {
   type ComputedField,
@@ -9,24 +15,6 @@ import {
 import { getSessionContext } from "./session.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
 import { isRecord } from "./utils/guards.ts";
-
-export type DocumentId = string | ObjectId;
-
-export function isDocumentId(value: unknown): value is DocumentId {
-  return typeof value === "string" || value instanceof ObjectId;
-}
-
-export interface StoredDocument {
-  _id: DocumentId;
-  [field: string]: unknown;
-}
-
-export function storedCollection(
-  db: Db,
-  name: string,
-): Collection<StoredDocument> {
-  return db.collection<StoredDocument>(name);
-}
 
 export interface ComputedSubject {
   readonly _id: DocumentId;

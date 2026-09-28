@@ -13,14 +13,13 @@ import {
   type ComputedTopology,
   locationFilter,
 } from "./computed-topology.ts";
+import { recomputeSubjects, toSubjects } from "./computed-apply.ts";
 import {
   type DocumentId,
   isDocumentId,
-  recomputeSubjects,
   type StoredDocument,
   storedCollection,
-  toSubjects,
-} from "./computed-apply.ts";
+} from "./stored-document.ts";
 import { markFar, markWhole } from "./computed-marks.ts";
 import { checkTransactionEnabled, getSessionContext } from "./session.ts";
 import { type RetryOptions, retryOnWriteConflict } from "./utils/retry.ts";

@@ -9,14 +9,16 @@ import {
 import {
   applyComputed,
   type ComputedSubject,
-  type DocumentId,
-  isDocumentId,
   recomputeSubjects,
-  type StoredDocument,
-  storedCollection,
   toSubjects,
   whereFilter,
 } from "./computed-apply.ts";
+import {
+  type DocumentId,
+  isDocumentId,
+  type StoredDocument,
+  storedCollection,
+} from "./stored-document.ts";
 import { getSessionContext } from "./session.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
 import { primaryCollection } from "./read-preference.ts";

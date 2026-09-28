@@ -1,5 +1,10 @@
 import * as v from "./schema.ts";
 import type * as m from "mongodb";
+import {
+  type StoredDocument,
+  toStoredDocument,
+  toStoredFilter,
+} from "./stored-document.ts";
 import { toMongoValidator } from "./validator.ts";
 import { dbId, newId } from "./ids.ts";
 import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
@@ -101,46 +106,47 @@ type IdSchema<TFields> = "_id" extends keyof TFields
   ? TFields["_id"]
   : ReturnType<typeof dbId>;
 
-type AnyMessage = any;
+type LiteralMessage = v.ErrorMessage<v.LiteralIssue> | undefined;
+type ObjectMessage = v.ErrorMessage<v.ObjectIssue> | undefined;
 
-type Elements<T extends Record<string, any>> = {
+type AnySchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
+type MultiCollectionSchema = Record<string, Record<string, AnySchema>>;
+
+type Elements<T extends MultiCollectionSchema> = {
   [key in keyof T]: {
     _id: IdSchema<T[key]>;
-    _type: v.LiteralSchema<key, AnyMessage>;
+    _type: v.LiteralSchema<key, LiteralMessage>;
   } & Omit<T[key], "_id">;
 }[keyof T];
 
 type OutputElementSchema<
-  T extends Record<string, any>,
+  T extends MultiCollectionSchema,
   K extends keyof T,
 > = v.ObjectSchema<
   {
     _id: IdSchema<T[K]>;
-    _type: v.LiteralSchema<K, AnyMessage>;
+    _type: v.LiteralSchema<K, LiteralMessage>;
   } & Omit<T[K], "_id">,
-  any
+  ObjectMessage
 >;
 
 type ElementSchema<
-  T extends Record<string, any>,
+  T extends MultiCollectionSchema,
   K extends keyof T,
 > = v.ObjectSchema<
   {
     _id: IdSchema<T[K]>;
   } & Omit<T[K], "_id">,
-  any
+  ObjectMessage
 >;
 
 /** Insert input: `_id` is minted when omitted. */
-type InsertDoc<T extends Record<string, any>, K extends keyof T> = Omit<
+type InsertDoc<T extends MultiCollectionSchema, K extends keyof T> = Omit<
   v.InferInput<ElementSchema<T, K>>,
   "_id"
 > & { _id?: string };
 
-type AnySchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
-type MultiSchema<T extends Record<string, any>> = Elements<T>;
-
-type MultiCollectionSchema = Record<string, Record<string, AnySchema>>;
+type MultiSchema<T extends MultiCollectionSchema> = Elements<T>;
 
 /**
  * Type helper to allow field removal with removeField()
@@ -390,10 +396,10 @@ function createMultiStageBuilder<T extends MultiCollectionSchema>(
 }
 
 type Input<T extends MultiCollectionSchema> = v.InferInput<
-  v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>
+  v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, ObjectMessage>], undefined>
 >;
 type Output<T extends MultiCollectionSchema> = v.InferOutput<
-  v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>
+  v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, ObjectMessage>], undefined>
 >;
 
 /**
@@ -685,7 +691,6 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
   );
   const collectionSchema = normalized.fields as T;
   const composites = normalized.indexes;
-  type TOutput = Output<T>;
 
   const schemaWithId = Object.entries(collectionSchema).reduce(
     (acc, [key, value]) => {
@@ -718,7 +723,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         [key]: createDotNotationSchema(value),
       };
     },
-    {} as Record<keyof T, v.BaseSchema<any, any, any>>,
+    {} as Record<keyof T, AnySchema>,
   );
 
   const schema = v.union([...Object.values(schemaElements)]);
@@ -845,7 +850,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
   const collection = maintainedCollection(
     db,
-    db.collection<TOutput>(collectionName, withReadPreference(opts)),
+    db.collection<StoredDocument>(collectionName, withReadPreference(opts)),
     collectionName,
     Object.values(collectionSchema).some((fields) => COMPUTED_ROOT in fields),
   );
@@ -870,10 +875,12 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         });
 
         // Apply sanitization based on configuration
-        const safeDoc = sanitizeForMongoDB(validation, {
-          undefinedBehavior: opts.undefinedBehavior || "remove",
-          deep: true,
-        }) as any;
+        const safeDoc = toStoredDocument(
+          sanitizeForMongoDB(validation, {
+            undefinedBehavior: opts.undefinedBehavior || "remove",
+            deep: true,
+          }),
+        );
 
         const session = sessionContext.getSession();
         const result = await collection.insertOne(safeDoc, { session });
@@ -907,12 +914,13 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         });
 
         // Apply sanitization based on configuration
-        const safeDocs = validation.map(
-          (doc) =>
+        const safeDocs = validation.map((doc) =>
+          toStoredDocument(
             sanitizeForMongoDB(doc, {
               undefinedBehavior: opts.undefinedBehavior || "remove",
               deep: true,
-            }) as any,
+            }),
+          ),
         );
 
         const session = sessionContext.getSession();
@@ -940,7 +948,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         const result = await collection.findOne(
           {
             $and: [{ _type: key as string }, { _id: id }],
-          } as any,
+          },
           readOpts(session, options),
         );
 
@@ -965,8 +973,8 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         const session = sessionContext.getSession();
         const result = await collection.findOne(
           {
-            $and: [{ _type: key as string }, filter],
-          } as any,
+            $and: [{ _type: key as string }, toStoredFilter(filter)],
+          },
           readOpts(session, options),
         );
 
@@ -995,8 +1003,11 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         const session = sessionContext.getSession();
         const cursor = collection.find(
           {
-            $and: filter ? [typeChecker, filter] : [typeChecker],
-          } as any,
+            $and:
+              filter === undefined
+                ? [typeChecker]
+                : [typeChecker, toStoredFilter(filter)],
+          },
           readOpts(session, options),
         );
 
@@ -1030,7 +1041,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     // Type safety is enforced through the overload signatures above
     async paginate(
       keyOrKeys: keyof T | (keyof T)[],
-      filter?: m.Filter<any>,
+      filter?: unknown,
       options?: {
         limit?: number;
         afterId?: string;
@@ -1089,7 +1100,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             : { _type: { $in: keys as string[] } };
 
         // Build the base query with type filter
-        const baseQuery = filter ? [typeChecker, filter] : [typeChecker];
+        const baseQuery =
+          filter === undefined
+            ? [typeChecker]
+            : [typeChecker, toStoredFilter(filter)];
         let query: Record<string, unknown> = { $and: baseQuery };
 
         // Normalize sort + direction-following `_id` tie-break (see
@@ -1173,7 +1187,9 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           createMultiStageBuilder<T>(collectionName);
 
         // Build cursor - use aggregate if pipeline is provided or naturalIdSort is enabled
-        let cursor: m.FindCursor<any> | m.AggregationCursor<any>;
+        let cursor:
+          | m.FindCursor<StoredDocument>
+          | m.AggregationCursor<StoredDocument>;
 
         // Stage to extract ULID part from _id for natural sorting across types
         const ulidExtractStage: AggregationStage = {
@@ -1571,7 +1587,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         const result = await collection.deleteOne(
           {
             _id: id,
-          } as any,
+          },
           { session },
         );
 
@@ -1611,7 +1627,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
               $in: ids,
             },
             _type: key as string,
-          } as any,
+          },
           { session },
         );
 
@@ -1643,9 +1659,9 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
         // Combine the user filter with the type filter
         const combinedFilter = {
-          ...filter,
+          ...toStoredFilter(filter),
           _type: key as string,
-        } as any;
+        };
 
         const result = await collection.deleteMany(combinedFilter, { session });
 
@@ -1670,7 +1686,9 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
       const run = async () => {
         const session = sessionContext.getSession();
 
-        const result = await collection.deleteMany(filter as any, { session });
+        const result = await collection.deleteMany(toStoredFilter(filter), {
+          session,
+        });
 
         if (!result.acknowledged) {
           throw new Error("Delete failed");
@@ -1692,7 +1710,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
       const run = async () => {
         const session = sessionContext.getSession();
         const result = await collection.findOne(
-          filter as any,
+          toStoredFilter(filter),
           readOpts(session, options),
         );
         if (!result) {
@@ -1713,7 +1731,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
       const run = async () => {
         const session = sessionContext.getSession();
         const cursor = collection.find(
-          filter as any,
+          toStoredFilter(filter),
           readOpts(session, options),
         );
         const result = await cursor.toArray();
@@ -1768,10 +1786,8 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             });
 
             // Build update operations
-            const updateOps: Record<string, unknown> = {};
-            if (
-              Object.keys(sanitizedDoc as Record<string, unknown>).length > 0
-            ) {
+            const updateOps: m.UpdateFilter<StoredDocument> = {};
+            if (Object.keys(sanitizedDoc).length > 0) {
               updateOps.$set = sanitizedDoc;
             }
             if (Object.keys(unset).length > 0) {
@@ -1784,11 +1800,8 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             }
 
             const result = await collection.updateOne(
-              {
-                _id: id,
-                _type: key as string,
-              } as unknown as m.Filter<TOutput>,
-              updateOps as m.UpdateFilter<TOutput>,
+              { _id: id, _type: key as string },
+              updateOps,
               { session },
             );
 
@@ -1822,7 +1835,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
       const run = (op?: OpContext) =>
         retryOnWriteConflict(
           async () => {
-            const bulkOps: any[] = [];
+            const bulkOps: m.AnyBulkWriteOperation<StoredDocument>[] = [];
             for (const type in operation) {
               const elements = operation[type];
               for (const id in elements) {
@@ -1945,11 +1958,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         return retryOnWriteConflict(
           async () => {
             const session = sessionContext.getSession();
-            const result = await collection.updateOne(
-              guard as any,
-              ops as any,
-              { session, upsert },
-            );
+            const result = await collection.updateOne(guard, ops, {
+              session,
+              upsert,
+            });
             if (!result.acknowledged) throw new Error("Update failed");
             return {
               matched: result.matchedCount,
@@ -1997,7 +2009,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         const raw = await retryOnWriteConflict(
           async () => {
             const session = sessionContext.getSession();
-            return await collection.findOneAndUpdate(guard as any, ops as any, {
+            return await collection.findOneAndUpdate(guard, ops, {
               session,
               returnDocument: options?.returnDocument ?? "after",
             });
@@ -2005,7 +2017,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           op ? { onRetry: op.onRetry } : undefined,
         );
         if (!raw) return null;
-        return v.parse(schema, raw) as any;
+        return v.parse(schema, raw);
       };
       return traced(
         tele,
