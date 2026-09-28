@@ -1,0 +1,32 @@
+exit 1
+--- stdout
+[1m[34m🐝 Checking migrations...[39m[22m
+[2m  Options: mode: quick[22m
+
+[2mMigrations directory: <project>/migrations[22m
+[2mSchemas file: <project>/schemas.ts[22m
+
+[2mFound 2 migration(s)[22m
+
+[1m📋 Validating schema consistency...[22m
+[32m  ✓ Schema consistency validated[39m
+
+[1m🧪 Validating migrations with simulation [quick]...[22m
+
+  [32m✓[39m [1/2] [1mcreate users[22m [2m(2025_01_01_000001_create_users)[22m [2m2 operations, reversible[22m
+  [31m✗[39m [2/2] [1madd role[22m [2m(2025_01_02_000002_add_role)[22m [31m1 error[39m
+
+[1m📊 Summary:[22m
+
+  Total migrations: [1m2[22m
+  Valid: [32m[1m1[22m[39m
+  Invalid: [31m[1m1[22m[39m
+
+[31m[1m✗ Validation FAILED — 1 of 2 migration(s) have errors[22m[39m
+
+[31m  ✗ add role [2m(2025_01_02_000002_add_role)[22m[39m
+[31m      Document in collection "users" does not match schema:
+-> (role) Invalid type: Expected ("admin" | "viewer") but received "owner"[39m
+
+--- stderr
+[31m[1mError:[22m[39m Migration validation failed

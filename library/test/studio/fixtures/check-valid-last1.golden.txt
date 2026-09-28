@@ -1,0 +1,26 @@
+exit 0
+--- stdout
+[1m[34m🐝 Checking migrations...[39m[22m
+[2m  Options: last: 1[22m
+
+[2mMigrations directory: <project>/migrations[22m
+[2mSchemas file: <project>/schemas.ts[22m
+
+[2mFound 2 migration(s)[22m
+
+[1m📋 Validating schema consistency...[22m
+[32m  ✓ Schema consistency validated[39m
+
+[1m🧪 Validating migrations with simulation [normal] (last 1)...[22m
+
+  [32m✓[39m [1/1] [1madd role[22m [2m(2025_01_02_000002_add_role)[22m [2m1 operation, reversible[22m
+
+[1m📊 Summary:[22m
+
+  Total migrations: [1m1[22m
+  Valid: [32m[1m1[22m[39m
+  Not validated: [33m[1m1[22m[39m
+
+[32m[1m✓ The last 1 migration(s) are valid and ready to apply![22m[39m
+[33m  1 earlier migration(s) were NOT validated — run without --last for the full chain.[39m
+--- stderr
