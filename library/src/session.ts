@@ -1,6 +1,7 @@
 import type { ClientSession, Db, MongoClient } from "../mod.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getTransactionTracer } from "./telemetry.ts";
+import { runInTransactionScope } from "./transaction-scope.ts";
 
 /**
  * Checks if MongoDB transactions are enabled on the current database
@@ -200,7 +201,7 @@ export function createSessionContext(mongoClient: MongoClient): {
       const execute = async () => {
         try {
           newSession.startTransaction();
-          const result = await fn(newSession);
+          const result = await runInTransactionScope(() => fn(newSession));
           await newSession.commitTransaction();
           return result as T;
         } catch (e) {

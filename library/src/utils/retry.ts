@@ -2,6 +2,8 @@
  * Error detection utilities for MongoDB write conflicts
  */
 
+import { insideTransaction } from "../transaction-scope.ts";
+
 /**
  * Checks if an error is a MongoDB write conflict error
  *
@@ -33,6 +35,27 @@ export function isWriteConflictError(error: unknown): boolean {
     (message.includes("transaction") && message.includes("aborted")) ||
     // MongoDB error code for write conflicts
     (error as any).code === 112
+  );
+}
+
+const NO_SUCH_TRANSACTION = 251;
+
+export function isTransactionScopedError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as {
+    code?: unknown;
+    message?: unknown;
+    hasErrorLabel?: (label: string) => boolean;
+  };
+  if (
+    typeof candidate.hasErrorLabel === "function" &&
+    candidate.hasErrorLabel("TransientTransactionError")
+  )
+    return true;
+  if (candidate.code === NO_SUCH_TRANSACTION) return true;
+  return (
+    typeof candidate.message === "string" &&
+    /transaction .* has been aborted/i.test(candidate.message)
   );
 }
 
@@ -131,7 +154,10 @@ export async function retryOnWriteConflict<T>(
       // Check if we should retry this error — only log/announce a retry once
       // we've actually decided to retry (avoids noisy "Retry attempt" lines
       // for application errors that are immediately rethrown).
-      if (!shouldRetry(error)) {
+      if (
+        (insideTransaction() && isTransactionScopedError(error)) ||
+        !shouldRetry(error)
+      ) {
         throw error;
       }
 
