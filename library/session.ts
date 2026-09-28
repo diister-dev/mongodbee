@@ -35,3 +35,8 @@ export {
   requestReadStats,
   withRequestContext,
 } from "./src/request-context.ts";
+export {
+  type AfterCommit,
+  afterCommit,
+  insideTransaction,
+} from "./src/transaction-scope.ts";

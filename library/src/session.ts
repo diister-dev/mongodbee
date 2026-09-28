@@ -4,7 +4,10 @@ import { contextVariable } from "./context-variable.ts";
 import { PRIMARY } from "./read-preference.ts";
 import { invalidateReads } from "./request-context.ts";
 import { getTransactionTracer } from "./telemetry.ts";
-import { runInTransactionScope } from "./transaction-scope.ts";
+import {
+  runInTransactionScope,
+  type TransactionRun,
+} from "./transaction-scope.ts";
 import { createLogger } from "./utils/logger.ts";
 
 const log = createLogger("session");
@@ -281,7 +284,7 @@ export function createSessionContext(mongoClient: MongoClient): {
     }
 
     const newSession = mongoClient.startSession();
-    return asyncSession.run(newSession, () => {
+    const committed = await asyncSession.run(newSession, () => {
       const txOptions = transactionOptions(options);
       const startedAt = Date.now();
       const canRetry = (e: unknown) =>
@@ -292,7 +295,7 @@ export function createSessionContext(mongoClient: MongoClient): {
         try {
           while (true) {
             newSession.startTransaction(txOptions);
-            let result: T;
+            let result: TransactionRun<T>;
             try {
               result = await runInTransactionScope(() => fn(newSession));
             } catch (e) {
@@ -321,6 +324,14 @@ export function createSessionContext(mongoClient: MongoClient): {
         ? txTracer.withTransaction(newSession, execute)
         : execute();
     });
+    for (const callback of committed.afterCommit) {
+      try {
+        await callback();
+      } catch (error) {
+        log.error("An afterCommit callback failed after the commit", error);
+      }
+    }
+    return committed.result;
   }
 
   return {
