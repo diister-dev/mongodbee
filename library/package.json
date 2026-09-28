@@ -66,6 +66,10 @@
       "types": "./dist/src/type-definition.d.ts",
       "default": "./dist/src/type-definition.js"
     },
+    "./computed": {
+      "types": "./dist/src/computed.d.ts",
+      "default": "./dist/src/computed.js"
+    },
     "./schema-navigator": {
       "types": "./dist/src/schema-navigator.d.ts",
       "default": "./dist/src/schema-navigator.js"

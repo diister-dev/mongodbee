@@ -11,6 +11,8 @@ import {
   upsertInsertFields,
 } from "./guarded-write.ts";
 import { getSessionContext } from "./session.ts";
+import { COMPUTED_ROOT } from "./computed-guard.ts";
+import { maintainedCollection } from "./computed-maintenance.ts";
 import { withIndex } from "./indexes.ts";
 import type { FlatType } from "../types/flat.ts";
 import type { Db } from "./mongodb.ts";
@@ -822,7 +824,12 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     log.debug(`init(${collectionName}): end`);
   }
 
-  const collection = db.collection<TOutput>(collectionName, opts);
+  const collection = maintainedCollection(
+    db,
+    db.collection<TOutput>(collectionName, opts),
+    collectionName,
+    Object.values(collectionSchema).some((fields) => COMPUTED_ROOT in fields),
+  );
   await init();
 
   const tele = createOperationTracer(opts.telemetry, {

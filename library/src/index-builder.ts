@@ -1,15 +1,18 @@
 import type * as m from "mongodb";
 import type { CompositeIndexDescriptor } from "./indexes.ts";
 
-export const PATH_SYMBOL: symbol = Symbol.for("mongodbee.path");
+export const PATH_SYMBOL: unique symbol = Symbol.for("mongodbee.path") as never;
 
-export interface FieldRef {
+declare const FIELD_TYPE: unique symbol;
+
+export interface FieldRef<T = unknown> {
   readonly [PATH_SYMBOL]: string;
+  readonly [FIELD_TYPE]?: T;
 }
 
 type Scalar = string | number | boolean | bigint | Date | null | undefined;
 
-export type FieldProxy<T> = FieldRef &
+export type FieldProxy<T> = FieldRef<T> &
   (T extends Scalar
     ? unknown
     : T extends ReadonlyArray<unknown>
@@ -17,7 +20,7 @@ export type FieldProxy<T> = FieldRef &
       : { readonly [K in keyof T]-?: FieldProxy<NonNullable<T[K]>> });
 
 export type FieldsOf<T> = FieldProxy<T> & {
-  readonly _id: FieldRef;
+  readonly _id: FieldRef<string>;
 };
 
 export function fieldPath(ref: FieldRef | string): string {

@@ -38,3 +38,42 @@ export * from "./src/runtime-config.ts";
 export * from "./src/ids.ts";
 export { partial, removeField } from "./src/sanitizer.ts";
 export type { TelemetryOptions } from "./src/telemetry.ts";
+export * from "./src/computed.ts";
+export {
+  type ComputedField,
+  type ComputedLocation,
+  type ComputedSchemas,
+  ComputedTopology,
+  ComputedTopologyError,
+  computedTopology,
+} from "./src/computed-topology.ts";
+export {
+  type ApplyComputedOptions,
+  type ApplyComputedResult,
+  applyComputed,
+  type CheckComputedOptions,
+  type CheckComputedResult,
+  type ComputedDrift,
+  ComputedEntriesExceededError,
+  checkComputed,
+  repairComputed,
+} from "./src/computed-apply.ts";
+export {
+  type ComputedRegistrationOptions,
+  ComputedNotRegisteredError,
+  ComputedRequiresTransactionError,
+  ComputedUnsupportedWriteError,
+  computedRegistration,
+  DEFAULT_INLINE_RECOMPUTE_LIMIT,
+  registerComputed,
+  unregisterComputed,
+} from "./src/computed-maintenance.ts";
+export {
+  COMPUTED_PENDING_COLLECTION,
+  type ComputedMark,
+  type DrainComputedOptions,
+  type DrainComputedResult,
+  drainComputedPending,
+  type PendingComputedSummary,
+  pendingComputed,
+} from "./src/computed-marks.ts";

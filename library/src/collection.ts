@@ -1,6 +1,8 @@
 import * as v from "./schema.ts";
 import { toMongoValidator } from "./validator.ts";
 import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
+import { COMPUTED_ROOT, refuseComputedWrite } from "./computed-guard.ts";
+import { maintainedCollection } from "./computed-maintenance.ts";
 import { createDotNotationSchema } from "./dot-notation.ts";
 import {
   insertedValues,
@@ -484,7 +486,10 @@ export async function collection<
     update: unknown,
     upsert: boolean | undefined,
   ): Record<string, unknown> | m.Document[] {
-    if (Array.isArray(update)) return update;
+    if (Array.isArray(update)) {
+      refuseComputedWrite(update);
+      return update;
+    }
     const processed = processUpdateWithRemoveField(
       update as Record<string, unknown>,
     );
@@ -602,7 +607,12 @@ export async function collection<
     }
   }
 
-  const collection = db.collection<TInput>(collectionName, opts);
+  const collection = maintainedCollection(
+    db,
+    db.collection<TInput>(collectionName, opts),
+    collectionName,
+    COMPUTED_ROOT in collectionSchema,
+  );
   await init();
 
   const tele = createOperationTracer(opts.telemetry, {
@@ -1635,6 +1645,15 @@ export async function collection<
       return collection.aggregate(pipeline, { session, ...options });
     },
     bulkWrite(operations, options?) {
+      for (const operation of operations) {
+        for (const body of Object.values(operation) as Array<
+          Record<string, unknown>
+        >) {
+          refuseComputedWrite(body.document);
+          refuseComputedWrite(body.update);
+          refuseComputedWrite(body.replacement);
+        }
+      }
       const run = () => {
         const session = sessionContext.getSession();
         return collection.bulkWrite(operations, { session, ...options });

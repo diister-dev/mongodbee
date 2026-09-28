@@ -14,6 +14,8 @@ import { toMongoValidator } from "./validator.ts";
 import { dbId, newId } from "./ids.ts";
 import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
 import { getSessionContext } from "./session.ts";
+import { COMPUTED_ROOT } from "./computed-guard.ts";
+import { maintainedCollection } from "./computed-maintenance.ts";
 import { createDotNotationSchema } from "./dot-notation.ts";
 import {
   type GuardedUpdateOptions,
@@ -671,7 +673,12 @@ export async function scopedMultiCollection<S extends AnySchema>(
     {} as Record<string, v.BaseSchema<any, any, any>>,
   );
 
-  const collection = db.collection<any>(collectionName);
+  const collection = maintainedCollection(
+    db,
+    db.collection<any>(collectionName),
+    collectionName,
+    Object.values(types).some((fields) => COMPUTED_ROOT in fields),
+  );
   const sessionContext = getSessionContext(db.client);
 
   const shouldAutoApply =

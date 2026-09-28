@@ -10,6 +10,7 @@
     "./ids": "./src/ids.ts",
     "./indexes": "./src/indexes.ts",
     "./type-definition": "./src/type-definition.ts",
+    "./computed": "./src/computed.ts",
     "./schema-navigator": "./src/schema-navigator.ts",
     "./types": "./src/types.ts",
     "./migration": "./src/migration/mod.ts",

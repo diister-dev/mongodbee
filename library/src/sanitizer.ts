@@ -2,6 +2,8 @@
  * Utilities for sanitizing documents before MongoDB operations
  */
 
+import { refuseComputedWrite } from "./computed-guard.ts";
+
 /**
  * Recursively removes undefined values from an object
  * This is needed because MongoDB doesn't support undefined as a BSON type
@@ -221,6 +223,7 @@ export function sanitizeForMongoDB<T = unknown>(
     deep: boolean;
   } = { undefinedBehavior: "remove", deep: true },
 ): T {
+  refuseComputedWrite(obj);
   function processValue(value: unknown): unknown {
     if (value === REMOVE_FIELD) {
       return undefined; // Will be removed by removeUndefined
