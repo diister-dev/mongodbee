@@ -14,6 +14,7 @@ import { toMongoValidator } from "./validator.ts";
 import { dbId, newId } from "./ids.ts";
 import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
 import { getSessionContext } from "./session.ts";
+import { readOpts } from "./read-preference.ts";
 import { createDotNotationSchema } from "./dot-notation.ts";
 import {
   type GuardedUpdateOptions,
@@ -109,6 +110,14 @@ export type ScopedMultiCollectionConfig<
    * - "inherit": Use global runtime config (default)
    */
   schemaManagement?: "auto" | "managed" | "inherit";
+  /**
+   * Read preference of this collection's reads outside a transaction, e.g.
+   * `{ mode: "secondaryPreferred", maxStalenessSeconds: 90 }`. Defaults to
+   * the client's. Transactions and index sync always use the primary.
+   */
+  readPreference?: m.ReadPreferenceLike;
+  /** Read concern of this collection's reads outside a transaction. */
+  readConcern?: m.ReadConcernLike;
 };
 
 // -------- Per-type schema augmentation -----------------------------------
@@ -671,7 +680,10 @@ export async function scopedMultiCollection<S extends AnySchema>(
     {} as Record<string, v.BaseSchema<any, any, any>>,
   );
 
-  const collection = db.collection<any>(collectionName);
+  const collection = db.collection<any>(collectionName, {
+    readPreference: config.readPreference,
+    readConcern: config.readConcern,
+  });
   const sessionContext = getSessionContext(db.client);
 
   const shouldAutoApply =
@@ -942,10 +954,10 @@ export async function scopedMultiCollection<S extends AnySchema>(
           ];
           if (filter) conditions.push(filter as Record<string, unknown>);
 
-          const cursor = collection.find({ $and: conditions } as any, {
-            session,
-            ...findOptions,
-          });
+          const cursor = collection.find(
+            { $and: conditions } as any,
+            readOpts(session, findOptions),
+          );
           const raw = await cursor.toArray();
           // `validate: false` skips the per-document parse for trusted hot-path
           // reads, returning the raw stored docs. Schema transforms are NOT
@@ -983,8 +995,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
           ];
           if (filter) conditions.push(filter as Record<string, unknown>);
           const cursor = collection.find({ $and: conditions } as any, {
-            session,
-            ...options,
+            ...readOpts(session, options),
             projection: buildProjection(fields as readonly string[]),
           });
           // Projected docs are partial — return them raw. Validating against
@@ -1032,10 +1043,10 @@ export async function scopedMultiCollection<S extends AnySchema>(
           const { validate = true, ...findOptions } = options ?? {};
           const conditions: Record<string, unknown>[] = [{ _scope: scopeId }];
           if (filter) conditions.push(filter as Record<string, unknown>);
-          const cursor = collection.find({ $and: conditions } as any, {
-            session,
-            ...findOptions,
-          });
+          const cursor = collection.find(
+            { $and: conditions } as any,
+            readOpts(session, findOptions),
+          );
           const raw = await cursor.toArray();
           if (validate === false) return raw as any;
           const out: unknown[] = [];
@@ -1066,10 +1077,10 @@ export async function scopedMultiCollection<S extends AnySchema>(
             { _scope: scopeId },
           ];
           if (filter) conditions.push(filter as Record<string, unknown>);
-          return collection.countDocuments({ $and: conditions } as any, {
-            session,
-            ...options,
-          });
+          return collection.countDocuments(
+            { $and: conditions } as any,
+            readOpts(session, options),
+          );
         };
         return traced(
           tele,
@@ -1957,10 +1968,10 @@ export async function scopedMultiCollection<S extends AnySchema>(
             conditions.push(userFilter as Record<string, unknown>);
           }
 
-          const cursor = collection.find({ $and: conditions } as any, {
-            session,
-            ...findOptions,
-          });
+          const cursor = collection.find(
+            { $and: conditions } as any,
+            readOpts(session, findOptions),
+          );
           const raw = await cursor.toArray();
           if (validate === false) return raw as any;
           const out: unknown[] = [];
@@ -1994,8 +2005,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
             conditions.push(userFilter as Record<string, unknown>);
           }
           const cursor = collection.find({ $and: conditions } as any, {
-            session,
-            ...options,
+            ...readOpts(session, options),
             projection: buildProjection(fields as readonly string[]),
           });
           return (await cursor.toArray()) as any;
@@ -2024,10 +2034,10 @@ export async function scopedMultiCollection<S extends AnySchema>(
             conditions.push(userFilter as Record<string, unknown>);
           }
 
-          return collection.countDocuments({ $and: conditions } as any, {
-            session,
-            ...options,
-          });
+          return collection.countDocuments(
+            { $and: conditions } as any,
+            readOpts(session, options),
+          );
         };
         return traced(
           tele,

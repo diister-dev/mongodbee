@@ -71,6 +71,7 @@ import {
 } from "../type-definition.ts";
 import { sanitizePathName } from "../schema-navigator.ts";
 import * as v from "../schema.ts";
+import { primaryCollection } from "../read-preference.ts";
 
 /**
  * Options for checking migration status
@@ -328,7 +329,7 @@ async function validateCollectionIndexes(
   const issues: IndexIssue[] = [];
 
   try {
-    const collection = db.collection(collectionName);
+    const collection = primaryCollection(db, collectionName);
     const currentIndexes = await collection.indexes();
 
     // If schema is not an ObjectSchema, wrap it

@@ -19,6 +19,7 @@ import { isMigrationAncestor } from "./definition.ts";
 import type { MigrationDefinition } from "./types.ts";
 import { getSessionContext } from "../session.ts";
 import { createLogger } from "../utils/logger.ts";
+import { PRIMARY, primaryCollection } from "../read-preference.ts";
 
 const log = createLogger("registry");
 
@@ -287,7 +288,9 @@ export async function discoverMultiCollectionInstances(
 
   // List all collections in the database
   // Note: listCollections cannot run in a transaction, so we don't pass session here
-  const collections = await db.listCollections().toArray();
+  const collections = await db
+    .listCollections({}, { readPreference: PRIMARY })
+    .toArray();
   const instances = new Set<string>();
 
   // Prefix-named collections that hold data but expose no valid `_information`
@@ -314,7 +317,7 @@ export async function discoverMultiCollectionInstances(
     // different type rules it out.
     let info: MultiCollectionInfo | null = null;
     try {
-      info = (await db.collection(collName).findOne(
+      info = (await primaryCollection(db, collName).findOne(
         {
           _type: MULTI_COLLECTION_INFO_TYPE,
         },
@@ -353,7 +356,7 @@ export async function discoverMultiCollectionInstances(
     // destructive consumer would otherwise flow or drop its real data.
     let hasData = false;
     try {
-      const anyDoc = await db.collection(collName).findOne(
+      const anyDoc = await primaryCollection(db, collName).findOne(
         {},
         {
           projection: { _id: 1 },
@@ -406,7 +409,7 @@ export async function getMultiCollectionInfo(
   collectionName: string,
 ): Promise<MultiCollectionInfo | null> {
   const session = getSessionFromDb(db);
-  const collection = db.collection(collectionName);
+  const collection = primaryCollection(db, collectionName);
 
   return (await collection.findOne(
     {
@@ -434,7 +437,7 @@ export async function createMultiCollectionInfo(
     `createMultiCollectionInfo(${collectionName}, type=${collectionType}, migration=${migrationId})`,
   );
   const session = getSessionFromDb(db);
-  const collection = db.collection(collectionName);
+  const collection = primaryCollection(db, collectionName);
   const mongodbeeVersion = getCurrentVersion();
 
   const info: MultiCollectionInfo = {
@@ -494,7 +497,7 @@ export async function recordMultiCollectionMigration(
   error?: string,
 ): Promise<void> {
   const session = getSessionFromDb(db);
-  const collection = db.collection(collectionName);
+  const collection = primaryCollection(db, collectionName);
   const mongodbeeVersion = getCurrentVersion();
 
   // Build record with only defined fields to avoid null values in MongoDB
@@ -537,7 +540,7 @@ export async function getMultiCollectionMigrations(
   collectionName: string,
 ): Promise<MultiCollectionMigrations | null> {
   const session = getSessionFromDb(db);
-  const collection = db.collection(collectionName);
+  const collection = primaryCollection(db, collectionName);
 
   return (await collection.findOne(
     {
@@ -700,7 +703,7 @@ export async function multiCollectionInstanceExists(
   log.debug(`multiCollectionInstanceExists(${collectionName})`);
   try {
     const session = getSessionFromDb(db);
-    const collection = db.collection(collectionName);
+    const collection = primaryCollection(db, collectionName);
     const info = (await collection.findOne(
       {
         _type: MULTI_COLLECTION_INFO_TYPE,
@@ -834,7 +837,7 @@ export async function shouldInstanceReceiveMigration(
 ): Promise<boolean> {
   try {
     const session = getSessionFromDb(db);
-    const collection = db.collection(collectionName);
+    const collection = primaryCollection(db, collectionName);
     const migrations = (await collection.findOne(
       {
         _type: MULTI_COLLECTION_MIGRATIONS_TYPE,
@@ -885,7 +888,7 @@ export async function shouldInstanceReceiveMigrationFromChain(
 ): Promise<boolean> {
   try {
     const session = getSessionFromDb(db);
-    const collection = db.collection(collectionName);
+    const collection = primaryCollection(db, collectionName);
     const migrations = (await collection.findOne(
       {
         _type: MULTI_COLLECTION_MIGRATIONS_TYPE,
@@ -952,7 +955,7 @@ export async function markAsMultiCollection(
   fromMigrationId?: string,
 ): Promise<void> {
   const session = getSessionFromDb(db);
-  const collection = db.collection(collectionName);
+  const collection = primaryCollection(db, collectionName);
 
   // Check if already marked
   const existing = await collection.findOne(
