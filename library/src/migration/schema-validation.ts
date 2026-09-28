@@ -8,7 +8,7 @@
  */
 
 import * as path from "node:path";
-import { INDEX_SYMBOL } from "../indexes.ts";
+import { INDEX_SYMBOL, indexMetadataOf } from "../indexes.ts";
 import { isTypeDefinition } from "../type-definition.ts";
 import type { MigrationDefinition, SchemasDefinition } from "./types.ts";
 import { pathToFileUrl } from "./utils/platform.ts";
@@ -153,7 +153,7 @@ export function simplifySchema(schema: any): any {
   // so it is structural and must survive simplification to participate in
   // snapshot comparisons. Other metadata (title, description, i18n) stays noise.
   if (CLEANUP_KINDS.includes(schema.kind)) {
-    const indexMetadata = schema.metadata?.[INDEX_SYMBOL];
+    const indexMetadata = indexMetadataOf(schema.metadata);
     if (indexMetadata !== undefined) {
       return {
         kind: schema.kind,
@@ -194,7 +194,7 @@ export function simplifySchema(schema: any): any {
  * @param schema - Simplified schema object
  * @returns Flattened object with dot-notation paths as keys
  */
-function flattenSchema(schema: any): Record<string, any> {
+export function flattenSchema(schema: any): Record<string, any> {
   const result: Record<string, any> = {};
 
   if (!schema || typeof schema !== "object") {
@@ -262,7 +262,7 @@ function flattenSchema(schema: any): Record<string, any> {
  * @param schema2 - Second flattened schema
  * @returns Array of differences with key and before/after values
  */
-function diffSchemas(
+export function diffSchemas(
   schema1: Record<string, any>,
   schema2: Record<string, any>,
 ): Array<{ key: string; before?: any; after?: any }> {

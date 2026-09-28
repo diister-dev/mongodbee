@@ -20,7 +20,26 @@ export {
  * Symbol used to mark a field as requiring a unique index
  * @internal
  */
-export const INDEX_SYMBOL = Symbol("mongodbee.index");
+export const INDEX_SYMBOL = Symbol.for("mongodbee.index");
+
+/**
+ * Reads `withIndex` metadata from a Valibot metadata object, including
+ * metadata written by another copy of mongodbee whose symbol is local.
+ * @internal
+ */
+export function indexMetadataOf(
+  metadata: Record<PropertyKey, unknown> | undefined | null,
+): IndexDatabase | undefined {
+  if (!metadata || typeof metadata !== "object") return undefined;
+  const own = metadata[INDEX_SYMBOL];
+  if (own !== undefined) return own as IndexDatabase;
+  for (const key of Object.getOwnPropertySymbols(metadata)) {
+    if (key.description === "mongodbee.index") {
+      return metadata[key] as IndexDatabase;
+    }
+  }
+  return undefined;
+}
 
 /**
  * Metadata for unique index validation
@@ -185,7 +204,7 @@ export function extractIndexes(
 
       // Check for index metadata on the schema itself
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let indexMetadata = (node.schema as any).metadata?.[INDEX_SYMBOL];
+      let indexMetadata = indexMetadataOf((node.schema as any).metadata);
 
       // If not found on schema, check in pipe validations (for withIndex on unions, etc.)
       if (!indexMetadata) {
@@ -194,7 +213,7 @@ export function extractIndexes(
         if (pipes && Array.isArray(pipes)) {
           for (const pipe of pipes) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const pipeMetadata = (pipe as any).metadata?.[INDEX_SYMBOL];
+            const pipeMetadata = indexMetadataOf((pipe as any).metadata);
             if (pipeMetadata) {
               indexMetadata = pipeMetadata;
               break; // Only need one index per field
