@@ -352,6 +352,22 @@ if (status.database && !status.database.isUpToDate) {
 📖 [**MIGRATIONS.md**](https://github.com/diister-dev/mongodbee/blob/main/doc/MIGRATIONS.md)
 — the complete migration reference.
 
+## Studio
+
+A local web explorer for the database of a MongoDBee project: collections by
+type and scope, schemas next to their validators, indexes, the migration chain
+and a configurable `check`. It is read-only unless started with `--write`.
+It lives in its own npm package, installed next to the core with the same
+version:
+
+```bash
+npm install --save-dev @diister/mongodbee-studio
+npx mongodbee studio
+```
+
+📖 [**STUDIO.md**](https://github.com/diister-dev/mongodbee/blob/main/doc/STUDIO.md)
+explains every view, the options and the write mode.
+
 ## Transactions
 
 `withSession` runs its callback inside a MongoDB transaction. Every MongoDBee
@@ -513,13 +529,21 @@ plain `collection()`.
 
 ## Development
 
+The repository is a Bun workspace: `library/` is `@diister/mongodbee`,
+`studio/` is `@diister/mongodbee-studio`. Install once at the root, then work
+in either package; the studio consumes the core's built `dist`, so build the
+core first.
+
 ```bash
+bun install        # at the repository root
 cd library
-bun install
 bun test           # needs a MongoDB on localhost:27017
 bun run check      # tsc
 bun run lint       # biome
 bun run build      # dist/ for npm
+cd ../studio
+bun run build      # server and prebuilt UI
+bun test
 ```
 
 The suite targets `node:test`, so it runs unchanged under `bun test`,

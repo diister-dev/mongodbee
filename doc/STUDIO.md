@@ -12,13 +12,31 @@ By default the studio is **read-only**: the server exposes GET endpoints only,
 and every other method is refused with `405`. Editing is opt-in with
 `--write` (see [Editing](#editing)).
 
+## Installing
+
+The studio is its own npm package, `@diister/mongodbee-studio`, so projects
+that never open it do not install its server or its UI. Install it next to
+`@diister/mongodbee`, with the same version: the studio depends on that exact
+version of the core, and both are released together.
+
+```bash
+npm install --save-dev @diister/mongodbee-studio
+bun add --dev @diister/mongodbee-studio
+deno add --dev npm:@diister/mongodbee-studio
+```
+
+The command stays `mongodbee studio`: the core CLI loads the studio package
+when it is installed. Without it, the command prints how to install it and exits
+with code 1. The studio is published to npm only, so run the command from the
+npm package of the core (as below), not from JSR.
+
 ## Running it
 
-The studio ships with the npm package and runs in the project's own runtime,
-like Drizzle Studio. That matters because the studio loads the project's
-`mongodbee.config.ts`, its migrations and its `schemas.ts`: a Deno project with
-an import map can only be loaded by Deno, a Bun project by Bun. The server uses
-`node:http`, which Node, Deno and Bun all provide, and serves the prebuilt UI.
+The studio runs in the project's own runtime, like Drizzle Studio. That
+matters because the studio loads the project's `mongodbee.config.ts`, its
+migrations and its `schemas.ts`: a Deno project with an import map can only be
+loaded by Deno, a Bun project by Bun. The server uses `node:http`, which Node,
+Deno and Bun all provide, and serves the prebuilt UI.
 
 ```bash
 npx mongodbee studio
@@ -29,9 +47,6 @@ deno run -A --env-file=.env --config=deno.jsonc npm:@diister/mongodbee/migration
 For a Deno project, pass the project's `deno.jsonc` so its import map resolves,
 and `--env-file` when the configuration reads the connection string from the
 environment.
-
-The JSR package does not include the studio. `mongodbee studio` run from the
-JSR package prints that the studio ships with the npm package, then exits.
 
 | Option         | Default           | Meaning                                                  |
 | -------------- | ----------------- | -------------------------------------------------------- |
@@ -308,22 +323,40 @@ Five sections, each with its own link (`#/migrations/<section>`):
 
 ## Packaging
 
-The UI is prebuilt when the package is built: `bun run build` compiles the
-library, then `bun run build:studio` bundles the Svelte UI into
+The repository is a Bun workspace with two packages:
+
+| Directory  | Package                     | Registries |
+| ---------- | --------------------------- | ---------- |
+| `library/` | `@diister/mongodbee`        | npm, JSR   |
+| `studio/`  | `@diister/mongodbee-studio` | npm        |
+
+The studio uses the core only through its public entry points:
+`@diister/mongodbee`, `/schema`, `/ids` (in the browser, for id times) and
+`/inspect`, which gathers what a tool needs to look at a project without
+importing core internals: project and configuration loading, the migration
+chain and history, the check runner (abort signal, document count, retention),
+schema navigation (`schemaToNode`), the index plan of a collection
+(`plannedIndexes`), validators and schema diffs. `@diister/mongodbee/inspect`
+is public but made for tools; applications have no use for it.
+
+`bun run version:set <version>` in `library/` bumps both packages, the
+studio's dependency on the core and the core's optional peer on the studio.
+`bun run build` refuses to run when any of them disagree, and when the studio
+and the core pin different `mongodb` drivers.
+
+The UI is prebuilt when the studio is built: `bun run build` in `studio/`
+compiles the server, then `bun run build:ui` bundles the Svelte UI into
 `dist/studio-ui` (the HTML page, content-hashed JavaScript, CSS, fonts and logo,
 plus a `manifest.json`). At runtime the studio serves those files and never
 needs `svelte` or `bun-plugin-svelte`, which, like `lucide` and the
-`@fontsource-variable` packages, stay development dependencies. The UI sources
-under `src/studio/ui` are not published.
+`@fontsource-variable` packages, stay development dependencies of the studio.
+The core package ships none of it.
 
-Running from the repository sources (`src/migration/cli/bin.ts`) under Bun
-bundles the UI in memory with `Bun.build` on start, which needs the development
-dependencies installed. Under Node or Deno the sources serve the UI last built
-into the library's `dist/studio-ui`, so run `bun run build:studio` first.
-
-The studio sources and the studio command are excluded from JSR (see
-`publish.exclude` in `jsr.json`); the CLI loads the studio command lazily and
-prints the npm instructions when it is absent.
+The studio resolves the core through the workspace, from the core's `dist`:
+build `library/` before type-checking, testing or building `studio/`. Running
+the studio from its sources under Bun bundles the UI in memory with
+`Bun.build` on start; under Node or Deno the sources serve the UI last built
+into `studio/dist/studio-ui`, so run `bun run build:ui` first.
 
 ## API
 
