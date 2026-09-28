@@ -13,7 +13,15 @@ import {
 import { getSessionContext } from "./session.ts";
 import { COMPUTED_ROOT } from "./computed-guard.ts";
 import { maintainedCollection } from "./computed-maintenance.ts";
-import { PRIMARY, type ReadOptions, readOpts } from "./read-preference.ts";
+import {
+  type DriverCollectionOptions,
+  PRIMARY,
+  type ReadOptions,
+  type ReadPreferenceInput,
+  readOpts,
+  type WithReadPreferenceInput,
+  withReadPreference,
+} from "./read-preference.ts";
 import { withIndex } from "./indexes.ts";
 import type { FlatType } from "../types/flat.ts";
 import type { Db } from "./mongodb.ts";
@@ -421,7 +429,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
   find<E extends keyof T>(
     key: E,
     filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
-    options?: m.FindOptions,
+    options?: WithReadPreferenceInput<m.FindOptions>,
   ): Promise<v.InferOutput<OutputElementSchema<T, E>>[]>;
   /**
    * Find the first document matching a cross-type filter — no `_type`
@@ -444,7 +452,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
    */
   findAny(
     filter: m.Filter<Input<T>>,
-    options?: m.FindOptions,
+    options?: WithReadPreferenceInput<m.FindOptions>,
   ): Promise<Output<T>[]>;
   paginate<
     E extends keyof T,
@@ -480,7 +488,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
       /** Fetch one extra document to set hasMore cheaply; the extra row is dropped. */
       peek?: boolean;
       /** Overrides the collection's read preference; ignored inside a transaction. */
-      readPreference?: m.ReadPreferenceLike;
+      readPreference?: ReadPreferenceInput;
     },
   ): Promise<{
     total?: number;
@@ -536,7 +544,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
       /** Fetch one extra document to set hasMore cheaply; the extra row is dropped. */
       peek?: boolean;
       /** Overrides the collection's read preference; ignored inside a transaction. */
-      readPreference?: m.ReadPreferenceLike;
+      readPreference?: ReadPreferenceInput;
     },
   ): Promise<{
     total?: number;
@@ -547,7 +555,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
   countDocuments<E extends keyof T>(
     key: E,
     filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
-    options?: m.CountDocumentsOptions,
+    options?: WithReadPreferenceInput<m.CountDocumentsOptions>,
   ): Promise<number>;
   deleteId<E extends keyof T>(key: E, id: string): Promise<number>;
   deleteIds<E extends keyof T>(key: E, ids: string[]): Promise<number>;
@@ -646,7 +654,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
   db: Db,
   collectionName: string,
   model: T | MultiCollectionModel<T>,
-  options?: m.CollectionOptions & CollectionOptions,
+  options?: DriverCollectionOptions & CollectionOptions,
 ): Promise<MultiCollectionResult<T>>;
 export async function multiCollection<
   const I extends Record<string, TypeInput>,
@@ -654,7 +662,7 @@ export async function multiCollection<
   db: Db,
   collectionName: string,
   model: I | MultiCollectionModel<I>,
-  options?: m.CollectionOptions & CollectionOptions,
+  options?: DriverCollectionOptions & CollectionOptions,
 ): Promise<MultiCollectionResult<ResolveTypes<I>>>;
 export async function multiCollection<const T extends MultiCollectionSchema>(
   db: Db,
@@ -664,7 +672,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     | MultiCollectionModel<T>
     | Record<string, TypeInput>
     | MultiCollectionModel,
-  options?: m.CollectionOptions & CollectionOptions,
+  options?: DriverCollectionOptions & CollectionOptions,
 ): Promise<MultiCollectionResult<T>> {
   const useModel =
     model &&
@@ -739,7 +747,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     return guardedUpdateOps(operation, dotSchema, doc, max);
   }
 
-  const opts: m.CollectionOptions & CollectionOptions = {
+  const opts: DriverCollectionOptions & CollectionOptions = {
     ...{
       safeDelete: true,
       undefinedBehavior: "remove", // Default behavior
@@ -837,7 +845,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
   const collection = maintainedCollection(
     db,
-    db.collection<TOutput>(collectionName, opts),
+    db.collection<TOutput>(collectionName, withReadPreference(opts)),
     collectionName,
     Object.values(collectionSchema).some((fields) => COMPUTED_ROOT in fields),
   );
@@ -1036,7 +1044,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         format?: (doc: any) => Promise<any> | any;
         skipTotal?: boolean;
         peek?: boolean;
-        readPreference?: m.ReadPreferenceLike;
+        readPreference?: ReadPreferenceInput;
       },
     ) {
       const run = async () => {
@@ -2088,7 +2096,7 @@ export async function newMultiCollection<const T extends MultiCollectionSchema>(
   db: Db,
   collectionName: string,
   schema: T,
-  options?: m.CollectionOptions & CollectionOptions,
+  options?: DriverCollectionOptions & CollectionOptions,
 ): Promise<MultiCollectionResult<T>> {
   // Check if we're in a session - DDL operations are incompatible with transactions
   const { getSession } = getSessionContext(db.client);
@@ -2183,7 +2191,7 @@ export async function createMultiCollectionInstance<
   db: Db,
   collectionName: string,
   model: MultiCollectionModel<T>,
-  options?: m.CollectionOptions & CollectionOptions,
+  options?: DriverCollectionOptions & CollectionOptions,
 ): Promise<MultiCollectionResult<T>> {
   log.debug(
     `createMultiCollectionInstance(${collectionName}): begin model=${model?.name}`,

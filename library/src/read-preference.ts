@@ -18,6 +18,53 @@ import type { ClientSession, Db } from "./mongodb.ts";
 /** The primary read preference. */
 export const PRIMARY: m.ReadPreference = m.ReadPreference.primary;
 
+/**
+ * A read preference as mongodbee accepts it: a mode name, a driver
+ * `ReadPreference`, or the plain `{ mode, maxStalenessSeconds, tags }` object
+ * the driver's own typings reject but its runtime understands.
+ */
+export type ReadPreferenceInput =
+  | m.ReadPreferenceLike
+  | {
+      readonly mode: m.ReadPreferenceMode;
+      readonly maxStalenessSeconds?: number;
+      readonly tags?: m.TagSet[];
+    };
+
+/** The driver `ReadPreference` for any accepted form. */
+export function toReadPreference(input: ReadPreferenceInput): m.ReadPreference {
+  if (input instanceof m.ReadPreference) return input;
+  if (typeof input === "string") return new m.ReadPreference(input);
+  return new m.ReadPreference(input.mode, input.tags, {
+    maxStalenessSeconds: input.maxStalenessSeconds,
+  });
+}
+
+/** Options with their `readPreference`, if any, turned into a driver one. */
+export function withReadPreference<
+  T extends { readonly readPreference?: ReadPreferenceInput },
+>(
+  options: T,
+): Omit<T, "readPreference"> & { readPreference?: m.ReadPreference } {
+  const { readPreference, ...rest } = options;
+  return readPreference === undefined
+    ? rest
+    : { ...rest, readPreference: toReadPreference(readPreference) };
+}
+
+/** Driver options `O` whose `readPreference` accepts every mongodbee form. */
+export type WithReadPreferenceInput<O> = Omit<O, "readPreference"> & {
+  readPreference?: ReadPreferenceInput;
+};
+
+/** Collection options of the driver, with a mongodbee read preference. */
+export type DriverCollectionOptions = Omit<
+  m.CollectionOptions,
+  "readPreference"
+> & {
+  readPreference?: ReadPreferenceInput;
+};
+
 /** Per-call read options accepted by the methods that take no driver options. */
 export type ReadOptions = {
   /**
@@ -25,7 +72,7 @@ export type ReadOptions = {
    * `"primary"` to read your own writes on a collection reading secondaries.
    * Ignored inside a transaction, which always reads the primary.
    */
-  readPreference?: m.ReadPreferenceLike;
+  readPreference?: ReadPreferenceInput;
 };
 
 /**
@@ -33,24 +80,39 @@ export type ReadOptions = {
  * options. Inside a transaction, the read preference and concerns are dropped
  * so the transaction's own (primary) ones apply.
  */
-export function readOpts<T extends object>(
+export type ResolvedReadOptions<T> = Partial<
+  Omit<T, "readPreference" | "readConcern" | "writeConcern">
+> & {
+  readPreference?: m.ReadPreference;
+  readConcern?: T[keyof T & "readConcern"];
+  writeConcern?: T[keyof T & "writeConcern"];
+  session: ClientSession | undefined;
+};
+
+export type SessionOnly = { session: ClientSession | undefined };
+
+export function readOpts<
+  T extends {
+    readonly readPreference?: ReadPreferenceInput;
+    readonly readConcern?: unknown;
+    readonly writeConcern?: unknown;
+  },
+>(
   session: ClientSession | undefined,
   options?: T,
-): T & { session: ClientSession | undefined } {
-  if (!options)
-    return { session } as T & { session: ClientSession | undefined };
-  if (!session?.inTransaction()) return { session, ...options };
-  const {
-    readPreference: _readPreference,
-    readConcern: _readConcern,
-    writeConcern: _writeConcern,
-    ...rest
-  } = options as T & {
-    readPreference?: unknown;
-    readConcern?: unknown;
-    writeConcern?: unknown;
+): ResolvedReadOptions<T> | SessionOnly {
+  if (options === undefined) return { session };
+  const { readPreference, readConcern, writeConcern, ...rest } = options;
+  if (session?.inTransaction()) return { ...rest, session };
+  return {
+    ...rest,
+    session,
+    ...(readPreference !== undefined && {
+      readPreference: toReadPreference(readPreference),
+    }),
+    ...(readConcern !== undefined && { readConcern }),
+    ...(writeConcern !== undefined && { writeConcern }),
   };
-  return { session, ...rest } as T & { session: ClientSession | undefined };
 }
 
 /** A handle on `name` that always reads the primary. */

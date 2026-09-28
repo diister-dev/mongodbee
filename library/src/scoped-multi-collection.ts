@@ -16,7 +16,12 @@ import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
 import { getSessionContext } from "./session.ts";
 import { COMPUTED_ROOT } from "./computed-guard.ts";
 import { maintainedCollection } from "./computed-maintenance.ts";
-import { readOpts } from "./read-preference.ts";
+import {
+  type ReadPreferenceInput,
+  readOpts,
+  type WithReadPreferenceInput,
+  withReadPreference,
+} from "./read-preference.ts";
 import { createDotNotationSchema } from "./dot-notation.ts";
 import {
   type GuardedUpdateOptions,
@@ -117,7 +122,7 @@ export type ScopedMultiCollectionConfig<
    * `{ mode: "secondaryPreferred", maxStalenessSeconds: 90 }`. Defaults to
    * the client's. Transactions and index sync always use the primary.
    */
-  readPreference?: m.ReadPreferenceLike;
+  readPreference?: ReadPreferenceInput;
   /** Read concern of this collection's reads outside a transaction. */
   readConcern?: m.ReadConcernLike;
 };
@@ -240,7 +245,7 @@ export type ScopedView<
   find<K extends keyof T>(
     type: K,
     filter?: m.Filter<OutputDoc<T, K, S>>,
-    options?: m.FindOptions & { validate?: boolean },
+    options?: WithReadPreferenceInput<m.FindOptions> & { validate?: boolean },
   ): Promise<OutputDoc<T, K, S>[]>;
 
   /**
@@ -256,7 +261,7 @@ export type ScopedView<
     type: K,
     fields: readonly P[],
     filter?: m.Filter<OutputDoc<T, K, S>>,
-    options?: m.FindOptions,
+    options?: WithReadPreferenceInput<m.FindOptions>,
   ): Promise<Pick<OutputDoc<T, K, S>, P | "_id" | "_type" | "_scope">[]>;
 
   /**
@@ -275,13 +280,13 @@ export type ScopedView<
    */
   findAny(
     filter?: m.Filter<AnyScopedOutput<T, S>>,
-    options?: m.FindOptions & { validate?: boolean },
+    options?: WithReadPreferenceInput<m.FindOptions> & { validate?: boolean },
   ): Promise<AnyScopedOutput<T, S>[]>;
 
   countDocuments<K extends keyof T>(
     type: K,
     filter?: m.Filter<OutputDoc<T, K, S>>,
-    options?: m.CountDocumentsOptions,
+    options?: WithReadPreferenceInput<m.CountDocumentsOptions>,
   ): Promise<number>;
 
   deleteId<K extends keyof T>(type: K, id: string): Promise<number>;
@@ -488,7 +493,7 @@ export type ReadOnlyMultiScopeView<
   find<K extends keyof T>(
     type: K,
     filter?: m.Filter<OutputDoc<T, K, S>>,
-    options?: m.FindOptions & { validate?: boolean },
+    options?: WithReadPreferenceInput<m.FindOptions> & { validate?: boolean },
   ): Promise<OutputDoc<T, K, S>[]>;
 
   /**
@@ -500,13 +505,13 @@ export type ReadOnlyMultiScopeView<
     type: K,
     fields: readonly P[],
     filter?: m.Filter<OutputDoc<T, K, S>>,
-    options?: m.FindOptions,
+    options?: WithReadPreferenceInput<m.FindOptions>,
   ): Promise<Pick<OutputDoc<T, K, S>, P | "_id" | "_type" | "_scope">[]>;
 
   countDocuments<K extends keyof T>(
     type: K,
     filter?: m.Filter<OutputDoc<T, K, S>>,
-    options?: m.CountDocumentsOptions,
+    options?: WithReadPreferenceInput<m.CountDocumentsOptions>,
   ): Promise<number>;
 
   aggregate(
@@ -684,10 +689,13 @@ export async function scopedMultiCollection<S extends AnySchema>(
 
   const collection = maintainedCollection(
     db,
-    db.collection<any>(collectionName, {
-      readPreference: config.readPreference,
-      readConcern: config.readConcern,
-    }),
+    db.collection<any>(
+      collectionName,
+      withReadPreference({
+        readPreference: config.readPreference,
+        readConcern: config.readConcern,
+      }),
+    ),
     collectionName,
     Object.values(types).some((fields) => COMPUTED_ROOT in fields),
   );

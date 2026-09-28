@@ -335,3 +335,20 @@ Two findings changed the code:
 - **A global subject read across scopes.** Recomputing an account from the participants of every exposition used the `_type` index and read every participant of the type. `computedTopology` now refuses, at boot, any field whose recompute read has no declared index leading with its `by` (or `through` link) field, and requires a `global` index when the read spans scopes. With it the same read touches exactly the rows it returns.
 
 In the first consumer (Diivento, `participant._computed.organizationIds`, dev database with 21 681 participants and 8 166 memberships) the recompute read is an `IXSCAN` on `_scope, _type, participantId`: one document examined, 2 ms.
+
+### 19.1 Three members and `majority` commits
+
+Transactions commit with `w: "majority"`, so on a real replica set each maintained write waits for a secondary to acknowledge. The same benches on a local three-member replica set (mongod 8.0.29, three processes on one machine, default write concern `majority` on both setups, so the "off" writes wait for a majority too), 200 samples per write:
+
+| Write | 1 member off / on | 3 members off / on |
+|---|---|---|
+| insert a source row (1 / 10 / 100 rows) | 0.4 to 0.7 / 2.0 to 3.0 ms | 0.5 to 0.8 / 2.0 to 2.5 ms |
+| change a field the computed value reads | 0.5 / 1.8 to 2.3 ms | 0.4 to 0.6 / 2.2 to 2.6 ms |
+| change a field no computed value reads | 1 / 1 ms | 0.6 to 0.8 / 0.6 to 0.7 ms |
+| delete a source row | 0.9 to 1 / 2.1 to 2.8 ms | 0.6 / 2.0 to 2.8 ms (p95 up to 10 ms) |
+| 50 concurrent writes on one subject, median of 5 | 247 ms | 289 ms |
+| full apply, per subject | 0.09 ms | 0.09 ms |
+
+A single write costs the same with three members: one commit, one acknowledgement. Contention grows by about 17%, because every retry of a conflicting transaction pays its own majority commit.
+
+What this does not measure is network distance: the three members share a loopback interface, so an acknowledgement costs microseconds. Across availability zones each maintained write adds one round trip to the nearest secondary on its commit, as any `majority` write already does, and each contention retry adds another. Rerun with `MONGODBEE_TEST_URI` pointing at the target cluster before sizing a burst-heavy subject.

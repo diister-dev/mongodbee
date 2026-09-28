@@ -14,7 +14,14 @@ import {
 import { EventEmitter } from "./events.ts";
 import { watchEvent } from "./change-stream.ts";
 import { getSessionContext } from "./session.ts";
-import { type ReadOptions, readOpts } from "./read-preference.ts";
+import {
+  type DriverCollectionOptions,
+  type ReadOptions,
+  type ReadPreferenceInput,
+  readOpts,
+  type WithReadPreferenceInput,
+  withReadPreference,
+} from "./read-preference.ts";
 import { ensureValidator } from "./utils/ensure-validator.ts";
 import { withDatabaseDdlLock } from "./ddl-lock.ts";
 import { applyCollectionIndexes } from "./indexes-applier.ts";
@@ -245,6 +252,10 @@ export type CollectionResult<
   | "indexInformation"
   | "listSearchIndexes"
   | "count"
+  | "countDocuments"
+  | "estimatedDocumentCount"
+  | "aggregate"
+  | "watch"
 > & {
   collection: m.Collection<TInput<T>>;
   schema: v.ObjectSchema<
@@ -259,7 +270,8 @@ export type CollectionResult<
   ) => Promise<WithId<TOutput<T>>["_id"]>;
   findOne: (
     filter: m.Filter<WithId<TInput<T>>>,
-    options?: Omit<m.FindOptions, "timeoutMode"> & m.Abortable,
+    options?: WithReadPreferenceInput<Omit<m.FindOptions, "timeoutMode">> &
+      m.Abortable,
   ) => Promise<WithId<TOutput<T>> | null>;
   getById: (
     id: string | m.ObjectId,
@@ -267,12 +279,30 @@ export type CollectionResult<
   ) => Promise<WithId<TOutput<T>>>;
   find: (
     filter: m.Filter<TInput<T>>,
-    options?: m.FindOptions & m.Abortable,
+    options?: WithReadPreferenceInput<m.FindOptions> & m.Abortable,
   ) => m.AbstractCursor<TOutput<T>>;
   findInvalid: (
     filter: m.Filter<TInput<T>>,
-    options?: m.FindOptions & m.Abortable,
+    options?: WithReadPreferenceInput<m.FindOptions> & m.Abortable,
   ) => m.AbstractCursor<WithId<TInput<T>>>;
+  countDocuments(
+    filter?: m.Filter<TInput<T>>,
+    options?: WithReadPreferenceInput<m.CountDocumentsOptions> & m.Abortable,
+  ): Promise<number>;
+  estimatedDocumentCount(
+    options?: WithReadPreferenceInput<m.EstimatedDocumentCountOptions>,
+  ): Promise<number>;
+  aggregate<R extends m.Document = m.Document>(
+    pipeline?: m.Document[],
+    options?: WithReadPreferenceInput<m.AggregateOptions> & m.Abortable,
+  ): m.AggregationCursor<R>;
+  watch<
+    TLocal extends m.Document = TInput<T>,
+    TChange extends m.Document = m.ChangeStreamDocument<TLocal>,
+  >(
+    pipeline?: m.Document[],
+    options?: WithReadPreferenceInput<m.ChangeStreamOptions>,
+  ): m.ChangeStream<TLocal, TChange>;
   withSession: Awaited<ReturnType<typeof getSessionContext>>["withSession"];
 
   // Utilities
@@ -311,7 +341,7 @@ export type CollectionResult<
        */
       peek?: boolean;
       /** Overrides the collection's read preference; ignored inside a transaction. */
-      readPreference?: m.ReadPreferenceLike;
+      readPreference?: ReadPreferenceInput;
     },
   ) => Promise<{
     total?: number;
@@ -334,7 +364,7 @@ export type CollectionResult<
   distinct<Key extends keyof WithId<TInput<T>>>(
     key: Key,
     filter: m.Filter<TInput<T>>,
-    options?: m.DistinctOptions,
+    options?: WithReadPreferenceInput<m.DistinctOptions>,
   ): Promise<Array<m.Flatten<WithId<TInput<T>>[Key]>>>;
   findOneAndDelete(
     filter: m.Filter<TInput<T>>,
@@ -443,13 +473,13 @@ export async function collection<
   db: Db,
   collectionName: string,
   collectionSchema: T,
-  options?: m.CollectionOptions & CollectionOptions,
+  options?: DriverCollectionOptions & CollectionOptions,
 ): Promise<CollectionResult<T>>;
 export async function collection<const S extends ObjectLikeSchema>(
   db: Db,
   collectionName: string,
   definition: TypeDefinition<S>,
-  options?: m.CollectionOptions & CollectionOptions,
+  options?: DriverCollectionOptions & CollectionOptions,
 ): Promise<CollectionResult<S["entries"]>>;
 export async function collection<
   const T extends Record<
@@ -460,7 +490,7 @@ export async function collection<
   db: Db,
   collectionName: string,
   input: T | TypeDefinition,
-  options?: m.CollectionOptions & CollectionOptions,
+  options?: DriverCollectionOptions & CollectionOptions,
 ): Promise<CollectionResult<T>> {
   type TInput = v.InferInput<v.ObjectSchema<T, undefined>>;
   type TOutput = WithId<v.InferOutput<v.ObjectSchema<T, undefined>>>;
@@ -475,7 +505,7 @@ export async function collection<
 
   const dotSchema = createDotNotationSchema(schema);
 
-  const opts: m.CollectionOptions & CollectionOptions = {
+  const opts: DriverCollectionOptions & CollectionOptions = {
     ...{
       safeDelete: true,
       undefinedBehavior: "remove", // Default behavior
@@ -618,7 +648,7 @@ export async function collection<
 
   const collection = maintainedCollection(
     db,
-    db.collection<TInput>(collectionName, opts),
+    db.collection<TInput>(collectionName, withReadPreference(opts)),
     collectionName,
     COMPUTED_ROOT in collectionSchema,
   );
@@ -902,7 +932,7 @@ export async function collection<
         sortPipeline?: (stage: SimpleStageBuilder) => AggregationStage[];
         skipTotal?: boolean;
         peek?: boolean;
-        readPreference?: m.ReadPreferenceLike;
+        readPreference?: ReadPreferenceInput;
       },
     ): Promise<{
       total?: number;

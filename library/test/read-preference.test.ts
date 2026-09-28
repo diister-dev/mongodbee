@@ -236,3 +236,109 @@ test("ReadPreference: withSession does not retry by default", async () => {
     assertEquals(await users.countDocuments({}), 0);
   });
 });
+
+const STALENESS = {
+  mode: "secondaryPreferred",
+  maxStalenessSeconds: 90,
+} as const;
+
+function sentPreferences(
+  started: readonly m.CommandStartedEvent[],
+  collectionName: string,
+): unknown[] {
+  return started
+    .filter(
+      (event) =>
+        event.command.find === collectionName ||
+        event.command.aggregate === collectionName,
+    )
+    .map((event) => event.command.$readPreference);
+}
+
+test("ReadPreference: the { mode, maxStalenessSeconds } form reaches the driver on every collection kind", async () => {
+  await withClient({ monitorCommands: true }, async (db, client) => {
+    const started: m.CommandStartedEvent[] = [];
+    client.on("commandStarted", (event) => started.push(event));
+
+    const users = await collection(db, "users", userSchema, {
+      readPreference: STALENESS,
+    });
+    await users.insertOne({ name: "Ada", age: 36 });
+    assertEquals(users.collection.readPreference?.mode, "secondaryPreferred");
+    assertEquals(users.collection.readPreference?.maxStalenessSeconds, 90);
+    assertEquals((await users.find({}).toArray()).length, 1);
+
+    const catalog = await multiCollection(
+      db,
+      "catalog",
+      { product: { name: v.string() } },
+      { readPreference: STALENESS, schemaManagement: "auto" },
+    );
+    await catalog.insertOne("product", { name: "Pen" });
+    assertEquals((await catalog.find("product", {})).length, 1);
+
+    const scoped = await scopedMultiCollection(db, "scoped", {
+      schemaManagement: "auto",
+      scope: refId("exposition"),
+      types: { artwork: { title: v.string() } },
+      readPreference: STALENESS,
+    });
+    const view = scoped.scope("exposition:abc");
+    await view.insertOne("artwork", { title: "Mona" });
+    assertEquals((await view.find("artwork", {})).length, 1);
+
+    const plain = await collection(db, "plain", userSchema);
+    await plain.insertOne({ name: "Bob", age: 40 });
+    assertEquals(
+      await plain.countDocuments({}, { readPreference: STALENESS }),
+      1,
+    );
+
+    const plainCatalog = await multiCollection(
+      db,
+      "plain_catalog",
+      { product: { name: v.string() } },
+      { schemaManagement: "auto" },
+    );
+    await plainCatalog.insertOne("product", { name: "Ink" });
+    assertEquals(
+      (await plainCatalog.find("product", {}, { readPreference: STALENESS }))
+        .length,
+      1,
+    );
+
+    const plainScoped = await scopedMultiCollection(db, "plain_scoped", {
+      schemaManagement: "auto",
+      scope: refId("exposition"),
+      types: { artwork: { title: v.string() } },
+    });
+    const plainView = plainScoped.scope("exposition:abc");
+    await plainView.insertOne("artwork", { title: "Nike" });
+    assertEquals(
+      (await plainView.find("artwork", {}, { readPreference: STALENESS }))
+        .length,
+      1,
+    );
+
+    for (const name of [
+      "users",
+      "catalog",
+      "scoped",
+      "plain",
+      "plain_catalog",
+      "plain_scoped",
+    ]) {
+      assert(
+        sentPreferences(started, name).some(
+          (sent) =>
+            JSON.stringify(sent) ===
+            JSON.stringify({
+              mode: "secondaryPreferred",
+              maxStalenessSeconds: 90,
+            }),
+        ),
+        `a read on "${name}" carries the staleness bound`,
+      );
+    }
+  });
+});
