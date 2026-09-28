@@ -218,6 +218,24 @@ export const workspaceModel = defineModel("workspace", {
 });
 ```
 
+### Reading a document that fails its schema
+
+Every read parses the stored document through the schema, so transforms apply
+and the returned type is what the schema says. A document that fails it (data
+written around mongodbee, or before a schema change) is handled per read:
+
+| Read | Invalid stored document |
+| --- | --- |
+| `getById`, `findOne`, `findOneAny`, `findOneAndUpdate` (every collection kind) | throws `DocumentValidationError` (`errors`, `result`) |
+| `collection().find()`, on every cursor path (`toArray`, `for await`, `next`) | throws `DocumentValidationError` |
+| `find` and `findAny` of multi and scoped collections | left out, logged as a warning without any document value |
+| `paginate` (every collection kind) | left out, counted in `page.skippedInvalid`, logged the same way |
+| `collection().findInvalid()` | lists exactly those documents |
+
+A list keeps serving its valid rows and says how many it left out; a single
+read never hands back data its type does not describe. A scoped `find` with
+`validate: false` skips parsing on purpose and returns stored documents as is.
+
 ## Indexes
 
 `withIndex()` attaches index metadata to a field's schema; MongoDBee creates,

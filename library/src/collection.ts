@@ -57,6 +57,7 @@ import type { Db } from "./mongodb.ts";
 import type * as m from "mongodb";
 import type { StoredDocument } from "./stored-document.ts";
 import { DocumentValidationError } from "./validation-error.ts";
+import { type Page, warnSkippedInvalid } from "./page.ts";
 
 import type { AggregationStage } from "./types.ts";
 import { createLogger } from "./utils/logger.ts";
@@ -345,12 +346,7 @@ export type CollectionResult<
       /** Overrides the collection's read preference; ignored inside a transaction. */
       readPreference?: ReadPreferenceInput;
     },
-  ) => Promise<{
-    total?: number;
-    position?: number;
-    data: R[];
-    hasMore?: boolean;
-  }>;
+  ) => Promise<Page<R>>;
 
   // From mongodb.Collection
   updateOne(
@@ -1070,12 +1066,7 @@ export async function collection<
         peek?: boolean;
         readPreference?: ReadPreferenceInput;
       },
-    ): Promise<{
-      total?: number;
-      position?: number;
-      data: R[];
-      hasMore?: boolean;
-    }> {
+    ): Promise<Page<R>> {
       const run = async () => {
         const { skipTotal = false, peek = false } = options || {};
         const requestedLimit = options?.limit ?? 100;
@@ -1405,6 +1396,7 @@ export async function collection<
         }
 
         let hardLimit = 10_000;
+        let skippedInvalid = 0;
         const elements: R[] = [];
 
         // Use aggregation pipeline when custom pipeline is provided
@@ -1433,7 +1425,8 @@ export async function collection<
               // Validate document with schema (only original fields, not lookup fields)
               const validation = v.safeParse(schema, doc);
               if (!validation.success) {
-                continue; // Skip invalid documents
+                skippedInvalid++;
+                continue;
               }
 
               // Merge original doc (with lookup fields) with validated output
@@ -1476,7 +1469,8 @@ export async function collection<
               // Validate document with schema
               const validation = v.safeParse(schema, doc);
               if (!validation.success) {
-                continue; // Skip invalid documents
+                skippedInvalid++;
+                continue;
               }
 
               const validatedDoc = validation.output as WithId<TOutput>;
@@ -1563,11 +1557,13 @@ export async function collection<
           }
         }
 
+        warnSkippedInvalid(log, collectionName, skippedInvalid);
         return {
           total,
           position,
           data: elements,
           ...(peek ? { hasMore } : {}),
+          ...(skippedInvalid > 0 && { skippedInvalid }),
         };
       };
       return traced(

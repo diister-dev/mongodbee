@@ -48,6 +48,8 @@ import {
 } from "./type-definition.ts";
 import { isSchemaManaged } from "./runtime-config.ts";
 import { createLogger } from "./utils/logger.ts";
+import { type Page, warnSkippedInvalid } from "./page.ts";
+import { parseStored } from "./validation-error.ts";
 import {
   assertSortResolvableBeforePipeline,
   buildCursorLadderBranches,
@@ -444,13 +446,6 @@ export type MultiPaginateOptions<
   readPreference?: ReadPreferenceInput;
 };
 
-export type MultiPage<R> = {
-  total?: number;
-  position?: number;
-  data: R[];
-  hasMore?: boolean;
-};
-
 /**
  * Type representing the enhanced MongoDB collection for storing multiple document types
  * @template T - Record mapping document type names to their schemas
@@ -504,7 +499,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
     key: E,
     filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
     options?: MultiPaginateOptions<T, E, EN, R>,
-  ): Promise<MultiPage<R>>;
+  ): Promise<Page<R>>;
   /**
    * Cross-pagination: paginate across multiple types simultaneously.
    * Documents from all specified types are merged and sorted together.
@@ -539,7 +534,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
        */
       naturalIdSort?: boolean;
     },
-  ): Promise<MultiPage<R>>;
+  ): Promise<Page<R>>;
   countDocuments<E extends keyof T>(
     key: E,
     filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
@@ -940,7 +935,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           throw new Error("No element found");
         }
 
-        return v.parse(schemaElements[key], result);
+        return parseStored(schemaElements[key], result);
       };
       return traced(
         tele,
@@ -966,7 +961,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           return null;
         }
 
-        return v.parse(schemaElements[key], result);
+        return parseStored(schemaElements[key], result);
       };
       return traced(
         tele,
@@ -1002,6 +997,12 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           const parsed = v.safeParse(schemaElements[key], item);
           if (parsed.success) output.push(parsed.output);
         }
+        warnSkippedInvalid(
+          log,
+          collectionName,
+          result.length - output.length,
+          "find",
+        );
         return output;
       };
       return traced(
@@ -1021,7 +1022,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
       options?: MultiPaginateOptions<T, K, EN, R> & {
         naturalIdSort?: boolean;
       },
-    ): Promise<MultiPage<R>> {
+    ): Promise<Page<R>> {
       const run = async () => {
         const { skipTotal = false, peek = false } = options || {};
         const requestedLimit = options?.limit ?? 100;
@@ -1423,6 +1424,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         }
 
         let hardLimit = 10_000;
+        let skippedInvalid = 0;
         const elements: R[] = [];
 
         try {
@@ -1431,7 +1433,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             if (!doc) break;
 
             const output = parseRow(doc);
-            if (output === undefined) continue;
+            if (output === undefined) {
+              skippedInvalid++;
+              continue;
+            }
 
             const validatedDoc: ExtractByType<T, K> =
               pipelineBuilder || sortPipelineBuilder
@@ -1490,11 +1495,13 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           }
         }
 
+        warnSkippedInvalid(log, collectionName, skippedInvalid);
         return {
           total,
           position,
           data: elements,
           ...(peek ? { hasMore } : {}),
+          ...(skippedInvalid > 0 && { skippedInvalid }),
         };
       };
       return traced(
@@ -1681,7 +1688,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         if (!result) {
           return null;
         }
-        return v.parse(schema, result);
+        return parseStored(schema, result);
       };
       return traced(
         tele,
@@ -1701,14 +1708,17 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         );
         const result = await cursor.toArray();
 
-        const output = result
-          .map((item) => {
-            const parsed = v.safeParse(schema, item);
-            if (!parsed.success) return null;
-            return parsed.output;
-          })
-          .filter((item): item is Output<T> => item !== null);
-
+        const output: Output<T>[] = [];
+        for (const item of result) {
+          const parsed = v.safeParse(schema, item);
+          if (parsed.success) output.push(parsed.output);
+        }
+        warnSkippedInvalid(
+          log,
+          collectionName,
+          result.length - output.length,
+          "findAny",
+        );
         return output;
       };
       return traced(
@@ -1982,7 +1992,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           op ? { onRetry: op.onRetry } : undefined,
         );
         if (!raw) return null;
-        return v.parse(schemaElements[key], raw);
+        return parseStored(schemaElements[key], raw);
       };
       return traced(
         tele,

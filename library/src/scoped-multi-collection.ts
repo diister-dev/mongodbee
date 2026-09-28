@@ -17,6 +17,9 @@ import {
   toStringId,
 } from "./stored-document.ts";
 import { toMongoValidator } from "./validator.ts";
+import { type Page, warnSkippedInvalid } from "./page.ts";
+import { parseStored } from "./validation-error.ts";
+import { createLogger } from "./utils/logger.ts";
 import { dbId, newId } from "./ids.ts";
 import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
 import { getSessionContext } from "./session.ts";
@@ -66,6 +69,8 @@ import {
   type TelemetryOptions,
   traced,
 } from "./telemetry.ts";
+
+const log = createLogger("scoped-multi-collection");
 
 // Structural fields that always exist on every stored doc — their cursor
 // rungs stay raw comparisons (no null branch).
@@ -389,7 +394,7 @@ export type ScopedView<
     type: K,
     filter?: m.Filter<OutputDoc<T, K, S>>,
     options?: ScopedPaginateOptions<T, K, S, EN, R>,
-  ): Promise<ScopedPage<R>>;
+  ): Promise<Page<R>>;
 };
 
 export type ScopedPaginateOptions<
@@ -423,16 +428,6 @@ export type ScopedPaginateOptions<
   skipTotal?: boolean;
   /** Fetch one extra row to set `hasMore` cheaply; the extra row is dropped. */
   peek?: boolean;
-};
-
-export type ScopedPage<R> = {
-  /** Total docs matching the (scoped) query, omitted when `skipTotal`. */
-  total?: number;
-  /** 0-based count of docs before this page's first row, omitted when `skipTotal`. */
-  position?: number;
-  data: R[];
-  /** Present only when `peek` was requested. */
-  hasMore?: boolean;
 };
 
 /** Single MongoDB aggregation stage (already-built object form). */
@@ -945,7 +940,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
               `getById(${typeName}): no element found in scope`,
             );
           }
-          return v.parse(storageSchemas[typeName], raw);
+          return parseStored(storageSchemas[typeName], raw);
         };
         return traced(
           tele,
@@ -976,7 +971,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
             },
           );
           if (!raw) return null;
-          return v.parse(storageSchemas[typeName], raw);
+          return parseStored(storageSchemas[typeName], raw);
         };
         return traced(
           tele,
@@ -1017,6 +1012,12 @@ export async function scopedMultiCollection<S extends AnySchema>(
             const parsed = v.safeParse(storageSchemas[typeName], item);
             if (parsed.success) out.push(parsed.output);
           }
+          warnSkippedInvalid(
+            log,
+            collectionName,
+            raw.length - out.length,
+            "find",
+          );
           return out;
         };
         return traced(
@@ -1080,7 +1081,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
             },
           );
           if (!raw) return null;
-          return v.parse(storageUnion, raw);
+          return parseStored(storageUnion, raw);
         };
         return traced(
           tele,
@@ -1110,6 +1111,12 @@ export async function scopedMultiCollection<S extends AnySchema>(
             const parsed = v.safeParse(storageUnion, item);
             if (parsed.success) out.push(parsed.output);
           }
+          warnSkippedInvalid(
+            log,
+            collectionName,
+            raw.length - out.length,
+            "findAny",
+          );
           return out;
         };
         return traced(
@@ -1461,7 +1468,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
             op ? { onRetry: op.onRetry } : undefined,
           );
           if (!raw) return null;
-          return v.parse(storageSchemas[typeName], raw);
+          return parseStored(storageSchemas[typeName], raw);
         };
         return traced(
           tele,
@@ -1508,7 +1515,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
         type: K,
         filter?: m.Filter<OutputDoc<T, K, S>>,
         options?: ScopedPaginateOptions<T, K, S, EN, R>,
-      ): Promise<ScopedPage<R>> {
+      ): Promise<Page<R>> {
         const run = async () => {
           const typeName = type as string;
           const { skipTotal = false, peek = false } = options || {};
@@ -1854,13 +1861,17 @@ export async function scopedMultiCollection<S extends AnySchema>(
           // keeps yielding more candidates. `hardLimit` bounds a pathological
           // filter that rejects everything.
           let hardLimit = 10_000;
+          let skippedInvalid = 0;
           const data: R[] = [];
           try {
             while (hardLimit-- > 0 && limit > 0) {
               const doc = await cursor.next();
               if (!doc) break;
               const parsed = v.safeParse(storageSchemas[typeName], doc);
-              if (!parsed.success) continue;
+              if (!parsed.success) {
+                skippedInvalid++;
+                continue;
+              }
               const validatedDoc: OutputDoc<T, K, S> =
                 pipelineBuilder || sortPipelineBuilder
                   ? { ...doc, ...parsed.output }
@@ -1934,11 +1945,13 @@ export async function scopedMultiCollection<S extends AnySchema>(
             }
           }
 
+          warnSkippedInvalid(log, collectionName, skippedInvalid);
           return {
             total,
             position,
             data: data,
             ...(peek ? { hasMore } : {}),
+            ...(skippedInvalid > 0 && { skippedInvalid }),
           };
         };
         return traced(
@@ -2002,7 +2015,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
             },
           );
           if (!raw) return null;
-          return v.parse(storageSchemas[typeName], raw);
+          return parseStored(storageSchemas[typeName], raw);
         };
         return traced(
           tele,
@@ -2039,6 +2052,12 @@ export async function scopedMultiCollection<S extends AnySchema>(
             const parsed = v.safeParse(storageSchemas[typeName], item);
             if (parsed.success) out.push(parsed.output);
           }
+          warnSkippedInvalid(
+            log,
+            collectionName,
+            raw.length - out.length,
+            "find",
+          );
           return out;
         };
         return traced(

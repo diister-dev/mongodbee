@@ -1,4 +1,4 @@
-import type * as v from "./schema.ts";
+import * as v from "./schema.ts";
 
 type AnySchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
 
@@ -18,4 +18,14 @@ export class DocumentValidationError extends Error {
     this.errors = errors;
     if (result !== undefined) this.result = result;
   }
+}
+
+/** Parses a document read from the database; a mismatch is a DocumentValidationError. */
+export function parseStored<S extends AnySchema>(
+  schema: S,
+  stored: unknown,
+): v.InferOutput<S> {
+  const parsed = v.safeParse(schema, stored);
+  if (!parsed.success) throw new DocumentValidationError(parsed, stored);
+  return parsed.output;
 }
