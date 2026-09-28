@@ -62,10 +62,7 @@ The leaf bee is rebuilt on a 24-unit grid to belong to the language: the leaf
 becomes a faceted diamond body in forest green, crossed by two honey bands, with
 four square wings in the two logo greens. Seven flat shapes, no curves, no
 gradients, a clear silhouette at 16 px. The wordmark sets "mongodbee" in Inter
-600, outlined to paths. The two other candidates (a pixel bee on an 8 by 8 grid,
-and a forest tile with the original leaf) and the original mark are kept in
-`brand/candidates/`, each with its wordmark, so one can be swapped in by copying
-two files.
+600, outlined to paths.
 
 ### Colour and depth
 
