@@ -3,6 +3,7 @@ import type { Db } from "../mongodb.ts";
 import { dirtyEquivalent } from "./object.ts";
 import { createLogger } from "./logger.ts";
 import { PRIMARY } from "../read-preference.ts";
+import { isRecord } from "./guards.ts";
 
 const log = createLogger("validator");
 
@@ -46,13 +47,26 @@ export async function ensureValidator(
     listCollections: 1,
     filter: { name: collectionName },
   });
-  const current = options.cursor?.firstBatch?.[0]?.options?.validator || {};
-  if (dirtyEquivalent(current, validator)) {
+  const stored: unknown = options.cursor?.firstBatch?.[0]?.options;
+  const current = isRecord(stored) ? stored : {};
+  const enforced =
+    (current.validationLevel ?? "strict") === "strict" &&
+    (current.validationAction ?? "error") === "error";
+  if (enforced && dirtyEquivalent(current.validator ?? {}, validator)) {
     return;
   }
 
-  log.debug(`ensureValidator(${collectionName}): collMod`);
-  await db.command({ collMod: collectionName, validator });
+  if (!enforced) {
+    log.warn(
+      `ensureValidator(${collectionName}): validation was ${String(current.validationLevel ?? "strict")}/${String(current.validationAction ?? "error")}, restoring strict/error`,
+    );
+  }
+  await db.command({
+    collMod: collectionName,
+    validator,
+    validationLevel: "strict",
+    validationAction: "error",
+  });
 }
 
 function isNamespaceExists(error: unknown): boolean {
