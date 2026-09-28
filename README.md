@@ -356,7 +356,8 @@ if (status.database && !status.database.isUpToDate) {
 
 `withSession` runs its callback inside a MongoDB transaction. Every MongoDBee
 operation on collections sharing the same client joins it automatically, through
-`AsyncLocalStorage` — nothing to thread through your call stack.
+the async context (`AsyncContext.Variable` when the runtime has it,
+`AsyncLocalStorage` otherwise) — nothing to thread through your call stack.
 
 ```ts
 await users.withSession(async () => {
@@ -383,6 +384,52 @@ await users.withSession(async () => {
   /* ... */
 }, { retry: true, writeConcern: { w: "majority", wtimeoutMS: 5000 } });
 ```
+
+### After the commit
+
+`afterCommit` defers a side effect until the transaction has committed. The
+callback runs outside the ended session, once, after the last attempt: a
+rolled back attempt, or one replayed by `retry`, drops what it queued. A
+nested `withSession` defers to the outermost commit, a failing callback is
+logged without failing the commit, and outside a transaction the callback
+runs right away.
+
+```ts
+import { afterCommit } from "@diister/mongodbee/session";
+
+await users.withSession(async () => {
+  await users.insertOne({ username: "alice", age: 32 });
+  await afterCommit(() => notifyWelcome("alice"));
+});
+```
+
+## Request context
+
+`withRequestContext` scopes work to one request. With `memoizeReads`, identical
+`getById`, `findOne`, `find`, `findProject` and read-only `aggregate` calls of
+that request reach MongoDB once; each caller gets its own copy. Reads inside a
+transaction are never memoized, and any write through MongoDBee or a commit
+clears the memo. A write made with the raw driver needs `invalidateReads()`,
+or a client created with `monitorCommands: true` and watched once with
+`invalidateReadsOnDriverWrites(client)`.
+
+```ts
+import {
+  invalidateReadsOnDriverWrites,
+  withRequestContext,
+} from "@diister/mongodbee/session";
+
+invalidateReadsOnDriverWrites(client);
+
+Deno.serve((request) =>
+  withRequestContext(() => app.fetch(request), {
+    memoizeReads: request.method === "GET",
+  })
+);
+```
+
+`requestReadStats()` reports how many reads were loaded, reused and
+invalidated in the current request.
 
 ## Replica sets and read preference
 
