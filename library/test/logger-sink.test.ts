@@ -23,7 +23,7 @@ test("logger: an application sink receives every warning mongodbee raises, the c
       await people.collection.insertOne({ name: 42 } as never, {
         bypassDocumentValidation: true,
       });
-      await people.find({}).toArray();
+      await people.findInvalid({}).toArray();
     });
   } finally {
     setLogSink(undefined);
@@ -33,7 +33,7 @@ test("logger: an application sink receives every warning mongodbee raises, the c
   assertEquals(warning?.level, "warn");
   assertEquals(
     warning?.message,
-    "1 invalid documents were ignored during find operation",
+    "1 invalid documents were found during findInvalid operation",
   );
   assertEquals(
     consoleCalls.filter((call) =>

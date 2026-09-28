@@ -578,6 +578,12 @@ export async function collection<
   const validator = toMongoValidator(schema);
   const invalidValidation: m.Filter<TInput> = { $nor: [validator] };
 
+  function parseStored(document: unknown): TOutput {
+    const parsed = v.safeParse(schema, document);
+    if (!parsed.success) throw new DocumentValidationError(parsed, document);
+    return parsed.output as TOutput;
+  }
+
   async function applyValidator() {
     await ensureValidator(db, collectionName, validator);
   }
@@ -989,32 +995,9 @@ export async function collection<
     },
     find(filter, options) {
       const session = sessionContext.getSession();
-      const cursor = collection.find(filter, readOpts(session, options));
-      const originalToArray = cursor.toArray;
-      // Override toArray
-      cursor.toArray = async function () {
-        const results = await originalToArray.call(cursor);
-        let invalidsCount = 0;
-
-        const output = results
-          .map((item) => {
-            const validation = v.safeParse(schema, item);
-            if (!validation.success) {
-              invalidsCount++;
-              return null;
-            }
-            return validation.output as m.WithId<TInput>;
-          })
-          .filter((item): item is m.WithId<TInput> => item !== null);
-
-        if (invalidsCount > 0) {
-          log.warn(
-            `${invalidsCount} invalid documents were ignored during find operation`,
-          );
-        }
-
-        return output;
-      };
+      const cursor = collection
+        .find(filter, readOpts(session, options))
+        .map(parseStored);
 
       if (tele) {
         cursor.toArray = tele.wrapToArray(
@@ -1026,7 +1009,7 @@ export async function collection<
         );
       }
 
-      return cursor as unknown as m.AbstractCursor<TOutput>;
+      return cursor;
     },
     findInvalid(filter, options) {
       const session = sessionContext.getSession();
