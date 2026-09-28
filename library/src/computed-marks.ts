@@ -14,6 +14,10 @@ import {
 } from "./computed-apply.ts";
 import { getSessionContext } from "./session.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
+import {
+  ComputedNotRegisteredError,
+  computedRegistration,
+} from "./computed-maintenance.ts";
 
 export const COMPUTED_PENDING_COLLECTION = "__dbee_computed_pending__";
 
@@ -142,7 +146,7 @@ export async function markFar(
 }
 
 export interface DrainComputedOptions {
-  readonly topology: ComputedTopology;
+  readonly topology?: ComputedTopology;
   readonly limit?: number;
   readonly batchSize?: number;
   readonly leaseMs?: number;
@@ -278,8 +282,15 @@ async function drainFar(
 
 export async function drainComputedPending(
   db: Db,
-  options: DrainComputedOptions,
+  drainOptions: DrainComputedOptions = {},
 ): Promise<DrainComputedResult> {
+  const topology = drainOptions.topology ?? computedRegistration(db)?.topology;
+  if (!topology) {
+    throw new ComputedNotRegisteredError(
+      `no computed topology is registered for database "${db.databaseName}"; pass one or call registerComputed at boot`,
+    );
+  }
+  const options = { ...drainOptions, topology };
   const limit = options.limit ?? 100;
   const leaseMs = options.leaseMs ?? 60_000;
   let drained = 0;

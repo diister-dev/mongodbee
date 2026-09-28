@@ -51,27 +51,44 @@ export class ComputedNotRegisteredError extends Error {
 
 const registrations = new WeakMap<MongoClient, Map<string, Registration>>();
 
+const EVERY_DATABASE = "*";
+
+function isDb(target: Db | MongoClient): target is Db {
+  return "databaseName" in target && "client" in target;
+}
+
+function registrationKey(target: Db | MongoClient): {
+  client: MongoClient;
+  name: string;
+} {
+  return isDb(target)
+    ? { client: target.client, name: target.databaseName }
+    : { client: target, name: EVERY_DATABASE };
+}
+
 export function registerComputed(
-  db: Db,
+  target: Db | MongoClient,
   topology: ComputedTopology,
   options: ComputedRegistrationOptions = {},
 ): void {
-  const byName =
-    registrations.get(db.client) ?? new Map<string, Registration>();
-  byName.set(db.databaseName, {
+  const { client, name } = registrationKey(target);
+  const byName = registrations.get(client) ?? new Map<string, Registration>();
+  byName.set(name, {
     topology,
     inlineLimit: options.inlineLimit ?? DEFAULT_INLINE_RECOMPUTE_LIMIT,
     standaloneMode: options.standaloneMode ?? "refuse",
   });
-  registrations.set(db.client, byName);
+  registrations.set(client, byName);
 }
 
-export function unregisterComputed(db: Db): void {
-  registrations.get(db.client)?.delete(db.databaseName);
+export function unregisterComputed(target: Db | MongoClient): void {
+  const { client, name } = registrationKey(target);
+  registrations.get(client)?.delete(name);
 }
 
 export function computedRegistration(db: Db): Registration | undefined {
-  return registrations.get(db.client)?.get(db.databaseName);
+  const byName = registrations.get(db.client);
+  return byName?.get(db.databaseName) ?? byName?.get(EVERY_DATABASE);
 }
 
 interface Plan {

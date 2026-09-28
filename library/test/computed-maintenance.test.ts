@@ -8,11 +8,15 @@ import { collection } from "../src/collection.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import { defineType } from "../src/type-definition.ts";
 import { from } from "../src/computed.ts";
-import { computedTopology } from "../src/computed-topology.ts";
+import {
+  ComputedTopology,
+  computedTopology,
+} from "../src/computed-topology.ts";
 import {
   ComputedNotRegisteredError,
   ComputedUnsupportedWriteError,
   registerComputed,
+  unregisterComputed,
 } from "../src/computed-maintenance.ts";
 import { applyComputed, checkComputed } from "../src/computed-apply.ts";
 import { getSessionContext } from "../src/session.ts";
@@ -118,6 +122,68 @@ test("computed maintenance: a full apply running during writes never overwrites 
 
     assertEquals((await checkComputed(db, topology)).drifts, []);
     assertEquals(await view.countDocuments("org_membership"), 40);
+  });
+});
+
+test("computed maintenance: a topology registered on the client covers every database it opens, a database registration wins", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const topology = computedTopology(schemas);
+    registerComputed(db.client, topology);
+    const sibling = db.client.db(
+      `@TEST_client_registration_${crypto.randomUUID().slice(0, 8)}`,
+    );
+    try {
+      for (const target of [db, sibling]) {
+        const expositions = await scopedMultiCollection(
+          target,
+          "+expositions",
+          {
+            schemaManagement: "auto",
+            scope: refId("exposition"),
+            types: schemas.scopedMultiCollections["+expositions"].types,
+          },
+        );
+        const view = expositions.scope(EXPO);
+        const participant = await view.insertOne("participant", {
+          name: "Ada",
+        });
+        await view.insertOne("org_membership", {
+          participantId: participant,
+          organizationId: ORGANIZATION,
+          status: "active",
+        });
+        const stored = (await view.getById("participant", participant)) as {
+          _computed?: { membershipCount?: number };
+        };
+        assertEquals(
+          stored._computed?.membershipCount,
+          1,
+          `${target.databaseName} is maintained through the client registration`,
+        );
+      }
+
+      registerComputed(db, new ComputedTopology([]));
+      const plain = await scopedMultiCollection(db, "+expositions", {
+        schemaManagement: "auto",
+        scope: refId("exposition"),
+        types: schemas.scopedMultiCollections["+expositions"].types,
+      });
+      const participant = await plain
+        .scope(EXPO)
+        .insertOne("participant", { name: "Bob" });
+      const stored = (await plain
+        .scope(EXPO)
+        .getById("participant", participant)) as { _computed?: unknown };
+      assertEquals(
+        stored._computed,
+        undefined,
+        "the database registration overrides the client one",
+      );
+    } finally {
+      unregisterComputed(db.client);
+      unregisterComputed(db);
+      await sibling.dropDatabase();
+    }
   });
 });
 
