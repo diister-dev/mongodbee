@@ -17,7 +17,7 @@ import * as path from "node:path";
 import { existsSync, readdirSync } from "node:fs";
 import { initCommand } from "../../../src/migration/cli/commands/init.ts";
 import { fileURLToPath } from "node:url";
-import { fileContains, runScript, withTempDir } from "./shared.ts";
+import { fileContains, moduleDir, runScript, withTempDir } from "./shared.ts";
 
 test("init - creates config file and migrations directory", async () => {
   await withTempDir(async (tempDir) => {
@@ -151,7 +151,7 @@ test({
           strict: true,
           noEmit: true,
           skipLibCheck: true,
-          typeRoots: [path.join(libRoot, "node_modules/@types")],
+          typeRoots: [path.dirname(moduleDir("@types/node") ?? libRoot)],
           types: ["node"],
           allowImportingTsExtensions: true,
           paths: {
@@ -167,7 +167,7 @@ test({
         "utf-8",
       );
 
-      const tsc = path.join(libRoot, "node_modules/typescript/bin/tsc");
+      const tsc = path.join(moduleDir("typescript") ?? libRoot, "bin/tsc");
       const { code, stdout } = await runScript(
         tsc,
         ["-p", "tsconfig.json"],

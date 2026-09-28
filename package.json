@@ -1,0 +1,5 @@
+{
+  "name": "mongodbee-workspace",
+  "private": true,
+  "workspaces": ["library", "studio"]
+}

@@ -36,10 +36,6 @@
       "LICENSE",
       "jsr.json"
     ],
-    "exclude": [
-      "src/**/*.test.ts",
-      "src/studio",
-      "src/migration/cli/commands/studio.ts"
-    ]
+    "exclude": ["src/**/*.test.ts"]
   }
 }

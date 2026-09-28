@@ -15,13 +15,6 @@
     "allowImportingTsExtensions": false,
     "rewriteRelativeImportExtensions": true
   },
-  "include": [
-    "mod.ts",
-    "schema.ts",
-    "session.ts",
-    "telemetry.ts",
-    "src",
-    "types"
-  ],
-  "exclude": ["test", "scripts", "**/*.test.ts"]
+  "include": ["mod.ts", "src"],
+  "exclude": ["test", "scripts", "**/*.test.ts", "src/ui"]
 }

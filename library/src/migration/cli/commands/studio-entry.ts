@@ -1,32 +1,42 @@
+import process from "node:process";
 import { yellow } from "../../../utils/colors.ts";
+import { isRecord } from "../../../utils/guards.ts";
+
+export const STUDIO_PACKAGE = "@diister/mongodbee-studio";
 
 export const STUDIO_UNAVAILABLE_MESSAGE =
-  "mongodbee studio ships with the npm package.\n" +
-  "Install @diister/mongodbee from npm in your project, then run it with the project's runtime:\n" +
-  "  npx mongodbee studio\n" +
-  "  bunx mongodbee studio\n" +
-  "  deno run -A npm:@diister/mongodbee/migration/cli/bin studio";
+  `mongodbee studio lives in its own package, ${STUDIO_PACKAGE}.\n` +
+  "Install it next to @diister/mongodbee, with the same version, then run the command again:\n" +
+  `  npm install --save-dev ${STUDIO_PACKAGE}\n` +
+  `  bun add --dev ${STUDIO_PACKAGE}\n` +
+  `  deno add --dev npm:${STUDIO_PACKAGE}`;
 
 type StudioHandler = (options: Record<string, unknown>) => Promise<void>;
 
-function studioModuleSpecifier(): string {
-  return import.meta.url.endsWith(".ts") ? "./studio.ts" : "./studio.js";
+function isMissingStudio(error: unknown): boolean {
+  const code = isRecord(error) ? error.code : undefined;
+  const message = error instanceof Error ? error.message : String(error);
+  const missing =
+    code === "ERR_MODULE_NOT_FOUND" ||
+    /not found|cannot find (module|package)|could not resolve/i.test(message);
+  return missing && message.includes(STUDIO_PACKAGE);
 }
 
-async function loadStudioCommand(): Promise<StudioHandler | undefined> {
-  const specifier = studioModuleSpecifier();
+function handlerOf(module: unknown): StudioHandler | undefined {
+  if (!isRecord(module)) return undefined;
+  const handler = module.studioCommand;
+  if (typeof handler !== "function") return undefined;
+  return (options) => Promise.resolve(handler(options));
+}
+
+export async function loadStudioCommand(
+  load: (specifier: string) => Promise<unknown> = (specifier) =>
+    import(specifier),
+): Promise<StudioHandler | undefined> {
   try {
-    const module = await import(specifier);
-    return module.studioCommand as StudioHandler;
+    return handlerOf(await load(STUDIO_PACKAGE));
   } catch (error) {
-    const code = (error as { code?: string }).code;
-    const message = error instanceof Error ? error.message : String(error);
-    const missing =
-      code === "ERR_MODULE_NOT_FOUND" ||
-      /not found|cannot find module|module not found/i.test(message);
-    if (missing && /studio/i.test(message)) {
-      return undefined;
-    }
+    if (isMissingStudio(error)) return undefined;
     throw error;
   }
 }
@@ -37,6 +47,7 @@ export async function studioEntry(
   const handler = await loadStudioCommand();
   if (!handler) {
     console.log(yellow(STUDIO_UNAVAILABLE_MESSAGE));
+    process.exitCode = 1;
     return;
   }
   await handler(options);

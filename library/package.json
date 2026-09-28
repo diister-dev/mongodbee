@@ -29,7 +29,6 @@
   "files": [
     "dist",
     "src",
-    "!src/studio/ui",
     "types",
     "mod.ts",
     "schema.ts",
@@ -103,25 +102,27 @@
     "mongodb": "6.21.0",
     "valibot": "1.5.0"
   },
+  "peerDependencies": {
+    "@diister/mongodbee-studio": "0.23.0-beta.32"
+  },
+  "peerDependenciesMeta": {
+    "@diister/mongodbee-studio": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
-    "@fontsource-variable/inter": "5.3.0",
-    "@fontsource-variable/jetbrains-mono": "5.3.0",
     "@opentelemetry/context-async-hooks": "2.11.0",
     "@opentelemetry/sdk-trace-base": "2.11.0",
     "@types/bun": "1.4.2",
     "@types/node": "22.20.4",
-    "bun-plugin-svelte": "0.0.6",
-    "lucide": "1.47.0",
-    "svelte": "5.57.1",
     "typescript": "6.0.3"
   },
   "scripts": {
     "check:package": "bun run scripts/check-package.ts",
     "version:set": "bun run scripts/check-package.ts --write",
     "prebuild": "bun run check:package",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && bun run build:studio",
-    "build:studio": "bun run scripts/build-studio-ui.ts",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "lint": "biome lint .",
     "fmt": "biome format --write .",
