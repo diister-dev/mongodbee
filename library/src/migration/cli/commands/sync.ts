@@ -9,7 +9,8 @@
 
 import process from "node:process";
 import { blue, bold, dim, green, red, yellow } from "../../../utils/colors.ts";
-import { MongoClient } from "../../../mongodb.ts";
+import type { MongoClient } from "../../../mongodb.ts";
+import { createMigrationClient } from "../utils/client.ts";
 import * as path from "node:path";
 
 import { loadConfig } from "../../config/loader.ts";
@@ -59,7 +60,7 @@ export async function syncCommand(
     console.log();
 
     // Connect to database
-    client = new MongoClient(connectionUri);
+    client = createMigrationClient(connectionUri, config);
     await client.connect();
 
     const db = client.db(dbName);

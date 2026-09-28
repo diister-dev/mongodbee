@@ -55,6 +55,9 @@ import {
   isDocumentDelete,
   snapshotIds,
 } from "./delete-checks.ts";
+import { createLogger } from "../../utils/logger.ts";
+
+const log = createLogger("simulation");
 
 // Mock generation lives in ./mock/ — these stay re-exported here because
 // this file is their historical import path.
@@ -473,7 +476,10 @@ export class SimulationValidator implements MigrationValidator {
         },
       });
     } catch (error) {
-      console.error(error);
+      log.debug(
+        "simulation failed:",
+        error instanceof Error ? (error.stack ?? error.message) : error,
+      );
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       errors.push(`Migration validation failed: ${errorMessage}`);

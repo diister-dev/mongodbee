@@ -10,6 +10,7 @@
     "./ids": "./src/ids.ts",
     "./indexes": "./src/indexes.ts",
     "./type-definition": "./src/type-definition.ts",
+    "./computed": "./src/computed.ts",
     "./schema-navigator": "./src/schema-navigator.ts",
     "./types": "./src/types.ts",
     "./migration": "./src/migration/mod.ts",
@@ -17,10 +18,10 @@
     "./migration/cli/bin": "./src/migration/cli/bin.ts"
   },
   "imports": {
-    "@diister/valibot-mock": "jsr:@diister/valibot-mock@^0.1.9",
-    "@opentelemetry/api": "npm:@opentelemetry/api@^1.9.0",
-    "mongodb": "npm:mongodb@^6.21.0",
-    "valibot": "npm:valibot@^1.4.0"
+    "@diister/valibot-mock": "jsr:@diister/valibot-mock@0.1.9",
+    "@opentelemetry/api": "npm:@opentelemetry/api@1.9.1",
+    "mongodb": "npm:mongodb@6.21.0",
+    "valibot": "npm:valibot@1.5.0"
   },
   "publish": {
     "include": [

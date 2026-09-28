@@ -1,6 +1,8 @@
 import * as v from "./schema.ts";
 import { toMongoValidator } from "./validator.ts";
 import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
+import { COMPUTED_ROOT, refuseComputedWrite } from "./computed-guard.ts";
+import { maintainedCollection } from "./computed-maintenance.ts";
 import { createDotNotationSchema } from "./dot-notation.ts";
 import {
   insertedValues,
@@ -12,6 +14,14 @@ import {
 import { EventEmitter } from "./events.ts";
 import { watchEvent } from "./change-stream.ts";
 import { getSessionContext } from "./session.ts";
+import {
+  type DriverCollectionOptions,
+  type ReadOptions,
+  type ReadPreferenceInput,
+  readOpts,
+  type WithReadPreferenceInput,
+  withReadPreference,
+} from "./read-preference.ts";
 import { ensureValidator } from "./utils/ensure-validator.ts";
 import { withDatabaseDdlLock } from "./ddl-lock.ts";
 import { applyCollectionIndexes } from "./indexes-applier.ts";
@@ -45,8 +55,14 @@ import {
 } from "./telemetry.ts";
 import type { Db } from "./mongodb.ts";
 import type * as m from "mongodb";
+import type { StoredDocument } from "./stored-document.ts";
+import { DocumentValidationError } from "./validation-error.ts";
+import { type Page, warnSkippedInvalid } from "./page.ts";
 
 import type { AggregationStage } from "./types.ts";
+import { createLogger } from "./utils/logger.ts";
+
+const log = createLogger("collection");
 
 // `_id` always exists — its cursor rungs stay raw comparisons (no null branch).
 const NON_NULLABLE_SORT_FIELDS: ReadonlySet<string> = new Set(["_id"]);
@@ -239,10 +255,14 @@ export type CollectionResult<
   | "indexInformation"
   | "listSearchIndexes"
   | "count"
+  | "countDocuments"
+  | "estimatedDocumentCount"
+  | "aggregate"
+  | "watch"
 > & {
   collection: m.Collection<TInput<T>>;
   schema: v.ObjectSchema<
-    { readonly _id: v.OptionalSchema<v.AnySchema, undefined> } & T,
+    { readonly _id: v.OptionalSchema<v.UnknownSchema, undefined> } & T,
     undefined
   >;
   on: ReturnType<typeof EventEmitter<Events<T>>>["on"];
@@ -253,17 +273,39 @@ export type CollectionResult<
   ) => Promise<WithId<TOutput<T>>["_id"]>;
   findOne: (
     filter: m.Filter<WithId<TInput<T>>>,
-    options?: Omit<m.FindOptions, "timeoutMode"> & m.Abortable,
+    options?: WithReadPreferenceInput<Omit<m.FindOptions, "timeoutMode">> &
+      m.Abortable,
   ) => Promise<WithId<TOutput<T>> | null>;
-  getById: (id: string | m.ObjectId) => Promise<WithId<TOutput<T>>>;
+  getById: (
+    id: string | m.ObjectId,
+    options?: ReadOptions,
+  ) => Promise<WithId<TOutput<T>>>;
   find: (
     filter: m.Filter<TInput<T>>,
-    options?: m.FindOptions & m.Abortable,
+    options?: WithReadPreferenceInput<m.FindOptions> & m.Abortable,
   ) => m.AbstractCursor<TOutput<T>>;
   findInvalid: (
     filter: m.Filter<TInput<T>>,
-    options?: m.FindOptions & m.Abortable,
+    options?: WithReadPreferenceInput<m.FindOptions> & m.Abortable,
   ) => m.AbstractCursor<WithId<TInput<T>>>;
+  countDocuments(
+    filter?: m.Filter<TInput<T>>,
+    options?: WithReadPreferenceInput<m.CountDocumentsOptions> & m.Abortable,
+  ): Promise<number>;
+  estimatedDocumentCount(
+    options?: WithReadPreferenceInput<m.EstimatedDocumentCountOptions>,
+  ): Promise<number>;
+  aggregate<R extends m.Document = m.Document>(
+    pipeline?: m.Document[],
+    options?: WithReadPreferenceInput<m.AggregateOptions> & m.Abortable,
+  ): m.AggregationCursor<R>;
+  watch<
+    TLocal extends m.Document = TInput<T>,
+    TChange extends m.Document = m.ChangeStreamDocument<TLocal>,
+  >(
+    pipeline?: m.Document[],
+    options?: WithReadPreferenceInput<m.ChangeStreamOptions>,
+  ): m.ChangeStream<TLocal, TChange>;
   withSession: Awaited<ReturnType<typeof getSessionContext>>["withSession"];
 
   // Utilities
@@ -301,13 +343,10 @@ export type CollectionResult<
        * pagination.
        */
       peek?: boolean;
+      /** Overrides the collection's read preference; ignored inside a transaction. */
+      readPreference?: ReadPreferenceInput;
     },
-  ) => Promise<{
-    total?: number;
-    position?: number;
-    data: R[];
-    hasMore?: boolean;
-  }>;
+  ) => Promise<Page<R>>;
 
   // From mongodb.Collection
   updateOne(
@@ -323,21 +362,35 @@ export type CollectionResult<
   distinct<Key extends keyof WithId<TInput<T>>>(
     key: Key,
     filter: m.Filter<TInput<T>>,
-    options?: m.DistinctOptions,
+    options?: WithReadPreferenceInput<m.DistinctOptions>,
   ): Promise<Array<m.Flatten<WithId<TInput<T>>[Key]>>>;
   findOneAndDelete(
     filter: m.Filter<TInput<T>>,
-    options?: m.FindOneAndDeleteOptions & { includeResultMetadata: boolean },
-  ): Promise<WithId<TInput<T>> | null>;
+    options: m.FindOneAndDeleteOptions & { includeResultMetadata: true },
+  ): Promise<m.ModifyResult<TInput<T>>>;
+  findOneAndDelete(
+    filter: m.Filter<TInput<T>>,
+    options?: m.FindOneAndDeleteOptions & { includeResultMetadata?: false },
+  ): Promise<m.WithId<TInput<T>> | null>;
   findOneAndReplace(
     filter: m.Filter<TInput<T>>,
     replacement: m.WithoutId<TInput<T>>,
-    options?: m.FindOneAndReplaceOptions & { includeResultMetadata: boolean },
-  ): Promise<m.ModifyResult<TInput<T>> | null>;
+    options: m.FindOneAndReplaceOptions & { includeResultMetadata: true },
+  ): Promise<m.ModifyResult<TInput<T>>>;
+  findOneAndReplace(
+    filter: m.Filter<TInput<T>>,
+    replacement: m.WithoutId<TInput<T>>,
+    options?: m.FindOneAndReplaceOptions & { includeResultMetadata?: false },
+  ): Promise<m.WithId<TInput<T>> | null>;
   findOneAndUpdate(
     filter: m.Filter<TInput<T>>,
     update: UpdateFilterWithRemovable<TInput<T>> | m.Document[],
-    options?: m.FindOneAndUpdateOptions & { includeResultMetadata: boolean },
+    options: m.FindOneAndUpdateOptions & { includeResultMetadata: true },
+  ): Promise<m.ModifyResult<TInput<T>>>;
+  findOneAndUpdate(
+    filter: m.Filter<TInput<T>>,
+    update: UpdateFilterWithRemovable<TInput<T>> | m.Document[],
+    options?: m.FindOneAndUpdateOptions & { includeResultMetadata?: false },
   ): Promise<m.WithId<TInput<T>> | null>;
   indexInformation(
     options: m.IndexInformationOptions & { full: true },
@@ -432,13 +485,13 @@ export async function collection<
   db: Db,
   collectionName: string,
   collectionSchema: T,
-  options?: m.CollectionOptions & CollectionOptions,
+  options?: DriverCollectionOptions & CollectionOptions,
 ): Promise<CollectionResult<T>>;
 export async function collection<const S extends ObjectLikeSchema>(
   db: Db,
   collectionName: string,
   definition: TypeDefinition<S>,
-  options?: m.CollectionOptions & CollectionOptions,
+  options?: DriverCollectionOptions & CollectionOptions,
 ): Promise<CollectionResult<S["entries"]>>;
 export async function collection<
   const T extends Record<
@@ -449,22 +502,23 @@ export async function collection<
   db: Db,
   collectionName: string,
   input: T | TypeDefinition,
-  options?: m.CollectionOptions & CollectionOptions,
+  options?: DriverCollectionOptions & CollectionOptions,
 ): Promise<CollectionResult<T>> {
   type TInput = v.InferInput<v.ObjectSchema<T, undefined>>;
   type TOutput = WithId<v.InferOutput<v.ObjectSchema<T, undefined>>>;
+  type FindOneAndResult = m.ModifyResult<TInput> | m.WithId<TInput> | null;
 
   const collectionSchema = fieldsOf(input) as T;
   const composites = indexesOf(input);
 
   const schema = v.object({
-    _id: v.optional(v.any()),
+    _id: v.optional(v.unknown()),
     ...collectionSchema,
   });
 
   const dotSchema = createDotNotationSchema(schema);
 
-  const opts: m.CollectionOptions & CollectionOptions = {
+  const opts: DriverCollectionOptions & CollectionOptions = {
     ...{
       safeDelete: true,
       undefinedBehavior: "remove", // Default behavior
@@ -484,7 +538,10 @@ export async function collection<
     update: unknown,
     upsert: boolean | undefined,
   ): Record<string, unknown> | m.Document[] {
-    if (Array.isArray(update)) return update;
+    if (Array.isArray(update)) {
+      refuseComputedWrite(update);
+      return update;
+    }
     const processed = processUpdateWithRemoveField(
       update as Record<string, unknown>,
     );
@@ -515,7 +572,13 @@ export async function collection<
 
   const events = EventEmitter<Events<T>>();
   const validator = toMongoValidator(schema);
-  const invalidValidation = { $nor: [validator] };
+  const invalidValidation: m.Filter<TInput> = { $nor: [validator] };
+
+  function parseStored(document: unknown): TOutput {
+    const parsed = v.safeParse(schema, document);
+    if (!parsed.success) throw new DocumentValidationError(parsed, document);
+    return parsed.output as TOutput;
+  }
 
   async function applyValidator() {
     await ensureValidator(db, collectionName, validator);
@@ -602,7 +665,18 @@ export async function collection<
     }
   }
 
-  const collection = db.collection<TInput>(collectionName, opts);
+  const collection = maintainedCollection(
+    db,
+    db.collection<TInput>(collectionName, withReadPreference(opts)),
+    collectionName,
+    COMPUTED_ROOT in collectionSchema,
+  );
+  const documents = maintainedCollection(
+    db,
+    db.collection<StoredDocument>(collectionName, withReadPreference(opts)),
+    collectionName,
+    COMPUTED_ROOT in collectionSchema,
+  );
   await init();
 
   const tele = createOperationTracer(opts.telemetry, {
@@ -612,7 +686,150 @@ export async function collection<
   });
   registerClientTelemetry(db.client, opts.telemetry);
 
-  return {
+  function findOneAndDelete(
+    filter: m.Filter<TInput>,
+    options: m.FindOneAndDeleteOptions & { includeResultMetadata: true },
+  ): Promise<m.ModifyResult<TInput>>;
+  function findOneAndDelete(
+    filter: m.Filter<TInput>,
+    options?: m.FindOneAndDeleteOptions & { includeResultMetadata?: false },
+  ): Promise<m.WithId<TInput> | null>;
+  function findOneAndDelete(
+    filter: m.Filter<TInput>,
+    options?: m.FindOneAndDeleteOptions,
+  ): Promise<FindOneAndResult> {
+    const run = () => {
+      const session = sessionContext.getSession();
+      return options?.includeResultMetadata
+        ? collection.findOneAndDelete(filter, {
+            ...options,
+            session,
+            includeResultMetadata: true,
+          })
+        : collection.findOneAndDelete(filter, {
+            ...options,
+            session,
+            includeResultMetadata: false,
+          });
+    };
+    return traced<FindOneAndResult>(
+      tele,
+      "findOneAndDelete",
+      () => ({ [TA.FILTER_KEYS]: filterKeys(filter) }),
+      run,
+    );
+  }
+
+  function findOneAndReplace(
+    filter: m.Filter<TInput>,
+    replacement: m.WithoutId<TInput>,
+    options: m.FindOneAndReplaceOptions & { includeResultMetadata: true },
+  ): Promise<m.ModifyResult<TInput>>;
+  function findOneAndReplace(
+    filter: m.Filter<TInput>,
+    replacement: m.WithoutId<TInput>,
+    options?: m.FindOneAndReplaceOptions & { includeResultMetadata?: false },
+  ): Promise<m.WithId<TInput> | null>;
+  function findOneAndReplace(
+    filter: m.Filter<TInput>,
+    replacement: m.WithoutId<TInput>,
+    options?: m.FindOneAndReplaceOptions,
+  ): Promise<FindOneAndResult> {
+    const run = () => {
+      const validation = v.safeParse(schema, replacement);
+      if (!validation.success) {
+        throw new DocumentValidationError(validation);
+      }
+
+      const sanitizedReplacement = sanitizeForMongoDB(validation.output, {
+        undefinedBehavior: opts.undefinedBehavior || "remove",
+        deep: true,
+      }) as unknown as TInput;
+
+      const session = sessionContext.getSession();
+      return options?.includeResultMetadata
+        ? collection.findOneAndReplace(filter, sanitizedReplacement, {
+            ...options,
+            session,
+            includeResultMetadata: true,
+          })
+        : collection.findOneAndReplace(filter, sanitizedReplacement, {
+            ...options,
+            session,
+            includeResultMetadata: false,
+          });
+    };
+    return traced<FindOneAndResult>(
+      tele,
+      "findOneAndReplace",
+      () => ({ [TA.FILTER_KEYS]: filterKeys(filter) }),
+      run,
+    );
+  }
+
+  function findOneAndUpdate(
+    filter: m.Filter<TInput>,
+    update: UpdateFilterWithRemovable<TInput> | m.Document[],
+    options: m.FindOneAndUpdateOptions & { includeResultMetadata: true },
+  ): Promise<m.ModifyResult<TInput>>;
+  function findOneAndUpdate(
+    filter: m.Filter<TInput>,
+    update: UpdateFilterWithRemovable<TInput> | m.Document[],
+    options?: m.FindOneAndUpdateOptions & { includeResultMetadata?: false },
+  ): Promise<m.WithId<TInput> | null>;
+  function findOneAndUpdate(
+    filter: m.Filter<TInput>,
+    update: UpdateFilterWithRemovable<TInput> | m.Document[],
+    options?: m.FindOneAndUpdateOptions,
+  ): Promise<FindOneAndResult> {
+    const run = () => {
+      const sanitizedUpdate = checkedUpdate(filter, update, options?.upsert);
+      const session = sessionContext.getSession();
+      return options?.includeResultMetadata
+        ? collection.findOneAndUpdate(filter, sanitizedUpdate, {
+            ...options,
+            session,
+            includeResultMetadata: true,
+          })
+        : collection.findOneAndUpdate(filter, sanitizedUpdate, {
+            ...options,
+            session,
+            includeResultMetadata: false,
+          });
+    };
+    return traced<FindOneAndResult>(
+      tele,
+      "findOneAndUpdate",
+      () => ({
+        [TA.FILTER_KEYS]: filterKeys(filter),
+        [TA.UPDATE_OPERATORS]: updateOperators(update),
+      }),
+      run,
+    );
+  }
+
+  function indexes(
+    options: m.IndexInformationOptions & { full?: true },
+  ): Promise<m.IndexDescriptionInfo[]>;
+  function indexes(
+    options: m.IndexInformationOptions & { full: false },
+  ): Promise<m.IndexDescriptionCompact>;
+  function indexes(
+    options: m.IndexInformationOptions,
+  ): Promise<m.IndexDescriptionCompact | m.IndexDescriptionInfo[]>;
+  function indexes(
+    options?: m.ListIndexesOptions,
+  ): Promise<m.IndexDescriptionInfo[]>;
+  function indexes(
+    options?: m.IndexInformationOptions | m.ListIndexesOptions,
+  ): Promise<m.IndexDescriptionCompact | m.IndexDescriptionInfo[]> {
+    const session = sessionContext.getSession();
+    return options !== undefined && "full" in options && options.full === false
+      ? collection.indexes({ ...options, session, full: false })
+      : collection.indexes({ ...options, session, full: true });
+  }
+
+  const result: CollectionResult<T> = {
     // Raw collection
     collection,
 
@@ -629,6 +846,9 @@ export async function collection<
     },
     get collectionName() {
       return collection.collectionName;
+    },
+    get db() {
+      return collection.db;
     },
     get dbName() {
       return collection.dbName;
@@ -720,7 +940,7 @@ export async function collection<
             ...validator, // Prevent returning invalid documents
             ...(filter as unknown as m.Filter<TInput>),
           },
-          { session, ...options },
+          readOpts(session, options),
         );
 
         if (!result) {
@@ -732,11 +952,7 @@ export async function collection<
           return validation.output as WithId<TOutput>;
         }
 
-        throw {
-          message: "Validation error",
-          errors: validation,
-          result,
-        };
+        throw new DocumentValidationError(validation, result);
       };
       return traced(
         tele,
@@ -746,12 +962,13 @@ export async function collection<
         (r) => ({ [TA.RETURNED_ROWS]: r ? 1 : 0 }),
       );
     },
-    async getById(id) {
+    async getById(id, options?) {
       const run = async () => {
         const session = sessionContext.getSession();
-        const result = await collection.findOne({ _id: id } as any, {
-          session,
-        });
+        const result = await documents.findOne(
+          { _id: id },
+          readOpts(session, options),
+        );
 
         if (!result) {
           throw new Error("No element found");
@@ -762,11 +979,7 @@ export async function collection<
           return validation.output as WithId<TOutput>;
         }
 
-        throw {
-          message: "Validation error",
-          errors: validation,
-          result,
-        };
+        throw new DocumentValidationError(validation, result);
       };
       return traced(
         tele,
@@ -776,37 +989,11 @@ export async function collection<
         () => ({ [TA.RETURNED_ROWS]: 1 }),
       );
     },
-    find(
-      filter: m.Filter<TInput>,
-      options?: m.FindOptions & m.Abortable,
-    ): m.AbstractCursor<TOutput> {
+    find(filter, options) {
       const session = sessionContext.getSession();
-      const cursor = collection.find(filter, { session, ...options });
-      const originalToArray = cursor.toArray;
-      // Override toArray
-      cursor.toArray = async function () {
-        const results = await originalToArray.call(cursor);
-        let invalidsCount = 0;
-
-        const output = results
-          .map((item) => {
-            const validation = v.safeParse(schema, item);
-            if (!validation.success) {
-              invalidsCount++;
-              return null;
-            }
-            return validation.output as m.WithId<TInput>;
-          })
-          .filter((item): item is m.WithId<TInput> => item !== null);
-
-        if (invalidsCount > 0) {
-          console.warn(
-            `Warning: ${invalidsCount} invalid documents were ignored during find operation`,
-          );
-        }
-
-        return output;
-      };
+      const cursor = collection
+        .find(filter, readOpts(session, options))
+        .map(parseStored);
 
       if (tele) {
         cursor.toArray = tele.wrapToArray(
@@ -818,18 +1005,13 @@ export async function collection<
         );
       }
 
-      return cursor as unknown as m.AbstractCursor<TOutput>;
+      return cursor;
     },
-    findInvalid(
-      filter: m.Filter<TInput>,
-      options?: m.FindOptions & m.Abortable,
-    ): m.AbstractCursor<TOutput> {
+    findInvalid(filter, options) {
       const session = sessionContext.getSession();
       const cursor = collection.find(
-        {
-          $and: [filter as any, invalidValidation],
-        },
-        { session, ...options },
+        { $and: [filter, invalidValidation] } as m.Filter<TInput>,
+        readOpts(session, options),
       );
 
       const originalToArray = cursor.toArray;
@@ -849,8 +1031,8 @@ export async function collection<
           .filter((item): item is m.WithId<TInput> => item !== null);
 
         if (invalidsCount > 0) {
-          console.warn(
-            `Warning: ${invalidsCount} invalid documents were found during findInvalid operation`,
+          log.warn(
+            `${invalidsCount} invalid documents were found during findInvalid operation`,
           );
         }
         return output;
@@ -875,20 +1057,16 @@ export async function collection<
         afterId?: string | m.ObjectId;
         beforeId?: string | m.ObjectId;
         sort?: m.Sort | m.SortDirection;
-        prepare?: (doc: WithId<TOutput>) => Promise<E>;
+        prepare?: (doc: WithId<TOutput>) => Promise<E> | E;
         filter?: (doc: E) => Promise<boolean> | boolean;
-        format?: (doc: E) => Promise<R>;
+        format?: (doc: E) => Promise<R> | R;
         pipeline?: (stage: SimpleStageBuilder) => AggregationStage[];
         sortPipeline?: (stage: SimpleStageBuilder) => AggregationStage[];
         skipTotal?: boolean;
         peek?: boolean;
+        readPreference?: ReadPreferenceInput;
       },
-    ): Promise<{
-      total?: number;
-      position?: number;
-      data: R[];
-      hasMore?: boolean;
-    }> {
+    ): Promise<Page<R>> {
       const run = async () => {
         const { skipTotal = false, peek = false } = options || {};
         const requestedLimit = options?.limit ?? 100;
@@ -904,6 +1082,12 @@ export async function collection<
           sortPipeline: sortPipelineBuilder,
         } = options || {};
         const session = sessionContext.getSession();
+        const readOptions = readOpts(
+          session,
+          options?.readPreference
+            ? { readPreference: options.readPreference }
+            : undefined,
+        );
         const baseQuery: m.Filter<TInput> = { ...filter };
         let query: m.Filter<TInput> = { ...filter };
 
@@ -920,7 +1104,7 @@ export async function collection<
         ): Promise<Record<string, unknown>[] | null> => {
           const anchorDoc = await collection.findOne(
             { _id: anchorId } as m.Filter<TInput>,
-            { session },
+            readOptions,
           );
           if (!anchorDoc) return null;
           return buildCursorLadderBranches({
@@ -1041,13 +1225,13 @@ export async function collection<
           const rows = await collection
             .aggregate(
               [{ $match: { _id: anchorId } }, ...sortStages, { $limit: 1 }],
-              { session },
+              readOptions,
             )
             .toArray();
           if (rows[0]) return rows[0] as Record<string, unknown>;
           const exists = await collection.findOne(
             { _id: anchorId } as m.Filter<TInput>,
-            { session },
+            readOptions,
           );
           throw new Error(
             exists
@@ -1124,7 +1308,7 @@ export async function collection<
                 pipeline: customPipeline,
                 count: true,
               }),
-              { session },
+              readOptions,
             )
             .toArray();
           return (rows[0]?.total as number | undefined) ?? 0;
@@ -1156,9 +1340,7 @@ export async function collection<
               { $count: "total" },
             ];
             const totalResult = await collection
-              .aggregate(countPipeline, {
-                session,
-              })
+              .aggregate(countPipeline, readOptions)
               .toArray();
             total = (totalResult[0]?.total as number | undefined) ?? 0;
 
@@ -1175,9 +1357,7 @@ export async function collection<
                   { $count: "total" },
                 ];
                 const afterResult = await collection
-                  .aggregate(afterPipeline, {
-                    session,
-                  })
+                  .aggregate(afterPipeline, readOptions)
                   .toArray();
                 const afterCount =
                   (afterResult[0]?.total as number | undefined) ?? 0;
@@ -1192,7 +1372,7 @@ export async function collection<
             }
           } else {
             // Find-style fast path: countDocuments is cheaper than aggregate.
-            total = await collection.countDocuments(baseQuery, { session });
+            total = await collection.countDocuments(baseQuery, readOptions);
 
             if (afterId) {
               if (cursorBranches) {
@@ -1201,7 +1381,7 @@ export async function collection<
                     [baseQuery as Record<string, unknown>],
                     cursorBranches,
                   ) as m.Filter<TInput>,
-                  { session },
+                  readOptions,
                 );
                 position = total - afterCount;
               } else {
@@ -1216,6 +1396,7 @@ export async function collection<
         }
 
         let hardLimit = 10_000;
+        let skippedInvalid = 0;
         const elements: R[] = [];
 
         // Use aggregation pipeline when custom pipeline is provided
@@ -1234,7 +1415,7 @@ export async function collection<
               })
             : [{ $match: query }, { $sort: sort }, ...customPipeline];
 
-          const cursor = collection.aggregate(aggregationPipeline, { session });
+          const cursor = collection.aggregate(aggregationPipeline, readOptions);
 
           try {
             while (hardLimit-- > 0 && limit > 0) {
@@ -1244,7 +1425,8 @@ export async function collection<
               // Validate document with schema (only original fields, not lookup fields)
               const validation = v.safeParse(schema, doc);
               if (!validation.success) {
-                continue; // Skip invalid documents
+                skippedInvalid++;
+                continue;
               }
 
               // Merge original doc (with lookup fields) with validated output
@@ -1276,7 +1458,7 @@ export async function collection<
         } else {
           // Use simple find for non-pipeline queries
           const cursor = collection
-            .find(query, { session })
+            .find(query, readOptions)
             .sort(sort as m.Sort);
 
           try {
@@ -1287,7 +1469,8 @@ export async function collection<
               // Validate document with schema
               const validation = v.safeParse(schema, doc);
               if (!validation.success) {
-                continue; // Skip invalid documents
+                skippedInvalid++;
+                continue;
               }
 
               const validatedDoc = validation.output as WithId<TOutput>;
@@ -1357,14 +1540,14 @@ export async function collection<
                       ...customPipeline,
                       { $count: "total" },
                     ],
-                    { session },
+                    readOptions,
                   )
                   .toArray();
                 beforeCount = (rows[0]?.total as number | undefined) ?? 0;
               } else {
                 beforeCount = await collection.countDocuments(
                   beforeQuery as m.Filter<TInput>,
-                  { session },
+                  readOptions,
                 );
               }
               position = Math.max(0, beforeCount - elements.length);
@@ -1374,11 +1557,13 @@ export async function collection<
           }
         }
 
+        warnSkippedInvalid(log, collectionName, skippedInvalid);
         return {
           total,
           position,
           data: elements,
           ...(peek ? { hasMore } : {}),
+          ...(skippedInvalid > 0 && { skippedInvalid }),
         };
       };
       return traced(
@@ -1392,7 +1577,7 @@ export async function collection<
     countDocuments(filter, options?) {
       const run = () => {
         const session = sessionContext.getSession();
-        return collection.countDocuments(filter, { session, ...options });
+        return collection.countDocuments(filter, readOpts(session, options));
       };
       return traced(
         tele,
@@ -1404,17 +1589,18 @@ export async function collection<
     estimatedDocumentCount(options?) {
       const run = () => {
         const session = sessionContext.getSession();
-        return collection.estimatedDocumentCount({ session, ...options });
+        return collection.estimatedDocumentCount(readOpts(session, options));
       };
       return traced(tele, "estimatedDocumentCount", undefined, run);
     },
     distinct(key, filter, options?) {
       const run = () => {
         const session = sessionContext.getSession();
-        return collection.distinct(key as string, filter, {
-          session,
-          ...options,
-        });
+        return collection.distinct(
+          key as string,
+          filter,
+          readOpts(session, options),
+        );
       };
       return traced(
         tele,
@@ -1430,10 +1616,7 @@ export async function collection<
       const run = () => {
         const validation = v.safeParse(schema, replacement);
         if (!validation.success) {
-          throw {
-            message: "Validation error",
-            errors: validation,
-          };
+          throw new DocumentValidationError(validation);
         }
 
         const sanitizedReplacement = sanitizeForMongoDB(validation.output, {
@@ -1465,8 +1648,8 @@ export async function collection<
           async () => {
             const session = sessionContext.getSession();
             return await collection.updateOne(
-              filter as any,
-              sanitizedUpdate as any,
+              filter as m.Filter<TInput>,
+              sanitizedUpdate,
               {
                 session,
                 ...options,
@@ -1497,7 +1680,7 @@ export async function collection<
         return retryOnWriteConflict(
           async () => {
             const session = sessionContext.getSession();
-            return await collection.updateMany(filter, sanitizedUpdate as any, {
+            return await collection.updateMany(filter, sanitizedUpdate, {
               session,
               ...options,
             });
@@ -1568,73 +1751,25 @@ export async function collection<
       );
     },
 
-    // Compound operations
-    findOneAndDelete(filter, options?) {
-      const run = () => {
-        const session = sessionContext.getSession();
-        return collection.findOneAndDelete(filter, { session, ...options });
-      };
-      return traced(
-        tele,
-        "findOneAndDelete",
-        () => ({ [TA.FILTER_KEYS]: filterKeys(filter) }),
-        run,
-      );
-    },
-    findOneAndReplace(filter, replacement, options?) {
-      const run = () => {
-        const validation = v.safeParse(schema, replacement);
-        if (!validation.success) {
-          throw {
-            message: "Validation error",
-            errors: validation,
-          };
-        }
-
-        const sanitizedReplacement = sanitizeForMongoDB(validation.output, {
-          undefinedBehavior: opts.undefinedBehavior || "remove",
-          deep: true,
-        }) as unknown as TInput;
-
-        const session = sessionContext.getSession();
-        return collection.findOneAndReplace(filter, sanitizedReplacement, {
-          session,
-          ...options,
-        });
-      };
-      return traced(
-        tele,
-        "findOneAndReplace",
-        () => ({ [TA.FILTER_KEYS]: filterKeys(filter) }),
-        run,
-      );
-    },
-    findOneAndUpdate(filter, update, options?) {
-      const run = () => {
-        const sanitizedUpdate = checkedUpdate(filter, update, options?.upsert);
-        const session = sessionContext.getSession();
-        return collection.findOneAndUpdate(filter, sanitizedUpdate as any, {
-          session,
-          ...options,
-        });
-      };
-      return traced(
-        tele,
-        "findOneAndUpdate",
-        () => ({
-          [TA.FILTER_KEYS]: filterKeys(filter),
-          [TA.UPDATE_OPERATORS]: updateOperators(update),
-        }),
-        run,
-      );
-    },
+    findOneAndDelete,
+    findOneAndReplace,
+    findOneAndUpdate,
 
     // Bulk operations
     aggregate(pipeline, options?) {
       const session = sessionContext.getSession();
-      return collection.aggregate(pipeline, { session, ...options });
+      return collection.aggregate(pipeline, readOpts(session, options));
     },
     bulkWrite(operations, options?) {
+      for (const operation of operations) {
+        for (const body of Object.values(operation) as Array<
+          Record<string, unknown>
+        >) {
+          refuseComputedWrite(body.document);
+          refuseComputedWrite(body.update);
+          refuseComputedWrite(body.replacement);
+        }
+      }
       const run = () => {
         const session = sessionContext.getSession();
         return collection.bulkWrite(operations, { session, ...options });
@@ -1679,10 +1814,7 @@ export async function collection<
       const session = sessionContext.getSession();
       return collection.dropIndexes({ session, ...options });
     },
-    indexes(options?) {
-      const session = sessionContext.getSession();
-      return collection.indexes({ session, ...options });
-    },
+    indexes,
     listIndexes(options?) {
       const session = sessionContext.getSession();
       return collection.listIndexes({ session, ...options });
@@ -1733,7 +1865,8 @@ export async function collection<
     },
     watch(pipeline, options?) {
       const session = sessionContext.getSession();
-      return collection.watch(pipeline, { session, ...options });
+      return collection.watch(pipeline, readOpts(session, options));
     },
-  } as CollectionResult<T>;
+  };
+  return result;
 }

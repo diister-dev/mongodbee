@@ -20,6 +20,7 @@ import { toMongoValidator } from "./validator.ts";
 import { extractIndexes } from "./indexes.ts";
 import { sanitizePathName } from "./schema-navigator.ts";
 import { withDatabaseDdlLock } from "./ddl-lock.ts";
+import { PRIMARY, primaryCollection } from "./read-preference.ts";
 
 /**
  * Options for applying security (validators and indexes)
@@ -80,7 +81,7 @@ export async function applySecurityToCollection(
     ...options,
   };
 
-  const collection = db.collection(collectionName);
+  const collection = primaryCollection(db, collectionName);
 
   // Apply JSON Schema validator
   if (opts.applyValidator) {
@@ -89,7 +90,7 @@ export async function applySecurityToCollection(
 
     // Check if collection exists
     const collections = await db
-      .listCollections({ name: collectionName })
+      .listCollections({ name: collectionName }, { readPreference: PRIMARY })
       .toArray();
 
     if (collections.length === 0) {
@@ -197,7 +198,7 @@ export async function applySecurityToMultiCollection(
     ...options,
   };
 
-  const collection = db.collection(collectionName);
+  const collection = primaryCollection(db, collectionName);
 
   // Apply union validator for all types
   if (opts.applyValidator) {
@@ -216,7 +217,7 @@ export async function applySecurityToMultiCollection(
 
     // Check if collection exists
     const collections = await db
-      .listCollections({ name: collectionName })
+      .listCollections({ name: collectionName }, { readPreference: PRIMARY })
       .toArray();
 
     if (collections.length === 0) {

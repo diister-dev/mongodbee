@@ -1,4 +1,7 @@
 import type * as v from "./schema.ts";
+import { createLogger } from "./utils/logger.ts";
+
+const log = createLogger("validator");
 
 type UnknownSchema = v.BaseSchema<any, any, any>;
 type UnknownValidation = v.BaseValidation<any, any, any>;
@@ -468,11 +471,8 @@ function constructorToValidator(
         };
       }
       case "non_empty": {
-        // For arrays, use minItems, for strings use minLength
-        // We can't distinguish here, so we provide both and let MongoDB pick the right one
         return {
           minLength: 1,
-          minItems: 1,
         };
       }
       case "integer": {
@@ -499,23 +499,16 @@ function constructorToValidator(
             .substring(lastSlashIndex + 1)
             .replace("u", "");
           if (flags.length > 0) {
-            console.warn(
-              `[WARN] Unsupported regex flags: ${flags} for "${schema.type}" schema`,
+            log.warn(
+              `Unsupported regex flags: ${flags} for "${schema.type}" schema${flags.includes("i") ? "; lowercase the value in application code instead of relying on the i flag" : ""}`,
             );
-            // Tips:
-            if (flags.includes("i")) {
-              console.warn(
-                `[WARN] - Tips: Use toLowerCase modifier in your application code`,
-              );
-            }
           }
           return {
             pattern: `${santizeRegex}`,
           };
         }
 
-        console.warn(`[WARN] Unsupported schema type: ${type}`);
-        console.log({ kind, type });
+        log.warn(`Unsupported schema type: ${type} (kind ${kind})`);
         return;
       }
     }

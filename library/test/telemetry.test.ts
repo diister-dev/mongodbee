@@ -15,6 +15,7 @@ import {
 } from "./+assert.ts";
 import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import { collection } from "../src/collection.ts";
+import { DocumentValidationError } from "../src/validation-error.ts";
 import { TELEMETRY_ATTRIBUTES as TA } from "../telemetry.ts";
 import { withDatabase } from "./+shared.ts";
 import { dumpSpans, makeTestTelemetry } from "./+telemetry.ts";
@@ -388,7 +389,7 @@ test("telemetry: error paths record ERROR spans and re-throw the original error"
 
     exporter.reset();
 
-    // --- Read-path validation failure: the original plain object
+    // --- Read-path validation failure: a DocumentValidationError carrying
     // { message, errors, result } reaches the caller intact.
     const SENTINEL_DB = "PII_SENTINEL_GETBYID_90bc";
     const raw = await db
@@ -399,6 +400,10 @@ test("telemetry: error paths record ERROR spans and re-throw the original error"
       );
     const objectError = await assertRejects(() =>
       users.getById(raw.insertedId),
+    );
+    assert(
+      objectError instanceof DocumentValidationError,
+      "a read-path validation failure is a DocumentValidationError",
     );
     const validationObject = objectError as {
       message?: string;

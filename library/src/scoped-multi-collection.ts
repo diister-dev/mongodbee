@@ -10,10 +10,27 @@
 import * as v from "./schema.ts";
 import type * as m from "mongodb";
 import type { Db } from "./mongodb.ts";
+import {
+  type StoredDocument,
+  toStoredDocument,
+  toStoredFilter,
+  toStringId,
+} from "./stored-document.ts";
 import { toMongoValidator } from "./validator.ts";
+import { type Page, warnSkippedInvalid } from "./page.ts";
+import { parseStored } from "./validation-error.ts";
+import { createLogger } from "./utils/logger.ts";
 import { dbId, newId } from "./ids.ts";
 import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
 import { getSessionContext } from "./session.ts";
+import { COMPUTED_ROOT } from "./computed-guard.ts";
+import { maintainedCollection } from "./computed-maintenance.ts";
+import {
+  type ReadPreferenceInput,
+  readOpts,
+  type WithReadPreferenceInput,
+  withReadPreference,
+} from "./read-preference.ts";
 import { createDotNotationSchema } from "./dot-notation.ts";
 import {
   type GuardedUpdateOptions,
@@ -53,6 +70,8 @@ import {
   traced,
 } from "./telemetry.ts";
 
+const log = createLogger("scoped-multi-collection");
+
 // Structural fields that always exist on every stored doc — their cursor
 // rungs stay raw comparisons (no null branch).
 const NON_NULLABLE_SORT_FIELDS: ReadonlySet<string> = new Set([
@@ -64,8 +83,11 @@ const NON_NULLABLE_SORT_FIELDS: ReadonlySet<string> = new Set([
 /** Reserved internal field names — cannot appear in user-defined type schemas. */
 const RESERVED_FIELDS: Set<string> = new Set(["_scope", "_type"]);
 
-type AnyMessage = any;
+type LiteralMessage = v.ErrorMessage<v.LiteralIssue> | undefined;
+type ObjectMessage = v.ErrorMessage<v.ObjectIssue> | undefined;
 type AnySchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
+type StoredSchema = v.ObjectSchema<v.ObjectEntries, undefined>;
+type StoredOutput = v.InferOutput<StoredSchema>;
 
 /**
  * Map of document-type names to their field schemas. Each type's fields are
@@ -109,6 +131,14 @@ export type ScopedMultiCollectionConfig<
    * - "inherit": Use global runtime config (default)
    */
   schemaManagement?: "auto" | "managed" | "inherit";
+  /**
+   * Read preference of this collection's reads outside a transaction, e.g.
+   * `{ mode: "secondaryPreferred", maxStalenessSeconds: 90 }`. Defaults to
+   * the client's. Transactions and index sync always use the primary.
+   */
+  readPreference?: ReadPreferenceInput;
+  /** Read concern of this collection's reads outside a transaction. */
+  readConcern?: m.ReadConcernLike;
 };
 
 // -------- Per-type schema augmentation -----------------------------------
@@ -129,10 +159,10 @@ type StorageElementSchema<
 > = v.ObjectSchema<
   {
     _id: IdSchema<T[K]>;
-    _type: v.LiteralSchema<K & string, AnyMessage>;
+    _type: v.LiteralSchema<K & string, LiteralMessage>;
     _scope: S;
   } & Omit<T[K], "_id">,
-  any
+  ObjectMessage
 >;
 
 // Element schema used for **insert validation** : _type is optional (auto-
@@ -146,12 +176,12 @@ type InsertElementSchema<
   {
     _id: IdSchema<T[K]>;
     _type: v.OptionalSchema<
-      v.LiteralSchema<K & string, AnyMessage>,
+      v.LiteralSchema<K & string, LiteralMessage>,
       () => K & string
     >;
     _scope: S;
   } & Omit<T[K], "_id">,
-  any
+  ObjectMessage
 >;
 
 /** Input shape the user passes to insertOne (no _scope/_type); `_id` is minted when omitted. */
@@ -162,6 +192,13 @@ type UserInputDoc<
   v.InferInput<InsertElementSchema<T, K, AnySchema>>,
   "_scope" | "_type" | "_id"
 > & { _id?: string };
+
+type Projected<
+  T extends ScopedMultiCollectionTypes,
+  K extends keyof T,
+  S extends AnySchema,
+  P extends keyof OutputDoc<T, K, S>,
+> = Pick<OutputDoc<T, K, S>, P | "_id" | "_type" | "_scope">;
 
 /** Output shape returned by reads. Always includes _scope. */
 type OutputDoc<
@@ -229,7 +266,7 @@ export type ScopedView<
   find<K extends keyof T>(
     type: K,
     filter?: m.Filter<OutputDoc<T, K, S>>,
-    options?: m.FindOptions & { validate?: boolean },
+    options?: WithReadPreferenceInput<m.FindOptions> & { validate?: boolean },
   ): Promise<OutputDoc<T, K, S>[]>;
 
   /**
@@ -245,8 +282,8 @@ export type ScopedView<
     type: K,
     fields: readonly P[],
     filter?: m.Filter<OutputDoc<T, K, S>>,
-    options?: m.FindOptions,
-  ): Promise<Pick<OutputDoc<T, K, S>, P | "_id" | "_type" | "_scope">[]>;
+    options?: WithReadPreferenceInput<m.FindOptions>,
+  ): Promise<Projected<T, K, S, P>[]>;
 
   /**
    * Find the first document matching a cross-type filter — no `_type`
@@ -264,13 +301,13 @@ export type ScopedView<
    */
   findAny(
     filter?: m.Filter<AnyScopedOutput<T, S>>,
-    options?: m.FindOptions & { validate?: boolean },
+    options?: WithReadPreferenceInput<m.FindOptions> & { validate?: boolean },
   ): Promise<AnyScopedOutput<T, S>[]>;
 
   countDocuments<K extends keyof T>(
     type: K,
     filter?: m.Filter<OutputDoc<T, K, S>>,
-    options?: m.CountDocumentsOptions,
+    options?: WithReadPreferenceInput<m.CountDocumentsOptions>,
   ): Promise<number>;
 
   deleteId<K extends keyof T>(type: K, id: string): Promise<number>;
@@ -349,48 +386,48 @@ export type ScopedView<
     options?: { returnDocument?: "before" | "after" },
   ): Promise<OutputDoc<T, K, S> | null>;
 
-  aggregate(
+  aggregate<R extends m.Document = m.Document>(
     stageBuilder: (stage: ScopedStageBuilder<T>) => AggregationStage[],
-  ): Promise<any[]>;
+  ): Promise<R[]>;
 
   paginate<K extends keyof T, EN = OutputDoc<T, K, S>, R = EN>(
     type: K,
     filter?: m.Filter<OutputDoc<T, K, S>>,
-    options?: {
-      limit?: number;
-      afterId?: string;
-      beforeId?: string;
-      sort?: m.Sort | m.SortDirection;
-      /** Scope-safe pipeline stages run server-side before pagination (lookups, addFields, …). */
-      pipeline?: (stage: ScopedStageBuilder<T>) => AggregationStage[];
-      /**
-       * Scope-safe stages that run BEFORE the cursor match and the `$sort`,
-       * so `sort` may reference fields they compute (e.g. sort by a
-       * `$lookup`ed document's field). Unlike `pipeline` (which runs after
-       * the sort, lazily over ~`limit` docs), these stages run over the
-       * whole scoped+filtered set — keep them lean (join just what the sort
-       * needs). Fields they add survive into the returned docs. Sort keys
-       * must be scalar (arrays keep MongoDB's ambiguous array-sort
-       * semantics — `$first` the lookup result before sorting on it).
-       */
-      sortPipeline?: (stage: ScopedStageBuilder<T>) => AggregationStage[];
-      prepare?: (doc: OutputDoc<T, K, S>) => Promise<EN> | EN;
-      filter?: (doc: EN) => Promise<boolean> | boolean;
-      format?: (doc: EN) => Promise<R> | R;
-      /** Skip the countDocuments call(s); `total` and `position` come back undefined. */
-      skipTotal?: boolean;
-      /** Fetch one extra row to set `hasMore` cheaply; the extra row is dropped. */
-      peek?: boolean;
-    },
-  ): Promise<{
-    /** Total docs matching the (scoped) query — omitted when `skipTotal`. */
-    total?: number;
-    /** 0-based count of docs before this page's first row — omitted when `skipTotal`. */
-    position?: number;
-    data: R[];
-    /** Present only when `peek` was requested. */
-    hasMore?: boolean;
-  }>;
+    options?: ScopedPaginateOptions<T, K, S, EN, R>,
+  ): Promise<Page<R>>;
+};
+
+export type ScopedPaginateOptions<
+  T extends ScopedMultiCollectionTypes,
+  K extends keyof T,
+  S extends AnySchema,
+  EN,
+  R,
+> = {
+  limit?: number;
+  afterId?: string;
+  beforeId?: string;
+  sort?: m.Sort | m.SortDirection;
+  /** Scope-safe pipeline stages run server-side before pagination (lookups, addFields, …). */
+  pipeline?: (stage: ScopedStageBuilder<T>) => AggregationStage[];
+  /**
+   * Scope-safe stages that run BEFORE the cursor match and the `$sort`,
+   * so `sort` may reference fields they compute (e.g. sort by a
+   * `$lookup`ed document's field). Unlike `pipeline` (which runs after
+   * the sort, lazily over ~`limit` docs), these stages run over the
+   * whole scoped+filtered set: keep them lean (join just what the sort
+   * needs). Fields they add survive into the returned docs. Sort keys
+   * must be scalar (arrays keep MongoDB's ambiguous array-sort
+   * semantics: `$first` the lookup result before sorting on it).
+   */
+  sortPipeline?: (stage: ScopedStageBuilder<T>) => AggregationStage[];
+  prepare?: (doc: OutputDoc<T, K, S>) => Promise<EN> | EN;
+  filter?: (doc: EN) => Promise<boolean> | boolean;
+  format?: (doc: EN) => Promise<R> | R;
+  /** Skip the countDocuments call(s); `total` and `position` come back undefined. */
+  skipTotal?: boolean;
+  /** Fetch one extra row to set `hasMore` cheaply; the extra row is dropped. */
+  peek?: boolean;
 };
 
 /** Single MongoDB aggregation stage (already-built object form). */
@@ -477,7 +514,7 @@ export type ReadOnlyMultiScopeView<
   find<K extends keyof T>(
     type: K,
     filter?: m.Filter<OutputDoc<T, K, S>>,
-    options?: m.FindOptions & { validate?: boolean },
+    options?: WithReadPreferenceInput<m.FindOptions> & { validate?: boolean },
   ): Promise<OutputDoc<T, K, S>[]>;
 
   /**
@@ -489,18 +526,18 @@ export type ReadOnlyMultiScopeView<
     type: K,
     fields: readonly P[],
     filter?: m.Filter<OutputDoc<T, K, S>>,
-    options?: m.FindOptions,
-  ): Promise<Pick<OutputDoc<T, K, S>, P | "_id" | "_type" | "_scope">[]>;
+    options?: WithReadPreferenceInput<m.FindOptions>,
+  ): Promise<Projected<T, K, S, P>[]>;
 
   countDocuments<K extends keyof T>(
     type: K,
     filter?: m.Filter<OutputDoc<T, K, S>>,
-    options?: m.CountDocumentsOptions,
+    options?: WithReadPreferenceInput<m.CountDocumentsOptions>,
   ): Promise<number>;
 
-  aggregate(
+  aggregate<R extends m.Document = m.Document>(
     stageBuilder: (stage: ScopedStageBuilder<T>) => AggregationStage[],
-  ): Promise<any[]>;
+  ): Promise<R[]>;
 };
 
 /**
@@ -637,7 +674,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
       });
       return acc;
     },
-    {} as Record<string, v.ObjectSchema<any, any>>,
+    {} as Record<string, StoredSchema>,
   );
 
   // Storage schemas, used to build the MongoDB validator and to parse docs
@@ -652,7 +689,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
       });
       return acc;
     },
-    {} as Record<string, v.ObjectSchema<any, any>>,
+    {} as Record<string, StoredSchema>,
   );
 
   const storageUnion = v.union(Object.values(storageSchemas));
@@ -668,10 +705,21 @@ export async function scopedMultiCollection<S extends AnySchema>(
       acc[typeName] = createDotNotationSchema(schema);
       return acc;
     },
-    {} as Record<string, v.BaseSchema<any, any, any>>,
+    {} as Record<string, AnySchema>,
   );
 
-  const collection = db.collection<any>(collectionName);
+  const collection = maintainedCollection(
+    db,
+    db.collection<StoredDocument>(
+      collectionName,
+      withReadPreference({
+        readPreference: config.readPreference,
+        readConcern: config.readConcern,
+      }),
+    ),
+    collectionName,
+    Object.values(types).some((fields) => COMPUTED_ROOT in fields),
+  );
   const sessionContext = getSessionContext(db.client);
 
   const shouldAutoApply =
@@ -808,15 +856,17 @@ export async function scopedMultiCollection<S extends AnySchema>(
             _scope: scopeId,
           });
 
-          const safeDoc = sanitizeForMongoDB(parsed, {
-            undefinedBehavior: "remove",
-            deep: true,
-          }) as any;
+          const safeDoc = toStoredDocument(
+            sanitizeForMongoDB(parsed, {
+              undefinedBehavior: "remove",
+              deep: true,
+            }),
+          );
 
           const session = sessionContext.getSession();
           const result = await collection.insertOne(safeDoc, { session });
           if (!result.acknowledged) throw new Error("Insert failed");
-          return result.insertedId as unknown as string;
+          return toStringId(result.insertedId);
         };
         return traced(
           tele,
@@ -845,18 +895,19 @@ export async function scopedMultiCollection<S extends AnySchema>(
             });
           });
 
-          const safeDocs = parsed.map(
-            (p) =>
+          const safeDocs = parsed.map((p) =>
+            toStoredDocument(
               sanitizeForMongoDB(p, {
                 undefinedBehavior: "remove",
                 deep: true,
-              }) as any,
+              }),
+            ),
           );
 
           const session = sessionContext.getSession();
           const result = await collection.insertMany(safeDocs, { session });
           if (!result.acknowledged) throw new Error("Insert failed");
-          return Object.values(result.insertedIds) as unknown as string[];
+          return Object.values(result.insertedIds).map(toStringId);
         };
         return traced(
           tele,
@@ -880,7 +931,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
               _id: id,
               _type: typeName,
               _scope: scopeId,
-            } as any,
+            },
             { session },
           );
           if (!raw) {
@@ -889,7 +940,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
               `getById(${typeName}): no element found in scope`,
             );
           }
-          return v.parse(storageSchemas[typeName], raw) as any;
+          return parseStored(storageSchemas[typeName], raw);
         };
         return traced(
           tele,
@@ -911,13 +962,16 @@ export async function scopedMultiCollection<S extends AnySchema>(
             { _type: typeName },
             { _scope: scopeId },
           ];
-          if (filter) conditions.push(filter as Record<string, unknown>);
+          if (filter) conditions.push(toStoredFilter(filter));
 
-          const raw = await collection.findOne({ $and: conditions } as any, {
-            session,
-          });
+          const raw = await collection.findOne(
+            { $and: conditions },
+            {
+              session,
+            },
+          );
           if (!raw) return null;
-          return v.parse(storageSchemas[typeName], raw) as any;
+          return parseStored(storageSchemas[typeName], raw);
         };
         return traced(
           tele,
@@ -940,25 +994,31 @@ export async function scopedMultiCollection<S extends AnySchema>(
             { _type: typeName },
             { _scope: scopeId },
           ];
-          if (filter) conditions.push(filter as Record<string, unknown>);
+          if (filter) conditions.push(toStoredFilter(filter));
 
-          const cursor = collection.find({ $and: conditions } as any, {
-            session,
-            ...findOptions,
-          });
+          const cursor = collection.find(
+            { $and: conditions },
+            readOpts(session, findOptions),
+          );
           const raw = await cursor.toArray();
           // `validate: false` skips the per-document parse for trusted hot-path
           // reads, returning the raw stored docs. Schema transforms are NOT
           // applied in that mode — opt out only when you don't depend on them.
           if (validate === false) {
-            return raw as any;
+            return raw;
           }
-          const out: unknown[] = [];
+          const out: StoredOutput[] = [];
           for (const item of raw) {
             const parsed = v.safeParse(storageSchemas[typeName], item);
             if (parsed.success) out.push(parsed.output);
           }
-          return out as any;
+          warnSkippedInvalid(
+            log,
+            collectionName,
+            raw.length - out.length,
+            "find",
+          );
+          return out;
         };
         return traced(
           tele,
@@ -973,23 +1033,28 @@ export async function scopedMultiCollection<S extends AnySchema>(
         );
       },
 
-      async findProject(type, fields, filter, options) {
-        const run = async () => {
+      async findProject<K extends keyof T, P extends keyof OutputDoc<T, K, S>>(
+        type: K,
+        fields: readonly P[],
+        filter?: m.Filter<OutputDoc<T, K, S>>,
+        options?: WithReadPreferenceInput<m.FindOptions>,
+      ) {
+        const run = async (): Promise<Projected<T, K, S, P>[]> => {
           const typeName = type as string;
           const session = sessionContext.getSession();
           const conditions: Record<string, unknown>[] = [
             { _type: typeName },
             { _scope: scopeId },
           ];
-          if (filter) conditions.push(filter as Record<string, unknown>);
-          const cursor = collection.find({ $and: conditions } as any, {
-            session,
-            ...options,
-            projection: buildProjection(fields as readonly string[]),
-          });
-          // Projected docs are partial — return them raw. Validating against
-          // the full type schema would reject the omitted fields.
-          return (await cursor.toArray()) as any;
+          if (filter) conditions.push(toStoredFilter(filter));
+          const cursor = collection.find(
+            { $and: conditions },
+            {
+              ...readOpts(session, options),
+              projection: buildProjection(fields as readonly string[]),
+            },
+          );
+          return (await cursor.toArray()) as Projected<T, K, S, P>[];
         };
         return traced(
           tele,
@@ -1008,12 +1073,15 @@ export async function scopedMultiCollection<S extends AnySchema>(
         const run = async () => {
           const session = sessionContext.getSession();
           const conditions: Record<string, unknown>[] = [{ _scope: scopeId }];
-          if (filter) conditions.push(filter as Record<string, unknown>);
-          const raw = await collection.findOne({ $and: conditions } as any, {
-            session,
-          });
+          if (filter) conditions.push(toStoredFilter(filter));
+          const raw = await collection.findOne(
+            { $and: conditions },
+            {
+              session,
+            },
+          );
           if (!raw) return null;
-          return v.parse(storageUnion, raw) as any;
+          return parseStored(storageUnion, raw);
         };
         return traced(
           tele,
@@ -1031,19 +1099,25 @@ export async function scopedMultiCollection<S extends AnySchema>(
           const session = sessionContext.getSession();
           const { validate = true, ...findOptions } = options ?? {};
           const conditions: Record<string, unknown>[] = [{ _scope: scopeId }];
-          if (filter) conditions.push(filter as Record<string, unknown>);
-          const cursor = collection.find({ $and: conditions } as any, {
-            session,
-            ...findOptions,
-          });
+          if (filter) conditions.push(toStoredFilter(filter));
+          const cursor = collection.find(
+            { $and: conditions },
+            readOpts(session, findOptions),
+          );
           const raw = await cursor.toArray();
-          if (validate === false) return raw as any;
-          const out: unknown[] = [];
+          if (validate === false) return raw;
+          const out: StoredOutput[] = [];
           for (const item of raw) {
             const parsed = v.safeParse(storageUnion, item);
             if (parsed.success) out.push(parsed.output);
           }
-          return out as any;
+          warnSkippedInvalid(
+            log,
+            collectionName,
+            raw.length - out.length,
+            "findAny",
+          );
+          return out;
         };
         return traced(
           tele,
@@ -1065,11 +1139,11 @@ export async function scopedMultiCollection<S extends AnySchema>(
             { _type: typeName },
             { _scope: scopeId },
           ];
-          if (filter) conditions.push(filter as Record<string, unknown>);
-          return collection.countDocuments({ $and: conditions } as any, {
-            session,
-            ...options,
-          });
+          if (filter) conditions.push(toStoredFilter(filter));
+          return collection.countDocuments(
+            { $and: conditions },
+            readOpts(session, options),
+          );
         };
         return traced(
           tele,
@@ -1092,7 +1166,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
               _id: id,
               _type: typeName,
               _scope: scopeId,
-            } as any,
+            },
             { session },
           );
           if (!result.acknowledged) throw new Error("Delete failed");
@@ -1125,7 +1199,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
               _id: { $in: ids },
               _type: typeName,
               _scope: scopeId,
-            } as any,
+            },
             { session },
           );
           if (!result.acknowledged) throw new Error("Delete failed");
@@ -1154,7 +1228,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
               ...(filter as Record<string, unknown>),
               _type: typeName,
               _scope: scopeId,
-            } as any,
+            },
             { session },
           );
           if (!result.acknowledged) throw new Error("Delete failed");
@@ -1207,8 +1281,8 @@ export async function scopedMultiCollection<S extends AnySchema>(
                   _id: id,
                   _type: typeName,
                   _scope: scopeId,
-                } as any,
-                updateOps as any,
+                },
+                updateOps,
                 { session },
               );
               if (!result.acknowledged) throw new Error("Update failed");
@@ -1238,7 +1312,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
 
       async updateMany(ops) {
         const run = async (op?: OpContext) => {
-          const bulkOps: m.AnyBulkWriteOperation[] = [];
+          const bulkOps: m.AnyBulkWriteOperation<StoredDocument>[] = [];
           for (const typeName in ops) {
             const items = ops[typeName as keyof T];
             if (!items) continue;
@@ -1267,7 +1341,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
                     _id: id,
                     _type: typeName,
                     _scope: scopeId,
-                  } as any,
+                  },
                   update: updateOps,
                 },
               });
@@ -1333,11 +1407,10 @@ export async function scopedMultiCollection<S extends AnySchema>(
           return retryOnWriteConflict(
             async () => {
               const session = sessionContext.getSession();
-              const result = await collection.updateOne(
-                guard as any,
-                ops as any,
-                { session, upsert },
-              );
+              const result = await collection.updateOne(guard, ops, {
+                session,
+                upsert,
+              });
               if (!result.acknowledged) throw new Error("Update failed");
               return {
                 matched: result.matchedCount,
@@ -1387,19 +1460,15 @@ export async function scopedMultiCollection<S extends AnySchema>(
           const raw = await retryOnWriteConflict(
             async () => {
               const session = sessionContext.getSession();
-              return await collection.findOneAndUpdate(
-                guard as any,
-                ops as any,
-                {
-                  session,
-                  returnDocument: options?.returnDocument ?? "after",
-                },
-              );
+              return await collection.findOneAndUpdate(guard, ops, {
+                session,
+                returnDocument: options?.returnDocument ?? "after",
+              });
             },
             op ? { onRetry: op.onRetry } : undefined,
           );
           if (!raw) return null;
-          return v.parse(storageSchemas[typeName], raw) as any;
+          return parseStored(storageSchemas[typeName], raw);
         };
         return traced(
           tele,
@@ -1414,7 +1483,9 @@ export async function scopedMultiCollection<S extends AnySchema>(
         );
       },
 
-      async aggregate(stageBuilder) {
+      async aggregate<R extends m.Document = m.Document>(
+        stageBuilder: (stage: ScopedStageBuilder<T>) => AggregationStage[],
+      ) {
         const run = async () => {
           const stage = buildScopedStageBuilder<T>(collectionName, {
             kind: "single",
@@ -1428,7 +1499,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
             ...userPipeline,
           ];
           const session = sessionContext.getSession();
-          const cursor = collection.aggregate(pipeline, { session });
+          const cursor = collection.aggregate<R>(pipeline, { session });
           return await cursor.toArray();
         };
         return traced(
@@ -1440,7 +1511,11 @@ export async function scopedMultiCollection<S extends AnySchema>(
         );
       },
 
-      async paginate(type, filter, options) {
+      async paginate<K extends keyof T, EN = OutputDoc<T, K, S>, R = EN>(
+        type: K,
+        filter?: m.Filter<OutputDoc<T, K, S>>,
+        options?: ScopedPaginateOptions<T, K, S, EN, R>,
+      ): Promise<Page<R>> {
         const run = async () => {
           const typeName = type as string;
           const { skipTotal = false, peek = false } = options || {};
@@ -1466,7 +1541,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
             { _scope: scopeId },
             { _type: typeName },
           ];
-          if (filter) baseQuery.push(filter as Record<string, unknown>);
+          if (filter) baseQuery.push(toStoredFilter(filter));
 
           // User pipelines (scope-aware builder). `pipeline` is used for BOTH
           // the count and the data fetch so `total` reflects docs that survive
@@ -1507,7 +1582,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
                   },
                   ...sortStages,
                   { $limit: 1 },
-                ] as any,
+                ],
                 { session },
               )
               .toArray();
@@ -1516,7 +1591,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
             // sortPipeline excluded it) is a different caller bug than a
             // stale/cross-scope id.
             const exists = await collection.findOne(
-              { _id: anchorId, _scope: scopeId, _type: typeName } as any,
+              { _id: anchorId, _scope: scopeId, _type: typeName },
               { session },
             );
             if (exists) {
@@ -1545,7 +1620,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
             direction: "after" | "before",
           ): Promise<Record<string, unknown>[] | null> => {
             const anchor = await collection.findOne(
-              { _id: anchorId, _scope: scopeId, _type: typeName } as any,
+              { _id: anchorId, _scope: scopeId, _type: typeName },
               { session },
             );
             if (!anchor) return null;
@@ -1704,13 +1779,13 @@ export async function scopedMultiCollection<S extends AnySchema>(
               }
             } else {
               total = await collection.countDocuments(
-                { $and: baseQuery } as any,
+                { $and: baseQuery },
                 { session },
               );
               if (afterId) {
                 if (cursorBranches) {
                   const afterCount = await collection.countDocuments(
-                    composeCursorQuery(baseQuery, cursorBranches) as any,
+                    composeCursorQuery(baseQuery, cursorBranches),
                     { session },
                   );
                   position = total - afterCount;
@@ -1736,7 +1811,9 @@ export async function scopedMultiCollection<S extends AnySchema>(
           // path never server-caps (see below) — it relies on the JS limit.
           const serverCap = customFilter ? undefined : limit;
 
-          let cursor: m.FindCursor<any> | m.AggregationCursor<any>;
+          let cursor:
+            | m.FindCursor<StoredDocument>
+            | m.AggregationCursor<StoredDocument>;
           if (sortMachinery) {
             // sortPipeline path: the stages the sort depends on ($lookup, …)
             // necessarily run over the whole scoped+filtered set — the sort
@@ -1768,10 +1845,10 @@ export async function scopedMultiCollection<S extends AnySchema>(
               { $sort: sort },
               ...userPipeline,
             ];
-            cursor = collection.aggregate(dataPipeline as any, { session });
+            cursor = collection.aggregate(dataPipeline, { session });
           } else {
             const findCursor = collection
-              .find(finalQuery as any, { session })
+              .find(finalQuery, { session })
               .sort(sort as m.Sort);
             cursor =
               serverCap !== undefined
@@ -1784,27 +1861,29 @@ export async function scopedMultiCollection<S extends AnySchema>(
           // keeps yielding more candidates. `hardLimit` bounds a pathological
           // filter that rejects everything.
           let hardLimit = 10_000;
-          const data: unknown[] = [];
+          let skippedInvalid = 0;
+          const data: R[] = [];
           try {
             while (hardLimit-- > 0 && limit > 0) {
               const doc = await cursor.next();
               if (!doc) break;
               const parsed = v.safeParse(storageSchemas[typeName], doc);
-              if (!parsed.success) continue;
-              // Preserve pipeline-added fields ($lookup results) alongside the
-              // validated document (parse strips unknown keys).
-              const validatedDoc =
+              if (!parsed.success) {
+                skippedInvalid++;
+                continue;
+              }
+              const validatedDoc: OutputDoc<T, K, S> =
                 pipelineBuilder || sortPipelineBuilder
                   ? { ...doc, ...parsed.output }
                   : parsed.output;
               const enriched = prepare
-                ? await prepare(validatedDoc as never)
-                : validatedDoc;
-              const keep = (await customFilter?.(enriched as never)) ?? true;
+                ? await prepare(validatedDoc)
+                : (validatedDoc as EN);
+              const keep = (await customFilter?.(enriched)) ?? true;
               if (!keep) continue;
               const finalDoc = format
-                ? await format(enriched as never)
-                : enriched;
+                ? await format(enriched)
+                : (enriched as unknown as R);
               data.push(finalDoc);
               limit--;
             }
@@ -1855,7 +1934,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
                     (beforeResult[0]?.total as number | undefined) ?? 0;
                 } else {
                   beforeCount = await collection.countDocuments(
-                    composeCursorQuery(baseQuery, cursorBranches) as any,
+                    composeCursorQuery(baseQuery, cursorBranches),
                     { session },
                   );
                 }
@@ -1866,11 +1945,13 @@ export async function scopedMultiCollection<S extends AnySchema>(
             }
           }
 
+          warnSkippedInvalid(log, collectionName, skippedInvalid);
           return {
             total,
             position,
-            data: data as any,
+            data: data,
             ...(peek ? { hasMore } : {}),
+            ...(skippedInvalid > 0 && { skippedInvalid }),
           };
         };
         return traced(
@@ -1924,14 +2005,17 @@ export async function scopedMultiCollection<S extends AnySchema>(
           const sm = scopeMatch();
           if (sm) conditions.push(sm);
           if (userFilter) {
-            conditions.push(userFilter as Record<string, unknown>);
+            conditions.push(toStoredFilter(userFilter));
           }
 
-          const raw = await collection.findOne({ $and: conditions } as any, {
-            session,
-          });
+          const raw = await collection.findOne(
+            { $and: conditions },
+            {
+              session,
+            },
+          );
           if (!raw) return null;
-          return v.parse(storageSchemas[typeName], raw) as any;
+          return parseStored(storageSchemas[typeName], raw);
         };
         return traced(
           tele,
@@ -1954,21 +2038,27 @@ export async function scopedMultiCollection<S extends AnySchema>(
           const sm = scopeMatch();
           if (sm) conditions.push(sm);
           if (userFilter) {
-            conditions.push(userFilter as Record<string, unknown>);
+            conditions.push(toStoredFilter(userFilter));
           }
 
-          const cursor = collection.find({ $and: conditions } as any, {
-            session,
-            ...findOptions,
-          });
+          const cursor = collection.find(
+            { $and: conditions },
+            readOpts(session, findOptions),
+          );
           const raw = await cursor.toArray();
-          if (validate === false) return raw as any;
-          const out: unknown[] = [];
+          if (validate === false) return raw;
+          const out: StoredOutput[] = [];
           for (const item of raw) {
             const parsed = v.safeParse(storageSchemas[typeName], item);
             if (parsed.success) out.push(parsed.output);
           }
-          return out as any;
+          warnSkippedInvalid(
+            log,
+            collectionName,
+            raw.length - out.length,
+            "find",
+          );
+          return out;
         };
         return traced(
           tele,
@@ -1983,22 +2073,29 @@ export async function scopedMultiCollection<S extends AnySchema>(
         );
       },
 
-      async findProject(type, fields, userFilter, options) {
-        const run = async () => {
+      async findProject<K extends keyof T, P extends keyof OutputDoc<T, K, S>>(
+        type: K,
+        fields: readonly P[],
+        userFilter?: m.Filter<OutputDoc<T, K, S>>,
+        options?: WithReadPreferenceInput<m.FindOptions>,
+      ) {
+        const run = async (): Promise<Projected<T, K, S, P>[]> => {
           const typeName = type as string;
           const session = sessionContext.getSession();
           const conditions: Record<string, unknown>[] = [{ _type: typeName }];
           const sm = scopeMatch();
           if (sm) conditions.push(sm);
           if (userFilter) {
-            conditions.push(userFilter as Record<string, unknown>);
+            conditions.push(toStoredFilter(userFilter));
           }
-          const cursor = collection.find({ $and: conditions } as any, {
-            session,
-            ...options,
-            projection: buildProjection(fields as readonly string[]),
-          });
-          return (await cursor.toArray()) as any;
+          const cursor = collection.find(
+            { $and: conditions },
+            {
+              ...readOpts(session, options),
+              projection: buildProjection(fields as readonly string[]),
+            },
+          );
+          return (await cursor.toArray()) as Projected<T, K, S, P>[];
         };
         return traced(
           tele,
@@ -2021,13 +2118,13 @@ export async function scopedMultiCollection<S extends AnySchema>(
           const sm = scopeMatch();
           if (sm) conditions.push(sm);
           if (userFilter) {
-            conditions.push(userFilter as Record<string, unknown>);
+            conditions.push(toStoredFilter(userFilter));
           }
 
-          return collection.countDocuments({ $and: conditions } as any, {
-            session,
-            ...options,
-          });
+          return collection.countDocuments(
+            { $and: conditions },
+            readOpts(session, options),
+          );
         };
         return traced(
           tele,
@@ -2041,7 +2138,9 @@ export async function scopedMultiCollection<S extends AnySchema>(
         );
       },
 
-      async aggregate(stageBuilder) {
+      async aggregate<R extends m.Document = m.Document>(
+        stageBuilder: (stage: ScopedStageBuilder<T>) => AggregationStage[],
+      ) {
         const run = async () => {
           const stage = buildScopedStageBuilder<T>(collectionName, filter);
           const userPipeline = stageBuilder(stage);
@@ -2050,7 +2149,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
           if (sm) pipeline.push({ $match: sm });
           pipeline.push(...userPipeline);
           const session = sessionContext.getSession();
-          const cursor = collection.aggregate(pipeline, { session });
+          const cursor = collection.aggregate<R>(pipeline, { session });
           return await cursor.toArray();
         };
         return traced(
@@ -2117,7 +2216,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
       const run = async () => {
         const session = sessionContext.getSession();
         const count = await collection.countDocuments(
-          { _scope: validated } as any,
+          { _scope: validated },
           { session, limit: 1 },
         );
         return count > 0;
@@ -2143,7 +2242,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
       const run = async () => {
         const session = sessionContext.getSession();
         const result = await collection.deleteMany(
-          { _scope: validated } as any,
+          { _scope: validated },
           { session },
         );
         if (!result.acknowledged) throw new Error("dropScope: delete failed");
@@ -2176,7 +2275,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
           byType[g._id] = g.count;
           total += g.count;
         }
-        return { total, byType: byType as any };
+        return { total, byType: byType };
       };
       return traced(
         tele,

@@ -19,6 +19,7 @@ import {
 } from "./indexes.ts";
 import { sanitizePathName } from "./schema-navigator.ts";
 import { createLogger } from "./utils/logger.ts";
+import { PRIMARY } from "./read-preference.ts";
 
 const log = createLogger("indexes-applier");
 
@@ -271,7 +272,7 @@ export async function applyCollectionIndexes(
   schema: v.ObjectSchema<any, any>,
   options: ApplyCollectionIndexesOptions = {},
 ): Promise<void> {
-  const currentIndexes = await collection.indexes();
+  const currentIndexes = await collection.indexes({ readPreference: PRIMARY });
   const indexes = extractIndexes(schema);
 
   // Collect all indexes that need to be created or recreated
@@ -493,7 +494,7 @@ export async function applyScopedMultiCollectionIndexes(
   log.debug(
     `applyScopedMultiCollectionIndexes(${collName}): list current indexes`,
   );
-  const currentIndexes = await collection.indexes();
+  const currentIndexes = await collection.indexes({ readPreference: PRIMARY });
 
   // Always-on base index : {_scope: 1, _type: 1, _id: 1}. The trailing `_id`
   // makes the ScopedView's default paginate sort ({_id: 1} under {_scope,_type}
@@ -729,7 +730,7 @@ export async function applyMultiCollectionIndexes(
 ): Promise<void> {
   const collName = collection.collectionName;
   log.debug(`applyMultiCollectionIndexes(${collName}): list current indexes`);
-  const currentIndexes = await collection.indexes();
+  const currentIndexes = await collection.indexes({ readPreference: PRIMARY });
   log.debug(
     `applyMultiCollectionIndexes(${collName}): found ${currentIndexes.length} existing indexes`,
   );

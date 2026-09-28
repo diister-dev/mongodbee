@@ -5,6 +5,17 @@ import {
   IndexDeclaration,
 } from "./index-builder.ts";
 import type { CompositeIndexDescriptor } from "./indexes.ts";
+import {
+  assertComputedDeclarations,
+  COMPUTED_ROOT,
+  type ComputedDeclarations,
+  type ComputedDescriptor,
+  computedDescriptors,
+  type ComputedEntries,
+  computedRootSchema,
+} from "./computed.ts";
+
+import { isRecord, isSchema } from "./utils/guards.ts";
 
 type AnySchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
 
@@ -18,13 +29,23 @@ export type IndexBuild<TOutput> = (
 
 const BRAND: symbol = Symbol.for("mongodbee.type-definition");
 
+const NO_COMPUTED: ComputedDeclarations = Object.freeze({});
+
 export class TypeDefinition<S extends ObjectLikeSchema = ObjectLikeSchema> {
   readonly schema: S;
   readonly indexes: readonly CompositeIndexDescriptor[];
+  readonly computed: Readonly<Record<string, ComputedDescriptor>>;
+  readonly computedDeclarations: ComputedDeclarations;
 
-  constructor(schema: S, indexes: readonly CompositeIndexDescriptor[]) {
+  constructor(
+    schema: S,
+    indexes: readonly CompositeIndexDescriptor[],
+    computedDeclarations: ComputedDeclarations = NO_COMPUTED,
+  ) {
     this.schema = schema;
     this.indexes = indexes;
+    this.computedDeclarations = computedDeclarations;
+    this.computed = computedDescriptors(computedDeclarations);
     Object.defineProperty(this, BRAND, { value: true, enumerable: false });
   }
 
@@ -33,11 +54,54 @@ export class TypeDefinition<S extends ObjectLikeSchema = ObjectLikeSchema> {
   }
 }
 
-export interface TypeDefinitionInput<S extends ObjectLikeSchema> {
+export type WithComputed<
+  S extends ObjectLikeSchema,
+  C extends ComputedDeclarations,
+> = keyof C extends never
+  ? S
+  : v.ObjectSchema<
+      S["entries"] & {
+        readonly [COMPUTED_ROOT]: v.OptionalSchema<
+          v.ObjectSchema<ComputedEntries<C>, undefined>,
+          undefined
+        >;
+      },
+      undefined
+    >;
+
+export interface TypeDefinitionInput<
+  S extends ObjectLikeSchema,
+  C extends ComputedDeclarations = Record<never, never>,
+> {
   schema: S;
+  computed?: C;
   indexes?:
-    | IndexBuild<v.InferOutput<S>>
+    | IndexBuild<v.InferOutput<WithComputed<S, C>>>
     | ReadonlyArray<IndexDeclaration | CompositeIndexDescriptor>;
+}
+
+function withEntries(
+  schema: ObjectLikeSchema,
+  entries: Record<string, AnySchema>,
+): ObjectLikeSchema {
+  const shaped = schema as ObjectLikeSchema & {
+    rest?: AnySchema;
+    pipe?: readonly unknown[];
+  };
+  const rebuilt =
+    schema.type === "loose_object"
+      ? v.looseObject(entries)
+      : schema.type === "strict_object"
+        ? v.strictObject(entries)
+        : schema.type === "object_with_rest" && shaped.rest
+          ? v.objectWithRest(entries, shaped.rest)
+          : v.object(entries);
+  if (!shaped.pipe || shaped.pipe.length < 2)
+    return rebuilt as ObjectLikeSchema;
+  return v.pipe(
+    rebuilt,
+    ...(shaped.pipe.slice(1) as [never]),
+  ) as unknown as ObjectLikeSchema;
 }
 
 function assertKeyPaths(
@@ -61,19 +125,33 @@ function assertKeyPaths(
   }
 }
 
-export function defineType<const S extends ObjectLikeSchema>(
-  input: TypeDefinitionInput<S>,
-): TypeDefinition<S> {
+export function defineType<
+  const S extends ObjectLikeSchema,
+  const C extends ComputedDeclarations = Record<never, never>,
+>(input: TypeDefinitionInput<S, C>): TypeDefinition<WithComputed<S, C>> {
+  const declarations: ComputedDeclarations = input.computed ?? NO_COMPUTED;
+  assertComputedDeclarations(input.schema.entries, declarations);
+  const schema =
+    Object.keys(declarations).length === 0
+      ? input.schema
+      : withEntries(input.schema, {
+          ...input.schema.entries,
+          [COMPUTED_ROOT]: computedRootSchema(declarations),
+        });
   const declared = input.indexes ?? [];
   const raw =
     typeof declared === "function"
-      ? declared(createFieldProxy<v.InferOutput<S>>())
+      ? declared(createFieldProxy<v.InferOutput<WithComputed<S, C>>>())
       : declared;
   const descriptors = raw.map((item) =>
     item instanceof IndexDeclaration ? item.toDescriptor() : item,
   );
-  assertKeyPaths(input.schema.entries, descriptors);
-  return new TypeDefinition(input.schema, descriptors);
+  assertKeyPaths(schema.entries, descriptors);
+  return new TypeDefinition(
+    schema as WithComputed<S, C>,
+    descriptors,
+    declarations,
+  );
 }
 
 export function isTypeDefinition(value: unknown): value is TypeDefinition {
@@ -86,6 +164,13 @@ export function isTypeDefinition(value: unknown): value is TypeDefinition {
 }
 
 export type TypeInput = Record<string, AnySchema> | TypeDefinition;
+
+export function isTypeInput(value: unknown): value is TypeInput {
+  return (
+    isTypeDefinition(value) ||
+    (isRecord(value) && Object.values(value).every(isSchema))
+  );
+}
 
 export type FieldsOfInput<I> =
   I extends TypeDefinition<infer S> ? S["entries"] : I;
@@ -146,7 +231,21 @@ export function withFields<I extends TypeInput>(
   source: I,
   fields: Record<string, AnySchema>,
 ): TypeInput {
-  const merged: Record<string, AnySchema> = { ...fieldsOf(source), ...fields };
+  const { [COMPUTED_ROOT]: _generated, ...own } = fieldsOf(source) as Record<
+    string,
+    AnySchema
+  >;
+  const merged: Record<string, AnySchema> = { ...own, ...fields };
   if (!isTypeDefinition(source)) return merged;
-  return defineType({ schema: v.object(merged), indexes: source.indexes });
+  return defineType({
+    schema: v.object(merged),
+    indexes: source.indexes,
+    computed: source.computedDeclarations,
+  });
+}
+
+export function computedOf(
+  input: TypeInput,
+): Readonly<Record<string, ComputedDescriptor>> {
+  return isTypeDefinition(input) ? input.computed : {};
 }
