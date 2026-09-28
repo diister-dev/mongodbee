@@ -109,6 +109,10 @@ ${yellow("GLOBAL OPTIONS:")}
 ${yellow("CHECK OPTIONS:")}
   -m, --mode        Simulation mode: quick, normal, hard (default: normal)
   -l, --last        Only validate the last N migrations
+  --docs            Mock documents per collection, 1 to 5000, overriding
+                    the mode (quick 10, normal 100, hard 500)
+  --retention       Share of each migration's documents carried into the
+                    next one, 0 to 1 (default: 0.5)
   --verbose         Print every warning under the migration that raised it
                     (default: warnings are deduplicated into a single digest)
   --check-indexes   Check database indexes against schema (requires database connection)

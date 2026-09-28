@@ -123,6 +123,8 @@ export interface SimulationValidatorOptions {
    */
   powerLevel?: SimulationPowerLevel;
 
+  docsPerCollection?: number;
+
   /**
    * Called as the simulation advances, with a short note naming what it is
    * doing right now ("applying operation 7/19", "mocking +expositions
@@ -166,7 +168,10 @@ export class SimulationValidator implements MigrationValidator {
 
   constructor(options: SimulationValidatorOptions = {}) {
     this.options = { ...DEFAULT_SIMULATION_VALIDATOR_OPTIONS, ...options };
-    this.mockConfig = getMockGenerationConfig(this.options.powerLevel);
+    this.mockConfig = getMockGenerationConfig(
+      this.options.powerLevel,
+      this.options.docsPerCollection,
+    );
     this.report = options.onProgress ?? (() => {});
   }
 

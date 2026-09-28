@@ -35,7 +35,23 @@ export interface MigrationValidationResult {
   valid: boolean;
   errors: string[];
   warnings: string[];
+  operationCount?: number;
+  reversible?: boolean;
 }
+
+export interface MigrationProgressEvent {
+  index: number;
+  total: number;
+  migration: MigrationDefinition;
+}
+
+export type MigrationProgressHook = (
+  event: MigrationProgressEvent,
+) => void | Promise<void>;
+
+export type MigrationResultHook = (
+  event: MigrationProgressEvent & { result: MigrationValidationResult },
+) => void | Promise<void>;
 
 export interface ValidateMigrationsOptions {
   verbose?: boolean;
@@ -58,6 +74,8 @@ export interface ValidateMigrationsOptions {
    * @default "normal"
    */
   powerLevel?: SimulationPowerLevel;
+
+  docsPerCollection?: number;
 
   /**
    * Only validate the last N migrations. If not provided, all migrations are
@@ -83,6 +101,12 @@ export interface ValidateMigrationsOptions {
    * reporting can be asserted without a terminal.
    */
   write?: (chunk: string) => void;
+
+  /** Called before each migration is simulated; awaited. */
+  onMigrationStart?: MigrationProgressHook;
+
+  /** Called with each migration's result once it is known; awaited. */
+  onMigrationResult?: MigrationResultHook;
 }
 
 /** Formats a step counter as a right-aligned `[ 3/12]`. */
@@ -177,12 +201,21 @@ export async function validateMigrationsWithSimulation(
 
   const notValidated = windowed ? migrations.slice(0, -lastN!) : [];
 
-  const modeLabel =
+  const presetLabel =
     powerLevel === "quick"
       ? "quick"
       : powerLevel === "hard"
         ? "hard"
         : "normal";
+  const tuning = [
+    options.docsPerCollection !== undefined
+      ? `${options.docsPerCollection} docs`
+      : "",
+    options.stateRetentionRatio !== undefined
+      ? `${Math.round(options.stateRetentionRatio * 100)}% kept`
+      : "",
+  ].filter(Boolean);
+  const modeLabel = [presetLabel, ...tuning].join(", ");
   const lastNLabel =
     lastN && lastN > 0 ? ` (last ${Math.min(lastN, migrations.length)})` : "";
 
@@ -201,6 +234,7 @@ export async function validateMigrationsWithSimulation(
     maxOperations: 1000,
     stateRetentionRatio,
     powerLevel,
+    docsPerCollection: options.docsPerCollection,
     // The in-flight line is driven by the work, not by a clock: the validator
     // never yields to the event loop, so a timer-based animation cannot fire
     // (it did not, for 17 seconds at a stretch). The reporter throttles the
@@ -246,6 +280,12 @@ export async function validateMigrationsWithSimulation(
     )} ${dim(`(${migration.id})`)}`;
     // The reporter adds its own in-flight marker; a static `…` here reads as two.
     steps.start(`  ${step}`);
+    const progress = {
+      index,
+      total: migrationsToValidate.length,
+      migration,
+    };
+    await options.onMigrationStart?.(progress);
 
     try {
       // Pass the current state to avoid re-simulating all parent migrations
@@ -274,6 +314,8 @@ export async function validateMigrationsWithSimulation(
       if (validationResult.success) {
         const operationCount = validationResult.data?.operationCount || 0;
         const isReversible = !validationResult.data?.hasIrreversibleProperty;
+        result.operationCount = operationCount as number;
+        result.reversible = isReversible;
 
         steps.done(
           `  ${green("✓")} ${step} ${dim(
@@ -331,6 +373,11 @@ export async function validateMigrationsWithSimulation(
       failures.push({ result });
       steps.done(`  ${red("✗")} ${step} ${red("validation error")}`);
     }
+
+    await options.onMigrationResult?.({
+      ...progress,
+      result: results[results.length - 1],
+    });
   }
 
   steps.finish();
