@@ -352,3 +352,43 @@ Transactions commit with `w: "majority"`, so on a real replica set each maintain
 A single write costs the same with three members: one commit, one acknowledgement. Contention grows by about 17%, because every retry of a conflicting transaction pays its own majority commit.
 
 What this does not measure is network distance: the three members share a loopback interface, so an acknowledgement costs microseconds. Across availability zones each maintained write adds one round trip to the nearest secondary on its commit, as any `majority` write already does, and each contention retry adds another. Rerun with `MONGODBEE_TEST_URI` pointing at the target cluster before sizing a burst-heavy subject.
+
+## 20. Concurrent writes and `_computed._rev`
+
+### 20.1 The defect
+
+Snapshot isolation only makes two transactions conflict when both modify the same document, and MongoDB treats a `$set` that writes an equal value as a no-op: it modifies nothing, so it conflicts with nothing (verified: a transaction rewriting a field to its current value commits past a concurrent writer; one that changes it, or `$inc`s anything, conflicts).
+
+Recomputing only wrote a subject whose value changed. Two concurrent writes could therefore each find the value unchanged in their own snapshot, write nothing to the subject, and both commit:
+
+1. a participant is a member of O1 through M1, so `organizationIds` is `[O1]`;
+2. transaction A removes M1; in its snapshot the truth is `[]`, it writes `[]`;
+3. transaction B adds M2 to O1; in its snapshot M1 is still active, the truth is `[O1]`, equal to the stored value, it writes nothing;
+4. no document is written by both, both commit: the truth is `[O1]`, the stored value `[]`, and no mark exists to repair it.
+
+The same happens when both writes leave the value unchanged in their snapshots (removing two memberships to the same organization). The multi-process test caught it under load on Node; `test/computed-revision.test.ts` reproduces both shapes deterministically.
+
+### 20.2 The fix
+
+Every transaction that recomputes a subject bumps `_computed._rev`, whether the value changed or not, in the same update as the changed values. Two transactions touching the same subject now always modify the same document, so one of them gets a write conflict and replays on fresh data. Outside a transaction (`standaloneMode: "best-effort"`) there is no isolation to protect and `_rev` is not bumped.
+
+`_rev` is declared by `computedRootSchema`: typed (`_computed._rev?: number`), accepted by the validator, refused to application writes like every other `_computed` path. A computed field name must start with a letter, so it cannot collide.
+
+This is the pattern MongoDB documents for locking a document inside a transaction ("set `lockId` field to any value, as long as it modifies the document"). It keeps the lock on the subject's own document, hence on its shard: a transaction stays single-shard.
+
+### 20.3 The alternative measured and rejected
+
+A separate collection of lock documents, one per subject, bumped instead of the subject. Both fix the defect (0 drift on both skew tests and the bench). Local replica set, 50 participants of 2 KB, 300 maintained writes per figure, median of three alternating runs:
+
+| | lock collection | `_rev` |
+| --- | --- | --- |
+| write leaving the value unchanged | 2.76 ms | 2.61 ms |
+| write changing the value | 2.98 ms | 2.68 ms |
+| oplog per write, unchanged / changed | 880 / 1281 B | 876 / 1079 B |
+| participant `update` events per 100 unchanged writes | 0 | 100 |
+| 50 concurrent membership writes on one participant | 290 ms | 378 ms |
+| 25 renames of the participant with 25 membership writes | 156 ms | 211 ms |
+
+The lock collection avoids the change-stream event and the waits: a non-transactional write to a document a transaction holds waits for it, so renaming a participant queues behind membership transactions under `_rev`. `_rev` was kept because it is MongoDB's documented pattern, needs no extra collection to create (a transaction cannot create one in a multi-shard write) or purge, and keeps transactions single-shard; its cost is one `update` event on the subject per maintained write and about 30% more time under heavy contention on one subject. Consumers of change streams on subjects can filter events whose only updated field is `_computed._rev`.
+
+Sources: MongoDB manual, [Production Considerations for Transactions](https://www.mongodb.com/docs/manual/core/transactions-production-consideration/) and [Transactions and Operations](https://www.mongodb.com/docs/manual/core/transactions-operations/).

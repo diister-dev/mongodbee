@@ -46,6 +46,22 @@ function primaryAddress(client: MongoClient): string | undefined {
   return undefined;
 }
 
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
+
+function sameServer(a: string, b: string): boolean {
+  const split = (address: string) => {
+    const at = address.lastIndexOf(":");
+    return { host: address.slice(0, at), port: address.slice(at + 1) };
+  };
+  const left = split(a);
+  const right = split(b);
+  if (left.port !== right.port) return false;
+  return (
+    left.host === right.host ||
+    (LOOPBACK.has(left.host) && LOOPBACK.has(right.host))
+  );
+}
+
 const userSchema = { name: v.string(), age: v.number() };
 
 for (const mode of ["primaryPreferred", "secondaryPreferred"] as const) {
@@ -178,7 +194,12 @@ test("ReadPreference: index sync and migration history read the primary", async 
             ?.mode ?? "primary",
           "primary",
         );
-        if (primary) assertEquals(event.address, primary);
+        if (primary) {
+          assert(
+            sameServer(event.address, primary),
+            `listIndexes went to ${event.address}, the primary is ${primary}`,
+          );
+        }
       }
 
       // Control: a plain read does follow the client's secondaryPreferred.

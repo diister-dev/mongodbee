@@ -5,7 +5,7 @@ import {
   assertRejects,
   assertThrows,
 } from "./+assert.ts";
-import { withDatabase } from "./+shared.ts";
+import { computedValues, withDatabase } from "./+shared.ts";
 import * as v from "../src/schema.ts";
 import { refId } from "../src/ids.ts";
 import { withIndex } from "../src/indexes.ts";
@@ -166,7 +166,7 @@ test("computed guard: a collection refuses every write that touches _computed", 
 
     const stored = await participants.getById(id);
     assertEquals(
-      (stored as { _computed?: unknown })._computed,
+      computedValues((stored as { _computed?: unknown })._computed),
       { organizationIds: [] },
       "only the truth reached the document, never the forged value",
     );
@@ -214,9 +214,12 @@ test("computed guard: a multi-collection refuses every write that touches _compu
     );
 
     const stored = await expo.findOne("participant", { _id: id });
-    assertEquals((stored as { _computed?: unknown } | null)?._computed, {
-      organizationIds: [],
-    });
+    assertEquals(
+      computedValues((stored as { _computed?: unknown } | null)?._computed),
+      {
+        organizationIds: [],
+      },
+    );
   });
 });
 
@@ -269,8 +272,11 @@ test("computed guard: a scoped view refuses every write that touches _computed",
     );
 
     const stored = await view.findOne("participant", { _id: id });
-    assertEquals((stored as { _computed?: unknown } | null)?._computed, {
-      organizationIds: [],
-    });
+    assertEquals(
+      computedValues((stored as { _computed?: unknown } | null)?._computed),
+      {
+        organizationIds: [],
+      },
+    );
   });
 });

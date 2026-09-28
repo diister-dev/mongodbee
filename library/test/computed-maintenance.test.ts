@@ -1,6 +1,6 @@
 import { test } from "./+harness.ts";
 import { assertEquals, assertRejects, assertThrows } from "./+assert.ts";
-import { withDatabase } from "./+shared.ts";
+import { computedValues, withDatabase } from "./+shared.ts";
 import type { Db } from "../src/mongodb.ts";
 import * as v from "../src/schema.ts";
 import { refId } from "../src/ids.ts";
@@ -257,7 +257,7 @@ test("computed maintenance: an update that touches no input of a field leaves th
       _computed?: { membershipCount?: number; organizationIds?: string[] };
     };
     assertEquals(
-      recomputed._computed,
+      computedValues(recomputed._computed),
       { organizationIds: [], membershipCount: 99 },
       "a status change recomputes the field filtered on status, not the unfiltered count",
     );

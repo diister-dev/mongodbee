@@ -1,4 +1,9 @@
-import type { Document, Filter } from "mongodb";
+import type {
+  AnyBulkWriteOperation,
+  Document,
+  Filter,
+  UpdateFilter,
+} from "mongodb";
 import type { ClientSession, Db } from "./mongodb.ts";
 import {
   type DocumentId,
@@ -6,7 +11,11 @@ import {
   type StoredDocument,
   storedCollection,
 } from "./stored-document.ts";
-import { COMPUTED_ROOT, type ComputedWhere } from "./computed.ts";
+import {
+  COMPUTED_REVISION,
+  COMPUTED_ROOT,
+  type ComputedWhere,
+} from "./computed.ts";
 import {
   type ComputedField,
   type ComputedTopology,
@@ -248,49 +257,67 @@ function sameValue(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+interface RevisedSubject {
+  _id: DocumentId;
+  _type?: string;
+  _scope?: string;
+  _computed?: { _rev?: number };
+}
+
+type SubjectUpdate = {
+  readonly collection: string;
+  readonly filter: Filter<RevisedSubject>;
+  readonly set: Record<string, unknown>;
+};
+
 export async function recomputeSubjects(
   db: Db,
   fields: readonly ComputedField[],
   subjects: readonly ComputedSubject[],
   session?: ClientSession,
 ): Promise<number> {
+  if (subjects.length === 0) return 0;
+  const revise = session?.inTransaction() === true;
+  const updates = new Map<string, SubjectUpdate>();
   let written = 0;
   for (const field of fields) {
-    if (subjects.length === 0) continue;
     const truth = await computeTruth(db, field, subjects, session);
-    const operations = subjects
-      .filter(
-        (subject) =>
-          !(
-            subject._computed &&
-            field.name in subject._computed &&
-            sameValue(
-              subject._computed[field.name],
-              truth.get(String(subject._id)),
-            )
-          ),
-      )
-      .map((subject) => ({
-        updateOne: {
-          filter: {
-            _id: subject._id,
-            ...locationFilter(field.at),
-          },
-          update: {
-            $set: {
-              [`${COMPUTED_ROOT}.${field.name}`]: truth.get(
-                String(subject._id),
-              ),
-            },
-          },
-        },
-      }));
-    if (operations.length === 0) continue;
-    await storedCollection(db, field.at.collection).bulkWrite(operations, {
-      session,
-      ordered: true,
-    });
-    written += operations.length;
+    for (const subject of subjects) {
+      const key = `${field.at.collection}|${String(subject._id)}`;
+      const update = updates.get(key) ?? {
+        collection: field.at.collection,
+        filter: { _id: subject._id, ...locationFilter(field.at) },
+        set: {},
+      };
+      updates.set(key, update);
+      const value = truth.get(String(subject._id));
+      const unchanged =
+        subject._computed !== undefined &&
+        field.name in subject._computed &&
+        sameValue(subject._computed[field.name], value);
+      if (unchanged) continue;
+      update.set[`${COMPUTED_ROOT}.${field.name}`] = value;
+      written++;
+    }
+  }
+  const byCollection = new Map<
+    string,
+    AnyBulkWriteOperation<RevisedSubject>[]
+  >();
+  for (const { collection, filter, set } of updates.values()) {
+    const changed = Object.keys(set).length > 0;
+    if (!changed && !revise) continue;
+    const update: UpdateFilter<RevisedSubject> = {};
+    if (changed) update.$set = set;
+    if (revise) update.$inc = { [`${COMPUTED_ROOT}.${COMPUTED_REVISION}`]: 1 };
+    const operations = byCollection.get(collection) ?? [];
+    operations.push({ updateOne: { filter, update } });
+    byCollection.set(collection, operations);
+  }
+  for (const [collection, operations] of byCollection) {
+    await db
+      .collection<RevisedSubject>(collection)
+      .bulkWrite(operations, { session, ordered: true });
   }
   return written;
 }

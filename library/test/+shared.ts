@@ -80,6 +80,16 @@ export async function withDatabase(
  * @param timeoutMs Deadline; generous on purpose, since the happy path returns
  *   as soon as the condition holds.
  */
+/**
+ * The computed values of a stored `_computed`, without its `_rev`: the
+ * revision counts recomputations, so tests about values compare these.
+ */
+export function computedValues(computed: unknown): unknown {
+  if (computed === null || typeof computed !== "object") return computed;
+  const { _rev: _revision, ...values } = computed as Record<string, unknown>;
+  return values;
+}
+
 export async function waitUntil(
   predicate: () => boolean,
   label: string,

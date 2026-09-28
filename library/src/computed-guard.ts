@@ -2,6 +2,15 @@ import { isRecord } from "./utils/guards.ts";
 
 export const COMPUTED_ROOT = "_computed";
 
+/**
+ * Revision of a subject's computed values, bumped by every transaction that
+ * recomputes the subject, changed or not. MongoDB only sees a conflict between
+ * transactions that modify the same document (rewriting an equal value is a
+ * no-op), so without it two transactions could each leave the subject
+ * untouched in their own snapshot and commit a stale value together.
+ */
+export const COMPUTED_REVISION = "_rev";
+
 export class ComputedFieldWriteError extends Error {
   override readonly name = "ComputedFieldWriteError";
 

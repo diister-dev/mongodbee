@@ -15,9 +15,10 @@ import {
 
 type AnySchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
 
-import { COMPUTED_ROOT } from "./computed-guard.ts";
+import { COMPUTED_REVISION, COMPUTED_ROOT } from "./computed-guard.ts";
 
 export {
+  COMPUTED_REVISION,
   COMPUTED_ROOT,
   ComputedFieldWriteError,
   refuseComputedWrite,
@@ -416,20 +417,32 @@ export type ComputedEntries<C extends ComputedDeclarations> = {
     v.GenericSchema<DeclaredValue<C[K]>>,
     undefined
   >;
+} & {
+  readonly [COMPUTED_REVISION]: v.OptionalSchema<
+    v.GenericSchema<number>,
+    undefined
+  >;
 };
+
+const REVISION_SCHEMA: AnySchema = v.pipe(
+  v.number(),
+  v.integer(),
+  v.minValue(0),
+);
 
 export function computedRootSchema(
   declarations: ComputedDeclarations,
 ): AnySchema {
   return v.optional(
-    v.object(
-      Object.fromEntries(
+    v.object({
+      ...Object.fromEntries(
         Object.entries(declarations).map(([name, declaration]) => [
           name,
           v.optional(declaration.valueSchema),
         ]),
       ),
-    ),
+      [COMPUTED_REVISION]: v.optional(REVISION_SCHEMA),
+    }),
   );
 }
 

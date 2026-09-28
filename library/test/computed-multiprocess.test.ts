@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+import process from "node:process";
 import { test } from "./+harness.ts";
 import { assert, assertEquals } from "./+assert.ts";
 import { TEST_URI, withDatabase } from "./+shared.ts";
@@ -16,37 +18,47 @@ const NODE_SCRIPT = new URL(
 
 type Node = {
   name: string;
-  process: ReturnType<typeof Bun.spawn>;
+  kill: () => void;
+  exited: Promise<number>;
   output: Promise<string>;
 };
+
+const RUN_ARGS = "Deno" in globalThis ? ["run", "-A"] : [];
 
 function spawnNode(
   name: string,
   env: Record<string, string>,
   onLine?: (line: string) => void,
 ): Node {
-  const child = Bun.spawn(["bun", NODE_SCRIPT], {
+  const child = spawn(process.execPath, [...RUN_ARGS, NODE_SCRIPT], {
     env: { ...process.env, ...env },
-    stdout: "pipe",
-    stderr: "pipe",
+    stdio: ["ignore", "pipe", "pipe"],
   });
-  const output = (async () => {
-    let text = "";
-    const decoder = new TextDecoder();
-    const reader = (child.stdout as ReadableStream<Uint8Array>).getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const piece = decoder.decode(value);
-      text += piece;
-      for (const line of piece.split("\n")) if (line) onLine?.(line);
-    }
-    text += await new Response(
-      child.stderr as ReadableStream<Uint8Array>,
-    ).text();
-    return text;
-  })();
-  return { name, process: child, output };
+  let stdout = "";
+  let stderr = "";
+  let partial = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    stdout += chunk;
+    const lines = (partial + chunk).split("\n");
+    partial = lines.pop() ?? "";
+    for (const line of lines) if (line) onLine?.(line);
+  });
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  const exited = new Promise<number>((resolve) =>
+    child.on("close", (code, signal) =>
+      resolve(code ?? (signal === null ? 1 : 128)),
+    ),
+  );
+  return {
+    name,
+    kill: () => child.kill("SIGKILL"),
+    exited,
+    output: exited.then(() => stdout + stderr),
+  };
 }
 
 test({
@@ -81,7 +93,7 @@ test({
         (line) => {
           if (line === "IN_DRAIN" && !killed && victim) {
             killed = true;
-            victim.process.kill(9);
+            victim.kill();
           }
         },
       );
@@ -104,7 +116,7 @@ test({
       const writerResults = await Promise.all(
         writers.map(async (node) => ({
           name: node.name,
-          code: await node.process.exited,
+          code: await node.exited,
           output: await node.output,
         })),
       );
@@ -114,8 +126,8 @@ test({
           0,
           `${result.name} failed:\n${result.output}`,
         );
-      await Promise.all(drainers.map((node) => node.process.exited));
-      const victimCode = await victim.process.exited;
+      await Promise.all(drainers.map((node) => node.exited));
+      const victimCode = await victim.exited;
 
       assert(
         killed,

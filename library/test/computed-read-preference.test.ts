@@ -16,7 +16,7 @@ import {
   drainComputedPending,
   pendingComputed,
 } from "../src/computed-marks.ts";
-import { TEST_URI } from "./+shared.ts";
+import { computedValues, TEST_URI } from "./+shared.ts";
 
 const EXPO = "exposition:expoaaaaa01";
 
@@ -118,7 +118,7 @@ test("computed + read preference: maintenance, marks, drain, full apply and chec
         validatedOrganizationIds?: string[];
       };
     };
-    assertEquals(stored._computed, {
+    assertEquals(computedValues(stored._computed), {
       organizationIds: [organization],
       validatedOrganizationIds: [organization],
     });

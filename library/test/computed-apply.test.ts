@@ -210,8 +210,11 @@ async function stored(
   const document = await db
     .collection(collectionName)
     .findOne({ _id: id as never });
-  return (document as { _computed?: Record<string, unknown> } | null)
+  const computed = (document as { _computed?: Record<string, unknown> } | null)
     ?._computed;
+  if (computed === undefined) return undefined;
+  const { _rev: _revision, ...values } = computed;
+  return values;
 }
 
 test("computed apply: the topology places every subject, source and far type in its physical collection", () => {

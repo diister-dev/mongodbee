@@ -77,11 +77,14 @@ async function open(db: Db, inlineLimit?: number) {
 }
 
 async function computedOf(db: Db, id: string) {
-  return (
+  const computed = (
     (await db.collection("+expositions").findOne({ _id: id as never })) as {
       _computed?: Record<string, unknown>;
     } | null
   )?._computed;
+  if (computed === undefined) return undefined;
+  const { _rev: _revision, ...values } = computed;
+  return values;
 }
 
 async function markIds(db: Db): Promise<string[]> {
