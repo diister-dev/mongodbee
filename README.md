@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/diister-dev/mongodbee/main/brand/logo.svg" alt="MongoDBee" width="160" />
+  <img src="https://raw.githubusercontent.com/diister-dev/mongodbee/main/brand/logo-wordmark.svg" alt="mongodbee" width="360" />
 
 # MongoDBee
 
