@@ -3,7 +3,7 @@ import { assertEquals } from "../+assert.ts";
 import * as v from "../../src/schema.ts";
 import { indexMetadataOf, INDEX_SYMBOL, withIndex } from "../../src/indexes.ts";
 import { fieldsOf, isTypeDefinition } from "../../src/type-definition.ts";
-import { schemaToNode } from "../../src/studio/schema-tree.ts";
+import { schemaToNode } from "../../src/inspect/schema-tree.ts";
 
 test("indexMetadataOf reads this copy's symbol and another copy's local symbol", () => {
   const foreign = Symbol("mongodbee.index");

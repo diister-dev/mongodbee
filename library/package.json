@@ -91,6 +91,10 @@
       "types": "./dist/src/migration/cli/bin.d.ts",
       "default": "./dist/src/migration/cli/bin.js"
     },
+    "./inspect": {
+      "types": "./dist/src/inspect/mod.d.ts",
+      "default": "./dist/src/inspect/mod.js"
+    },
     "./package.json": "./package.json"
   },
   "dependencies": {
