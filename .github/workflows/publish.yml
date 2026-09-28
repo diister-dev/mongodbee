@@ -51,6 +51,13 @@ jobs:
           bun run lint
           bun run build
 
+      - name: Verify the studio before publishing
+        working-directory: studio
+        run: |
+          bun run check
+          bun run lint
+          bun run build
+
       - name: Refuse to publish a version that is not the tag
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
@@ -78,6 +85,18 @@ jobs:
           echo "staging $version under dist-tag '$tag'"
           npm stage publish --access public --tag "$tag"
           echo "Staged. Release it with: npm stage list && npm stage approve <id>"
+
+      - name: Stage the studio npm release
+        if: inputs.registry != 'jsr'
+        working-directory: studio
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          case "$version" in
+            *-*) tag="$(printf '%s' "${version#*-}" | cut -d. -f1)" ;;
+            *)   tag="latest" ;;
+          esac
+          echo "staging the studio $version under dist-tag '$tag'"
+          npm stage publish --access public --tag "$tag"
 
       - name: Publish to JSR
         if: inputs.registry != 'npm'
