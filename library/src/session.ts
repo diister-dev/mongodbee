@@ -1,10 +1,81 @@
 import type { ClientSession, Db, MongoClient } from "../mod.ts";
+import * as m from "mongodb";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { PRIMARY } from "./read-preference.ts";
 import { getTransactionTracer } from "./telemetry.ts";
 import { runInTransactionScope } from "./transaction-scope.ts";
 import { createLogger } from "./utils/logger.ts";
 
 const log = createLogger("session");
+
+/**
+ * Options of a transaction opened by `withSession`. The read preference is
+ * not configurable: a transaction always runs on the primary.
+ */
+export type WithSessionOptions = Omit<
+  m.TransactionOptions,
+  "readPreference"
+> & {
+  /**
+   * Re-run the whole callback when the transaction fails with a
+   * `TransientTransactionError` (e.g. a primary election), for up to 120 s.
+   * Off by default: only enable it when the callback has no side effect
+   * outside the transaction.
+   */
+  retry?: boolean;
+};
+
+/** Same budget as the driver's `ClientSession.withTransaction`. */
+const TRANSACTION_RETRY_BUDGET_MS = 120_000;
+
+/** A commit that hit `maxCommitTimeMS` is not retried, as in the driver. */
+const MAX_TIME_MS_EXPIRED = 50;
+
+function hasErrorLabel(error: unknown, label: string): boolean {
+  return error instanceof m.MongoError && error.hasErrorLabel(label);
+}
+
+/**
+ * The transaction options: primary, snapshot reads and majority writes by
+ * default. The client's read preference (e.g. `primaryPreferred` in the URI)
+ * never leaks into the transaction, where the driver would reject it.
+ */
+function transactionOptions(
+  options: WithSessionOptions | undefined,
+): m.TransactionOptions {
+  const { retry: _retry, ...rest } = options ?? {};
+  return {
+    readConcern: { level: "snapshot" },
+    writeConcern: { w: "majority" },
+    ...rest,
+    readPreference: PRIMARY,
+  };
+}
+
+/**
+ * Commits, retrying while the outcome is unknown (network error, primary
+ * stepdown): committing twice is safe, the server deduplicates it.
+ */
+async function commitWithRetry(
+  session: ClientSession,
+  startedAt: number,
+): Promise<void> {
+  while (true) {
+    try {
+      await session.commitTransaction();
+      return;
+    } catch (error) {
+      const retryable =
+        hasErrorLabel(error, "UnknownTransactionCommitResult") &&
+        !(
+          error instanceof m.MongoServerError &&
+          error.code === MAX_TIME_MS_EXPIRED
+        ) &&
+        Date.now() - startedAt < TRANSACTION_RETRY_BUDGET_MS;
+      if (!retryable) throw error;
+    }
+  }
+}
 
 /**
  * Checks if MongoDB transactions are enabled on the current database
@@ -64,7 +135,7 @@ export async function checkTransactionEnabled(
     const session = mongoClient.startSession();
     const collectionId = `transaction_test_${crypto.randomUUID()}`;
     try {
-      session.startTransaction();
+      session.startTransaction({ readPreference: PRIMARY });
       await mongoDb.collection(collectionId).insertOne(
         { test: true },
         {
@@ -160,10 +231,18 @@ export function createSessionContext(mongoClient: MongoClient): {
    * Otherwise, it creates a new session and automatically manages
    * the transaction lifecycle (start, commit, abort).
    *
+   * The transaction always runs on the primary, whatever the client's read
+   * preference. `options` only apply to the outermost call, the one that
+   * opens the transaction.
+   *
    * @param fn - The function to execute within the session context
+   * @param options - Transaction concerns and the opt-in transient retry
    * @returns A promise that resolves to the function's result
    */
-  withSession: <T>(fn: (session?: ClientSession) => Promise<T>) => Promise<T>;
+  withSession: <T>(
+    fn: (session?: ClientSession) => Promise<T>,
+    options?: WithSessionOptions,
+  ) => Promise<T>;
 } {
   let warningDisplayed = false;
   let transactionsEnabledPromise: Promise<boolean> | undefined;
@@ -176,6 +255,7 @@ export function createSessionContext(mongoClient: MongoClient): {
 
   async function withSession<T>(
     fn: (session?: ClientSession) => Promise<T>,
+    options?: WithSessionOptions,
   ): Promise<T> {
     // Lazy loading: ne vérifie le support des transactions qu'au premier appel de withSession
     if (!transactionsEnabledPromise) {
@@ -201,17 +281,34 @@ export function createSessionContext(mongoClient: MongoClient): {
 
     const newSession = mongoClient.startSession();
     return asyncSession.run(newSession, () => {
+      const txOptions = transactionOptions(options);
+      const startedAt = Date.now();
+      const canRetry = (e: unknown) =>
+        options?.retry === true &&
+        hasErrorLabel(e, "TransientTransactionError") &&
+        Date.now() - startedAt < TRANSACTION_RETRY_BUDGET_MS;
       const execute = async () => {
         try {
-          newSession.startTransaction();
-          const result = await runInTransactionScope(() => fn(newSession));
-          await newSession.commitTransaction();
-          return result as T;
-        } catch (e) {
-          if (newSession.inTransaction()) {
-            await newSession.abortTransaction();
+          while (true) {
+            newSession.startTransaction(txOptions);
+            let result: T;
+            try {
+              result = await runInTransactionScope(() => fn(newSession));
+            } catch (e) {
+              if (newSession.inTransaction()) {
+                await newSession.abortTransaction();
+              }
+              if (canRetry(e)) continue;
+              throw e;
+            }
+            try {
+              await commitWithRetry(newSession, startedAt);
+            } catch (e) {
+              if (canRetry(e)) continue;
+              throw e;
+            }
+            return result;
           }
-          throw e;
         } finally {
           await newSession.endSession();
         }

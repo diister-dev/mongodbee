@@ -13,6 +13,7 @@ import {
 import { getSessionContext } from "./session.ts";
 import { COMPUTED_ROOT } from "./computed-guard.ts";
 import { maintainedCollection } from "./computed-maintenance.ts";
+import { PRIMARY, type ReadOptions, readOpts } from "./read-preference.ts";
 import { withIndex } from "./indexes.ts";
 import type { FlatType } from "../types/flat.ts";
 import type { Db } from "./mongodb.ts";
@@ -410,10 +411,12 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
   getById<E extends keyof T>(
     key: E,
     id: string,
+    options?: ReadOptions,
   ): Promise<v.InferOutput<OutputElementSchema<T, E>>>;
   findOne<E extends keyof T>(
     key: E,
     filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
+    options?: ReadOptions,
   ): Promise<v.InferOutput<OutputElementSchema<T, E>> | null>;
   find<E extends keyof T>(
     key: E,
@@ -429,7 +432,10 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
    * Returns `null` if no doc matches. The result is validated against the
    * union schema and typed as the union of all element shapes.
    */
-  findOneAny(filter: m.Filter<Input<T>>): Promise<Output<T> | null>;
+  findOneAny(
+    filter: m.Filter<Input<T>>,
+    options?: ReadOptions,
+  ): Promise<Output<T> | null>;
   /**
    * Find all documents matching a cross-type filter — no `_type` constraint
    * injected. Symmetric to `deleteAny`. Each result is validated against
@@ -473,6 +479,8 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
       skipTotal?: boolean;
       /** Fetch one extra document to set hasMore cheaply; the extra row is dropped. */
       peek?: boolean;
+      /** Overrides the collection's read preference; ignored inside a transaction. */
+      readPreference?: m.ReadPreferenceLike;
     },
   ): Promise<{
     total?: number;
@@ -527,6 +535,8 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
       skipTotal?: boolean;
       /** Fetch one extra document to set hasMore cheaply; the extra row is dropped. */
       peek?: boolean;
+      /** Overrides the collection's read preference; ignored inside a transaction. */
+      readPreference?: m.ReadPreferenceLike;
     },
   ): Promise<{
     total?: number;
@@ -597,6 +607,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
   ): Promise<v.InferOutput<OutputElementSchema<T, E>> | null>;
   aggregate(
     stageBuilder: (stage: StageBuilder<T>) => AggregationStage[],
+    options?: ReadOptions,
   ): Promise<any[]>;
   drop(options: { force: true }): Promise<boolean>;
 };
@@ -915,14 +926,14 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         (ids) => ({ [TA.INSERTED_COUNT]: ids.length }),
       );
     },
-    async getById(key, id) {
+    async getById(key, id, options?) {
       const run = async () => {
         const session = sessionContext.getSession();
         const result = await collection.findOne(
           {
             $and: [{ _type: key as string }, { _id: id }],
           } as any,
-          { session },
+          readOpts(session, options),
         );
 
         if (!result) {
@@ -941,14 +952,14 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         run,
       );
     },
-    async findOne(key, filter) {
+    async findOne(key, filter, options?) {
       const run = async () => {
         const session = sessionContext.getSession();
         const result = await collection.findOne(
           {
             $and: [{ _type: key as string }, filter],
           } as any,
-          { session },
+          readOpts(session, options),
         );
 
         if (!result) {
@@ -978,7 +989,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           {
             $and: filter ? [typeChecker, filter] : [typeChecker],
           } as any,
-          { session, ...options },
+          readOpts(session, options),
         );
 
         const result = await cursor.toArray();
@@ -1025,6 +1036,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         format?: (doc: any) => Promise<any> | any;
         skipTotal?: boolean;
         peek?: boolean;
+        readPreference?: m.ReadPreferenceLike;
       },
     ) {
       const run = async () => {
@@ -1050,6 +1062,12 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           );
         }
         const session = sessionContext.getSession();
+        const readOptions = readOpts(
+          session,
+          options?.readPreference
+            ? { readPreference: options.readPreference }
+            : undefined,
+        );
 
         // Support both single key and array of keys for cross-pagination
         const keys = Array.isArray(keyOrKeys)
@@ -1119,9 +1137,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         ): Promise<Record<string, unknown>[] | null> => {
           const anchorDoc = await collection.findOne(
             { _id: anchorId } as never,
-            {
-              session,
-            },
+            readOptions,
           );
           if (!anchorDoc) return null;
           const enrichedAnchorDoc = useNaturalIdSort
@@ -1194,13 +1210,14 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           const rows = await collection
             .aggregate(
               [{ $match: { _id: anchorId } }, ...sortStages, { $limit: 1 }],
-              { session },
+              readOptions,
             )
             .toArray();
           if (rows[0]) return rows[0] as Record<string, unknown>;
-          const exists = await collection.findOne({ _id: anchorId } as never, {
-            session,
-          });
+          const exists = await collection.findOne(
+            { _id: anchorId } as never,
+            readOptions,
+          );
           throw new Error(
             exists
               ? `paginate: ${label} was dropped by \`sortPipeline\` — cannot ` +
@@ -1283,7 +1300,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 pipeline: userPipeline,
                 count: true,
               }),
-              { session },
+              readOptions,
             )
             .toArray();
           return (rows[0]?.total as number | undefined) ?? 0;
@@ -1308,7 +1325,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
               { $count: "total" },
             ];
             const rows = await collection
-              .aggregate(stages, { session })
+              .aggregate(stages, readOptions)
               .toArray();
             return (rows[0]?.total as number | undefined) ?? 0;
           }
@@ -1323,7 +1340,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
               { $count: "total" },
             ];
             const rows = await collection
-              .aggregate(stages, { session })
+              .aggregate(stages, readOptions)
               .toArray();
             return (rows[0]?.total as number | undefined) ?? 0;
           }
@@ -1331,7 +1348,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             (branches
               ? composeCursorQuery(baseQuery, branches)
               : { $and: baseQuery }) as never,
-            { session },
+            readOptions,
           );
         };
 
@@ -1380,7 +1397,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
               pipeline: userPipeline,
               reverse: Boolean(beforeId),
             }),
-            { session },
+            readOptions,
           );
         } else if (pipelineBuilder || useNaturalIdSort) {
           // For naturalIdSort, we need to add _ulid BEFORE the cursor filter can use it
@@ -1403,10 +1420,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 ...userPipeline,
                 { $sort: sort as Record<string, 1 | -1> },
               ];
-          cursor = collection.aggregate(aggregatePipeline, { session });
+          cursor = collection.aggregate(aggregatePipeline, readOptions);
         } else {
           cursor = collection
-            .find(query as never, { session })
+            .find(query as never, readOptions)
             .sort(sort as m.Sort);
         }
 
@@ -1517,10 +1534,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           $and: filter ? [typeChecker, filter] : [typeChecker],
         };
 
-        return collection.countDocuments(query as never, {
-          session,
-          ...options,
-        });
+        return collection.countDocuments(
+          query as never,
+          readOpts(session, options),
+        );
       };
       return traced(
         tele,
@@ -1663,10 +1680,13 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         (count) => ({ [TA.DELETED_COUNT]: count }),
       );
     },
-    async findOneAny(filter) {
+    async findOneAny(filter, options?) {
       const run = async () => {
         const session = sessionContext.getSession();
-        const result = await collection.findOne(filter as any, { session });
+        const result = await collection.findOne(
+          filter as any,
+          readOpts(session, options),
+        );
         if (!result) {
           return null;
         }
@@ -1684,7 +1704,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     async findAny(filter, options) {
       const run = async () => {
         const session = sessionContext.getSession();
-        const cursor = collection.find(filter as any, { session, ...options });
+        const cursor = collection.find(
+          filter as any,
+          readOpts(session, options),
+        );
         const result = await cursor.toArray();
 
         const output = result
@@ -1987,14 +2010,17 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         run,
       );
     },
-    async aggregate(stageBuilder) {
+    async aggregate(stageBuilder, options?) {
       const run = async () => {
         const stage = createMultiStageBuilder<T>(collectionName);
 
         const session = sessionContext.getSession();
 
         const pipeline = stageBuilder(stage);
-        const cursor = collection.aggregate(pipeline, { session });
+        const cursor = collection.aggregate(
+          pipeline,
+          readOpts(session, options),
+        );
 
         return await cursor.toArray();
       };
@@ -2086,7 +2112,7 @@ export async function newMultiCollection<const T extends MultiCollectionSchema>(
 
   // Check if collection already exists
   const collections = await db
-    .listCollections({ name: collectionName })
+    .listCollections({ name: collectionName }, { readPreference: PRIMARY })
     .toArray();
   if (collections.length > 0) {
     throw new Error(

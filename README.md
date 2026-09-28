@@ -352,6 +352,46 @@ await users.withSession(async () => {
 });
 ```
 
+A transaction always runs on the primary, with `snapshot` reads and a
+`w: "majority"` commit, whatever the client's read preference. A
+`primaryPreferred` URI no longer breaks it. The commit is retried when its
+outcome is unknown, e.g. after a primary stepdown. Pass `retry: true` to also
+replay the whole callback on a `TransientTransactionError`, such as an
+election mid-transaction. Only do this when the callback has no side effect
+outside the database:
+
+```ts
+await users.withSession(async () => {
+  /* ... */
+}, { retry: true, writeConcern: { w: "majority", wtimeoutMS: 5000 } });
+```
+
+## Replica sets and read preference
+
+Reads follow the collection's read preference, falling back to the client's
+(`primary` unless the URI says otherwise). To offload reads that tolerate a
+little replication lag, such as listings, dashboards or stats, onto the
+secondaries, opt in per collection:
+
+```ts
+const stats = await collection(db, "stats", schema, {
+  readPreference: { mode: "secondaryPreferred", maxStalenessSeconds: 90 },
+});
+// multiCollection takes the same option; scopedMultiCollection takes it in its config.
+```
+
+- **Inside `withSession`, every read goes to the primary.** A per-call or
+  per-collection read preference is ignored there.
+- **Read your own writes** with a per-call override:
+  `stats.findOne(filter, { readPreference: "primary" })`. `getById`,
+  `paginate` and the multi-collection `findOne`/`findOneAny`/`aggregate`
+  accept `{ readPreference }` too.
+- **Internal reads always use the primary**, whatever the client default:
+  index and validator sync, the migration history, the multi-collection
+  registry, and the whole migration CLI.
+- **`paginate` on a secondary** may compute its `total` and its page on two
+  different members, so the count can be slightly off while writes replicate.
+
 ## Change streams
 
 Opt in with `enableWatching`, then subscribe. `on()` returns its unsubscribe

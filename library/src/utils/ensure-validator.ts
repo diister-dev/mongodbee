@@ -2,6 +2,7 @@ import type { Document } from "mongodb";
 import type { Db } from "../mongodb.ts";
 import { dirtyEquivalent } from "./object.ts";
 import { createLogger } from "./logger.ts";
+import { PRIMARY } from "../read-preference.ts";
 
 const log = createLogger("validator");
 
@@ -24,7 +25,9 @@ export async function ensureValidator(
   collectionName: string,
   validator: Document,
 ): Promise<void> {
-  const existing = await db.listCollections({ name: collectionName }).toArray();
+  const existing = await db
+    .listCollections({ name: collectionName }, { readPreference: PRIMARY })
+    .toArray();
 
   if (existing.length === 0) {
     log.debug(`ensureValidator(${collectionName}): createCollection`);

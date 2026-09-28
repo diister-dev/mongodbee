@@ -14,6 +14,7 @@ import {
 import { EventEmitter } from "./events.ts";
 import { watchEvent } from "./change-stream.ts";
 import { getSessionContext } from "./session.ts";
+import { type ReadOptions, readOpts } from "./read-preference.ts";
 import { ensureValidator } from "./utils/ensure-validator.ts";
 import { withDatabaseDdlLock } from "./ddl-lock.ts";
 import { applyCollectionIndexes } from "./indexes-applier.ts";
@@ -260,7 +261,10 @@ export type CollectionResult<
     filter: m.Filter<WithId<TInput<T>>>,
     options?: Omit<m.FindOptions, "timeoutMode"> & m.Abortable,
   ) => Promise<WithId<TOutput<T>> | null>;
-  getById: (id: string | m.ObjectId) => Promise<WithId<TOutput<T>>>;
+  getById: (
+    id: string | m.ObjectId,
+    options?: ReadOptions,
+  ) => Promise<WithId<TOutput<T>>>;
   find: (
     filter: m.Filter<TInput<T>>,
     options?: m.FindOptions & m.Abortable,
@@ -306,6 +310,8 @@ export type CollectionResult<
        * pagination.
        */
       peek?: boolean;
+      /** Overrides the collection's read preference; ignored inside a transaction. */
+      readPreference?: m.ReadPreferenceLike;
     },
   ) => Promise<{
     total?: number;
@@ -733,7 +739,7 @@ export async function collection<
             ...validator, // Prevent returning invalid documents
             ...(filter as unknown as m.Filter<TInput>),
           },
-          { session, ...options },
+          readOpts(session, options),
         );
 
         if (!result) {
@@ -759,12 +765,13 @@ export async function collection<
         (r) => ({ [TA.RETURNED_ROWS]: r ? 1 : 0 }),
       );
     },
-    async getById(id) {
+    async getById(id, options?) {
       const run = async () => {
         const session = sessionContext.getSession();
-        const result = await collection.findOne({ _id: id } as any, {
-          session,
-        });
+        const result = await collection.findOne(
+          { _id: id } as any,
+          readOpts(session, options),
+        );
 
         if (!result) {
           throw new Error("No element found");
@@ -794,7 +801,7 @@ export async function collection<
       options?: m.FindOptions & m.Abortable,
     ): m.AbstractCursor<TOutput> {
       const session = sessionContext.getSession();
-      const cursor = collection.find(filter, { session, ...options });
+      const cursor = collection.find(filter, readOpts(session, options));
       const originalToArray = cursor.toArray;
       // Override toArray
       cursor.toArray = async function () {
@@ -842,7 +849,7 @@ export async function collection<
         {
           $and: [filter as any, invalidValidation],
         },
-        { session, ...options },
+        readOpts(session, options),
       );
 
       const originalToArray = cursor.toArray;
@@ -895,6 +902,7 @@ export async function collection<
         sortPipeline?: (stage: SimpleStageBuilder) => AggregationStage[];
         skipTotal?: boolean;
         peek?: boolean;
+        readPreference?: m.ReadPreferenceLike;
       },
     ): Promise<{
       total?: number;
@@ -917,6 +925,12 @@ export async function collection<
           sortPipeline: sortPipelineBuilder,
         } = options || {};
         const session = sessionContext.getSession();
+        const readOptions = readOpts(
+          session,
+          options?.readPreference
+            ? { readPreference: options.readPreference }
+            : undefined,
+        );
         const baseQuery: m.Filter<TInput> = { ...filter };
         let query: m.Filter<TInput> = { ...filter };
 
@@ -933,7 +947,7 @@ export async function collection<
         ): Promise<Record<string, unknown>[] | null> => {
           const anchorDoc = await collection.findOne(
             { _id: anchorId } as m.Filter<TInput>,
-            { session },
+            readOptions,
           );
           if (!anchorDoc) return null;
           return buildCursorLadderBranches({
@@ -1054,13 +1068,13 @@ export async function collection<
           const rows = await collection
             .aggregate(
               [{ $match: { _id: anchorId } }, ...sortStages, { $limit: 1 }],
-              { session },
+              readOptions,
             )
             .toArray();
           if (rows[0]) return rows[0] as Record<string, unknown>;
           const exists = await collection.findOne(
             { _id: anchorId } as m.Filter<TInput>,
-            { session },
+            readOptions,
           );
           throw new Error(
             exists
@@ -1137,7 +1151,7 @@ export async function collection<
                 pipeline: customPipeline,
                 count: true,
               }),
-              { session },
+              readOptions,
             )
             .toArray();
           return (rows[0]?.total as number | undefined) ?? 0;
@@ -1169,9 +1183,7 @@ export async function collection<
               { $count: "total" },
             ];
             const totalResult = await collection
-              .aggregate(countPipeline, {
-                session,
-              })
+              .aggregate(countPipeline, readOptions)
               .toArray();
             total = (totalResult[0]?.total as number | undefined) ?? 0;
 
@@ -1188,9 +1200,7 @@ export async function collection<
                   { $count: "total" },
                 ];
                 const afterResult = await collection
-                  .aggregate(afterPipeline, {
-                    session,
-                  })
+                  .aggregate(afterPipeline, readOptions)
                   .toArray();
                 const afterCount =
                   (afterResult[0]?.total as number | undefined) ?? 0;
@@ -1205,7 +1215,7 @@ export async function collection<
             }
           } else {
             // Find-style fast path: countDocuments is cheaper than aggregate.
-            total = await collection.countDocuments(baseQuery, { session });
+            total = await collection.countDocuments(baseQuery, readOptions);
 
             if (afterId) {
               if (cursorBranches) {
@@ -1214,7 +1224,7 @@ export async function collection<
                     [baseQuery as Record<string, unknown>],
                     cursorBranches,
                   ) as m.Filter<TInput>,
-                  { session },
+                  readOptions,
                 );
                 position = total - afterCount;
               } else {
@@ -1247,7 +1257,7 @@ export async function collection<
               })
             : [{ $match: query }, { $sort: sort }, ...customPipeline];
 
-          const cursor = collection.aggregate(aggregationPipeline, { session });
+          const cursor = collection.aggregate(aggregationPipeline, readOptions);
 
           try {
             while (hardLimit-- > 0 && limit > 0) {
@@ -1289,7 +1299,7 @@ export async function collection<
         } else {
           // Use simple find for non-pipeline queries
           const cursor = collection
-            .find(query, { session })
+            .find(query, readOptions)
             .sort(sort as m.Sort);
 
           try {
@@ -1370,14 +1380,14 @@ export async function collection<
                       ...customPipeline,
                       { $count: "total" },
                     ],
-                    { session },
+                    readOptions,
                   )
                   .toArray();
                 beforeCount = (rows[0]?.total as number | undefined) ?? 0;
               } else {
                 beforeCount = await collection.countDocuments(
                   beforeQuery as m.Filter<TInput>,
-                  { session },
+                  readOptions,
                 );
               }
               position = Math.max(0, beforeCount - elements.length);
@@ -1405,7 +1415,7 @@ export async function collection<
     countDocuments(filter, options?) {
       const run = () => {
         const session = sessionContext.getSession();
-        return collection.countDocuments(filter, { session, ...options });
+        return collection.countDocuments(filter, readOpts(session, options));
       };
       return traced(
         tele,
@@ -1417,17 +1427,18 @@ export async function collection<
     estimatedDocumentCount(options?) {
       const run = () => {
         const session = sessionContext.getSession();
-        return collection.estimatedDocumentCount({ session, ...options });
+        return collection.estimatedDocumentCount(readOpts(session, options));
       };
       return traced(tele, "estimatedDocumentCount", undefined, run);
     },
     distinct(key, filter, options?) {
       const run = () => {
         const session = sessionContext.getSession();
-        return collection.distinct(key as string, filter, {
-          session,
-          ...options,
-        });
+        return collection.distinct(
+          key as string,
+          filter,
+          readOpts(session, options),
+        );
       };
       return traced(
         tele,
@@ -1645,7 +1656,7 @@ export async function collection<
     // Bulk operations
     aggregate(pipeline, options?) {
       const session = sessionContext.getSession();
-      return collection.aggregate(pipeline, { session, ...options });
+      return collection.aggregate(pipeline, readOpts(session, options));
     },
     bulkWrite(operations, options?) {
       for (const operation of operations) {
@@ -1755,7 +1766,7 @@ export async function collection<
     },
     watch(pipeline, options?) {
       const session = sessionContext.getSession();
-      return collection.watch(pipeline, { session, ...options });
+      return collection.watch(pipeline, readOpts(session, options));
     },
   } as CollectionResult<T>;
 }

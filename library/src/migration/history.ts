@@ -12,6 +12,7 @@ import type { Collection } from "mongodb";
 import type { Db } from "../mongodb.ts";
 import { getCurrentVersion } from "./utils/package-info.ts";
 import { calculateMigrationStateFromHistory } from "./migration-history.ts";
+import { primaryCollection } from "../read-preference.ts";
 
 /**
  * Type of migration operation
@@ -78,7 +79,7 @@ export const MIGRATION_OPERATIONS_COLLECTION = "__dbee_migration__";
 export function getMigrationOperationsCollection(
   db: Db,
 ): Collection<MigrationOperation> {
-  return db.collection(MIGRATION_OPERATIONS_COLLECTION);
+  return primaryCollection(db, MIGRATION_OPERATIONS_COLLECTION);
 }
 
 /**

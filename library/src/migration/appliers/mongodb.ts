@@ -47,6 +47,7 @@ import {
 import { getIrreversibleOperations } from "../builder.ts";
 import { scopedMultiCollection } from "../../scoped-multi-collection.ts";
 import { getSessionContext } from "../../session.ts";
+import { PRIMARY, primaryCollection } from "../../read-preference.ts";
 import { createLogger } from "../../utils/logger.ts";
 
 const log = createLogger("migration-applier");
@@ -306,7 +307,7 @@ export function createMongodbApplier(
     filter: Record<string, unknown>,
   ): Promise<number | undefined> {
     try {
-      const collection = db.collection(collectionName);
+      const collection = primaryCollection(db, collectionName);
       return Object.keys(filter).length === 0
         ? await collection.estimatedDocumentCount()
         : await collection.countDocuments(filter as Record<string, unknown>);
@@ -325,7 +326,7 @@ export function createMongodbApplier(
     // "collection does not exist" silently skips validator/index re-sync and
     // masks the true cause — let it propagate so the migration fails loudly.
     const collections = await db
-      .listCollections({ name: collectionName })
+      .listCollections({ name: collectionName }, { readPreference: PRIMARY })
       .toArray();
     return collections.length > 0;
   }
@@ -339,7 +340,7 @@ export function createMongodbApplier(
    */
   async function dropToleratingMissing(collectionName: string): Promise<void> {
     try {
-      await db.collection(collectionName).drop();
+      await primaryCollection(db, collectionName).drop();
     } catch (error) {
       const e = error as { code?: number; codeName?: string };
       if (e?.code === 26 || e?.codeName === "NamespaceNotFound") return;
@@ -388,7 +389,7 @@ export function createMongodbApplier(
           });
 
           // Synchronize indexes using shared applier
-          const collection = db.collection(collectionName);
+          const collection = primaryCollection(db, collectionName);
           await applyCollectionIndexes(collection, collectionSchema, {
             composites: indexesOf(schema),
           });
@@ -427,7 +428,7 @@ export function createMongodbApplier(
           });
 
           // Synchronize indexes using shared applier
-          const collection = db.collection(collectionName);
+          const collection = primaryCollection(db, collectionName);
           const schemasPerType = Object.entries(multiSchema).reduce<
             Record<
               string,
@@ -509,7 +510,7 @@ export function createMongodbApplier(
             validationLevel: "strict",
           });
           await applyMultiCollectionIndexes(
-            db.collection(instanceName),
+            primaryCollection(db, instanceName),
             schemasPerType,
             { composites: modelComposites },
           );
@@ -597,9 +598,9 @@ export function createMongodbApplier(
       collectionName,
       await countForProgress(collectionName, filter),
     );
-    const result = await db
-      .collection(collectionName)
-      .deleteMany(filter as Record<string, unknown>);
+    const result = await primaryCollection(db, collectionName).deleteMany(
+      filter as Record<string, unknown>,
+    );
     reporter.add(result.deletedCount);
     reporter.done();
     return result.deletedCount;
@@ -622,8 +623,7 @@ export function createMongodbApplier(
       groupKey[`k${position}`] = `$${path}`;
     });
 
-    const groups = await db
-      .collection(collectionName)
+    const groups = await primaryCollection(db, collectionName)
       .aggregate<{ ids: unknown[] }>([
         { $match: { $and: [...plan.clauses, ...presence] } },
         { $sort: { _id: 1 } },
@@ -651,7 +651,9 @@ export function createMongodbApplier(
       const filter: Record<string, unknown> = {
         _id: { $in: doomed.slice(start, start + BATCH) },
       };
-      const result = await db.collection(collectionName).deleteMany(filter);
+      const result = await primaryCollection(db, collectionName).deleteMany(
+        filter,
+      );
       reporter.add(result.deletedCount);
     }
     reporter.done();
@@ -671,7 +673,7 @@ export function createMongodbApplier(
       Record<string, readonly Record<string, unknown>[]>
     >();
     if (!reads || reads.length === 0) return out;
-    const collection = db.collection(collectionName);
+    const collection = primaryCollection(db, collectionName);
     const scopes = (await collection.distinct("_scope", filter)) as unknown[];
     for (const scope of scopes) {
       if (typeof scope !== "string") continue;
@@ -699,7 +701,7 @@ export function createMongodbApplier(
     transformer: (doc: Record<string, unknown>) => Record<string, unknown>,
     operationType?: MigrationRule["type"],
   ): Promise<void> {
-    const collection = db.collection(collectionName);
+    const collection = primaryCollection(db, collectionName);
     const reporter = operationType
       ? makeReporter(
           operationType,
@@ -788,7 +790,7 @@ export function createMongodbApplier(
 
           // If collection exists, still apply indexes && update validator if schema provided
           if (operation.schema) {
-            const collection = db.collection(operation.collectionName);
+            const collection = primaryCollection(db, operation.collectionName);
             const collectionSchema = v.object(fieldsOf(operation.schema));
             await applyCollectionIndexes(collection, collectionSchema, {
               composites: indexesOf(operation.schema),
@@ -805,7 +807,7 @@ export function createMongodbApplier(
         }
 
         if (operation.schema) {
-          const collection = db.collection(operation.collectionName);
+          const collection = primaryCollection(db, operation.collectionName);
           const collectionSchema = v.object(fieldsOf(operation.schema));
           await applyCollectionIndexes(collection, collectionSchema, {
             composites: indexesOf(operation.schema),
@@ -821,7 +823,7 @@ export function createMongodbApplier(
             `Collection ${operation.collectionName} does not exist`,
           );
         }
-        await db.collection(operation.collectionName).drop();
+        await primaryCollection(db, operation.collectionName).drop();
       },
     },
 
@@ -894,7 +896,7 @@ export function createMongodbApplier(
         }
 
         // Apply indexes using shared applier
-        const collection = db.collection(operation.collectionName);
+        const collection = primaryCollection(db, operation.collectionName);
         const schemasPerType = Object.entries(operation.schema).reduce(
           (acc, [typeName, typeSchema]) => {
             acc[typeName] = v.object(fieldsOf(typeSchema));
@@ -924,7 +926,7 @@ export function createMongodbApplier(
             `Multi-collection ${operation.collectionName} does not exist`,
           );
         }
-        await db.collection(operation.collectionName).drop();
+        await primaryCollection(db, operation.collectionName).drop();
       },
     },
 
@@ -1000,7 +1002,7 @@ export function createMongodbApplier(
         }
 
         // Apply indexes using shared applier
-        const multiCollection = db.collection(operation.collectionName);
+        const multiCollection = primaryCollection(db, operation.collectionName);
         const schemasPerType = Object.entries(operation.schema).reduce(
           (acc, [typeName, typeSchema]) => {
             acc[typeName] = v.object(fieldsOf(typeSchema));
@@ -1030,13 +1032,13 @@ export function createMongodbApplier(
             `Multi-model instance ${operation.collectionName} does not exist`,
           );
         }
-        await db.collection(operation.collectionName).drop();
+        await primaryCollection(db, operation.collectionName).drop();
       },
     },
 
     mark_as_multimodel: {
       apply: async (operation) => {
-        const collection = db.collection(operation.collectionName);
+        const collection = primaryCollection(db, operation.collectionName);
 
         if (
           opts.strictValidation &&
@@ -1103,7 +1105,7 @@ export function createMongodbApplier(
         }
 
         // Apply indexes using shared applier (critical for multi-model tracking)
-        const modelCollection = db.collection(operation.collectionName);
+        const modelCollection = primaryCollection(db, operation.collectionName);
         const schemasPerType = Object.entries(modelSchema).reduce(
           (acc, [typeName, typeSchema]) => {
             acc[typeName] = v.object(fieldsOf(typeSchema));
@@ -1125,7 +1127,7 @@ export function createMongodbApplier(
         });
       },
       reverse: async (operation) => {
-        const collection = db.collection(operation.collectionName);
+        const collection = primaryCollection(db, operation.collectionName);
         await collection.deleteMany({
           _type: {
             $in: [MULTI_COLLECTION_INFO_TYPE, MULTI_COLLECTION_MIGRATIONS_TYPE],
@@ -1173,7 +1175,7 @@ export function createMongodbApplier(
           );
         }
 
-        const collection = db.collection(operation.collectionName);
+        const collection = primaryCollection(db, operation.collectionName);
         const sig = operation.collectionName;
         const documents = operation.documents.map((doc: unknown, i) => {
           const typedDoc = doc as Record<string, unknown>;
@@ -1216,7 +1218,7 @@ export function createMongodbApplier(
           );
         }
 
-        const collection = db.collection(operation.collectionName);
+        const collection = primaryCollection(db, operation.collectionName);
         const sig = operation.collectionName;
         const documentIds = operation.documents.map((doc: unknown, i) =>
           resolveSeedDocId(
@@ -1248,7 +1250,7 @@ export function createMongodbApplier(
           );
         }
 
-        const collection = db.collection(operation.collectionName);
+        const collection = primaryCollection(db, operation.collectionName);
         const sig = `${operation.collectionName}:${operation.documentType}`;
         const documents = operation.documents.map((doc: unknown, i) => {
           const typedDoc = doc as Record<string, unknown>;
@@ -1296,7 +1298,7 @@ export function createMongodbApplier(
           );
         }
 
-        const collection = db.collection(operation.collectionName);
+        const collection = primaryCollection(db, operation.collectionName);
         const sig = `${operation.collectionName}:${operation.documentType}`;
         const documentIds = operation.documents.map((doc: unknown, i) =>
           resolveSeedDocId(
@@ -1328,7 +1330,7 @@ export function createMongodbApplier(
           );
         }
 
-        const collection = db.collection(operation.collectionName);
+        const collection = primaryCollection(db, operation.collectionName);
         const sig = `${operation.collectionName}:${operation.modelType}:${operation.documentType}`;
         const documents = operation.documents.map((doc: unknown, i) => {
           const typedDoc = doc as Record<string, unknown>;
@@ -1376,7 +1378,7 @@ export function createMongodbApplier(
           );
         }
 
-        const collection = db.collection(operation.collectionName);
+        const collection = primaryCollection(db, operation.collectionName);
         const sig = `${operation.collectionName}:${operation.modelType}:${operation.documentType}`;
         const documentIds = operation.documents.map((doc: unknown, i) =>
           resolveSeedDocId(
@@ -1426,7 +1428,7 @@ export function createMongodbApplier(
             continue;
           }
 
-          const collection = db.collection(collectionName);
+          const collection = primaryCollection(db, collectionName);
           const sig = `${operation.modelType}:${operation.documentType}`;
           const documents = operation.documents.map((doc: unknown, i) => {
             const typedDoc = doc as Record<string, unknown>;
@@ -1473,7 +1475,7 @@ export function createMongodbApplier(
 
         const sig = `${operation.modelType}:${operation.documentType}`;
         for (const collectionName of instances) {
-          const collection = db.collection(collectionName);
+          const collection = primaryCollection(db, collectionName);
           const documentIds = operation.documents.map((doc: unknown, i) =>
             resolveSeedDocId(
               doc as Record<string, unknown>,
@@ -1722,8 +1724,8 @@ export function createMongodbApplier(
     flow: {
       apply: async (operation) => {
         const prefix = extractIdPrefix(operation.targetIdSchema, "");
-        const source = db.collection(operation.from.collection);
-        const target = db.collection(operation.into.collection);
+        const source = primaryCollection(db, operation.from.collection);
+        const target = primaryCollection(db, operation.into.collection);
         const baseFilter = (operation.from.where ?? {}) as Record<
           string,
           unknown
@@ -1787,8 +1789,8 @@ export function createMongodbApplier(
           );
         }
         const prefix = extractIdPrefix(operation.targetIdSchema, "");
-        const source = db.collection(operation.from.collection);
-        const target = db.collection(operation.into.collection);
+        const source = primaryCollection(db, operation.from.collection);
+        const target = primaryCollection(db, operation.into.collection);
         const baseFilter = (operation.from.where ?? {}) as Record<
           string,
           unknown
@@ -1851,7 +1853,7 @@ export function createMongodbApplier(
        * consolidations expected to be retried or caught up.
        */
       apply: async (operation) => {
-        const target = db.collection(operation.into.collection);
+        const target = primaryCollection(db, operation.into.collection);
         const from = operation.from;
 
         // Resolve the concrete source collections + the context for each.
@@ -1913,7 +1915,7 @@ export function createMongodbApplier(
           // (guards against discovery returning the in-progress target, which
           // would re-read + re-insert and collide on `_id`).
           if (src.coll === operation.into.collection) continue;
-          const sourceColl = db.collection(src.coll);
+          const sourceColl = primaryCollection(db, src.coll);
           const baseWhere = (src.where ?? {}) as Record<string, unknown>;
 
           // Source `_id`s whose target doc actually LANDED (inserted/merged).
@@ -2086,7 +2088,7 @@ export function createMongodbApplier(
             `Collection ${operation.collectionName} does not exist`,
           );
         }
-        const collection = db.collection(operation.collectionName);
+        const collection = primaryCollection(db, operation.collectionName);
         const source = operation.schema as TypeInput;
         const collectionSchema = v.object(fieldsOf(source));
         await applyCollectionIndexes(collection, collectionSchema, {
@@ -2109,7 +2111,7 @@ export function createMongodbApplier(
             `Multi-collection ${operation.collectionName} does not exist`,
           );
         }
-        const collection = db.collection(operation.collectionName);
+        const collection = primaryCollection(db, operation.collectionName);
         await collection.deleteMany({ _type: operation.documentType } as Record<
           string,
           unknown
@@ -2342,7 +2344,7 @@ export function createMongodbApplier(
         }
 
         for (const collectionName of instances) {
-          const collection = db.collection(collectionName);
+          const collection = primaryCollection(db, collectionName);
           await collection.deleteMany({
             _type: operation.documentType,
           } as Record<string, unknown>);
@@ -2368,7 +2370,7 @@ export function createMongodbApplier(
         }
         // One physical collection holds every scope: dropping the type is a
         // single deleteMany across all scopes.
-        const collection = db.collection(operation.collectionName);
+        const collection = primaryCollection(db, operation.collectionName);
         await collection.deleteMany({ _type: operation.documentType } as Record<
           string,
           unknown
@@ -2392,7 +2394,7 @@ export function createMongodbApplier(
             `Multi-collection ${operation.collectionName} does not exist`,
           );
         }
-        const collection = db.collection(operation.collectionName);
+        const collection = primaryCollection(db, operation.collectionName);
         await collection.updateMany(
           { _type: operation.oldTypeName } as Record<string, unknown>,
           { $set: { _type: operation.newTypeName } } as Record<string, unknown>,
@@ -2407,7 +2409,7 @@ export function createMongodbApplier(
             `Multi-collection ${operation.collectionName} does not exist`,
           );
         }
-        const collection = db.collection(operation.collectionName);
+        const collection = primaryCollection(db, operation.collectionName);
         await collection.updateMany(
           { _type: operation.newTypeName } as Record<string, unknown>,
           { $set: { _type: operation.oldTypeName } } as Record<string, unknown>,
@@ -2427,14 +2429,14 @@ export function createMongodbApplier(
       },
       reverse: async (operation) => {
         if (await collectionExists(operation.collectionName)) {
-          await db.collection(operation.collectionName).drop();
+          await primaryCollection(db, operation.collectionName).drop();
         }
       },
     },
 
     seed_scoped_multicollection_type: {
       apply: async (operation) => {
-        const collection = db.collection(operation.collectionName);
+        const collection = primaryCollection(db, operation.collectionName);
         const sig = `${operation.collectionName}:${operation.scope}:${operation.documentType}`;
         const documents = operation.documents.map((doc: unknown, i) => {
           const typedDoc = doc as Record<string, unknown>;
@@ -2473,7 +2475,7 @@ export function createMongodbApplier(
         );
       },
       reverse: async (operation) => {
-        const collection = db.collection(operation.collectionName);
+        const collection = primaryCollection(db, operation.collectionName);
         const sig = `${operation.collectionName}:${operation.scope}:${operation.documentType}`;
         const ids = operation.documents.map((doc: unknown, i) =>
           resolveSeedDocId(
@@ -2550,7 +2552,7 @@ export function createMongodbApplier(
         }
 
         for (const collectionName of instances) {
-          const collection = db.collection(collectionName);
+          const collection = primaryCollection(db, collectionName);
           const oldTypePrefix = `${operation.oldTypeName}:`;
           const newTypePrefix = `${operation.newTypeName}:`;
           await renameTypeInPlace(
@@ -2569,7 +2571,7 @@ export function createMongodbApplier(
         );
 
         for (const collectionName of instances) {
-          const collection = db.collection(collectionName);
+          const collection = primaryCollection(db, collectionName);
           const oldTypePrefix = `${operation.oldTypeName}:`;
           const newTypePrefix = `${operation.newTypeName}:`;
           // Reverse direction: newTypeName → oldTypeName

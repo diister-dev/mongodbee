@@ -14,6 +14,7 @@ import {
 } from "./computed-apply.ts";
 import { getSessionContext } from "./session.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
+import { primaryCollection } from "./read-preference.ts";
 import {
   ComputedNotRegisteredError,
   computedRegistration,
@@ -44,7 +45,7 @@ export function computedFieldKey(
 }
 
 function pending(db: Db) {
-  return db.collection<ComputedMark>(COMPUTED_PENDING_COLLECTION);
+  return primaryCollection<ComputedMark>(db, COMPUTED_PENDING_COLLECTION);
 }
 
 async function upsertMark(
@@ -231,8 +232,7 @@ async function drainFar(
 ): Promise<void> {
   const { descriptor } = field;
   if (!descriptor.through) return;
-  const near = await db
-    .collection(field.source.collection)
+  const near = await primaryCollection(db, field.source.collection)
     .find(
       {
         ...locationFilter(field.source),

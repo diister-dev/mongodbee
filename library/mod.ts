@@ -83,3 +83,4 @@ export {
   type PendingComputedSummary,
   pendingComputed,
 } from "./src/computed-marks.ts";
+export type { ReadOptions } from "./src/read-preference.ts";
