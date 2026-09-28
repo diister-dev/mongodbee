@@ -240,7 +240,8 @@ A test per cell asserts the stored value equals a full apply after the write.
 
 - The computed descriptors of a type are part of the frozen migration schema, exactly like its composite indexes.
 - `check` refuses a living `schemas.ts` whose descriptors differ from the last migration's snapshot, like a drifted declared index.
-- A migration that adds or changes a descriptor carries the operation that recomputes it: `.type("participant").applyComputed("organizationIds")`, run after the migration's other operations.
+- A migration that adds or changes a descriptor carries the operation that recomputes it: `.type("participant").applyComputed("organizationIds")`. It is a full apply (§11) against the migration's frozen schemas, so it reads the sources by batch with no sibling cap; the simulation computes the same values in memory from the simulated sources. Its reverse removes the field, or the whole `_computed` root when the parent declares no computed field on that type. Available on scoped multi-collection types.
+- Order matters when the same migration also reshapes the subject: to replace a hand-kept field, apply the computed field first, then transform the old one away, so that on the way down the transform can rebuild the old field from the computed values before the reverse removes them.
 - A migration operation that writes a source type (`transform`, `seed`, `deleteWhere`, `flowToScope`, `dedupe`) marks every computed field that type feeds; the migration ends with a full apply of those fields. Declared by the operation, not left to the author.
 - Renaming an existing hand-maintained field into `_computed`: introduce the descriptor with its full apply, switch readers, then drop the old field in a later migration.
 

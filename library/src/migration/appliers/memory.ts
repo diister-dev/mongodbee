@@ -12,6 +12,14 @@ import {
   resolveSeedId,
 } from "../utils/seed-id.ts";
 import { getIrreversibleOperations } from "../builder.ts";
+import {
+  migrationComputedField,
+  parentDeclaresComputed,
+  withComputedValue,
+  withoutComputedValue,
+} from "../computed-operation.ts";
+import { computeTruthFromDocuments, toSubjects } from "../../computed-apply.ts";
+import type { ComputedLocation } from "../../computed-topology.ts";
 
 /** Field-level `where` operators the simulation understands. */
 const SUPPORTED_OPERATORS =
@@ -1393,6 +1401,60 @@ export function createMemoryApplier(migration: MigrationDefinition) {
         );
         coll.content = coll.content.filter(
           (doc) => !seededIds.has(String(doc._id)),
+        );
+        return state;
+      },
+    },
+    apply_computed_scoped_multicollection_type: {
+      apply: (state, operation) => {
+        const coll = state.scopedMultiCollections[operation.collectionName];
+        if (!coll) {
+          throw new Error(
+            `Scoped multi-collection ${operation.collectionName} does not exist`,
+          );
+        }
+        const field = migrationComputedField(
+          migration,
+          operation.documentType,
+          operation.field,
+        );
+        const documentsAt = (location: ComputedLocation) =>
+          (
+            resolveStateCollection(state, location.collection)?.content ?? []
+          ).filter(
+            (doc) =>
+              location.kind === "collection" || doc._type === location.type,
+          );
+        const truth = computeTruthFromDocuments(
+          field,
+          toSubjects(
+            coll.content.filter((doc) => doc._type === operation.documentType),
+          ),
+          documentsAt(field.source),
+          field.far ? documentsAt(field.far) : [],
+        );
+        coll.content = coll.content.map((doc) =>
+          doc._type === operation.documentType
+            ? withComputedValue(doc, field.name, truth.get(String(doc._id)))
+            : doc,
+        );
+        return state;
+      },
+      reverse: (state, operation) => {
+        const coll = state.scopedMultiCollections[operation.collectionName];
+        if (!coll) {
+          throw new Error(
+            `Scoped multi-collection ${operation.collectionName} does not exist`,
+          );
+        }
+        const keepRoot = parentDeclaresComputed(
+          migration,
+          operation.documentType,
+        );
+        coll.content = coll.content.map((doc) =>
+          doc._type === operation.documentType
+            ? withoutComputedValue(doc, operation.field, keepRoot)
+            : doc,
         );
         return state;
       },
