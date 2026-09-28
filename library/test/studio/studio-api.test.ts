@@ -1,3 +1,4 @@
+import { request as httpRequest } from "node:http";
 import { test } from "../+harness.ts";
 import { assert, assertEquals, assertRejects } from "../+assert.ts";
 import { withDatabase } from "../+shared.ts";
@@ -538,6 +539,17 @@ test("studio router: read-only JSON surface", async (t) => {
   });
 });
 
+function statusWithHost(url: string, host: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest(url, { headers: { host } }, (response) => {
+      response.resume();
+      resolve(response.statusCode ?? 0);
+    });
+    request.on("error", reject);
+    request.end();
+  });
+}
+
 test({
   name: "studio server: serves the built UI and the API on loopback",
   timeout: 30_000,
@@ -556,10 +568,10 @@ test({
         const meta = await (await fetch(`${server.url}/api/meta`)).json();
         assertEquals(meta.readOnly, true);
 
-        const foreign = await fetch(`${server.url}/api/meta`, {
-          headers: { host: "attacker.example" },
-        });
-        assertEquals(foreign.status, 403);
+        assertEquals(
+          await statusWithHost(`${server.url}/api/meta`, "attacker.example"),
+          403,
+        );
       } finally {
         await server.stop();
       }

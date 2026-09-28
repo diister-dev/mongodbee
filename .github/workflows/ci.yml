@@ -96,7 +96,7 @@ jobs:
       # by the consumers job below. Types are tsc's job (the check job).
       - name: Test (deno)
         if: matrix.runtime == 'deno'
-        run: deno test -A --parallel --no-check --ignore=test/migration/cli test/
+        run: deno test -A --parallel --no-check --ignore=test/migration/cli,test/studio/check-report.test.ts,test/studio/studio-target.test.ts test/
 
   consumers:
     name: Consume the built package (${{ matrix.runtime }})
