@@ -60,7 +60,6 @@ test("MongoDB validator generation for trim", () => {
     bsonType: "string",
     description: "must be a string",
     minLength: 1,
-    minItems: 1,
   });
 
   assertEquals(jsonSchema.properties!.email, {

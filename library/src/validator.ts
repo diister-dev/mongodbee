@@ -471,11 +471,8 @@ function constructorToValidator(
         };
       }
       case "non_empty": {
-        // For arrays, use minItems, for strings use minLength
-        // We can't distinguish here, so we provide both and let MongoDB pick the right one
         return {
           minLength: 1,
-          minItems: 1,
         };
       }
       case "integer": {
