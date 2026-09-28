@@ -15,6 +15,8 @@ import {
   computedRootSchema,
 } from "./computed.ts";
 
+import { isRecord, isSchema } from "./utils/guards.ts";
+
 type AnySchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
 
 export type ObjectLikeSchema = AnySchema & {
@@ -162,6 +164,13 @@ export function isTypeDefinition(value: unknown): value is TypeDefinition {
 }
 
 export type TypeInput = Record<string, AnySchema> | TypeDefinition;
+
+export function isTypeInput(value: unknown): value is TypeInput {
+  return (
+    isTypeDefinition(value) ||
+    (isRecord(value) && Object.values(value).every(isSchema))
+  );
+}
 
 export type FieldsOfInput<I> =
   I extends TypeDefinition<infer S> ? S["entries"] : I;

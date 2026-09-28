@@ -6,7 +6,7 @@ import {
   fieldsOf,
   indexesOf,
   isTypeDefinition,
-  type TypeInput,
+  isTypeInput,
 } from "./type-definition.ts";
 
 interface LeadingIndex {
@@ -15,15 +15,14 @@ interface LeadingIndex {
 }
 
 function leadingIndexes(input: unknown): LeadingIndex[] {
-  if (input === null || typeof input !== "object") return [];
-  const entries = fieldsOf(input as TypeInput) as v.ObjectEntries;
-  const onFields = extractIndexes(v.object(entries)).map(
+  if (!isTypeInput(input)) return [];
+  const onFields = extractIndexes(v.object(fieldsOf(input))).map(
     ({ path, metadata }) => ({
       path,
       global: metadata.global === true,
     }),
   );
-  const composites = indexesOf(input as TypeInput).flatMap((descriptor) => {
+  const composites = indexesOf(input).flatMap((descriptor) => {
     const first = Object.keys(descriptor.key)[0];
     return first === undefined
       ? []
@@ -205,9 +204,7 @@ export function computedTopology(schemas: ComputedSchemas): ComputedTopology {
   const fields: ComputedField[] = [];
   for (const { type: subject, input, at } of subjects) {
     if (!isTypeDefinition(input)) continue;
-    for (const [name, descriptor] of Object.entries(
-      computedOf(input as TypeInput),
-    )) {
+    for (const [name, descriptor] of Object.entries(computedOf(input))) {
       if ((locations.get(subject) ?? []).length > 1) {
         throw new ComputedTopologyError(
           `computed field "${subject}.${name}": subject type "${subject}" is declared in more than one collection`,

@@ -6,6 +6,7 @@ import {
   fieldPath,
 } from "./index-builder.ts";
 import { findSchemaAtPath } from "./schema-navigator.ts";
+import { isRecord, isSchema } from "./utils/guards.ts";
 import {
   fieldsOf,
   type FieldsOfInput,
@@ -113,13 +114,34 @@ export type ComputedDeclarations = Readonly<
 
 const COUNT_SCHEMA: AnySchema = v.pipe(v.number(), v.integer(), v.minValue(0));
 
+function isLiteral(value: unknown): value is ComputedLiteral {
+  return (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  );
+}
+
+function whereEntry(
+  value: unknown,
+): ComputedLiteral | readonly ComputedLiteral[] | undefined {
+  if (isLiteral(value)) return value;
+  if (!Array.isArray(value)) return undefined;
+  const literals: ComputedLiteral[] = [];
+  for (const item of value) {
+    if (!isLiteral(item)) return undefined;
+    literals.push(item);
+  }
+  return literals;
+}
+
 function isModel(value: unknown): value is ModelLike {
   return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as ModelLike).name === "string" &&
-    typeof (value as ModelLike).schema === "object" &&
-    !("entries" in (value as object))
+    isRecord(value) &&
+    typeof value.name === "string" &&
+    isRecord(value.schema) &&
+    !("entries" in value)
   );
 }
 
@@ -128,46 +150,49 @@ function resolveSource(
   second: TypeInput | string,
 ): ResolvedSource {
   if (isModel(first)) {
-    const type = second as string;
-    const input = first.schema[type];
+    if (typeof second !== "string") {
+      throw new ComputedDefinitionError(
+        `from(model "${first.name}", type) takes the type name as its second argument`,
+      );
+    }
+    const input = first.schema[second];
     if (input === undefined)
       throw new ComputedDefinitionError(
-        `model "${first.name}" has no type "${type}"`,
+        `model "${first.name}" has no type "${second}"`,
       );
     return {
-      ref: { model: first.name, type },
-      entries: fieldsOf(input) as Record<string, AnySchema>,
+      ref: { model: first.name, type: second },
+      entries: fieldsOf(input),
     };
   }
-  return {
-    ref: { type: first },
-    entries: fieldsOf(second as TypeInput) as Record<string, AnySchema>,
-  };
+  if (typeof second === "string") {
+    throw new ComputedDefinitionError(
+      `from("${first}", fields) takes the source fields as its second argument`,
+    );
+  }
+  return { ref: { type: first }, entries: fieldsOf(second) };
 }
 
 function schemaAt(source: ResolvedSource, path: string): AnySchema {
   if (path === "_id") return v.string();
-  const found = findSchemaAtPath(
-    v.object(source.entries) as never,
-    path.split("."),
-  );
+  const found = findSchemaAtPath(v.object(source.entries), path.split("."));
   if (found === undefined || !("kind" in found) || found.kind !== "schema") {
     throw new ComputedDefinitionError(
       `"${path}" does not exist on source type "${source.ref.type}"`,
     );
   }
-  return unwrapOptional(found as AnySchema);
+  return unwrapOptional(found);
 }
 
 function unwrapOptional(schema: AnySchema): AnySchema {
-  const wrapped = schema as AnySchema & { wrapped?: AnySchema };
   if (
     (schema.type === "optional" ||
       schema.type === "nullish" ||
       schema.type === "exact_optional") &&
-    wrapped.wrapped
+    "wrapped" in schema &&
+    isSchema(schema.wrapped)
   ) {
-    return unwrapOptional(wrapped.wrapped);
+    return unwrapOptional(schema.wrapped);
   }
   return schema;
 }
@@ -223,17 +248,12 @@ export class ComputedFrom<T> {
     const [ref, value] = pick(createFieldProxy<T>());
     const current = this.#current();
     const path = pathOf(current, ref);
-    for (const literal of Array.isArray(value) ? value : [value]) {
-      if (
-        literal !== null &&
-        !["string", "number", "boolean"].includes(typeof literal)
-      ) {
-        throw new ComputedDefinitionError(
-          `where("${path}") takes string, number, boolean or null values only`,
-        );
-      }
+    const entry = whereEntry(value);
+    if (entry === undefined) {
+      throw new ComputedDefinitionError(
+        `where("${path}") takes string, number, boolean or null values only`,
+      );
     }
-    const entry = value as ComputedLiteral | readonly ComputedLiteral[];
     if (this.#state.through) {
       return new ComputedFrom<T>({
         ...this.#state,
@@ -334,10 +354,13 @@ export class ComputedCollect<V> extends ComputedDeclaration<V[]> {
   }
 
   #aggregate(): Extract<ComputedAggregate, { kind: "collect" }> {
-    return this.descriptor.aggregate as Extract<
-      ComputedAggregate,
-      { kind: "collect" }
-    >;
+    const { aggregate } = this.descriptor;
+    if (aggregate.kind !== "collect") {
+      throw new ComputedDefinitionError(
+        `a collect declaration carries a "${aggregate.kind}" aggregate`,
+      );
+    }
+    return aggregate;
   }
 
   distinct(): ComputedCollect<V> {

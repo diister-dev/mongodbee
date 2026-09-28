@@ -714,52 +714,56 @@ for (const [seed, inlineLimit] of [
   [3, 1],
   [11, 1],
 ] as const) {
-  test(`computed oracle: random writes across every collection kind keep every field equal to a full apply (seed ${seed}${inlineLimit ? `, inline limit ${inlineLimit} with marks drained` : ""})`, async (t) => {
-    await withDatabase(t.name, async (db) => {
-      const random = mulberry32(seed);
-      const world = await openAll(db, inlineLimit);
-      await seedOrganizations(world);
-      const all = steps(db, world, random);
-      const { withSession } = getSessionContext(db.client);
-      const applied = new Map<string, number>();
-      let markedSteps = 0;
-      for (let index = 0; index < 160; index++) {
-        const roll = random();
-        const chosen = all[Math.floor(random() * all.length)]!;
-        const label = `step ${index} ${chosen.name}`;
-        if (roll < 0.2) {
-          const second = all[Math.floor(random() * all.length)]!;
-          await withSession(async () => {
+  test({
+    name: `computed oracle: random writes across every collection kind keep every field equal to a full apply (seed ${seed}${inlineLimit ? `, inline limit ${inlineLimit} with marks drained` : ""})`,
+    timeout: 30_000,
+    fn: async (t) => {
+      await withDatabase(t.name, async (db) => {
+        const random = mulberry32(seed);
+        const world = await openAll(db, inlineLimit);
+        await seedOrganizations(world);
+        const all = steps(db, world, random);
+        const { withSession } = getSessionContext(db.client);
+        const applied = new Map<string, number>();
+        let markedSteps = 0;
+        for (let index = 0; index < 160; index++) {
+          const roll = random();
+          const chosen = all[Math.floor(random() * all.length)]!;
+          const label = `step ${index} ${chosen.name}`;
+          if (roll < 0.2) {
+            const second = all[Math.floor(random() * all.length)]!;
+            await withSession(async () => {
+              await chosen.run();
+              await second.run();
+            });
+          } else if (roll < 0.28) {
+            await withSession(async () => {
+              await chosen.run();
+              throw new Error("rolled back on purpose");
+            }).catch((error: Error) =>
+              assertEquals(error.message, "rolled back on purpose"),
+            );
+          } else {
             await chosen.run();
-            await second.run();
+          }
+          applied.set(chosen.name, (applied.get(chosen.name) ?? 0) + 1);
+          const drained = await drainComputedPending(db, {
+            topology: computedTopology(schemas),
           });
-        } else if (roll < 0.28) {
-          await withSession(async () => {
-            await chosen.run();
-            throw new Error("rolled back on purpose");
-          }).catch((error: Error) =>
-            assertEquals(error.message, "rolled back on purpose"),
-          );
-        } else {
-          await chosen.run();
+          markedSteps += drained.drained > 0 ? 1 : 0;
+          assertEquals(drained.remaining, 0, `${label}: every mark is drained`);
+          await assertNoDrift(db, label);
         }
-        applied.set(chosen.name, (applied.get(chosen.name) ?? 0) + 1);
-        const drained = await drainComputedPending(db, {
-          topology: computedTopology(schemas),
-        });
-        markedSteps += drained.drained > 0 ? 1 : 0;
-        assertEquals(drained.remaining, 0, `${label}: every mark is drained`);
-        await assertNoDrift(db, label);
-      }
-      assert(
-        applied.size >= all.length - 3,
-        `most kinds of write were exercised: ${[...applied.keys()].length}/${all.length}`,
-      );
-      if (inlineLimit)
         assert(
-          markedSteps >= 10,
-          `the marks path was exercised on ${markedSteps} steps`,
+          applied.size >= all.length - 3,
+          `most kinds of write were exercised: ${[...applied.keys()].length}/${all.length}`,
         );
-    });
+        if (inlineLimit)
+          assert(
+            markedSteps >= 10,
+            `the marks path was exercised on ${markedSteps} steps`,
+          );
+      });
+    },
   });
 }

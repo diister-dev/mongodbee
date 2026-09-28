@@ -13,10 +13,19 @@ import {
   type ComputedTopology,
   locationFilter,
 } from "./computed-topology.ts";
-import { type ComputedSubject, recomputeSubjects } from "./computed-apply.ts";
+import {
+  type DocumentId,
+  isDocumentId,
+  recomputeSubjects,
+  type StoredDocument,
+  storedCollection,
+  toSubjects,
+} from "./computed-apply.ts";
 import { markFar, markWhole } from "./computed-marks.ts";
 import { checkTransactionEnabled, getSessionContext } from "./session.ts";
 import { type RetryOptions, retryOnWriteConflict } from "./utils/retry.ts";
+import { primaryCollection } from "./read-preference.ts";
+import { isRecord } from "./utils/guards.ts";
 
 export const DEFAULT_INLINE_RECOMPUTE_LIMIT = 1000;
 
@@ -146,10 +155,8 @@ function touchedPaths(
   if (!keys.some((key) => key.startsWith("$"))) return "all";
   const paths: string[] = [];
   for (const [operator, value] of Object.entries(update)) {
-    if (value === null || typeof value !== "object") continue;
-    for (const [path, target] of Object.entries(
-      value as Record<string, unknown>,
-    )) {
+    if (!isRecord(value)) continue;
+    for (const [path, target] of Object.entries(value)) {
       paths.push(path.replace(/\.\$(\[[^\]]*\])?/g, ""));
       if (operator === "$rename" && typeof target === "string")
         paths.push(target);
@@ -220,13 +227,8 @@ function farFieldsTouchedBy(
 function valueAt(document: Document, path: string): unknown {
   let current: unknown = document;
   for (const segment of path.split(".")) {
-    if (
-      current === null ||
-      typeof current !== "object" ||
-      Array.isArray(current)
-    )
-      return undefined;
-    current = (current as Record<string, unknown>)[segment];
+    if (!isRecord(current)) return undefined;
+    current = current[segment];
   }
   return current;
 }
@@ -253,7 +255,7 @@ function isOfType(
 }
 
 class Affected {
-  readonly #bySubjectField = new Map<ComputedField, Map<string, unknown>>();
+  readonly #bySubjectField = new Map<ComputedField, Map<string, DocumentId>>();
   readonly #whole = new Map<ComputedField, Set<string | undefined>>();
 
   whole(fields: readonly ComputedField[], scope: string | undefined): void {
@@ -268,10 +270,7 @@ class Affected {
     return this.#whole.entries();
   }
 
-  readonly #far = new Map<
-    ComputedField,
-    Map<string, { id: unknown; scope: string | undefined }>
-  >();
+  readonly #far = new Map<ComputedField, Map<string, FarTarget>>();
 
   fromFar(
     fields: readonly ComputedField[],
@@ -280,30 +279,31 @@ class Affected {
     for (const document of documents) {
       for (const field of fields) {
         if (!field.far || !isOfType(document, field.far)) continue;
-        const ids =
-          this.#far.get(field) ??
-          new Map<string, { id: unknown; scope: string | undefined }>();
+        const id: unknown = document._id;
+        if (!isDocumentId(id)) {
+          throw new TypeError(
+            `a far document of a computed field must have a string or ObjectId _id, got ${typeof id}`,
+          );
+        }
+        const ids = this.#far.get(field) ?? new Map<string, FarTarget>();
         const scope =
           field.farScoped && typeof document._scope === "string"
             ? document._scope
             : undefined;
-        ids.set(`${scope ?? "*"}|${String(document._id)}`, {
-          id: document._id,
-          scope,
-        });
+        ids.set(`${scope ?? "*"}|${String(id)}`, { id, scope });
         this.#far.set(field, ids);
       }
     }
   }
 
-  farEntries(): IterableIterator<
-    [ComputedField, Map<string, { id: unknown; scope: string | undefined }>]
-  > {
+  farEntries(): IterableIterator<[ComputedField, Map<string, FarTarget>]> {
     return this.#far.entries();
   }
 
   add(field: ComputedField, id: unknown): void {
-    const ids = this.#bySubjectField.get(field) ?? new Map<string, unknown>();
+    if (!isDocumentId(id)) return;
+    const ids =
+      this.#bySubjectField.get(field) ?? new Map<string, DocumentId>();
     ids.set(String(id), id);
     this.#bySubjectField.set(field, ids);
   }
@@ -316,12 +316,8 @@ class Affected {
       for (const field of fields) {
         if (!isOfType(document, field.source)) continue;
         const by = valueAt(document, field.descriptor.by);
-        for (const id of by === undefined || by === null
-          ? []
-          : Array.isArray(by)
-            ? by
-            : [by])
-          this.add(field, id);
+        const values: readonly unknown[] = Array.isArray(by) ? by : [by];
+        for (const id of values) this.add(field, id);
       }
     }
   }
@@ -337,13 +333,18 @@ class Affected {
     }
   }
 
-  entries(): IterableIterator<[ComputedField, Map<string, unknown>]> {
+  entries(): IterableIterator<[ComputedField, Map<string, DocumentId>]> {
     return this.#bySubjectField.entries();
   }
 }
 
-function idCandidates(ids: Iterable<unknown>): unknown[] {
-  const candidates: unknown[] = [];
+interface FarTarget {
+  readonly id: DocumentId;
+  readonly scope: string | undefined;
+}
+
+function idCandidates(ids: Iterable<DocumentId>): DocumentId[] {
+  const candidates: DocumentId[] = [];
   for (const id of ids) {
     candidates.push(id);
     if (typeof id === "string" && /^[0-9a-f]{24}$/i.test(id))
@@ -397,7 +398,7 @@ async function recomputeAffected(
   }
   const byLocation = new Map<
     string,
-    { fields: ComputedField[]; ids: Map<string, unknown> }
+    { fields: ComputedField[]; ids: Map<string, DocumentId> }
   >();
   for (const [field, ids] of affected.entries()) {
     if (marked.has(field)) continue;
@@ -414,7 +415,7 @@ async function recomputeAffected(
     const key = `${field.at.collection}|${field.subject}`;
     const entry = byLocation.get(key) ?? {
       fields: [],
-      ids: new Map<string, unknown>(),
+      ids: new Map<string, DocumentId>(),
     };
     entry.fields.push(field);
     for (const [key, id] of ids) entry.ids.set(key, id);
@@ -422,19 +423,18 @@ async function recomputeAffected(
   }
   for (const { fields, ids } of byLocation.values()) {
     const at = fields[0]!.at;
-    const subjects = (await db
-      .collection(at.collection)
-      .find(
-        {
-          ...locationFilter(at),
-          _id: { $in: idCandidates(ids.values()) },
-        } as Filter<Document>,
-        {
+    const filter: Filter<StoredDocument> = {
+      ...locationFilter(at),
+      _id: { $in: idCandidates(ids.values()) },
+    };
+    const subjects = toSubjects(
+      await storedCollection(db, at.collection)
+        .find(filter, {
           session,
           projection: { _id: 1, _scope: 1, [COMPUTED_ROOT]: 1 },
-        },
-      )
-      .toArray()) as ComputedSubject[];
+        })
+        .toArray(),
+    );
     for (const field of fields) {
       const concerned = subjects.filter((subject) =>
         ids.has(String(subject._id)),
@@ -472,16 +472,26 @@ const OPTIONS_INDEX: Record<string, number> = {
   bulkWrite: 1,
 };
 
+function documentIds(ids: readonly unknown[]): DocumentId[] {
+  return ids.map((id) => {
+    if (!isDocumentId(id)) {
+      throw new TypeError(
+        `a document feeding a computed field must have a string or ObjectId _id, got ${typeof id}`,
+      );
+    }
+    return id;
+  });
+}
+
 interface WriteContext {
   readonly db: Db;
-  readonly target: Collection<Document>;
   readonly name: string;
   readonly plan: Plan;
   readonly session: ClientSession | undefined;
 }
 
 function scopeOf(filter: Filter<Document>): string | undefined {
-  const scope = (filter as { _scope?: unknown })._scope;
+  const scope: unknown = filter._scope;
   return typeof scope === "string" ? scope : undefined;
 }
 
@@ -492,7 +502,7 @@ async function readTargets(
   affected: Affected,
 ): Promise<Document[]> {
   const limit = context.plan.registration.inlineLimit;
-  const found = await context.target
+  const found = await primaryCollection(context.db, context.name)
     .find(filter, {
       session: context.session,
       projection: projectionFor([...fields, ...context.plan.near]),
@@ -511,8 +521,9 @@ async function readByIds(
   ids: readonly unknown[],
 ): Promise<Document[]> {
   if (ids.length === 0) return [];
-  return await context.target
-    .find({ _id: { $in: [...ids] } } as Filter<Document>, {
+  const filter: Filter<StoredDocument> = { _id: { $in: documentIds(ids) } };
+  return await primaryCollection<StoredDocument>(context.db, context.name)
+    .find(filter, {
       session: context.session,
       projection: projectionFor(context.plan.near),
     })
@@ -817,7 +828,6 @@ export function maintainedCollection<T extends Document>(
           maintainedCall(
             {
               db,
-              target: object as unknown as Collection<Document>,
               name: collectionName,
               plan,
               session,

@@ -1,3 +1,5 @@
+import { isRecord } from "./utils/guards.ts";
+
 export const COMPUTED_ROOT = "_computed";
 
 export class ComputedFieldWriteError extends Error {
@@ -13,7 +15,7 @@ export class ComputedFieldWriteError extends Error {
 const isComputedPath = (path: string): boolean =>
   path === COMPUTED_ROOT || path.startsWith(`${COMPUTED_ROOT}.`);
 
-function refuseKeys(record: Record<string, unknown>): void {
+function refuseKeys(record: Readonly<Record<string, unknown>>): void {
   for (const key of Object.keys(record)) {
     if (isComputedPath(key)) throw new ComputedFieldWriteError(key);
   }
@@ -32,20 +34,13 @@ export function refuseComputedWrite(payload: unknown): void {
     }
     return;
   }
-  if (typeof payload !== "object" || payload === null) return;
-  const record = payload as Record<string, unknown>;
-  refuseKeys(record);
-  for (const [key, value] of Object.entries(record)) {
-    if (
-      !key.startsWith("$") ||
-      typeof value !== "object" ||
-      value === null ||
-      Array.isArray(value)
-    )
-      continue;
-    refuseKeys(value as Record<string, unknown>);
+  if (!isRecord(payload)) return;
+  refuseKeys(payload);
+  for (const [key, value] of Object.entries(payload)) {
+    if (!key.startsWith("$") || !isRecord(value)) continue;
+    refuseKeys(value);
     if (key === "$rename") {
-      for (const target of Object.values(value as Record<string, unknown>)) {
+      for (const target of Object.values(value)) {
         if (typeof target === "string" && isComputedPath(target))
           throw new ComputedFieldWriteError(target);
       }

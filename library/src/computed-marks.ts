@@ -1,4 +1,4 @@
-import type { ClientSession, Document, Filter } from "mongodb";
+import type { ClientSession, Filter } from "mongodb";
 import type { Db } from "./mongodb.ts";
 import { COMPUTED_ROOT } from "./computed.ts";
 import {
@@ -9,7 +9,12 @@ import {
 import {
   applyComputed,
   type ComputedSubject,
+  type DocumentId,
+  isDocumentId,
   recomputeSubjects,
+  type StoredDocument,
+  storedCollection,
+  toSubjects,
   whereFilter,
 } from "./computed-apply.ts";
 import { getSessionContext } from "./session.ts";
@@ -29,8 +34,8 @@ export interface ComputedMark {
   readonly field: string;
   readonly kind: ComputedMarkKind;
   readonly scope: string | null;
-  readonly subject?: unknown;
-  readonly far?: unknown;
+  readonly subject?: DocumentId;
+  readonly far?: DocumentId;
   readonly reason: string;
   readonly createdAt: Date;
   readonly updatedAt: Date;
@@ -51,8 +56,8 @@ function pending(db: Db) {
 async function upsertMark(
   db: Db,
   identity: Pick<ComputedMark, "_id" | "field" | "kind" | "scope"> & {
-    subject?: unknown;
-    far?: unknown;
+    subject?: DocumentId;
+    far?: DocumentId;
   },
   reason: string,
   session: ClientSession | undefined,
@@ -101,7 +106,7 @@ export async function markWhole(
 export async function markSubjects(
   db: Db,
   field: ComputedField,
-  subjects: Iterable<unknown>,
+  subjects: Iterable<DocumentId>,
   reason: string,
   session?: ClientSession,
 ): Promise<void> {
@@ -125,7 +130,7 @@ export async function markSubjects(
 export async function markFar(
   db: Db,
   field: ComputedField,
-  far: unknown,
+  far: DocumentId,
   scope: string | undefined,
   reason: string,
   session?: ClientSession,
@@ -163,13 +168,11 @@ export interface DrainComputedResult {
 
 async function claim(db: Db, leaseMs: number): Promise<ComputedMark | null> {
   const now = new Date();
+  const claimable: Filter<ComputedMark> = {
+    $or: [{ claimedUntil: { $exists: false } }, { claimedUntil: { $lt: now } }],
+  };
   return await pending(db).findOneAndUpdate(
-    {
-      $or: [
-        { claimedUntil: { $exists: false } },
-        { claimedUntil: { $lt: now } },
-      ],
-    } as Filter<ComputedMark>,
+    claimable,
     { $set: { claimedUntil: new Date(now.getTime() + leaseMs) } },
     { sort: { createdAt: 1, _id: 1 }, returnDocument: "after" },
   );
@@ -189,6 +192,26 @@ function fieldOf(
   return topology.fields.find((field) => computedFieldKey(field) === key);
 }
 
+async function readSubjectsById(
+  db: Db,
+  field: ComputedField,
+  ids: readonly DocumentId[],
+  session: ClientSession | undefined,
+): Promise<ComputedSubject[]> {
+  const filter: Filter<StoredDocument> = {
+    ...locationFilter(field.at),
+    _id: { $in: [...ids] },
+  };
+  return toSubjects(
+    await storedCollection(db, field.at.collection)
+      .find(filter, {
+        session,
+        projection: { _id: 1, _scope: 1, [COMPUTED_ROOT]: 1 },
+      })
+      .toArray(),
+  );
+}
+
 async function drainSubject(
   db: Db,
   field: ComputedField,
@@ -199,19 +222,10 @@ async function drainSubject(
   return await retryOnWriteConflict(
     () =>
       withSession(async (session) => {
-        const subjects = (await db
-          .collection(field.at.collection)
-          .find(
-            {
-              ...locationFilter(field.at),
-              _id: mark.subject,
-            } as Filter<Document>,
-            {
-              session,
-              projection: { _id: 1, _scope: 1, [COMPUTED_ROOT]: 1 },
-            },
-          )
-          .toArray()) as ComputedSubject[];
+        const subjects =
+          mark.subject === undefined
+            ? []
+            : await readSubjectsById(db, field, [mark.subject], session);
         await recomputeSubjects(db, [field], subjects, session);
         await afterRecompute?.(mark);
         const removed = await pending(db).deleteOne(
@@ -231,27 +245,24 @@ async function drainFar(
   batchSize: number,
 ): Promise<void> {
   const { descriptor } = field;
-  if (!descriptor.through) return;
-  const near = await primaryCollection(db, field.source.collection)
-    .find(
-      {
-        ...locationFilter(field.source),
-        ...whereFilter(descriptor.where),
-        [descriptor.through.via]: mark.far,
-        ...(field.scoped && mark.scope !== null && { _scope: mark.scope }),
-      } as Filter<Document>,
-      { projection: { [descriptor.by]: 1 } },
-    )
+  if (!descriptor.through || mark.far === undefined) return;
+  const nearFilter: Filter<StoredDocument> = {
+    ...locationFilter(field.source),
+    ...whereFilter(descriptor.where),
+    [descriptor.through.via]: mark.far,
+    ...(field.scoped && mark.scope !== null && { _scope: mark.scope }),
+  };
+  const near = await primaryCollection<StoredDocument>(
+    db,
+    field.source.collection,
+  )
+    .find(nearFilter, { projection: { [descriptor.by]: 1 } })
     .toArray();
-  const subjects = new Map<string, unknown>();
+  const subjects = new Map<string, DocumentId>();
   for (const document of near) {
     const by = document[descriptor.by];
-    for (const id of by === undefined || by === null
-      ? []
-      : Array.isArray(by)
-        ? by
-        : [by])
-      subjects.set(String(id), id);
+    const values: readonly unknown[] = Array.isArray(by) ? by : [by];
+    for (const id of values.filter(isDocumentId)) subjects.set(String(id), id);
   }
   const ids = [...subjects.values()];
   const { withSession } = getSessionContext(db.client);
@@ -260,19 +271,7 @@ async function drainFar(
     await retryOnWriteConflict(
       () =>
         withSession(async (session) => {
-          const read = (await db
-            .collection(field.at.collection)
-            .find(
-              {
-                ...locationFilter(field.at),
-                _id: { $in: chunk },
-              } as Filter<Document>,
-              {
-                session,
-                projection: { _id: 1, _scope: 1, [COMPUTED_ROOT]: 1 },
-              },
-            )
-            .toArray()) as ComputedSubject[];
+          const read = await readSubjectsById(db, field, chunk, session);
           await recomputeSubjects(db, [field], read, session);
         }),
       { maxRetries: 8 },

@@ -1,4 +1,4 @@
-import type { Document, Filter } from "mongodb";
+import { type Collection, type Document, type Filter, ObjectId } from "mongodb";
 import type { ClientSession, Db } from "./mongodb.ts";
 import { COMPUTED_ROOT, type ComputedWhere } from "./computed.ts";
 import {
@@ -8,11 +8,48 @@ import {
 } from "./computed-topology.ts";
 import { getSessionContext } from "./session.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
+import { isRecord } from "./utils/guards.ts";
+
+export type DocumentId = string | ObjectId;
+
+export function isDocumentId(value: unknown): value is DocumentId {
+  return typeof value === "string" || value instanceof ObjectId;
+}
+
+export interface StoredDocument {
+  _id: DocumentId;
+  [field: string]: unknown;
+}
+
+export function storedCollection(
+  db: Db,
+  name: string,
+): Collection<StoredDocument> {
+  return db.collection<StoredDocument>(name);
+}
 
 export interface ComputedSubject {
-  readonly _id: unknown;
+  readonly _id: DocumentId;
   readonly _scope?: string;
   readonly _computed?: Readonly<Record<string, unknown>>;
+}
+
+export function toSubjects(documents: readonly Document[]): ComputedSubject[] {
+  return documents.map((document) => {
+    const id: unknown = document._id;
+    if (!isDocumentId(id)) {
+      throw new TypeError(
+        `a computed subject must have a string or ObjectId _id, got ${typeof id}`,
+      );
+    }
+    return {
+      _id: id,
+      ...(typeof document._scope === "string" && { _scope: document._scope }),
+      ...(isRecord(document[COMPUTED_ROOT]) && {
+        _computed: document[COMPUTED_ROOT],
+      }),
+    };
+  });
 }
 
 export class ComputedEntriesExceededError extends Error {
@@ -41,7 +78,7 @@ export class ComputedEntriesExceededError extends Error {
 export interface ComputedDrift {
   readonly subject: string;
   readonly field: string;
-  readonly id: unknown;
+  readonly id: DocumentId;
   readonly stored: unknown;
   readonly truth: unknown;
   readonly missing: boolean;
@@ -59,13 +96,8 @@ export function whereFilter(where: ComputedWhere): Record<string, unknown> {
 function valueAt(document: Document, path: string): unknown {
   let current: unknown = document;
   for (const segment of path.split(".")) {
-    if (
-      current === null ||
-      typeof current !== "object" ||
-      Array.isArray(current)
-    )
-      return undefined;
-    current = (current as Record<string, unknown>)[segment];
+    if (!isRecord(current)) return undefined;
+    current = current[segment];
   }
   return current;
 }
@@ -120,8 +152,7 @@ export async function computeTruth(
       : aggregate.kind === "collect"
         ? aggregate.path
         : undefined;
-    const near = await db
-      .collection(field.source.collection)
+    const near = await storedCollection(db, field.source.collection)
       .find(
         {
           ...locationFilter(field.source),
@@ -133,7 +164,7 @@ export async function computeTruth(
             ],
           },
           ...(field.scoped && { _scope: scope }),
-        } as Filter<Document>,
+        },
         {
           session,
           projection: projectionOf([
@@ -153,21 +184,21 @@ export async function computeTruth(
             .flatMap((document) =>
               asList(valueAt(document, descriptor.through!.via)),
             )
+            .filter(isDocumentId)
             .map((via) => [keyOf(via), via]),
         ).values(),
       ];
       const farDocuments =
         vias.length === 0
           ? []
-          : await db
-              .collection(field.far.collection)
+          : await storedCollection(db, field.far.collection)
               .find(
                 {
                   ...locationFilter(field.far),
                   ...whereFilter(descriptor.through.where),
                   _id: { $in: vias },
                   ...(field.farScoped && { _scope: scope }),
-                } as Filter<Document>,
+                },
                 {
                   session,
                   projection: projectionOf(
@@ -256,7 +287,7 @@ export async function recomputeSubjects(
           filter: {
             _id: subject._id,
             ...locationFilter(field.at),
-          } as Filter<Document>,
+          },
           update: {
             $set: {
               [`${COMPUTED_ROOT}.${field.name}`]: truth.get(
@@ -267,9 +298,10 @@ export async function recomputeSubjects(
         },
       }));
     if (operations.length === 0) continue;
-    await db
-      .collection(field.at.collection)
-      .bulkWrite(operations, { session, ordered: true });
+    await storedCollection(db, field.at.collection).bulkWrite(operations, {
+      session,
+      ordered: true,
+    });
     written += operations.length;
   }
   return written;
@@ -299,25 +331,24 @@ function subjectFields(
 async function readSubjects(
   db: Db,
   field: ComputedField,
-  options: { scope?: string; after?: unknown; limit: number },
+  options: { scope?: string; after?: DocumentId; limit: number },
   session?: ClientSession,
 ): Promise<ComputedSubject[]> {
-  return (await db
-    .collection(field.at.collection)
-    .find(
-      {
-        ...locationFilter(field.at),
-        ...(options.scope !== undefined && { _scope: options.scope }),
-        ...(options.after !== undefined && { _id: { $gt: options.after } }),
-      } as Filter<Document>,
-      {
+  const filter: Filter<StoredDocument> = {
+    ...locationFilter(field.at),
+    ...(options.scope !== undefined && { _scope: options.scope }),
+    ...(options.after !== undefined && { _id: { $gt: options.after } }),
+  };
+  return toSubjects(
+    await storedCollection(db, field.at.collection)
+      .find(filter, {
         session,
         projection: { _id: 1, _scope: 1, [COMPUTED_ROOT]: 1 },
         sort: { _id: 1 },
         limit: options.limit,
-      },
-    )
-    .toArray()) as ComputedSubject[];
+      })
+      .toArray(),
+  );
 }
 
 export interface ApplyComputedOptions {
@@ -340,7 +371,7 @@ export async function applyComputed(
 ): Promise<ApplyComputedResult> {
   const fields = subjectFields(topology, options.subject, options.fields);
   const batchSize = options.batchSize ?? 100;
-  let after: unknown;
+  let after: DocumentId | undefined;
   let subjects = 0;
   let written = 0;
   let batches = 0;
@@ -393,7 +424,7 @@ export async function checkComputed(
   let checked = 0;
   for (const subjectType of subjectTypes) {
     const fields = subjectFields(topology, subjectType, options.fields);
-    let after: unknown;
+    let after: DocumentId | undefined;
     for (;;) {
       if (checked >= limit) return { checked, drifts, complete: false };
       const size = Math.min(batchSize, limit - checked);
@@ -457,19 +488,20 @@ export async function repairComputed(
       ).values(),
     ];
     written += await inBatchTransaction(db, async (session) => {
-      const read = (await db
-        .collection(fields[0]!.at.collection)
-        .find(
-          {
-            ...locationFilter(fields[0]!.at),
-            _id: { $in: ids },
-          } as Filter<Document>,
-          {
-            session,
-            projection: { _id: 1, _scope: 1, [COMPUTED_ROOT]: 1 },
-          },
-        )
-        .toArray()) as ComputedSubject[];
+      const read = toSubjects(
+        await storedCollection(db, fields[0]!.at.collection)
+          .find(
+            {
+              ...locationFilter(fields[0]!.at),
+              _id: { $in: ids },
+            },
+            {
+              session,
+              projection: { _id: 1, _scope: 1, [COMPUTED_ROOT]: 1 },
+            },
+          )
+          .toArray(),
+      );
       return await recomputeSubjects(db, fields, read, session);
     });
   }
