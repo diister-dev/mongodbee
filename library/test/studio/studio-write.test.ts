@@ -191,6 +191,20 @@ test("studio write: guarded update of a plain collection", async (t) => {
       },
     );
     assertEquals(protectedField.status, 400);
+
+    const computedField = await send(
+      context,
+      "PATCH",
+      "/api/collections/users/document",
+      {
+        id: '"u1"',
+        set: { _computed: { _rev: 9 } },
+      },
+    );
+    assertEquals(computedField.status, 400);
+    assert(
+      (await computedField.json()).error.includes("maintained by mongodbee"),
+    );
   });
 });
 

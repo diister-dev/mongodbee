@@ -1,4 +1,4 @@
-export const PROTECTED_KEYS = ["_id", "_type", "_scope"] as const;
+export const PROTECTED_KEYS = ["_id", "_type", "_scope", "_computed"] as const;
 
 type Json = Record<string, unknown>;
 

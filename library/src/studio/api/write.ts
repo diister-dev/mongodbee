@@ -4,6 +4,7 @@ import { multiCollection } from "../../multi-collection.ts";
 import { scopedMultiCollection } from "../../scoped-multi-collection.ts";
 import { duplicateKeyOf, isDuplicateKeyError } from "../../duplicate-key.ts";
 import { REMOVE_FIELD } from "../../sanitizer.ts";
+import { COMPUTED_ROOT } from "../../computed-guard.ts";
 import {
   type DocumentId,
   isDocumentId,
@@ -18,7 +19,12 @@ import { requireEntry } from "./documents.ts";
 import { getMigrationsReport } from "./migrations.ts";
 
 export const WRITE_HEADER = "x-mongodbee-studio";
-export const PROTECTED_FIELDS = ["_id", "_type", "_scope"] as const;
+export const PROTECTED_FIELDS = [
+  "_id",
+  "_type",
+  "_scope",
+  "_computed",
+] as const;
 const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export interface UpdateBody {
@@ -259,6 +265,12 @@ export async function readJsonBody<T>(request: Request): Promise<T> {
 function checkField(path: string): void {
   if (!FIELD_NAME.test(path)) {
     throw new StudioHttpError(400, `Invalid field "${path}"`);
+  }
+  if (path === COMPUTED_ROOT) {
+    throw new StudioHttpError(
+      400,
+      `${path} is maintained by mongodbee from the computed declarations`,
+    );
   }
   if ((PROTECTED_FIELDS as readonly string[]).includes(path)) {
     throw new StudioHttpError(400, `${path} cannot be edited`);

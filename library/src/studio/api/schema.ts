@@ -1,7 +1,10 @@
 import * as v from "../../schema.ts";
 import type { CompositeIndexDescriptor } from "../../indexes.ts";
-import { fieldsOf, indexesOf } from "../../type-definition.ts";
+import { computedOf, fieldsOf, indexesOf } from "../../type-definition.ts";
+import type { ComputedDescriptor } from "../../computed.ts";
+import { COMPUTED_REVISION, COMPUTED_ROOT } from "../../computed-guard.ts";
 import { toMongoValidator } from "../../validator.ts";
+import type { TypeSource } from "../../migration/types.ts";
 import type { CollectionKind } from "../catalog.ts";
 import type { StudioContext } from "../context.ts";
 import {
@@ -38,12 +41,52 @@ const IMPLICIT_FIELDS: Record<CollectionKind, string[]> = {
   internal: [],
 };
 
-export function typeJsonSchema(source: unknown): unknown {
+function sourceLabel(source: ComputedDescriptor["source"]): string {
+  return source.model ? `${source.model}.${source.type}` : source.type;
+}
+
+export function describeComputed(descriptor: ComputedDescriptor): string {
+  const aggregate =
+    descriptor.aggregate.kind === "count"
+      ? "count of"
+      : `${descriptor.aggregate.distinct ? "distinct " : ""}${descriptor.aggregate.path} of`;
+  const parts = [
+    `${aggregate} ${sourceLabel(descriptor.source)} by ${descriptor.by}`,
+  ];
+  const where = Object.keys(descriptor.where);
+  if (where.length > 0) parts.push(`where ${where.join(", ")}`);
+  if (descriptor.through) {
+    parts.push(
+      `through ${sourceLabel(descriptor.through.source)}.${descriptor.through.via}`,
+    );
+  }
+  if (descriptor.sameScope) parts.push("in the same scope");
+  return parts.join(", ");
+}
+
+export function typeFields(source: TypeSource): Record<string, SchemaNode> {
+  const fields = entriesToNodes(fieldsOf(source));
+  const root = fields[COMPUTED_ROOT];
+  if (!root) return fields;
+  root.system = "computed";
+  const descriptors = computedOf(source);
+  for (const [name, child] of Object.entries(root.entries ?? {})) {
+    if (name === COMPUTED_REVISION) {
+      child.system = "revision";
+      child.description =
+        "Bumped by every transaction that recomputes this document";
+      continue;
+    }
+    child.system = "computed";
+    const descriptor = descriptors[name];
+    if (descriptor) child.computed = describeComputed(descriptor);
+  }
+  return fields;
+}
+
+export function typeJsonSchema(source: TypeSource): unknown {
   try {
-    const validator = toMongoValidator(
-      v.object(fieldsOf(source as never) as never),
-    ) as { $jsonSchema?: unknown };
-    return validator.$jsonSchema ?? validator;
+    return toMongoValidator(v.object(fieldsOf(source))).$jsonSchema;
   } catch {
     return undefined;
   }
@@ -60,7 +103,7 @@ export async function getCollectionSchema(
     implicitFields: IMPLICIT_FIELDS[entry.kind],
     types: Object.entries(entry.types).map(([name, source]) => ({
       name,
-      fields: entriesToNodes(fieldsOf(source) as Record<string, unknown>),
+      fields: typeFields(source),
       indexes: indexesOf(source),
       jsonSchema: typeJsonSchema(source),
     })),

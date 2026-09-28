@@ -90,11 +90,11 @@
     {#if children.length > 0}
       <button class="toggle" onclick={() => (open = !open)} aria-expanded={open}>
         <span class="caret" class:open><Icon icon={ChevronRight} size={12} /></span>
-        <span class="mono">{name}</span>
+        <span class="mono" class:system-name={node.system}>{name}</span>
       </button>
     {:else}
       <span class="spacer"></span>
-      <span class="mono">{name}</span>
+      <span class="mono" class:system-name={node.system}>{name}</span>
     {/if}
     </div>
   </td>
@@ -111,18 +111,27 @@
       </Tooltip>
     {/if}
   </td>
-  <td>
+  <td class="type-cell">
+    <div class="type-line">
     {#if element?.ref}
-      <span class="mono type">ref</span>
-      <TypeTag name={element.ref} title="References {element.ref}" />{#if element !== node}<span class="mono type"
-          >[]</span
-        >{/if}
+      <span class="ref-type">
+        <span class="mono type">ref</span>
+        <TypeTag name={element.ref} title="References {element.ref}" />{#if element !== node}<span class="mono type"
+            >[]</span
+          >{/if}
+      </span>
     {:else}
       <span class="mono type">{typeLabel(node)}</span>
     {/if}
     {#each modifiers as modifier}
       <span class="modifier">{modifier}</span>
     {/each}
+    {#if node.system && !node.computed}
+      <Tooltip text={node.system === "revision" ? "Written by mongodbee, never by the application" : "Maintained by mongodbee from the type computed declarations; the studio never edits it"}>
+        <span class="system">{node.system === "revision" ? "revision" : "computed"}</span>
+      </Tooltip>
+    {/if}
+    </div>
   </td>
   <td class="rules">
     <div class="rule-list">
@@ -132,6 +141,9 @@
             <Enum value={typeof option === "string" || typeof option === "number" ? option : JSON.stringify(option)} options={values} field={name} />
           {/each}
         </span>
+      {/if}
+      {#if node.computed}
+        <Tooltip text={node.computed} overflow><span class="rule computed-rule">{node.computed}</span></Tooltip>
       {/if}
       {#each rules as rule (rule)}
         <Tooltip text={rule} overflow><span class="rule" class:index-rule={rule.includes("index")}>{rule}</span></Tooltip>
@@ -242,10 +254,47 @@
     color: var(--text-muted);
   }
 
+  .type-cell {
+    white-space: normal;
+  }
+
+  .type-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 8px;
+    min-width: 0;
+  }
+
+  .ref-type {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
   .modifier {
-    margin-left: 8px;
     color: var(--text-faint);
     font-size: var(--text-xs);
+  }
+
+  .system {
+    display: inline-flex;
+    align-items: center;
+    height: 18px;
+    padding: 0 5px;
+    border: 1px dashed var(--card-border);
+    color: var(--text-faint);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .system-name {
+    color: var(--text-muted);
+  }
+
+  .computed-rule {
+    border-style: dashed;
   }
 
   .rules,

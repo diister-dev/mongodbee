@@ -17,6 +17,8 @@ export interface SchemaNode {
   checks?: SchemaCheck[];
   index?: IndexDatabase;
   description?: string;
+  system?: "computed" | "revision";
+  computed?: string;
   discriminator?: string;
   entries?: Record<string, SchemaNode>;
   item?: SchemaNode;

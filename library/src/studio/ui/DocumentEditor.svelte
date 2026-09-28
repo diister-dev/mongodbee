@@ -5,7 +5,7 @@
   import Icon from "./Icon.svelte";
   import Segmented from "./controls/Segmented.svelte";
   import { Plus } from "./lib/icons.js";
-  import { diffDocument, editableOf, hasChanges, parseEditable } from "./lib/edit.ts";
+  import { diffDocument, editableOf, hasChanges, parseEditable, PROTECTED_KEYS } from "./lib/edit.ts";
   import { defaultFor, removeAt, setAt } from "./lib/form-model.ts";
   import { plural } from "./lib/format.js";
 
@@ -43,7 +43,7 @@
   const changed = $derived(mode === "create" || (change && hasChanges(change)));
   const ready = $derived(changed && !submitting && !textError && issues.length === 0 && !checking);
 
-  const entries = $derived(Object.entries(fields).filter(([key]) => !["_id", "_type", "_scope"].includes(key)));
+  const entries = $derived(Object.entries(fields).filter(([key]) => !PROTECTED_KEYS.includes(key)));
   const present = $derived(entries.filter(([key, node]) => !node.optional || key in value));
   const missing = $derived(entries.filter(([key, node]) => node.optional && !(key in value)));
   const extra = $derived(Object.keys(value).filter((key) => !entries.some(([entry]) => entry === key)));
