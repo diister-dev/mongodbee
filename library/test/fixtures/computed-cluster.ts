@@ -1,5 +1,6 @@
 import * as v from "../../src/schema.ts";
 import { refId } from "../../src/ids.ts";
+import { withIndex } from "../../src/indexes.ts";
 import type { Db } from "../../src/mongodb.ts";
 import { scopedMultiCollection } from "../../src/scoped-multi-collection.ts";
 import { defineType } from "../../src/type-definition.ts";
@@ -21,8 +22,8 @@ const Organization = defineType({
 
 const Membership = defineType({
   schema: v.object({
-    participantId: refId("participant"),
-    organizationId: refId("expo_organization"),
+    participantId: withIndex(refId("participant")),
+    organizationId: withIndex(refId("expo_organization")),
     status: v.picklist(["active", "removed"]),
   }),
 });

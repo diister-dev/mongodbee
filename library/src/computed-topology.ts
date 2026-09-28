@@ -1,9 +1,36 @@
 import type { ComputedDescriptor } from "./computed.ts";
+import * as v from "./schema.ts";
+import { extractIndexes } from "./indexes.ts";
 import {
   computedOf,
+  fieldsOf,
+  indexesOf,
   isTypeDefinition,
   type TypeInput,
 } from "./type-definition.ts";
+
+interface LeadingIndex {
+  readonly path: string;
+  readonly global: boolean;
+}
+
+function leadingIndexes(input: unknown): LeadingIndex[] {
+  if (input === null || typeof input !== "object") return [];
+  const entries = fieldsOf(input as TypeInput) as v.ObjectEntries;
+  const onFields = extractIndexes(v.object(entries)).map(
+    ({ path, metadata }) => ({
+      path,
+      global: metadata.global === true,
+    }),
+  );
+  const composites = indexesOf(input as TypeInput).flatMap((descriptor) => {
+    const first = Object.keys(descriptor.key)[0];
+    return first === undefined
+      ? []
+      : [{ path: first, global: descriptor.global === true }];
+  });
+  return [...onFields, ...composites];
+}
 
 export type ComputedLocation =
   | { readonly kind: "collection"; readonly collection: string }
@@ -91,8 +118,32 @@ function describe(location: ComputedLocation): string {
     : `"${location.type}" in "${location.collection}"`;
 }
 
+function assertReadIndexed(
+  label: string,
+  location: ComputedLocation,
+  input: unknown,
+  path: string,
+  readsWithinScope: boolean,
+): void {
+  if (path === "_id") return;
+  const candidates = leadingIndexes(input).filter(
+    (index) => index.path === path,
+  );
+  const acrossScopes = location.kind === "scoped" && !readsWithinScope;
+  const usable = acrossScopes
+    ? candidates.some((index) => index.global)
+    : candidates.length > 0;
+  if (usable) return;
+  throw new ComputedTopologyError(
+    `computed field ${label}: recomputing it reads ${describe(location)} by "${path}"${acrossScopes ? " across every scope" : ""}, ` +
+      `and no declared index leads with "${path}"${acrossScopes ? " without the scope prefix" : ""}. ` +
+      `Declare withIndex(${acrossScopes ? "..., { global: true }" : "..."}) on "${path}" or a composite index leading with it, or every such write scans the whole collection.`,
+  );
+}
+
 export function computedTopology(schemas: ComputedSchemas): ComputedTopology {
   const locations = new Map<string, ComputedLocation[]>();
+  const inputs = new Map<string, unknown>();
   const subjects: Array<{
     type: string;
     input: unknown;
@@ -100,6 +151,7 @@ export function computedTopology(schemas: ComputedSchemas): ComputedTopology {
   }> = [];
   const place = (type: string, input: unknown, at: ComputedLocation) => {
     locations.set(type, [...(locations.get(type) ?? []), at]);
+    inputs.set(type, input);
     subjects.push({ type, input, at });
   };
 
@@ -202,6 +254,18 @@ export function computedTopology(schemas: ComputedSchemas): ComputedTopology {
       if (far && at.kind === "scoped" && far.kind === "scoped" && !farScoped) {
         throw new ComputedTopologyError(
           `computed field "${subject}.${name}": the far type lives in another scoped collection; declare sameScope()`,
+        );
+      }
+      const label = `"${subject}.${name}"`;
+      const sourceInput = inputs.get(descriptor.source.type);
+      assertReadIndexed(label, source, sourceInput, descriptor.by, scoped);
+      if (descriptor.through) {
+        assertReadIndexed(
+          label,
+          source,
+          sourceInput,
+          descriptor.through.via,
+          scoped,
         );
       }
       fields.push(

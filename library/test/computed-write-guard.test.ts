@@ -8,6 +8,7 @@ import {
 import { withDatabase } from "./+shared.ts";
 import * as v from "../src/schema.ts";
 import { refId } from "../src/ids.ts";
+import { withIndex } from "../src/indexes.ts";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
@@ -29,7 +30,7 @@ const EXPO = "exposition:expoaaaaa01";
 
 const Membership = defineType({
   schema: v.object({
-    participantId: refId("participant"),
+    participantId: withIndex(refId("participant")),
     organizationId: refId("expo_organization"),
   }),
 });

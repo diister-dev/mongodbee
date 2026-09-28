@@ -91,10 +91,12 @@ export interface RetryOptions {
   exponentialBackoff?: boolean;
 
   /**
-   * Add random jitter to delays to prevent thundering herd
+   * Add random jitter to delays to prevent thundering herd. `true` adds up to
+   * 20% on top of the delay; `"full"` draws the whole delay uniformly between
+   * zero and the backoff cap, which spreads contenders that collided together.
    * @default true
    */
-  jitter?: boolean;
+  jitter?: boolean | "full";
 
   /**
    * Custom function to determine if an error should trigger a retry
@@ -180,7 +182,9 @@ export async function retryOnWriteConflict<T>(
       }
 
       // Add jitter to prevent thundering herd problem
-      if (jitter) {
+      if (jitter === "full") {
+        delayMs = delayMs * Math.random();
+      } else if (jitter) {
         // Add random jitter up to 20% of the delay
         const jitterAmount = delayMs * 0.2 * Math.random();
         delayMs = delayMs + jitterAmount;

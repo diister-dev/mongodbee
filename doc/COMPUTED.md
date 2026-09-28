@@ -1,6 +1,6 @@
 # Computed fields and dependency versions
 
-Status: specification, not implemented. Branch `feat/computed`.
+Status: steps 0 to 5 implemented on branch `feat/computed` (declarations, full apply and check, inline maintenance, marks and drainer, `through`), measured in §19. Steps 6 (chains), 7 (migrations) and 8 (dependency versions) remain.
 
 ## 1. The problem
 
@@ -315,3 +315,23 @@ Each step lands only when its part of §16 is green.
 - A migration that writes a source type marks the fields it feeds and ends with their full apply, rather than `check` refusing it.
 - Mongodbee provides dependency versions; applications own their caches.
 - v1 recomputes; delta is a later, oracle-gated optimisation.
+
+## 19. Measurements
+
+Local replica set, one process, `bench/computed-cost.ts` and `bench/computed-contention.ts` (rerun them to reproduce). Medians over 300 sequential writes; "off" is the same write with no computed field registered.
+
+| Write | Off | On | Note |
+|---|---|---|---|
+| insert a source row (subject holds 1 / 10 / 100 rows) | 0.4 ms | 2.0 / 2.0 / 2.8 ms | the write now opens its own transaction and recomputes one subject |
+| change a field the computed value reads | 0.5 ms | 2.2 to 2.6 ms | same |
+| change a field no computed value reads | 1 ms | 1 ms | no read, no transaction: the precision of §7.4 pays |
+| update the subject itself on its own fields | 1 ms | 1 ms | same |
+| delete a source row | 1 ms | 2.2 to 3 ms | |
+| full apply | | 0.07 ms per subject | 10 000 subjects in 0.68 s |
+
+Two findings changed the code:
+
+- **Contention on one subject.** 50 concurrent writes feeding the same subject took 1.2 s against 10 ms without computed fields: every transaction writes the subject, so they serialise, and the old retry (10 to 400 ms, 20% jitter) spent most of that time sleeping in lockstep. The default retry is now full jitter between 2 and 50 ms (`DEFAULT_COMPUTED_RETRY`, overridable per registration): 5 / 20 / 50 concurrent writers take about 18 / 100 / 260 ms. What remains is the serialisation itself, about 5 ms per writer, inherent to one document written by every transaction. A subject written in bursts by many sources (a counter on a popular parent) should stay a hand-kept guard or wait for the delta strategy.
+- **A global subject read across scopes.** Recomputing an account from the participants of every exposition used the `_type` index and read every participant of the type. `computedTopology` now refuses, at boot, any field whose recompute read has no declared index leading with its `by` (or `through` link) field, and requires a `global` index when the read spans scopes. With it the same read touches exactly the rows it returns.
+
+In the first consumer (Diivento, `participant._computed.organizationIds`, dev database with 21 681 participants and 8 166 memberships) the recompute read is an `IXSCAN` on `_scope, _type, participantId`: one document examined, 2 ms.

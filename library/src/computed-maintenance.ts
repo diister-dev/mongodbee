@@ -16,25 +16,34 @@ import {
 import { type ComputedSubject, recomputeSubjects } from "./computed-apply.ts";
 import { markFar, markWhole } from "./computed-marks.ts";
 import { checkTransactionEnabled, getSessionContext } from "./session.ts";
-import { retryOnWriteConflict } from "./utils/retry.ts";
+import { type RetryOptions, retryOnWriteConflict } from "./utils/retry.ts";
 
 export const DEFAULT_INLINE_RECOMPUTE_LIMIT = 1000;
 
-const OWN_TRANSACTION_RETRY = {
-  maxRetries: 12,
-  initialDelay: 10,
-  maxDelay: 400,
-};
+export type ComputedRetryOptions = Pick<
+  RetryOptions,
+  "maxRetries" | "initialDelay" | "maxDelay" | "jitter"
+>;
+
+export const DEFAULT_COMPUTED_RETRY: Readonly<ComputedRetryOptions> =
+  Object.freeze({
+    maxRetries: 60,
+    initialDelay: 2,
+    maxDelay: 50,
+    jitter: "full",
+  });
 
 export interface ComputedRegistrationOptions {
   readonly inlineLimit?: number;
   readonly standaloneMode?: "refuse" | "best-effort";
+  readonly retry?: ComputedRetryOptions;
 }
 
 interface Registration {
   readonly topology: ComputedTopology;
   readonly inlineLimit: number;
   readonly standaloneMode: "refuse" | "best-effort";
+  readonly retry: ComputedRetryOptions;
 }
 
 export class ComputedRequiresTransactionError extends Error {
@@ -77,6 +86,7 @@ export function registerComputed(
     topology,
     inlineLimit: options.inlineLimit ?? DEFAULT_INLINE_RECOMPUTE_LIMIT,
     standaloneMode: options.standaloneMode ?? "refuse",
+    retry: options.retry ?? DEFAULT_COMPUTED_RETRY,
   });
   registrations.set(client, byName);
 }
@@ -828,7 +838,7 @@ export function maintainedCollection<T extends Document>(
         }
         return await retryOnWriteConflict(
           () => sessionContext.withSession((session) => run(session)),
-          OWN_TRANSACTION_RETRY,
+          plan.registration.retry,
         );
       };
     },

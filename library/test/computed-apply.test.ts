@@ -9,6 +9,7 @@ import { withDatabase } from "./+shared.ts";
 import type { Db } from "../src/mongodb.ts";
 import * as v from "../src/schema.ts";
 import { refId } from "../src/ids.ts";
+import { withIndex } from "../src/indexes.ts";
 import { collection } from "../src/collection.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import { defineModel } from "../src/multi-collection-model.ts";
@@ -39,15 +40,15 @@ const Organization = defineType({
 
 const Membership = defineType({
   schema: v.object({
-    participantId: refId("participant"),
-    organizationId: refId("expo_organization"),
+    participantId: withIndex(refId("participant")),
+    organizationId: withIndex(refId("expo_organization")),
     status: v.picklist(["active", "removed"]),
   }),
 });
 
 const Scan = defineType({
   schema: v.object({
-    scannedIds: v.array(refId("participant")),
+    scannedIds: withIndex(v.array(refId("participant"))),
     kind: v.picklist(["security", "business", "vip"]),
   }),
 });
@@ -55,7 +56,10 @@ const Scan = defineType({
 const ScansModel = defineModel("scans", { schema: { scan: Scan } });
 
 const Participant = defineType({
-  schema: v.object({ name: v.string(), userId: v.string() }),
+  schema: v.object({
+    name: v.string(),
+    userId: withIndex(v.string(), { global: true }),
+  }),
   computed: {
     organizationIds: from("org_membership", Membership)
       .by((m) => m.participantId)
@@ -257,7 +261,62 @@ test("computed apply: a topology that cannot place a field precisely is refused 
         .collect((m) => m.organizationId),
     },
   });
+  const UnindexedMembership = defineType({
+    schema: v.object({
+      participantId: refId("participant"),
+      organizationId: refId("expo_organization"),
+    }),
+  });
+  const CountsUnindexed = defineType({
+    schema: v.object({ name: v.string() }),
+    computed: {
+      n: from("org_membership", UnindexedMembership)
+        .by((m) => m.participantId)
+        .count(),
+    },
+  });
+  const ScopedOnlyUserId = defineType({
+    schema: v.object({ name: v.string(), userId: withIndex(v.string()) }),
+  });
+  const CountsAcrossScopes = defineType({
+    schema: v.object({ email: v.string() }),
+    computed: {
+      n: from("participant", ScopedOnlyUserId)
+        .by((p) => p.userId)
+        .count(),
+    },
+  });
   const cases: Array<[string, () => unknown, string]> = [
+    [
+      "no index on the subject link",
+      () =>
+        computedTopology({
+          scopedMultiCollections: {
+            "+expositions": {
+              scope: refId("exposition"),
+              types: {
+                participant: CountsUnindexed,
+                org_membership: UnindexedMembership,
+              },
+            },
+          },
+        }),
+      'no declared index leads with "participantId"',
+    ],
+    [
+      "a global subject read across scopes through a scoped index",
+      () =>
+        computedTopology({
+          collections: { users: CountsAcrossScopes },
+          scopedMultiCollections: {
+            "+expositions": {
+              scope: refId("exposition"),
+              types: { participant: ScopedOnlyUserId },
+            },
+          },
+        }),
+      "across every scope",
+    ],
     [
       "unknown source",
       () => computedTopology({ collections: { users: User } }),

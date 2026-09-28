@@ -4,6 +4,7 @@ import { withDatabase } from "./+shared.ts";
 import type { Db } from "../src/mongodb.ts";
 import * as v from "../src/schema.ts";
 import { refId } from "../src/ids.ts";
+import { withIndex } from "../src/indexes.ts";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
@@ -27,8 +28,8 @@ const Organization = defineType({
 
 const Membership = defineType({
   schema: v.object({
-    participantId: refId("participant"),
-    organizationId: refId("expo_organization"),
+    participantId: withIndex(refId("participant")),
+    organizationId: withIndex(refId("expo_organization")),
     status: v.picklist(["active", "removed"]),
     note: v.optional(v.string()),
   }),
@@ -36,7 +37,7 @@ const Membership = defineType({
 
 const Scan = defineType({
   schema: v.object({
-    scannedIds: v.array(refId("participant")),
+    scannedIds: withIndex(v.array(refId("participant"))),
     kind: v.picklist(["security", "business", "vip"]),
   }),
 });
@@ -44,7 +45,10 @@ const Scan = defineType({
 const ScansModel = defineModel("scans", { schema: { scan: Scan } });
 
 const Participant = defineType({
-  schema: v.object({ name: v.string(), userId: v.string() }),
+  schema: v.object({
+    name: v.string(),
+    userId: withIndex(v.string(), { global: true }),
+  }),
   computed: {
     organizationIds: from("org_membership", Membership)
       .by((m) => m.participantId)
@@ -80,7 +84,7 @@ const Participant = defineType({
 
 const AccountTag = defineType({
   schema: v.object({
-    accountId: v.string(),
+    accountId: withIndex(v.string()),
     tag: v.string(),
     weight: v.number(),
   }),
@@ -104,7 +108,7 @@ const Account = defineType({
 });
 
 const LeadComment = defineType({
-  schema: v.object({ leadId: refId("lead"), body: v.string() }),
+  schema: v.object({ leadId: withIndex(refId("lead")), body: v.string() }),
 });
 const LeadWithCount = defineType({
   schema: v.object({ title: v.string() }),

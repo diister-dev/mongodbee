@@ -4,6 +4,7 @@ import { withDatabase } from "./+shared.ts";
 import type { Db } from "../src/mongodb.ts";
 import * as v from "../src/schema.ts";
 import { refId } from "../src/ids.ts";
+import { withIndex } from "../src/indexes.ts";
 import { collection } from "../src/collection.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import { defineType } from "../src/type-definition.ts";
@@ -25,7 +26,7 @@ const EXPO = "exposition:expoaaaaa01";
 
 const Membership = defineType({
   schema: v.object({
-    participantId: refId("participant"),
+    participantId: withIndex(refId("participant")),
     organizationId: refId("expo_organization"),
     status: v.picklist(["active", "removed"]),
   }),
