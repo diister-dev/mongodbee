@@ -56,6 +56,7 @@ import {
 import type { Db } from "./mongodb.ts";
 import type * as m from "mongodb";
 import type { StoredDocument } from "./stored-document.ts";
+import { DocumentValidationError } from "./validation-error.ts";
 
 import type { AggregationStage } from "./types.ts";
 import { createLogger } from "./utils/logger.ts";
@@ -260,7 +261,7 @@ export type CollectionResult<
 > & {
   collection: m.Collection<TInput<T>>;
   schema: v.ObjectSchema<
-    { readonly _id: v.OptionalSchema<v.AnySchema, undefined> } & T,
+    { readonly _id: v.OptionalSchema<v.UnknownSchema, undefined> } & T,
     undefined
   >;
   on: ReturnType<typeof EventEmitter<Events<T>>>["on"];
@@ -515,7 +516,7 @@ export async function collection<
   const composites = indexesOf(input);
 
   const schema = v.object({
-    _id: v.optional(v.any()),
+    _id: v.optional(v.unknown()),
     ...collectionSchema,
   });
 
@@ -735,10 +736,7 @@ export async function collection<
     const run = () => {
       const validation = v.safeParse(schema, replacement);
       if (!validation.success) {
-        throw {
-          message: "Validation error",
-          errors: validation,
-        };
+        throw new DocumentValidationError(validation);
       }
 
       const sanitizedReplacement = sanitizeForMongoDB(validation.output, {
@@ -952,11 +950,7 @@ export async function collection<
           return validation.output as WithId<TOutput>;
         }
 
-        throw {
-          message: "Validation error",
-          errors: validation,
-          result,
-        };
+        throw new DocumentValidationError(validation, result);
       };
       return traced(
         tele,
@@ -983,11 +977,7 @@ export async function collection<
           return validation.output as WithId<TOutput>;
         }
 
-        throw {
-          message: "Validation error",
-          errors: validation,
-          result,
-        };
+        throw new DocumentValidationError(validation, result);
       };
       return traced(
         tele,
@@ -1647,10 +1637,7 @@ export async function collection<
       const run = () => {
         const validation = v.safeParse(schema, replacement);
         if (!validation.success) {
-          throw {
-            message: "Validation error",
-            errors: validation,
-          };
+          throw new DocumentValidationError(validation);
         }
 
         const sanitizedReplacement = sanitizeForMongoDB(validation.output, {

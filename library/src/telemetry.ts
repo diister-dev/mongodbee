@@ -40,6 +40,7 @@ import {
 } from "@opentelemetry/api";
 import type { ClientSession, MongoClient } from "mongodb";
 import { VERSION } from "./version.ts";
+import { DocumentValidationError } from "./validation-error.ts";
 
 /**
  * Opt-in tracing configuration accepted by `collection()`,
@@ -206,13 +207,9 @@ function prune(attributes: Attributes): Attributes {
 }
 
 function isValidationError(error: unknown): boolean {
-  if (error instanceof Error) return error.name === "ValiError";
-  // MongoDBee validation failures are thrown as plain objects:
-  // `{ message: "Validation error", errors, result }`
   return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as { message?: unknown }).message === "Validation error"
+    error instanceof DocumentValidationError ||
+    (error instanceof Error && error.name === "ValiError")
   );
 }
 

@@ -37,6 +37,7 @@ export * from "./src/security.ts";
 export * from "./src/runtime-config.ts";
 export * from "./src/ids.ts";
 export { partial, removeField } from "./src/sanitizer.ts";
+export { DocumentValidationError } from "./src/validation-error.ts";
 export type { TelemetryOptions } from "./src/telemetry.ts";
 export {
   type LogLevel,
