@@ -407,7 +407,9 @@ await users.withSession(async () => {
 
 `withRequestContext` scopes work to one request. With `memoizeReads`, identical
 `getById`, `findOne`, `find`, `findProject` and read-only `aggregate` calls of
-that request reach MongoDB once; each caller gets its own copy. Reads inside a
+that request reach MongoDB once; the first caller gets the loaded value and
+every later one its own copy. A result of more than 100 rows is not kept: a
+round-trip on an index costs less than copying it. Reads inside a
 transaction are never memoized, and any write through MongoDBee or a commit
 clears the memo. A write made with the raw driver needs `invalidateReads()`,
 or a client created with `monitorCommands: true` and watched once with

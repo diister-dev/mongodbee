@@ -12,8 +12,10 @@ export interface RequestReadStats {
   invalidations: number;
 }
 
+const MEMOIZED_ROWS_LIMIT = 100;
+
 interface RequestState {
-  reads: Map<string, Promise<Uint8Array>> | undefined;
+  reads: Map<string, Promise<Uint8Array | undefined>> | undefined;
   stats: RequestReadStats;
 }
 
@@ -119,7 +121,11 @@ function copyOf<T>(bytes: Uint8Array): T {
   return BSON.deserialize(bytes).value as T;
 }
 
-export function readThrough<T>(
+function memoizable(value: unknown): boolean {
+  return !Array.isArray(value) || value.length <= MEMOIZED_ROWS_LIMIT;
+}
+
+export async function readThrough<T>(
   target: ReadTarget,
   operation: string,
   args: readonly unknown[],
@@ -128,22 +134,32 @@ export function readThrough<T>(
 ): Promise<T> {
   const state = requestState.get();
   const reads = state?.reads;
-  if (!state || !reads || session !== undefined) return load();
+  if (!state || !reads || session !== undefined) return await load();
   const key = readKey(target, operation, args);
-  if (key === undefined) return load();
-  let entry = reads.get(key);
-  if (entry) {
-    state.stats.reused++;
-  } else {
+  if (key === undefined) return await load();
+  const shared = reads.get(key);
+  if (shared) {
+    const bytes = await shared;
+    if (bytes !== undefined) {
+      state.stats.reused++;
+      return copyOf<T>(bytes);
+    }
     state.stats.loaded++;
-    const loading = load().then((value) => BSON.serialize({ value }));
-    entry = loading;
-    reads.set(key, loading);
-    loading.catch(() => {
-      if (reads.get(key) === loading) reads.delete(key);
-    });
+    return await load();
   }
-  return entry.then((bytes) => copyOf<T>(bytes));
+  state.stats.loaded++;
+  const loading = load();
+  const entry = loading.then((value) =>
+    memoizable(value) ? BSON.serialize({ value }) : undefined,
+  );
+  reads.set(key, entry);
+  const forget = () => {
+    if (reads.get(key) === entry) reads.delete(key);
+  };
+  entry.then((bytes) => {
+    if (bytes === undefined) forget();
+  }, forget);
+  return await loading;
 }
 
 export function findOneThrough<TDoc extends m.Document>(

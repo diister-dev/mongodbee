@@ -300,6 +300,34 @@ test("request context: a failed read is not remembered", async () => {
   });
 });
 
+test("request context: a read of more than 100 rows is not memoized", async () => {
+  await withCountedDatabase(async (db, reads) => {
+    const expo = (await scopedPeople(db)).scope("expo:a");
+    await expo.insertMany(
+      "person",
+      Array.from({ length: 101 }, (_, i) => ({ name: `P${i}`, tags: [] })),
+    );
+
+    const before = reads();
+    await withRequestContext(
+      async () => {
+        assertEquals((await expo.find("person", {})).length, 101);
+        assertEquals((await expo.find("person", {})).length, 101);
+        assertEquals(
+          (await expo.find("person", {}, { limit: 100 })).length,
+          100,
+        );
+        assertEquals(
+          (await expo.find("person", {}, { limit: 100 })).length,
+          100,
+        );
+      },
+      { memoizeReads: true },
+    );
+    assertEquals(reads() - before, 3);
+  });
+});
+
 test("request context: different filters, types and options stay apart", async () => {
   await withCountedDatabase(async (db, reads) => {
     const expo = (await scopedPeople(db)).scope("expo:a");
