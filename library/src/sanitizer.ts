@@ -208,6 +208,23 @@ export function extractFieldsToRemove(
 }
 
 /**
+ * The shape of `T` once sanitized: `undefined` never survives, so a key that
+ * may hold it becomes optional and loses `undefined`, in plain objects and
+ * arrays alike. Other objects (Date, ObjectId, ...) are kept as they are.
+ */
+export type Sanitized<T> = T extends readonly (infer U)[]
+  ? Sanitized<Exclude<U, undefined>>[]
+  : T extends Record<string, unknown>
+    ? {
+        [K in keyof T as undefined extends T[K] ? never : K]: Sanitized<T[K]>;
+      } & {
+        [K in keyof T as undefined extends T[K] ? K : never]?: Sanitized<
+          Exclude<T[K], undefined>
+        >;
+      }
+    : T;
+
+/**
  * Enhanced sanitization that handles explicit field removal
  *
  * @param obj - The object to sanitize
@@ -222,7 +239,7 @@ export function sanitizeForMongoDB<T = unknown>(
     /** Whether to sanitize nested objects (should always be true) */
     deep: boolean;
   } = { undefinedBehavior: "remove", deep: true },
-): T {
+): Sanitized<T> {
   refuseComputedWrite(obj);
   function processValue(value: unknown): unknown {
     if (value === REMOVE_FIELD) {
@@ -272,7 +289,7 @@ export function sanitizeForMongoDB<T = unknown>(
     return value;
   }
 
-  return processValue(obj) as T;
+  return processValue(obj) as Sanitized<T>;
 }
 
 // Special marker for fields to ignore during updates

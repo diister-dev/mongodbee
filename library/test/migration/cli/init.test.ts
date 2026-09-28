@@ -154,7 +154,6 @@ test({
           typeRoots: [path.join(libRoot, "node_modules/@types")],
           types: ["node"],
           allowImportingTsExtensions: true,
-          baseUrl: ".",
           paths: {
             "@diister/mongodbee": [path.join(libRoot, "mod.ts")],
             "@diister/mongodbee/*": [path.join(libRoot, "src/*/mod.ts")],
