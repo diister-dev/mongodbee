@@ -224,10 +224,14 @@ three modes:
   from the schema are listed under the table with their share, which is how
   leftovers of an old shape stand out.
   `defineType` composite indexes are listed under the type.
+  Computed fields sit under `_computed`, tagged as computed, each with the
+  declaration it comes from ("organizationId of org_membership by
+  participantId, where status"); `_computed._rev` is tagged as the revision
+  mongodbee bumps on every recompute.
   A constraint MongoDB ignores for the field's type (such as `minItems` on a
-  string, which `nonEmpty` emits for both strings and arrays) is struck
-  through, with the reason on hover; the regex of a `pattern` is shown on
-  hover too.
+  string, which `nonEmpty` emitted for both strings and arrays before
+  0.23.0-beta.32) is struck through, with the reason on hover; the regex of a
+  `pattern` is shown on hover too.
 - **$jsonSchema**: the full `$jsonSchema` each type compiles to, browsable and
   copyable.
 - **Validator**: the collection validator the last applied migration expects,
@@ -374,6 +378,8 @@ away for bulk changes:
   quiet;
 - a reference (`refId`) shows its target type tag and is picked from the
   documents it points to, listed by their name; any id can still be typed;
+- `_computed` is never offered: mongodbee maintains it, and the write API
+  refuses it like `_id`, `_type` and `_scope`;
 - nullable fields have a `null` switch; optional fields can be removed, and
   the ones not set yet are offered as "+ field" buttons;
 - every field shows what its schema expects ("at least 1 character, an
