@@ -324,6 +324,50 @@ test("request context: different filters, types and options stay apart", async (
   });
 });
 
+test("request context: identical aggregations reach MongoDB once", async () => {
+  await withCountedDatabase(async (db, reads) => {
+    const expo = (await scopedPeople(db)).scope("expo:a");
+    await expo.insertOne("person", { name: "Ada", tags: ["x"] });
+    await expo.insertOne("person", { name: "Grace", tags: ["x"] });
+
+    const before = reads();
+    await withRequestContext(
+      async () => {
+        const names = () =>
+          expo.aggregate<{ _id: string }>(() => [
+            { $match: { _type: "person" } },
+            { $group: { _id: "$name" } },
+            { $sort: { _id: 1 } },
+          ]);
+        assertEquals(await names(), [{ _id: "Ada" }, { _id: "Grace" }]);
+        assertEquals(await names(), [{ _id: "Ada" }, { _id: "Grace" }]);
+      },
+      { memoizeReads: true },
+    );
+    assertEquals(reads() - before, 1);
+  });
+});
+
+test("request context: an aggregation that writes clears the memo", async () => {
+  await withCountedDatabase(async (db) => {
+    const expo = (await scopedPeople(db)).scope("expo:a");
+    const id = await expo.insertOne("person", { name: "Ada", tags: [] });
+
+    await withRequestContext(
+      async () => {
+        await expo.getById("person", id);
+        await expo.aggregate(() => [
+          { $match: { _id: id } },
+          { $set: { name: "Merged" } },
+          { $merge: { into: "+people", whenMatched: "merge" } },
+        ]);
+        assertEquals((await expo.getById("person", id)).name, "Merged");
+      },
+      { memoizeReads: true },
+    );
+  });
+});
+
 test("request context: multi-collections and collections are memoized too", async () => {
   await withCountedDatabase(async (db, reads) => {
     const catalog = await multiCollection(db, "catalog", {

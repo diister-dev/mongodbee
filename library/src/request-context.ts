@@ -175,3 +175,34 @@ export function findThrough<TDoc extends m.Document>(
     () => collection.find(query, driverOptions).toArray(),
   );
 }
+
+function writesThroughPipeline(pipeline: readonly m.Document[]): boolean {
+  return pipeline.some((stage) => "$out" in stage || "$merge" in stage);
+}
+
+export async function aggregateThrough<
+  TDoc extends m.Document,
+  R extends m.Document,
+>(
+  collection: m.Collection<TDoc>,
+  pipeline: m.Document[],
+  options: object | undefined,
+  driverOptions: m.AggregateOptions & { session?: m.ClientSession },
+): Promise<R[]> {
+  const load = () => collection.aggregate<R>(pipeline, driverOptions).toArray();
+  if (!writesThroughPipeline(pipeline)) {
+    return await readThrough(
+      collection,
+      "aggregate",
+      [pipeline, options],
+      driverOptions.session,
+      load,
+    );
+  }
+  invalidateReads();
+  try {
+    return await load();
+  } finally {
+    invalidateReads();
+  }
+}

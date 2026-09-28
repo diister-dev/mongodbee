@@ -27,7 +27,11 @@ import {
   type WithReadPreferenceInput,
   withReadPreference,
 } from "./read-preference.ts";
-import { findOneThrough, findThrough } from "./request-context.ts";
+import {
+  aggregateThrough,
+  findOneThrough,
+  findThrough,
+} from "./request-context.ts";
 import { withIndex } from "./indexes.ts";
 import type { FlatType } from "../types/flat.ts";
 import type { Db } from "./mongodb.ts";
@@ -2019,12 +2023,12 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         const session = sessionContext.getSession();
 
         const pipeline = stageBuilder(stage);
-        const cursor = collection.aggregate<R>(
+        return await aggregateThrough<StoredDocument, R>(
+          collection,
           pipeline,
+          options,
           readOpts(session, options),
         );
-
-        return await cursor.toArray();
       };
       return traced(tele, "aggregate", undefined, run, (docs) => ({
         [TA.RETURNED_ROWS]: docs.length,

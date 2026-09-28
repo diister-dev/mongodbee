@@ -59,7 +59,11 @@ import {
 } from "./type-definition.ts";
 import { withDatabaseDdlLock } from "./ddl-lock.ts";
 import { isSchemaManaged } from "./runtime-config.ts";
-import { findOneThrough, findThrough } from "./request-context.ts";
+import {
+  aggregateThrough,
+  findOneThrough,
+  findThrough,
+} from "./request-context.ts";
 import {
   createOperationTracer,
   errorWithSafeMessage,
@@ -1500,8 +1504,12 @@ export async function scopedMultiCollection<S extends AnySchema>(
             ...userPipeline,
           ];
           const session = sessionContext.getSession();
-          const cursor = collection.aggregate<R>(pipeline, { session });
-          return await cursor.toArray();
+          return await aggregateThrough<StoredDocument, R>(
+            collection,
+            pipeline,
+            undefined,
+            { session },
+          );
         };
         return traced(
           tele,
@@ -2151,8 +2159,12 @@ export async function scopedMultiCollection<S extends AnySchema>(
           if (sm) pipeline.push({ $match: sm });
           pipeline.push(...userPipeline);
           const session = sessionContext.getSession();
-          const cursor = collection.aggregate<R>(pipeline, { session });
-          return await cursor.toArray();
+          return await aggregateThrough<StoredDocument, R>(
+            collection,
+            pipeline,
+            undefined,
+            { session },
+          );
         };
         return traced(
           tele,
