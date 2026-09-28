@@ -26,6 +26,15 @@ export function toStoredDocument(value: unknown): StoredDocument {
   return value;
 }
 
+export function toStringId(id: unknown): string {
+  if (typeof id !== "string") {
+    throw new TypeError(
+      `a mongodbee id is a string, got ${id instanceof ObjectId ? "an ObjectId" : typeof id}`,
+    );
+  }
+  return id;
+}
+
 export function isStoredFilter(
   value: unknown,
 ): value is Filter<StoredDocument> {

@@ -619,10 +619,10 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
     >,
     options?: { returnDocument?: "before" | "after" },
   ): Promise<v.InferOutput<OutputElementSchema<T, E>> | null>;
-  aggregate(
+  aggregate<R extends m.Document = m.Document>(
     stageBuilder: (stage: StageBuilder<T>) => AggregationStage[],
     options?: ReadOptions,
-  ): Promise<any[]>;
+  ): Promise<R[]>;
   drop(options: { force: true }): Promise<boolean>;
 };
 
@@ -2030,14 +2030,17 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         run,
       );
     },
-    async aggregate(stageBuilder, options?) {
+    async aggregate<R extends m.Document = m.Document>(
+      stageBuilder: (stage: StageBuilder<T>) => AggregationStage[],
+      options?: ReadOptions,
+    ) {
       const run = async () => {
         const stage = createMultiStageBuilder<T>(collectionName);
 
         const session = sessionContext.getSession();
 
         const pipeline = stageBuilder(stage);
-        const cursor = collection.aggregate(
+        const cursor = collection.aggregate<R>(
           pipeline,
           readOpts(session, options),
         );

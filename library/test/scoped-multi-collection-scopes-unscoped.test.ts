@@ -153,14 +153,17 @@ test(".unscoped countDocuments returns total across scopes", async () => {
 test(".unscoped aggregate sees everything", async () => {
   await withDatabase("smc-unscoped-agg", async (db) => {
     const { catalog } = await seed(db, { allowUnscoped: true });
-    const counts = await catalog.unscoped.aggregate((stage) => [
+    const counts = await catalog.unscoped.aggregate<{
+      _id: string;
+      count: number;
+    }>((stage) => [
       stage.match("artwork", {}),
       stage.group({ _id: "$_scope", count: { $sum: 1 } }),
       stage.sort({ _id: 1 }),
     ]);
     assertEquals(counts.length, 3);
     assertEquals(
-      counts.map((c: { count: number }) => c.count),
+      counts.map((c) => c.count),
       [2, 2, 1],
     );
   });
