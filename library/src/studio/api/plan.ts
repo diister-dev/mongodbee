@@ -21,6 +21,7 @@ import {
   toSpec,
 } from "./indexes.ts";
 import { describeOperation, type OperationDescription } from "./migrations.ts";
+import { field, recordField, textField, textListField } from "./rule-fields.ts";
 
 export const PLAN_TIME_LIMIT_MS = 5_000;
 export const PLAN_COUNT_LIMIT = 1_000_000;
@@ -364,7 +365,6 @@ function flagReasons(
   lossy: boolean,
 ): OperationFlag[] {
   const reasons: OperationFlag[] = [];
-  const raw = rule as Record<string, unknown>;
   if (irreversible) {
     let reason = "Marked irreversible: rollback cannot undo it.";
     if (rule.type.startsWith("delete_") || rule.type.startsWith("dedupe_")) {
@@ -372,7 +372,7 @@ function flagReasons(
         "Removed documents are not kept, so rollback cannot restore them.";
     } else if (rule.type === "flow" || rule.type === "flow_to_scope") {
       reason =
-        raw.sourceDisposition === "consume"
+        field(rule, "sourceDisposition") === "consume"
           ? "Source documents are moved, not copied, so they cannot be put back."
           : "Declared irreversible: rollback does not remove the copies.";
     } else if (rule.type.startsWith("transform_")) {
@@ -398,8 +398,8 @@ async function estimate(
   resolve: Resolver,
   rule: MigrationRule,
 ): Promise<{ impact: OperationImpact; blocking?: string }> {
-  const raw = rule as Record<string, any>;
-  const collectionName: string | undefined = raw.collectionName;
+  const collectionName = textField(rule, "collectionName");
+  const modelType = textField(rule, "modelType") ?? "";
   const entry = collectionName ? resolve.byName.get(collectionName) : undefined;
   const exists = Boolean(entry?.exists);
   const type = rule.type;
@@ -424,18 +424,20 @@ async function estimate(
   }
 
   if (type.startsWith("seed_")) {
-    const documents = Array.isArray(raw.documents) ? raw.documents.length : 0;
+    const seeded = field(rule, "documents");
+    const documents = Array.isArray(seeded) ? seeded.length : 0;
     const impact: OperationImpact = {
       documents: { value: documents },
       verb: "inserted",
     };
     if (type === "seed_multimodel_instances_type") {
-      const instances = resolve.instancesOf(raw.modelType);
+      const instances = resolve.instancesOf(modelType);
       impact.documents = { value: documents * instances.length };
       impact.note = `${documents} per instance, ${instances.length} instances`;
     }
-    if (typeof raw.scope === "string")
-      impact.scopes = { all: false, values: [raw.scope] };
+    const seededScope = textField(rule, "scope");
+    if (seededScope !== undefined)
+      impact.scopes = { all: false, values: [seededScope] };
     return { impact };
   }
 
@@ -446,57 +448,69 @@ async function estimate(
   }
 
   if (type === "rename_collection") {
-    const source = resolve.byName.get(raw.from);
-    const target = resolve.byName.get(raw.to);
+    const fromName = textField(rule, "from") ?? "";
+    const toName = textField(rule, "to") ?? "";
+    const source = resolve.byName.get(fromName);
+    const target = resolve.byName.get(toName);
     const impact: OperationImpact = {
       documents: source?.exists
-        ? await boundedCount(context, raw.from, {})
+        ? await boundedCount(context, fromName, {})
         : { value: 0 },
       verb: "renamed",
       exists: Boolean(target?.exists),
     };
-    if (target?.exists && !raw.dropTarget) {
+    if (target?.exists && !field(rule, "dropTarget")) {
       return {
         impact,
-        blocking: `${raw.to} already exists; the rename will fail`,
+        blocking: `${toName} already exists; the rename will fail`,
       };
     }
     return { impact };
   }
 
   if (type === "flow") {
-    const source = resolve.byName.get(raw.from?.collection);
+    const from = recordField(rule, "from");
+    const fromCollection = textField(from, "collection") ?? "";
+    const source = resolve.byName.get(fromCollection);
     return {
       impact: {
         documents: source?.exists
           ? await boundedCount(
               context,
-              raw.from.collection,
-              raw.from.where ?? {},
+              fromCollection,
+              recordField(from, "where") ?? {},
             )
           : { value: 0 },
-        verb: raw.sourceDisposition === "consume" ? "moved" : "copied",
+        verb:
+          field(rule, "sourceDisposition") === "consume" ? "moved" : "copied",
       },
     };
   }
 
   if (type === "flow_to_scope") {
-    const from = raw.from ?? {};
+    const from = recordField(rule, "from");
+    const fromKind = textField(from, "kind");
+    const fromName = textField(from, "name") ?? "";
+    const fromCollection = textField(from, "collectionName") ?? "";
     let documents: Count = { value: 0 };
-    if (from.kind === "collection" && resolve.byName.get(from.name)?.exists) {
-      documents = await boundedCount(context, from.name, from.where ?? {});
+    if (fromKind === "collection" && resolve.byName.get(fromName)?.exists) {
+      documents = await boundedCount(
+        context,
+        fromName,
+        recordField(from, "where") ?? {},
+      );
     } else if (
-      from.kind === "multiCollectionType" &&
-      resolve.byName.get(from.collectionName)?.exists
+      fromKind === "multiCollectionType" &&
+      resolve.byName.get(fromCollection)?.exists
     ) {
-      documents = await boundedCount(context, from.collectionName, {
-        _type: from.documentType,
+      documents = await boundedCount(context, fromCollection, {
+        _type: textField(from, "documentType"),
       });
-    } else if (from.kind === "multiModelInstances") {
+    } else if (fromKind === "multiModelInstances") {
       documents = addCounts(
         await Promise.all(
           resolve
-            .instancesOf(from.model)
+            .instancesOf(textField(from, "model") ?? "")
             .map((instance) =>
               boundedCount(context, instance.name, typeFilter(undefined)),
             ),
@@ -506,14 +520,16 @@ async function estimate(
     return {
       impact: {
         documents,
-        verb: raw.sourceDisposition === "consume" ? "moved" : "copied",
+        verb:
+          field(rule, "sourceDisposition") === "consume" ? "moved" : "copied",
       },
     };
   }
 
-  const documentType: string | undefined = raw.documentType ?? raw.oldTypeName;
+  const documentType =
+    textField(rule, "documentType") ?? textField(rule, "oldTypeName");
   const scoped = type.includes("scoped");
-  const scopeFilter: string[] | undefined = raw.scopeFilter;
+  const scopeFilter = textListField(rule, "scopeFilter");
   const isDelete = type.startsWith("delete_");
   const isDedupe = type.startsWith("dedupe_");
   const verb =
@@ -527,7 +543,7 @@ async function estimate(
 
   const targets: string[] = [];
   if (type.includes("multimodel_instances")) {
-    for (const instance of resolve.instancesOf(raw.modelType))
+    for (const instance of resolve.instancesOf(modelType))
       targets.push(instance.name);
   } else if (collectionName && exists) {
     targets.push(collectionName);
@@ -539,12 +555,12 @@ async function estimate(
       : "plain";
   const base =
     kind === "typed" || scoped ? typeFilter(documentType, scopeFilter) : {};
-  const filter = merge(base, raw.where);
+  const filter = merge(base, recordField(rule, "where"));
 
   const impact: OperationImpact = { verb };
 
   if (isDedupe) {
-    const by: string[] = raw.by ?? [];
+    const by = textListField(rule, "by") ?? [];
     const results = await Promise.all(
       targets.map((target) =>
         findDuplicates(

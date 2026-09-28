@@ -1,3 +1,4 @@
+import { storedCollection } from "../../stored-document.ts";
 import { buildCatalog, type CatalogEntry, isTyped } from "../catalog.ts";
 import type { StudioContext } from "../context.ts";
 import { StudioHttpError } from "../http.ts";
@@ -140,10 +141,9 @@ export async function resolveLabels(
     for (const entry of catalog) {
       if (remaining.length === 0) break;
       if (answers(entry, prefix) === undefined) continue;
-      const found = await context.db
-        .collection(entry.name)
+      const found = await storedCollection(context.db, entry.name)
         .find(
-          { _id: { $in: remaining as never[] } },
+          { _id: { $in: remaining } },
           {
             maxTimeMS: QUERY_TIME_LIMIT_MS,
             limit: remaining.length,

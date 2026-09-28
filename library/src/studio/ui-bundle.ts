@@ -65,9 +65,17 @@ function hasBun(): boolean {
   return Boolean((globalThis as { Bun?: unknown }).Bun);
 }
 
+function isBunBundler(value: unknown): value is BunBundler {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof Reflect.get(value, "build") === "function"
+  );
+}
+
 function bunRuntime(): BunBundler {
-  const bun = (globalThis as unknown as { Bun?: BunBundler }).Bun;
-  if (!bun) {
+  const bun: unknown = Reflect.get(globalThis, "Bun");
+  if (!isBunBundler(bun)) {
     throw new Error(
       "mongodbee studio: building the UI from source needs Bun. Run `bun run build:studio` in the library first",
     );

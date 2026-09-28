@@ -227,9 +227,7 @@ export function expectedValidator(entry: CatalogEntry): unknown {
         ...createMetadataSchemas(),
       ];
       return toMongoValidator(
-        schemas.length > 0
-          ? v.union(schemas as never)
-          : v.object({ _type: v.string() }),
+        schemas.length > 0 ? v.union(schemas) : v.object({ _type: v.string() }),
       );
     }
     case "scopedMultiCollection": {
@@ -241,7 +239,7 @@ export function expectedValidator(entry: CatalogEntry): unknown {
           ...fieldsOf(source),
         }),
       );
-      return toMongoValidator(v.union(schemas as never));
+      return toMongoValidator(v.union(schemas));
     }
     default:
       return undefined;

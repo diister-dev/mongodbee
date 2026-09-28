@@ -81,7 +81,9 @@ export function isLoopbackHost(host: string): boolean {
   return LOOPBACK_HOSTS.has(host) || LOOPBACK_HOSTS.has(`[${host}]`);
 }
 
-function readBody(incoming: IncomingMessage): Promise<Uint8Array | null> {
+function readBody(
+  incoming: IncomingMessage,
+): Promise<Uint8Array<ArrayBuffer> | null> {
   return new Promise((resolve, reject) => {
     const chunks: Uint8Array[] = [];
     let size = 0;
@@ -122,7 +124,7 @@ async function toRequestWithBody(
   return new Request(base.url, {
     method,
     headers: base.headers,
-    body: body as unknown as BodyInit,
+    body,
     signal,
   });
 }

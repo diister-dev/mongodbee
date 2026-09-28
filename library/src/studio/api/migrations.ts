@@ -18,6 +18,7 @@ import {
   presetDocsPerCollection,
 } from "../../migration/validators/mock/config.ts";
 import type { StudioContext } from "../context.ts";
+import { recordField, textField } from "./rule-fields.ts";
 
 export type MigrationStatus = MigrationStateRecord["status"];
 
@@ -129,18 +130,22 @@ function describeValue(key: string, value: unknown): unknown {
 }
 
 function targetOf(rule: MigrationRule): string | undefined {
-  const raw = rule as Record<string, any>;
   if (rule.type === "flow" || rule.type === "flow_to_scope") {
+    const source = recordField(rule, "from");
     const from =
-      raw.from?.collection ??
-      raw.from?.name ??
-      raw.from?.model ??
-      raw.from?.collectionName;
-    return `${from} → ${raw.into?.collection}`;
+      textField(source, "collection") ??
+      textField(source, "name") ??
+      textField(source, "model") ??
+      textField(source, "collectionName");
+    return `${from} → ${textField(recordField(rule, "into"), "collection")}`;
   }
-  if (rule.type === "rename_collection") return `${raw.from} → ${raw.to}`;
-  const collection = raw.collectionName ?? raw.modelType;
-  const type = raw.documentType ?? raw.newTypeName;
+  if (rule.type === "rename_collection") {
+    return `${textField(rule, "from")} → ${textField(rule, "to")}`;
+  }
+  const collection =
+    textField(rule, "collectionName") ?? textField(rule, "modelType");
+  const type =
+    textField(rule, "documentType") ?? textField(rule, "newTypeName");
   if (collection && type) return `${collection}.${type}`;
   return collection;
 }

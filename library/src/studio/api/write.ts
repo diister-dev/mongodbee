@@ -4,18 +4,22 @@ import { multiCollection } from "../../multi-collection.ts";
 import { scopedMultiCollection } from "../../scoped-multi-collection.ts";
 import { duplicateKeyOf, isDuplicateKeyError } from "../../duplicate-key.ts";
 import { REMOVE_FIELD } from "../../sanitizer.ts";
+import {
+  type DocumentId,
+  isDocumentId,
+  type StoredDocument,
+  storedCollection,
+} from "../../stored-document.ts";
 import type { CatalogEntry } from "../catalog.ts";
 import type { StudioContext } from "../context.ts";
 import { encodeId, parseExtendedJson, StudioHttpError } from "../http.ts";
-import { fieldsOf } from "../../type-definition.ts";
+import { fieldsOf, isTypeDefinition } from "../../type-definition.ts";
 import { requireEntry } from "./documents.ts";
 import { getMigrationsReport } from "./migrations.ts";
 
 export const WRITE_HEADER = "x-mongodbee-studio";
 export const PROTECTED_FIELDS = ["_id", "_type", "_scope"] as const;
 const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
-type AnyCollection = any;
 
 export interface UpdateBody {
   id: string;
@@ -51,12 +55,146 @@ export interface WriteLogEntry {
   fields?: string[];
 }
 
-const cache = new WeakMap<StudioContext, Map<string, Promise<AnyCollection>>>();
+interface WriteTarget {
+  type?: string;
+  scope?: string;
+}
+
+interface Writer {
+  update(
+    target: WriteTarget,
+    filter: Record<string, unknown>,
+    set: Record<string, unknown>,
+    unset: string[],
+  ): Promise<{ matched: number; modified: number }>;
+  insert(
+    target: WriteTarget,
+    document: Record<string, unknown>,
+  ): Promise<unknown>;
+  remove(target: WriteTarget, id: DocumentId): Promise<number>;
+}
+
+function stringId(id: DocumentId): string {
+  if (typeof id !== "string") {
+    throw new StudioHttpError(
+      400,
+      "Documents of this collection have string ids",
+    );
+  }
+  return id;
+}
+
+function typeOf(target: WriteTarget): string {
+  if (!target.type) throw new StudioHttpError(400, "Choose a type first");
+  return target.type;
+}
+
+function scopeOf(target: WriteTarget): string {
+  if (!target.scope) throw new StudioHttpError(400, "Choose a scope first");
+  return target.scope;
+}
+
+function removals(set: Record<string, unknown>, unset: string[]) {
+  const doc: Record<string, unknown> = { ...set };
+  for (const path of unset) doc[path] = REMOVE_FIELD;
+  return doc;
+}
+
+async function writerFor(
+  context: StudioContext,
+  entry: CatalogEntry,
+): Promise<Writer> {
+  const options = { schemaManagement: "managed" as const };
+  if (entry.kind === "collection") {
+    const source = entry.types[entry.name];
+    if (!source) {
+      throw new StudioHttpError(409, `No schema for "${entry.name}"`);
+    }
+    const handle = isTypeDefinition(source)
+      ? await collection(context.db, entry.name, source, options)
+      : await collection(context.db, entry.name, source, options);
+    return {
+      async update(_target, filter, set, unset) {
+        const update: {
+          $set?: Record<string, unknown>;
+          $unset?: Record<string, "">;
+        } = {};
+        if (Object.keys(set).length > 0) update.$set = set;
+        if (unset.length > 0) {
+          update.$unset = Object.fromEntries(unset.map((path) => [path, ""]));
+        }
+        const result = await handle.updateOne(filter, update);
+        return { matched: result.matchedCount, modified: result.modifiedCount };
+      },
+      async insert(_target, document) {
+        return await handle.insertOne(document);
+      },
+      async remove(_target, id) {
+        const filter: Record<string, unknown> = { _id: id };
+        const result = await handle.deleteOne(filter);
+        return result.deletedCount;
+      },
+    };
+  }
+  if (entry.kind === "multiCollection") {
+    const handle = await multiCollection(
+      context.db,
+      entry.name,
+      entry.types,
+      options,
+    );
+    return {
+      async update(target, filter, set, unset) {
+        return await handle.updateWhere(
+          typeOf(target),
+          filter,
+          removals(set, unset),
+        );
+      },
+      async insert(target, document) {
+        return await handle.insertOne(typeOf(target), document);
+      },
+      async remove(target, id) {
+        return await handle.deleteId(typeOf(target), stringId(id));
+      },
+    };
+  }
+  if (entry.kind === "scopedMultiCollection" && entry.scope) {
+    const handle = await scopedMultiCollection(context.db, entry.name, {
+      scope: entry.scope,
+      types: entry.types,
+      ...options,
+    });
+    return {
+      async update(target, filter, set, unset) {
+        return await handle
+          .scope(scopeOf(target))
+          .updateWhere(typeOf(target), filter, removals(set, unset));
+      },
+      async insert(target, document) {
+        return await handle
+          .scope(scopeOf(target))
+          .insertOne(typeOf(target), document);
+      },
+      async remove(target, id) {
+        return await handle
+          .scope(scopeOf(target))
+          .deleteId(typeOf(target), stringId(id));
+      },
+    };
+  }
+  throw new StudioHttpError(
+    409,
+    `"${entry.name}" is a ${entry.kind}; the studio only writes to collections, multi-collections and scoped collections`,
+  );
+}
+
+const cache = new WeakMap<StudioContext, Map<string, Promise<Writer>>>();
 
 function handleFor(
   context: StudioContext,
   entry: CatalogEntry,
-): Promise<AnyCollection> {
+): Promise<Writer> {
   let perContext = cache.get(context);
   if (!perContext) {
     perContext = new Map();
@@ -64,38 +202,7 @@ function handleFor(
   }
   const cached = perContext.get(entry.name);
   if (cached) return cached;
-  const created = (async () => {
-    if (entry.kind === "collection") {
-      const source = entry.types[entry.name];
-      if (!source) {
-        throw new StudioHttpError(409, `No schema for "${entry.name}"`);
-      }
-      return await collection(context.db, entry.name, source as never, {
-        schemaManagement: "managed",
-      });
-    }
-    if (entry.kind === "multiCollection") {
-      return await multiCollection(
-        context.db,
-        entry.name,
-        entry.types as never,
-        {
-          schemaManagement: "managed",
-        },
-      );
-    }
-    if (entry.kind === "scopedMultiCollection" && entry.scope) {
-      return await scopedMultiCollection(context.db, entry.name, {
-        scope: entry.scope,
-        types: entry.types as never,
-        schemaManagement: "managed",
-      });
-    }
-    throw new StudioHttpError(
-      409,
-      `"${entry.name}" is a ${entry.kind}; the studio only writes to collections, multi-collections and scoped collections`,
-    );
-  })();
+  const created = writerFor(context, entry);
   perContext.set(entry.name, created);
   created.catch(() => perContext.delete(entry.name));
   return created;
@@ -158,11 +265,18 @@ function checkField(path: string): void {
   }
 }
 
-function parseId(raw: unknown): unknown {
+function parseId(raw: unknown): DocumentId {
   if (typeof raw !== "string" || raw === "") {
     throw new StudioHttpError(400, "Missing document id");
   }
-  return parseExtendedJson(raw);
+  const id = parseExtendedJson(raw);
+  if (!isDocumentId(id)) {
+    throw new StudioHttpError(
+      400,
+      "The studio writes documents whose id is a string or an ObjectId",
+    );
+  }
+  return id;
 }
 
 function requireType(entry: CatalogEntry, type: string | undefined): string {
@@ -281,9 +395,7 @@ function translate(error: unknown): never {
     throw new StudioHttpError(
       409,
       "Another document already has this value for a unique index",
-      details
-        ? { duplicate: details as unknown as Record<string, unknown> }
-        : undefined,
+      details ? { duplicate: details } : undefined,
     );
   }
   const message = error instanceof Error ? error.message : String(error);
@@ -338,27 +450,14 @@ export async function updateDocument(
   let matched: number;
   let modified: number;
   try {
-    if (entry.kind === "collection") {
-      const update: Record<string, unknown> = {};
-      if (Object.keys(set).length > 0) update.$set = set;
-      if (unset.length > 0) {
-        update.$unset = Object.fromEntries(unset.map((path) => [path, ""]));
-      }
-      const result = await handle.updateOne({ _id: id, ...guard }, update);
-      matched = result.matchedCount;
-      modified = result.modifiedCount;
-    } else {
-      const type = requireType(entry, body.type);
-      const doc: Record<string, unknown> = { ...set };
-      for (const path of unset) doc[path] = REMOVE_FIELD;
-      const view =
-        entry.kind === "scopedMultiCollection"
-          ? handle.scope(requireScope(entry, body.scope))
-          : handle;
-      const result = await view.updateWhere(type, { _id: id, ...guard }, doc);
-      matched = result.matched;
-      modified = result.modified;
-    }
+    const result = await handle.update(
+      { type: checkedType, scope: body.scope },
+      { _id: id, ...guard },
+      set,
+      unset,
+    );
+    matched = result.matched;
+    modified = result.modified;
   } catch (error) {
     translate(error);
   }
@@ -399,16 +498,10 @@ export async function insertDocument(
   const handle = await handleFor(context, entry);
   let id: unknown;
   try {
-    if (entry.kind === "collection") {
-      id = await handle.insertOne(document);
-    } else {
-      const type = requireType(entry, body.type);
-      const view =
-        entry.kind === "scopedMultiCollection"
-          ? handle.scope(requireScope(entry, body.scope))
-          : handle;
-      id = await view.insertOne(type, document);
-    }
+    id = await handle.insert(
+      { type: checkedType, scope: body.scope },
+      document,
+    );
   } catch (error) {
     translate(error);
   }
@@ -424,12 +517,7 @@ export async function deleteDocument(
   await assertWritable(context);
   const entry = await requireEntry(context, name);
   const id = parseId(body.id);
-  const label =
-    typeof id === "string"
-      ? id
-      : typeof (id as { toHexString?: unknown })?.toHexString === "function"
-        ? (id as { toHexString(): string }).toHexString()
-        : encodeId(id);
+  const label = typeof id === "string" ? id : id.toHexString();
   if (body.confirm !== label) {
     throw new StudioHttpError(
       400,
@@ -437,22 +525,15 @@ export async function deleteDocument(
     );
   }
   const handle = await handleFor(context, entry);
-  const snapshot = await context.db
-    .collection(entry.name)
-    .findOne({ _id: id as never });
+  const snapshot = await storedCollection(context.db, entry.name).findOne({
+    _id: id,
+  });
   let deleted: number;
+  const checkedType =
+    entry.kind === "collection" ? undefined : requireType(entry, body.type);
+  requireScope(entry, body.scope);
   try {
-    if (entry.kind === "collection") {
-      const result = await handle.deleteOne({ _id: id });
-      deleted = result.deletedCount;
-    } else {
-      const type = requireType(entry, body.type);
-      const view =
-        entry.kind === "scopedMultiCollection"
-          ? handle.scope(requireScope(entry, body.scope))
-          : handle;
-      deleted = await view.deleteId(type, id);
-    }
+    deleted = await handle.remove({ type: checkedType, scope: body.scope }, id);
   } catch (error) {
     translate(error);
   }
@@ -471,7 +552,7 @@ export const RESTORE_WINDOW_MS = 10 * 60 * 1000;
 
 interface KeptDocument {
   collection: string;
-  document: Record<string, unknown>;
+  document: StoredDocument;
   expires: number;
 }
 
@@ -480,7 +561,7 @@ const kept = new WeakMap<StudioContext, Map<string, KeptDocument>>();
 function keepForRestore(
   context: StudioContext,
   collectionName: string,
-  document: Record<string, unknown>,
+  document: StoredDocument,
 ): string {
   let store = kept.get(context);
   if (!store) {
@@ -521,7 +602,7 @@ export async function restoreDocument(
     );
   }
   try {
-    await context.db.collection(entry.name).insertOne(item.document as never);
+    await storedCollection(context.db, entry.name).insertOne(item.document);
   } catch (error) {
     translate(error);
   }
