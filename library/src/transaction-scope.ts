@@ -1,11 +1,11 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import { contextVariable } from "./context-variable.ts";
 
-const transactionScope = new AsyncLocalStorage<true>();
+const transactionScope = contextVariable<true>("mongodbee.transaction");
 
 export function runInTransactionScope<T>(fn: () => Promise<T>): Promise<T> {
   return transactionScope.run(true, fn);
 }
 
 export function insideTransaction(): boolean {
-  return transactionScope.getStore() === true;
+  return transactionScope.get() === true;
 }

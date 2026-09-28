@@ -27,3 +27,11 @@
  */
 
 export * from "./src/session.ts";
+export {
+  invalidateReads,
+  invalidateReadsOnDriverWrites,
+  type RequestContextOptions,
+  type RequestReadStats,
+  requestReadStats,
+  withRequestContext,
+} from "./src/request-context.ts";

@@ -59,6 +59,7 @@ import {
 } from "./type-definition.ts";
 import { withDatabaseDdlLock } from "./ddl-lock.ts";
 import { isSchemaManaged } from "./runtime-config.ts";
+import { findOneThrough, findThrough } from "./request-context.ts";
 import {
   createOperationTracer,
   errorWithSafeMessage,
@@ -926,12 +927,10 @@ export async function scopedMultiCollection<S extends AnySchema>(
         const run = async () => {
           const typeName = type as string;
           const session = sessionContext.getSession();
-          const raw = await collection.findOne(
-            {
-              _id: id,
-              _type: typeName,
-              _scope: scopeId,
-            },
+          const raw = await findOneThrough(
+            collection,
+            { _id: id, _type: typeName, _scope: scopeId },
+            undefined,
             { session },
           );
           if (!raw) {
@@ -964,11 +963,11 @@ export async function scopedMultiCollection<S extends AnySchema>(
           ];
           if (filter) conditions.push(toStoredFilter(filter));
 
-          const raw = await collection.findOne(
+          const raw = await findOneThrough(
+            collection,
             { $and: conditions },
-            {
-              session,
-            },
+            undefined,
+            { session },
           );
           if (!raw) return null;
           return parseStored(storageSchemas[typeName], raw);
@@ -996,11 +995,12 @@ export async function scopedMultiCollection<S extends AnySchema>(
           ];
           if (filter) conditions.push(toStoredFilter(filter));
 
-          const cursor = collection.find(
+          const raw = await findThrough(
+            collection,
             { $and: conditions },
+            findOptions,
             readOpts(session, findOptions),
           );
-          const raw = await cursor.toArray();
           // `validate: false` skips the per-document parse for trusted hot-path
           // reads, returning the raw stored docs. Schema transforms are NOT
           // applied in that mode — opt out only when you don't depend on them.
@@ -1047,14 +1047,14 @@ export async function scopedMultiCollection<S extends AnySchema>(
             { _scope: scopeId },
           ];
           if (filter) conditions.push(toStoredFilter(filter));
-          const cursor = collection.find(
+          const projection = buildProjection(fields as readonly string[]);
+          const raw = await findThrough(
+            collection,
             { $and: conditions },
-            {
-              ...readOpts(session, options),
-              projection: buildProjection(fields as readonly string[]),
-            },
+            { ...options, projection },
+            { ...readOpts(session, options), projection },
           );
-          return (await cursor.toArray()) as Projected<T, K, S, P>[];
+          return raw as Projected<T, K, S, P>[];
         };
         return traced(
           tele,
@@ -1074,11 +1074,11 @@ export async function scopedMultiCollection<S extends AnySchema>(
           const session = sessionContext.getSession();
           const conditions: Record<string, unknown>[] = [{ _scope: scopeId }];
           if (filter) conditions.push(toStoredFilter(filter));
-          const raw = await collection.findOne(
+          const raw = await findOneThrough(
+            collection,
             { $and: conditions },
-            {
-              session,
-            },
+            undefined,
+            { session },
           );
           if (!raw) return null;
           return parseStored(storageUnion, raw);
@@ -1100,11 +1100,12 @@ export async function scopedMultiCollection<S extends AnySchema>(
           const { validate = true, ...findOptions } = options ?? {};
           const conditions: Record<string, unknown>[] = [{ _scope: scopeId }];
           if (filter) conditions.push(toStoredFilter(filter));
-          const cursor = collection.find(
+          const raw = await findThrough(
+            collection,
             { $and: conditions },
+            findOptions,
             readOpts(session, findOptions),
           );
-          const raw = await cursor.toArray();
           if (validate === false) return raw;
           const out: StoredOutput[] = [];
           for (const item of raw) {
@@ -2008,11 +2009,11 @@ export async function scopedMultiCollection<S extends AnySchema>(
             conditions.push(toStoredFilter(userFilter));
           }
 
-          const raw = await collection.findOne(
+          const raw = await findOneThrough(
+            collection,
             { $and: conditions },
-            {
-              session,
-            },
+            undefined,
+            { session },
           );
           if (!raw) return null;
           return parseStored(storageSchemas[typeName], raw);
@@ -2041,11 +2042,12 @@ export async function scopedMultiCollection<S extends AnySchema>(
             conditions.push(toStoredFilter(userFilter));
           }
 
-          const cursor = collection.find(
+          const raw = await findThrough(
+            collection,
             { $and: conditions },
+            findOptions,
             readOpts(session, findOptions),
           );
-          const raw = await cursor.toArray();
           if (validate === false) return raw;
           const out: StoredOutput[] = [];
           for (const item of raw) {
@@ -2088,14 +2090,14 @@ export async function scopedMultiCollection<S extends AnySchema>(
           if (userFilter) {
             conditions.push(toStoredFilter(userFilter));
           }
-          const cursor = collection.find(
+          const projection = buildProjection(fields as readonly string[]);
+          const raw = await findThrough(
+            collection,
             { $and: conditions },
-            {
-              ...readOpts(session, options),
-              projection: buildProjection(fields as readonly string[]),
-            },
+            { ...options, projection },
+            { ...readOpts(session, options), projection },
           );
-          return (await cursor.toArray()) as Projected<T, K, S, P>[];
+          return raw as Projected<T, K, S, P>[];
         };
         return traced(
           tele,
