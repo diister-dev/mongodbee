@@ -23,5 +23,5 @@
     "src",
     "types"
   ],
-  "exclude": ["test", "scripts", "**/*.test.ts"]
+  "exclude": ["test", "scripts", "**/*.test.ts", "src/studio/ui"]
 }
