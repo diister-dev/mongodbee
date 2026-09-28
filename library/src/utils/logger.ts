@@ -104,12 +104,37 @@ function formatArg(arg: unknown): string {
   }
 }
 
+export type LogLevel = Level;
+
+export interface LogRecord {
+  readonly level: LogLevel;
+  readonly namespace: string;
+  readonly message: string;
+  readonly args: readonly unknown[];
+}
+
+export type LogSink = (record: LogRecord) => void;
+
+const consoleSink: LogSink = ({ level, namespace, message }) => {
+  const delta = formatDelta(namespace, Date.now());
+  console.log(
+    `[mongodbee:${namespace}] ${level.toUpperCase()} ${message} (${delta})`,
+  );
+};
+
+let sink: LogSink = consoleSink;
+
+export function setLogSink(next: LogSink | undefined): void {
+  sink = next ?? consoleSink;
+}
+
 function emit(level: Level, namespace: string, args: unknown[]): void {
-  const now = Date.now();
-  const delta = formatDelta(namespace, now);
   const message = args.map(formatArg).join(" ");
-  const line = `[mongodbee:${namespace}] ${level.toUpperCase()} ${message} (${delta})`;
-  console.log(line);
+  try {
+    sink({ level, namespace, message, args });
+  } catch {
+    consoleSink({ level, namespace, message, args });
+  }
 }
 
 export interface Logger {

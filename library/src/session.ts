@@ -2,6 +2,9 @@ import type { ClientSession, Db, MongoClient } from "../mod.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getTransactionTracer } from "./telemetry.ts";
 import { runInTransactionScope } from "./transaction-scope.ts";
+import { createLogger } from "./utils/logger.ts";
+
+const log = createLogger("session");
 
 /**
  * Checks if MongoDB transactions are enabled on the current database
@@ -53,7 +56,7 @@ export async function checkTransactionEnabled(
   } catch (error) {
     // If administrative commands fail, fall back to the original method
     // This might happen in restricted environments
-    console.warn(
+    log.warn(
       "Unable to check transaction support via administrative commands, falling back to test transaction:",
       error,
     );
@@ -185,7 +188,7 @@ export function createSessionContext(mongoClient: MongoClient): {
     const transactionsEnabled = await transactionsEnabledPromise;
 
     if (!warningDisplayed && !transactionsEnabled) {
-      console.warn(
+      log.warn(
         "MongoDB transactions are not enabled. This may cause issues with concurrent operations.",
       );
       warningDisplayed = true;

@@ -38,6 +38,12 @@ export * from "./src/runtime-config.ts";
 export * from "./src/ids.ts";
 export { partial, removeField } from "./src/sanitizer.ts";
 export type { TelemetryOptions } from "./src/telemetry.ts";
+export {
+  type LogLevel,
+  type LogRecord,
+  type LogSink,
+  setLogSink,
+} from "./src/utils/logger.ts";
 export * from "./src/computed.ts";
 export {
   type ComputedField,

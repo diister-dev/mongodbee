@@ -3,6 +3,9 @@
  */
 
 import { insideTransaction } from "../transaction-scope.ts";
+import { createLogger } from "./logger.ts";
+
+const log = createLogger("retry");
 
 /**
  * Checks if an error is a MongoDB write conflict error
@@ -166,12 +169,7 @@ export async function retryOnWriteConflict<T>(
         throw error;
       }
 
-      console.error(
-        "Retry attempt",
-        attempt + 1,
-        "due to write conflict:",
-        error,
-      );
+      log.debug("retry attempt", attempt + 1, "after a write conflict:", error);
 
       // Calculate delay for next retry
       let delayMs = initialDelay;

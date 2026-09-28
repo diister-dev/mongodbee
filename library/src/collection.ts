@@ -49,6 +49,9 @@ import type { Db } from "./mongodb.ts";
 import type * as m from "mongodb";
 
 import type { AggregationStage } from "./types.ts";
+import { createLogger } from "./utils/logger.ts";
+
+const log = createLogger("collection");
 
 // `_id` always exists — its cursor rungs stay raw comparisons (no null branch).
 const NON_NULLABLE_SORT_FIELDS: ReadonlySet<string> = new Set(["_id"]);
@@ -810,8 +813,8 @@ export async function collection<
           .filter((item): item is m.WithId<TInput> => item !== null);
 
         if (invalidsCount > 0) {
-          console.warn(
-            `Warning: ${invalidsCount} invalid documents were ignored during find operation`,
+          log.warn(
+            `${invalidsCount} invalid documents were ignored during find operation`,
           );
         }
 
@@ -859,8 +862,8 @@ export async function collection<
           .filter((item): item is m.WithId<TInput> => item !== null);
 
         if (invalidsCount > 0) {
-          console.warn(
-            `Warning: ${invalidsCount} invalid documents were found during findInvalid operation`,
+          log.warn(
+            `${invalidsCount} invalid documents were found during findInvalid operation`,
           );
         }
         return output;

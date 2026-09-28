@@ -11,6 +11,9 @@
 import * as v from "valibot";
 import { createMockGenerator } from "@diister/valibot-mock";
 import type { MockGeneratorOptions } from "@diister/valibot-mock";
+import { createLogger } from "../../../utils/logger.ts";
+
+const log = createLogger("simulation");
 
 /**
  * Options threaded into ONE generator invocation.
@@ -101,8 +104,8 @@ export function generateMockDocument(
     return validation.output;
   }
   // If validation fails (shouldn't happen), fallback to simple mock
-  console.warn(
-    "/!\\ Generated mock data did not validate against schema, using simple mock instead",
+  log.warn(
+    "Generated mock data did not validate against schema, using the raw mock instead",
   );
   return mockData;
 }
@@ -127,8 +130,8 @@ export function generateMockScopeValue(
   if (validation.success) {
     return validation.output;
   }
-  console.warn(
-    "/!\\ Generated mock scope value did not validate against the scope schema, using raw mock instead",
+  log.warn(
+    "Generated mock scope value did not validate against the scope schema, using the raw mock instead",
   );
   return mockValue;
 }

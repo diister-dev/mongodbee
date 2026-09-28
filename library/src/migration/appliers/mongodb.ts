@@ -47,6 +47,9 @@ import {
 import { getIrreversibleOperations } from "../builder.ts";
 import { scopedMultiCollection } from "../../scoped-multi-collection.ts";
 import { getSessionContext } from "../../session.ts";
+import { createLogger } from "../../utils/logger.ts";
+
+const log = createLogger("migration-applier");
 
 /**
  * Resolve the `_id` of a seed document: honour an explicit `_id`, else
@@ -357,10 +360,7 @@ export function createMongodbApplier(
         });
       } catch (error) {
         // Tolerate errors (collection might not have validators)
-        console.warn(
-          `Could not disable validator for ${collectionName}:`,
-          error,
-        );
+        log.warn(`Could not disable validator for ${collectionName}:`, error);
       }
     }
   }
@@ -741,7 +741,7 @@ export function createMongodbApplier(
                 }`,
               );
             }
-            console.warn(
+            log.warn(
               `Skipping document ${doc._id} due to transform error:`,
               error,
             );
@@ -781,7 +781,7 @@ export function createMongodbApplier(
         if (collExist) {
           if (opts.strictValidation) {
             // throw new Error(`Collection ${operation.collectionName} already exists`);
-            console.warn(
+            log.warn(
               `Collection ${operation.collectionName} already exists, skipping creation.`,
             );
           }
@@ -877,7 +877,7 @@ export function createMongodbApplier(
 
         if (collExist) {
           if (opts.strictValidation) {
-            console.warn(
+            log.warn(
               `Multi-collection ${operation.collectionName} already exists, skipping creation.`,
             );
           }
@@ -959,7 +959,7 @@ export function createMongodbApplier(
 
         if (collExist) {
           if (opts.strictValidation && registered) {
-            console.warn(
+            log.warn(
               `Multi-model instance ${operation.collectionName} already exists, skipping creation.`,
             );
           }
@@ -1043,7 +1043,7 @@ export function createMongodbApplier(
           !(await collectionExists(operation.collectionName))
         ) {
           // throw new Error(`Collection ${operation.collectionName} does not exist`);
-          console.warn(
+          log.warn(
             `Collection ${operation.collectionName} does not exist, creating it first.`,
           );
         }
@@ -1405,9 +1405,7 @@ export function createMongodbApplier(
         );
 
         if (instances.length === 0) {
-          console.warn(
-            `No instances found for model type ${operation.modelType}`,
-          );
+          log.warn(`No instances found for model type ${operation.modelType}`);
           return;
         }
 
@@ -1422,7 +1420,7 @@ export function createMongodbApplier(
             migration,
           );
           if (!shouldReceive) {
-            console.log(
+            log.info(
               `Skipping instance ${collectionName} - already has this migration`,
             );
             continue;
@@ -1641,9 +1639,7 @@ export function createMongodbApplier(
         );
 
         if (instances.length === 0) {
-          console.warn(
-            `No instances found for model type ${operation.modelType}`,
-          );
+          log.warn(`No instances found for model type ${operation.modelType}`);
           return;
         }
 
@@ -1658,7 +1654,7 @@ export function createMongodbApplier(
             migration,
           );
           if (!shouldReceive) {
-            console.log(
+            log.info(
               `Skipping instance ${collectionName} - already has this migration`,
             );
             continue;
@@ -2203,9 +2199,7 @@ export function createMongodbApplier(
           operation.modelType,
         );
         if (instances.length === 0) {
-          console.warn(
-            `No instances found for model type ${operation.modelType}`,
-          );
+          log.warn(`No instances found for model type ${operation.modelType}`);
           return;
         }
         for (const collectionName of instances) {
@@ -2343,9 +2337,7 @@ export function createMongodbApplier(
         );
 
         if (instances.length === 0) {
-          console.warn(
-            `No instances found for model type ${operation.modelType}`,
-          );
+          log.warn(`No instances found for model type ${operation.modelType}`);
           return;
         }
 
@@ -2553,9 +2545,7 @@ export function createMongodbApplier(
         );
 
         if (instances.length === 0) {
-          console.warn(
-            `No instances found for model type ${operation.modelType}`,
-          );
+          log.warn(`No instances found for model type ${operation.modelType}`);
           return;
         }
 
@@ -2739,7 +2729,7 @@ export function createMongodbApplier(
       try {
         await synchronizeValidatorsAndIndexes(targetSchemas);
       } catch (syncErr) {
-        console.error(
+        log.error(
           "CRITICAL: failed to re-enable validators after migration. " +
             "Collections may be left without validation until the next " +
             "`migrate`/`check` run.",
