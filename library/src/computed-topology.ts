@@ -14,7 +14,7 @@ interface LeadingIndex {
   readonly global: boolean;
 }
 
-function leadingIndexes(input: unknown): LeadingIndex[] {
+export function leadingIndexes(input: unknown): LeadingIndex[] {
   if (!isTypeInput(input)) return [];
   const onFields = extractIndexes(v.object(fieldsOf(input))).map(
     ({ path, metadata }) => ({
@@ -78,11 +78,36 @@ export class ComputedTopologyError extends Error {
   override readonly name = "ComputedTopologyError";
 }
 
+export interface TypePlacement {
+  readonly locations: readonly ComputedLocation[];
+  readonly input: unknown;
+}
+
 export class ComputedTopology {
   readonly fields: readonly ComputedField[];
+  readonly types: ReadonlyMap<string, TypePlacement>;
 
-  constructor(fields: readonly ComputedField[]) {
+  constructor(
+    fields: readonly ComputedField[],
+    types: ReadonlyMap<string, TypePlacement> = new Map(),
+  ) {
     this.fields = Object.freeze([...fields]);
+    this.types = types;
+  }
+
+  place(type: string): { location: ComputedLocation; input: unknown } {
+    const placement = this.types.get(type);
+    if (!placement || placement.locations.length === 0) {
+      throw new ComputedTopologyError(
+        `type "${type}" is not declared in any collection of the topology`,
+      );
+    }
+    if (placement.locations.length > 1) {
+      throw new ComputedTopologyError(
+        `type "${type}" is declared in ${placement.locations.map(describe).join(" and ")}; it must live in one place`,
+      );
+    }
+    return { location: placement.locations[0]!, input: placement.input };
   }
 
   field(subject: string, name: string): ComputedField {
@@ -279,5 +304,16 @@ export function computedTopology(schemas: ComputedSchemas): ComputedTopology {
       );
     }
   }
-  return new ComputedTopology(fields);
+  return new ComputedTopology(
+    fields,
+    new Map(
+      [...locations].map(([type, placed]) => [
+        type,
+        Object.freeze({
+          locations: Object.freeze([...placed]),
+          input: inputs.get(type),
+        }),
+      ]),
+    ),
+  );
 }

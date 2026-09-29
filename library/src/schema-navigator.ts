@@ -825,6 +825,35 @@ export function findSchemaAtPath(
   return found;
 }
 
+const ALTERNATIVE_SEGMENT = /^\$(union|variant|intersect)\[\d+\]$/;
+
+export function findSchemasAtFieldPath(
+  schema: UnknownSchema,
+  targetPath: readonly string[],
+): UnknownSchema[] {
+  const found: UnknownSchema[] = [];
+  new SchemaNavigator().navigate(
+    schema,
+    createSimpleVisitor({
+      onNode: (node) => {
+        const fieldPath = node.path.filter(
+          (segment) => !ALTERNATIVE_SEGMENT.test(segment),
+        );
+        if (
+          fieldPath.length === targetPath.length &&
+          fieldPath.every((segment, index) => segment === targetPath[index]) &&
+          "kind" in node.schema &&
+          node.schema.kind === "schema"
+        ) {
+          found.push(node.schema as UnknownSchema);
+          return false;
+        }
+      },
+    }),
+  );
+  return found;
+}
+
 /**
  * Path element processor result types
  */

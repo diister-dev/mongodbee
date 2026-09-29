@@ -12,12 +12,24 @@ export interface FieldRef<T = unknown> {
 
 type Scalar = string | number | boolean | bigint | Date | null | undefined;
 
+type KeysOfAny<T> = T extends unknown ? keyof T : never;
+
+type ValueAt<T, K extends PropertyKey> = T extends unknown
+  ? K extends keyof T
+    ? T[K]
+    : never
+  : never;
+
+type Branches<T> = Exclude<T, Scalar | ReadonlyArray<unknown>>;
+
 export type FieldProxy<T> = FieldRef<T> &
-  (T extends Scalar
+  ([Branches<T>] extends [never]
     ? unknown
-    : T extends ReadonlyArray<unknown>
-      ? unknown
-      : { readonly [K in keyof T]-?: FieldProxy<NonNullable<T[K]>> });
+    : {
+        readonly [K in KeysOfAny<Branches<T>>]-?: FieldProxy<
+          NonNullable<ValueAt<Branches<T>, K>>
+        >;
+      });
 
 export type FieldsOf<T> = FieldProxy<T> & {
   readonly _id: FieldRef<string>;
