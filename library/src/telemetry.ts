@@ -41,6 +41,7 @@ import {
 import type { ClientSession, MongoClient } from "mongodb";
 import { VERSION } from "./version.ts";
 import { DocumentValidationError } from "./validation-error.ts";
+import { invalidateReads, isReadOperation } from "./request-context.ts";
 
 /**
  * Opt-in tracing configuration accepted by `collection()`,
@@ -453,8 +454,18 @@ export function traced<T>(
   run: (op?: OpContext) => Promise<T>,
   resultAttributes?: (result: T) => Attributes | undefined,
 ): Promise<T> {
-  if (!tele) return run();
-  return tele.withOp(operationName, attributes?.(), run, resultAttributes);
+  const execute = isReadOperation(operationName)
+    ? run
+    : async (op?: OpContext) => {
+        invalidateReads();
+        try {
+          return await run(op);
+        } finally {
+          invalidateReads();
+        }
+      };
+  if (!tele) return execute();
+  return tele.withOp(operationName, attributes?.(), execute, resultAttributes);
 }
 
 /**

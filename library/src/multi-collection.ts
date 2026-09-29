@@ -27,6 +27,11 @@ import {
   type WithReadPreferenceInput,
   withReadPreference,
 } from "./read-preference.ts";
+import {
+  aggregateThrough,
+  findOneThrough,
+  findThrough,
+} from "./request-context.ts";
 import { withIndex } from "./indexes.ts";
 import type { FlatType } from "../types/flat.ts";
 import type { Db } from "./mongodb.ts";
@@ -924,10 +929,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     async getById(key, id, options?) {
       const run = async () => {
         const session = sessionContext.getSession();
-        const result = await collection.findOne(
-          {
-            $and: [{ _type: key as string }, { _id: id }],
-          },
+        const result = await findOneThrough(
+          collection,
+          { $and: [{ _type: key as string }, { _id: id }] },
+          options,
           readOpts(session, options),
         );
 
@@ -950,10 +955,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     async findOne(key, filter, options?) {
       const run = async () => {
         const session = sessionContext.getSession();
-        const result = await collection.findOne(
-          {
-            $and: [{ _type: key as string }, toStoredFilter(filter)],
-          },
+        const result = await findOneThrough(
+          collection,
+          { $and: [{ _type: key as string }, toStoredFilter(filter)] },
+          options,
           readOpts(session, options),
         );
 
@@ -980,17 +985,17 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         };
 
         const session = sessionContext.getSession();
-        const cursor = collection.find(
+        const result = await findThrough(
+          collection,
           {
             $and:
               filter === undefined
                 ? [typeChecker]
                 : [typeChecker, toStoredFilter(filter)],
           },
+          options,
           readOpts(session, options),
         );
-
-        const result = await cursor.toArray();
 
         const output: v.InferOutput<OutputElementSchema<T, typeof key>>[] = [];
         for (const item of result) {
@@ -1681,8 +1686,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     async findOneAny(filter, options?) {
       const run = async () => {
         const session = sessionContext.getSession();
-        const result = await collection.findOne(
+        const result = await findOneThrough(
+          collection,
           toStoredFilter(filter),
+          options,
           readOpts(session, options),
         );
         if (!result) {
@@ -1702,11 +1709,12 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     async findAny(filter, options) {
       const run = async () => {
         const session = sessionContext.getSession();
-        const cursor = collection.find(
+        const result = await findThrough(
+          collection,
           toStoredFilter(filter),
+          options,
           readOpts(session, options),
         );
-        const result = await cursor.toArray();
 
         const output: Output<T>[] = [];
         for (const item of result) {
@@ -2015,12 +2023,12 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         const session = sessionContext.getSession();
 
         const pipeline = stageBuilder(stage);
-        const cursor = collection.aggregate<R>(
+        return await aggregateThrough<StoredDocument, R>(
+          collection,
           pipeline,
+          options,
           readOpts(session, options),
         );
-
-        return await cursor.toArray();
       };
       return traced(tele, "aggregate", undefined, run, (docs) => ({
         [TA.RETURNED_ROWS]: docs.length,

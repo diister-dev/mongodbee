@@ -1,9 +1,13 @@
 import type { ClientSession, Db, MongoClient } from "../mod.ts";
 import * as m from "mongodb";
-import { AsyncLocalStorage } from "node:async_hooks";
+import { contextVariable } from "./context-variable.ts";
 import { PRIMARY } from "./read-preference.ts";
+import { invalidateReads } from "./request-context.ts";
 import { getTransactionTracer } from "./telemetry.ts";
-import { runInTransactionScope } from "./transaction-scope.ts";
+import {
+  runInTransactionScope,
+  type TransactionRun,
+} from "./transaction-scope.ts";
 import { createLogger } from "./utils/logger.ts";
 
 const log = createLogger("session");
@@ -247,10 +251,10 @@ export function createSessionContext(mongoClient: MongoClient): {
   let warningDisplayed = false;
   let transactionsEnabledPromise: Promise<boolean> | undefined;
 
-  const asyncSession = new AsyncLocalStorage<ClientSession | undefined>();
+  const asyncSession = contextVariable<ClientSession>("mongodbee.session");
 
   function getSession(): ClientSession | undefined {
-    return asyncSession.getStore();
+    return asyncSession.get();
   }
 
   async function withSession<T>(
@@ -280,7 +284,7 @@ export function createSessionContext(mongoClient: MongoClient): {
     }
 
     const newSession = mongoClient.startSession();
-    return asyncSession.run(newSession, () => {
+    const committed = await asyncSession.run(newSession, () => {
       const txOptions = transactionOptions(options);
       const startedAt = Date.now();
       const canRetry = (e: unknown) =>
@@ -291,7 +295,7 @@ export function createSessionContext(mongoClient: MongoClient): {
         try {
           while (true) {
             newSession.startTransaction(txOptions);
-            let result: T;
+            let result: TransactionRun<T>;
             try {
               result = await runInTransactionScope(() => fn(newSession));
             } catch (e) {
@@ -306,6 +310,8 @@ export function createSessionContext(mongoClient: MongoClient): {
             } catch (e) {
               if (canRetry(e)) continue;
               throw e;
+            } finally {
+              invalidateReads();
             }
             return result;
           }
@@ -318,6 +324,14 @@ export function createSessionContext(mongoClient: MongoClient): {
         ? txTracer.withTransaction(newSession, execute)
         : execute();
     });
+    for (const callback of committed.afterCommit) {
+      try {
+        await callback();
+      } catch (error) {
+        log.error("An afterCommit callback failed after the commit", error);
+      }
+    }
+    return committed.result;
   }
 
   return {

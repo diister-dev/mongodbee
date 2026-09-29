@@ -22,6 +22,7 @@ import {
   type WithReadPreferenceInput,
   withReadPreference,
 } from "./read-preference.ts";
+import { findOneThrough } from "./request-context.ts";
 import { ensureValidator } from "./utils/ensure-validator.ts";
 import { withDatabaseDdlLock } from "./ddl-lock.ts";
 import { applyCollectionIndexes } from "./indexes-applier.ts";
@@ -935,11 +936,13 @@ export async function collection<
     async findOne(filter, options?) {
       const run = async () => {
         const session = sessionContext.getSession();
-        const result = await collection.findOne(
+        const result = await findOneThrough(
+          collection,
           {
             ...validator, // Prevent returning invalid documents
             ...(filter as unknown as m.Filter<TInput>),
           },
+          options,
           readOpts(session, options),
         );
 
@@ -965,8 +968,10 @@ export async function collection<
     async getById(id, options?) {
       const run = async () => {
         const session = sessionContext.getSession();
-        const result = await documents.findOne(
+        const result = await findOneThrough(
+          documents,
           { _id: id },
+          options,
           readOpts(session, options),
         );
 
