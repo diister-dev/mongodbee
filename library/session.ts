@@ -40,3 +40,9 @@ export {
   afterCommit,
   insideTransaction,
 } from "./src/transaction-scope.ts";
+export {
+  currentReadPreference,
+  type ReadPreferenceInput,
+  readingCollection,
+  withReadPreference,
+} from "./src/read-preference.ts";

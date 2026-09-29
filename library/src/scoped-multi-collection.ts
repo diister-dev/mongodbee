@@ -26,10 +26,11 @@ import { getSessionContext } from "./session.ts";
 import { COMPUTED_ROOT } from "./computed-guard.ts";
 import { maintainedCollection } from "./computed-maintenance.ts";
 import {
+  type DriverCollectionOptions,
   type ReadPreferenceInput,
+  readingCollection,
   readOpts,
   type WithReadPreferenceInput,
-  withReadPreference,
 } from "./read-preference.ts";
 import { createDotNotationSchema } from "./dot-notation.ts";
 import {
@@ -715,12 +716,13 @@ export async function scopedMultiCollection<S extends AnySchema>(
 
   const collection = maintainedCollection(
     db,
-    db.collection<StoredDocument>(
+    readingCollection<StoredDocument, DriverCollectionOptions>(
+      db,
       collectionName,
-      withReadPreference({
+      {
         readPreference: config.readPreference,
         readConcern: config.readConcern,
-      }),
+      },
     ),
     collectionName,
     Object.values(types).some((fields) => COMPUTED_ROOT in fields),
