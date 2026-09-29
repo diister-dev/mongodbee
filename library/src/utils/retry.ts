@@ -62,6 +62,15 @@ export function isTransactionScopedError(error: unknown): boolean {
   );
 }
 
+export function isRetryableTransactionFailure(error: unknown): boolean {
+  return isWriteConflictError(error) || isTransactionScopedError(error);
+}
+
+export const TRANSACTION_REPLAY: Readonly<RetryOptions> = Object.freeze({
+  maxRetries: 8,
+  shouldRetry: isRetryableTransactionFailure,
+});
+
 /**
  * Options for retry behavior
  */
