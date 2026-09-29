@@ -14,6 +14,7 @@ import {
 import {
   COMPUTED_REVISION,
   COMPUTED_ROOT,
+  type ComputedLiteral,
   type ComputedWhere,
 } from "./computed.ts";
 import {
@@ -209,22 +210,111 @@ export async function computeTruth(
       );
     }
 
-    const wanted = new Set(ids.map(String));
-    for (const document of near) {
-      const owners = new Set(
-        asList(valueAt(document, descriptor.by))
-          .map(String)
-          .filter((id) => wanted.has(id)),
-      );
-      const reached = farById
-        ? asList(valueAt(document, descriptor.through!.via))
-            .map((via) => farById!.get(keyOf(via)))
-            .filter((far): far is Document => far !== undefined)
-        : [document];
-      for (const owner of owners) contributions.get(owner)!.push(...reached);
-    }
+    contribute(field, contributions, new Set(ids.map(String)), near, farById);
   }
 
+  return truthOf(field, contributions);
+}
+
+export function computeTruthFromDocuments(
+  field: ComputedField,
+  subjects: readonly ComputedSubject[],
+  sources: readonly Document[],
+  fars: readonly Document[],
+): Map<string, unknown> {
+  const { descriptor } = field;
+  const contributions = new Map<string, Document[]>(
+    subjects.map((subject) => [String(subject._id), []]),
+  );
+  for (const [scope, group] of groupByScope(field, subjects)) {
+    const wanted = new Set(group.map((subject) => String(subject._id)));
+    const near = sources
+      .filter(
+        (document) =>
+          (!field.scoped || document._scope === scope) &&
+          matchesWhere(document, descriptor.where) &&
+          asList(valueAt(document, descriptor.by)).some((owner) =>
+            wanted.has(String(owner)),
+          ),
+      )
+      .sort(byId);
+    const through = descriptor.through;
+    const farById = through
+      ? new Map(
+          fars
+            .filter(
+              (document) =>
+                (!field.farScoped || document._scope === scope) &&
+                matchesWhere(document, through.where),
+            )
+            .map((document) => [keyOf(document._id), document]),
+        )
+      : undefined;
+    contribute(field, contributions, wanted, near, farById);
+  }
+  return truthOf(field, contributions);
+}
+
+function byId(a: Document, b: Document): number {
+  const left = String(a._id);
+  const right = String(b._id);
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function matchesLiteral(value: unknown, expected: ComputedLiteral): boolean {
+  if (expected === null) {
+    return (
+      value === undefined ||
+      asList(value).length === 0 ||
+      (Array.isArray(value) && value.includes(null))
+    );
+  }
+  return asList(value).some((candidate) => candidate === expected);
+}
+
+function isLiteralList(
+  expected: ComputedLiteral | readonly ComputedLiteral[],
+): expected is readonly ComputedLiteral[] {
+  return Array.isArray(expected);
+}
+
+function matchesWhere(document: Document, where: ComputedWhere): boolean {
+  return Object.entries(where).every(([path, expected]) => {
+    const value = valueAt(document, path);
+    return isLiteralList(expected)
+      ? expected.some((literal) => matchesLiteral(value, literal))
+      : matchesLiteral(value, expected);
+  });
+}
+
+function contribute(
+  field: ComputedField,
+  contributions: Map<string, Document[]>,
+  wanted: ReadonlySet<string>,
+  near: readonly Document[],
+  farById: ReadonlyMap<string, Document> | undefined,
+): void {
+  const { descriptor } = field;
+  for (const document of near) {
+    const owners = new Set(
+      asList(valueAt(document, descriptor.by))
+        .map(String)
+        .filter((id) => wanted.has(id)),
+    );
+    const reached = farById
+      ? asList(valueAt(document, descriptor.through!.via))
+          .map((via) => farById.get(keyOf(via)))
+          .filter((far): far is Document => far !== undefined)
+      : [document];
+    for (const owner of owners) contributions.get(owner)!.push(...reached);
+  }
+}
+
+function truthOf(
+  field: ComputedField,
+  contributions: ReadonlyMap<string, Document[]>,
+): Map<string, unknown> {
+  const aggregate = field.descriptor.aggregate;
   const truth = new Map<string, unknown>();
   for (const [subject, documents] of contributions) {
     if (aggregate.kind === "count") {

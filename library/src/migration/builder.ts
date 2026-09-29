@@ -59,6 +59,7 @@ import type {
   TransformCollectionRule,
 } from "./types.ts";
 import { fieldsOf, type TypeInput } from "../type-definition.ts";
+import { computedTopology } from "../computed-topology.ts";
 
 /**
  * A transform's document type is the migration's to name; the engine runs the
@@ -774,6 +775,17 @@ function createScopedMultiCollectionTypeBuilder(
         ...(options.scopeFilter ? { scopeFilter: options.scopeFilter } : {}),
       });
       state.mark({ type: "irreversible" });
+      return builder;
+    },
+
+    applyComputed(field) {
+      computedTopology(options.schemas ?? {}).field(documentType, field);
+      state.operations.push({
+        type: "apply_computed_scoped_multicollection_type",
+        collectionName,
+        documentType,
+        field,
+      });
       return builder;
     },
 

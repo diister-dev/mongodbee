@@ -343,6 +343,13 @@ export type DedupeScopedMultiCollectionDocumentsRule = {
   scopeFilter?: readonly string[];
 };
 
+export type ApplyComputedScopedMultiCollectionTypeRule = {
+  type: "apply_computed_scoped_multicollection_type";
+  collectionName: string;
+  documentType: string;
+  field: string;
+};
+
 /**
  * Rule for renaming a type in a multi-collection or multi-model
  *
@@ -511,6 +518,7 @@ export type MigrationRule =
   | DedupeCollectionDocumentsRule
   | DedupeMultiCollectionDocumentsRule
   | DedupeScopedMultiCollectionDocumentsRule
+  | ApplyComputedScopedMultiCollectionTypeRule
   // Rename type
   | RenameMultiCollectionTypeRule
   | RenameMultiModelInstancesTypeRule
@@ -829,6 +837,7 @@ export interface ScopedMultiCollectionTypeBuilder {
   dedupe(
     options: DedupeOptions & { readonly scopeFilter?: readonly string[] },
   ): ScopedMultiCollectionTypeBuilder;
+  applyComputed(field: string): ScopedMultiCollectionTypeBuilder;
 
   /** Finishes configuring this type and returns to the scoped builder. */
   end(): ScopedMultiCollectionBuilder;

@@ -49,6 +49,12 @@ import { scopedMultiCollection } from "../../scoped-multi-collection.ts";
 import { getSessionContext } from "../../session.ts";
 import { PRIMARY, primaryCollection } from "../../read-preference.ts";
 import { createLogger } from "../../utils/logger.ts";
+import { applyComputed } from "../../computed-apply.ts";
+import { computedTopology } from "../../computed-topology.ts";
+import {
+  computedUnsetPath,
+  parentDeclaresComputed,
+} from "../computed-operation.ts";
 
 const log = createLogger("migration-applier");
 
@@ -2493,6 +2499,25 @@ export function createMongodbApplier(
             unknown
           >);
         }
+      },
+    },
+
+    apply_computed_scoped_multicollection_type: {
+      apply: async (operation) => {
+        await applyComputed(db, computedTopology(migration.schemas), {
+          subject: operation.documentType,
+          fields: [operation.field],
+        });
+      },
+      reverse: async (operation) => {
+        const keepRoot = parentDeclaresComputed(
+          migration,
+          operation.documentType,
+        );
+        await primaryCollection(db, operation.collectionName).updateMany(
+          { _type: operation.documentType },
+          { $unset: { [computedUnsetPath(operation.field, keepRoot)]: "" } },
+        );
       },
     },
 
