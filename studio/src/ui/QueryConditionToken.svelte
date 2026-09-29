@@ -126,7 +126,7 @@
     onchange={(op) => update({ op, value: needsValue(op) ? condition.value : "" })}
   />
   {#if needsValue(condition.op)}
-    {#if choices}
+    {#if choices && condition.op !== "in"}
       <Select
         value={condition.value}
         options={[{ value: "", label: "choose" }, ...choices]}
@@ -137,9 +137,9 @@
     {:else}
       <Combobox
         value={condition.value}
-        options={suggestions}
+        options={condition.op === "in" && choices ? choices : suggestions}
         label="Value for {condition.field}"
-        placeholder={family === "number" ? "0" : family === "date" ? "2026-01-31" : "value"}
+        placeholder={condition.op === "in" ? "a, b, c" : family === "number" ? "0" : family === "date" ? "2026-01-31" : "value"}
         free
         mono
         width="170px"

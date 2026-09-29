@@ -14,7 +14,8 @@ test("operators fit the field family, text defaults to contains", () => {
   assertEquals(defaultOperator("number"), "eq");
   assertEquals(operatorsFor("number").includes("gte"), true);
   assertEquals(operatorsFor("boolean").includes("gt"), false);
-  assertEquals(operatorsFor("choice"), ["eq", "ne", "exists", "missing"]);
+  assertEquals(operatorsFor("choice"), ["eq", "ne", "in", "exists", "missing"]);
+  assertEquals(operatorsFor("date").includes("in"), false);
 });
 
 test("conditions serialise only when complete", () => {

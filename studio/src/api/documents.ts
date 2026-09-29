@@ -41,6 +41,7 @@ export const CONDITION_OPERATORS = [
   "lte",
   "contains",
   "starts",
+  "in",
   "exists",
   "missing",
 ] as const;
@@ -176,6 +177,27 @@ export function parseCondition(raw: string): Condition {
   return { field, op, value: raw.slice(second + 1) };
 }
 
+export function listValues(raw: string): string[] {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("[")) {
+    const parsed = parseExtendedJson(trimmed);
+    if (
+      !Array.isArray(parsed) ||
+      parsed.some((item) => item !== null && typeof item === "object")
+    ) {
+      throw new StudioHttpError(
+        400,
+        "A list of values holds strings, numbers, booleans or null",
+      );
+    }
+    return parsed.map((item) => (item === null ? "null" : String(item)));
+  }
+  return trimmed
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item !== "");
+}
+
 export function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -207,6 +229,12 @@ export function conditionClause(
       return { [field]: { $regex: `^${escapeRegex(value)}`, $options: "i" } };
     case "eq":
       return { [field]: coerceFilterValue(value, kind) };
+    case "in":
+      return {
+        [field]: {
+          $in: listValues(value).map((item) => coerceFilterValue(item, kind)),
+        },
+      };
     case "ne":
       return { [field]: { $ne: coerceFilterValue(value, kind) } };
     default:

@@ -11,7 +11,7 @@
   import ErrorState from "./ErrorState.svelte";
   import TypeTag from "./values/TypeTag.svelte";
 
-  let { collection, tab, type, scope = "", open = "", navigate } = $props();
+  let { collection, tab, type, scope = "", open = "", where = [], navigate } = $props();
 
   let schema = $state(null);
   let schemaError = $state(null);
@@ -89,14 +89,14 @@
 {:else if !schema}
   <div class="empty-state"><span class="shimmer">Loading schema</span></div>
 {:else}
-  {#key `${shown}|${type}|${scope}|${open}`}
+  {#key `${shown}|${type}|${scope}|${open}|${where.join("&")}`}
     <div class="tab-body">
       {#if shown === "schema"}
         <SchemaView {schema} {type} {collection} />
       {:else if shown === "indexes"}
         <IndexesView {collection} />
       {:else}
-        <DataView {collection} {schema} {type} initialScope={scope} initialOpen={open} />
+        <DataView {collection} {schema} {type} {navigate} initialScope={scope} initialOpen={open} initialWhere={where} />
       {/if}
     </div>
   {/key}

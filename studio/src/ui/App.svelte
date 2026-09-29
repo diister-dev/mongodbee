@@ -48,6 +48,7 @@
         type: params.get("type") ?? "",
         scope: params.get("scope") ?? "",
         open: params.get("open") ?? "",
+        where: params.getAll("w"),
       };
     }
     return { view: "home" };
@@ -65,6 +66,7 @@
       if (next.type) params.set("type", next.type);
       if (next.scope) params.set("scope", next.scope);
       if (next.open) params.set("open", next.open);
+      for (const condition of next.where ?? []) params.append("w", condition);
       const query = params.toString();
       if (query) hash += `?${query}`;
     }
@@ -305,6 +307,7 @@
                   type={route.type}
                   scope={route.scope}
                   open={route.open}
+                  where={route.where}
                   {navigate}
                 />
               {:else}
