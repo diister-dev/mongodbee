@@ -233,14 +233,71 @@ From the two reports:
 Never in readers: scans, full participant documents, registrations and seat
 counts, leads, flow sessions, jobs, mails, secrets, key material, tokens.
 
-## 12. Observability and tooling
+## 12. Observability and control
 
-- Metrics per reader: hits and misses per level, loads, load duration,
-  invalidations by source, entries and bytes in L1, discarded loads (the
-  generation race), bypasses (feed not live, strict mode, freshness floor).
-- Feed metrics: live, lag, restarts, continuity losses, events per second.
+A cache nobody can see is a cache nobody trusts. Readers report through the
+telemetry mongodbee already has (OpenTelemetry, opt-in with the same
+`telemetry` options as collections), and give the operator levers that need
+no deployment.
+
+### 12.1 See
+
+- **Metrics**, per reader and level:
+  - calls by outcome: `hit`, `miss`, `bypass` (with its reason: strict mode,
+    feed not live, freshness floor, inside a transaction);
+  - loads and load duration;
+  - invalidations by source (write, commit, raw driver, feed, TTL) and by
+    width (one key, whole reader);
+  - discarded loads (the generation race), L1 entries, L1 bytes, evictions.
+- **Feed metrics**: live, lag, restarts, continuity losses, events per second.
+- **Spans**: a reader call inside a traced request records its name, level
+  and outcome as span attributes (`mongodbee.reader`, `mongodbee.reader.level`,
+  `mongodbee.reader.outcome`), so a slow request shows which facts came from
+  memory and which went to the database.
+- **Logs**, paired with a counter, for every anomaly: a continuity loss, a
+  critical reader bypassing L1 because the feed is late, a drift found by
+  verification (12.3). Values are never logged, only the reader, the key
+  hash and the reason.
+- **Dashboard and alerts**: the Grafana dashboard shipped in `doc/grafana`
+  gains a readers row (hit ratio by reader, bypasses, invalidations, feed lag)
+  and alert rules: drift above zero, feed not live, lag above `maxLagMs`,
+  continuity loss, a sudden hit ratio drop.
+
+### 12.2 Control
+
+- **Switches without deployment**, through mongodbee's runtime configuration:
+  all readers, one reader, or one level (L1 off keeps L0), each able to fall
+  back to plain loads instantly.
+- **Strict requests**: `withRequestContext(fn, { fresh: true })` for the
+  routes that must read at the source.
+- **Rollout per reader**: L1 is enabled one reader at a time, never globally
+  first.
+
+### 12.3 Prove
+
+- **Shadow mode**: before a reader serves from L1, it runs in shadow for a
+  while: it always loads from the database, compares with what L1 would have
+  returned, and counts mismatches. A reader is switched to serving only when
+  its shadow drift is zero over a representative period.
+- **Continuous verification**: once serving, a sampled share of L1 hits
+  (configurable, for example 1%) is reloaded in the background and compared.
+  A mismatch is logged and counted, and the entry is dropped. This is the
+  cache's equivalent of `checkComputed`.
+- **Dependency check in tests**: in test mode, a reader records the types its
+  `load` actually read and fails when one is missing from `dependsOn`. A too
+  narrow declaration, the dangerous direction since it leaves stale data, is
+  caught by the test suite rather than in production.
+- **Explain**: in development, a request can ask for the list of readers it
+  used, with level, outcome and key hash, for example through a response
+  header the application chooses to expose.
+
+### 12.4 Tooling
+
 - `@diister/mongodbee/inspect` exposes the declarations (name, key shape,
   dependencies, level, TTL, critical) so tools can show them.
+- In Diivento, the metrics come from mongodbee's instrumentation through the
+  application's OpenTelemetry provider; the application adds its own
+  dashboards and alerts on top and declares no duplicate instrument.
 
 What the studio can show, since it runs in its own process and never sees
 the application's memory:
@@ -278,8 +335,9 @@ in the studio.
    invalidation from MongoDBee writes, commits and raw driver writes. Diivento
    replaces `requestScoped` with readers and deletes every `forget` call.
 2. The change feed: typed, resumable, projected, with state and subscribers.
-3. L1 on top of the feed, behind a per-reader opt-in and an application flag,
-   one reader at a time, with the metrics of section 12 read before and after.
+3. L1 on top of the feed, behind a per-reader opt-in and a runtime switch,
+   one reader at a time: shadow mode first, serving only once its drift is
+   zero, then continuous verification (section 12.3).
 4. Freshness floor and `afterClusterTime` for secondary reads.
 5. Batching.
 6. Studio views and the inspect contract.
