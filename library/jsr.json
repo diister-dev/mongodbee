@@ -1,6 +1,6 @@
 {
   "name": "@diister/mongodbee",
-  "version": "0.23.0-beta.33",
+  "version": "0.23.0-beta.34",
   "license": "MIT",
   "exports": {
     ".": "./mod.ts",
@@ -15,7 +15,8 @@
     "./types": "./src/types.ts",
     "./migration": "./src/migration/mod.ts",
     "./migration/cli": "./src/migration/cli/mod.ts",
-    "./migration/cli/bin": "./src/migration/cli/bin.ts"
+    "./migration/cli/bin": "./src/migration/cli/bin.ts",
+    "./inspect": "./src/inspect/mod.ts"
   },
   "imports": {
     "@diister/valibot-mock": "jsr:@diister/valibot-mock@0.1.9",

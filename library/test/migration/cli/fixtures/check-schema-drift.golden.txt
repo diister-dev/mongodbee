@@ -1,0 +1,21 @@
+exit 1
+--- stdout
+[1m[34m🐝 Checking migrations...[39m[22m
+[2m  Options: mode: quick[22m
+
+[2mMigrations directory: <project>/migrations[22m
+[2mSchemas file: <project>/schemas.ts[22m
+
+[2mFound 2 migration(s)[22m
+
+[1m📋 Validating schema consistency...[22m
+[31m
+  ✗ Schema validation failed[39m
+[31m    Collection "users" schema differs:
+[32m    + active.type = "boolean"[0m[39m
+[31m    
+The last migration schema must match your project schema (schemas.ts).
+Update your schemas.ts to match the last migration, or create a new migration to reflect your current schema.[39m
+
+--- stderr
+[31m[1mError:[22m[39m Schema validation failed

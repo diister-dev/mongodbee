@@ -1,6 +1,6 @@
 {
   "name": "@diister/mongodbee",
-  "version": "0.23.0-beta.33",
+  "version": "0.23.0-beta.34",
   "description": "A type-safe MongoDB wrapper with built-in validation powered by Valibot",
   "license": "MIT",
   "type": "module",
@@ -90,6 +90,10 @@
       "types": "./dist/src/migration/cli/bin.d.ts",
       "default": "./dist/src/migration/cli/bin.js"
     },
+    "./inspect": {
+      "types": "./dist/src/inspect/mod.d.ts",
+      "default": "./dist/src/inspect/mod.js"
+    },
     "./package.json": "./package.json"
   },
   "dependencies": {
@@ -97,6 +101,14 @@
     "@opentelemetry/api": "1.9.1",
     "mongodb": "6.21.0",
     "valibot": "1.5.0"
+  },
+  "peerDependencies": {
+    "@diister/mongodbee-studio": "0.23.0-beta.34"
+  },
+  "peerDependenciesMeta": {
+    "@diister/mongodbee-studio": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",

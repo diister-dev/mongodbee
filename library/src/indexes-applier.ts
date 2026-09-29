@@ -23,6 +23,15 @@ import { PRIMARY } from "./read-preference.ts";
 
 const log = createLogger("indexes-applier");
 
+export interface IndexTarget {
+  readonly collectionName: string;
+  indexes(options: {
+    readPreference: m.ReadPreference;
+  }): Promise<m.IndexDescriptionInfo[]>;
+  dropIndex(name: string): Promise<unknown>;
+  createIndexes(specs: m.IndexDescription[]): Promise<string[]>;
+}
+
 export const COMPOSITE_INDEX_MARKER = "_idx_";
 
 export interface CompositeProjection {
@@ -92,9 +101,7 @@ export function projectComposites(
   });
 }
 
-type ExistingIndex = Awaited<
-  ReturnType<m.Collection<m.Document>["indexes"]>
->[number];
+type ExistingIndex = m.IndexDescriptionInfo;
 
 type PlannedIndex = {
   key: Record<string, number>;
@@ -205,7 +212,7 @@ function isIndexNotFound(error: unknown): boolean {
  * already gone — same reasoning as NamespaceExists in `ensureValidator`.
  */
 async function dropIndexes(
-  collection: m.Collection<any>,
+  collection: IndexTarget,
   names: readonly string[],
 ): Promise<void> {
   await Promise.all(
@@ -232,7 +239,7 @@ async function dropIndexes(
  * that must surface rather than be tolerated as "already exists".
  */
 async function createIndexes(
-  collection: m.Collection<any>,
+  collection: IndexTarget,
   planned: readonly PlannedIndex[],
 ): Promise<void> {
   if (planned.length === 0) return;
@@ -268,7 +275,7 @@ async function createIndexes(
  * ```
  */
 export async function applyCollectionIndexes(
-  collection: m.Collection<any>,
+  collection: IndexTarget,
   schema: v.ObjectSchema<any, any>,
   options: ApplyCollectionIndexesOptions = {},
 ): Promise<void> {
@@ -486,7 +493,7 @@ function partialFilterPinsType(pfe: unknown, typeName: string): boolean {
  * @param options - { composites? }
  */
 export async function applyScopedMultiCollectionIndexes(
-  collection: m.Collection<any>,
+  collection: IndexTarget,
   schemasPerType: Record<string, v.ObjectSchema<any, any>>,
   options: ApplyIndexesOptions = {},
 ): Promise<void> {
@@ -724,7 +731,7 @@ export async function applyScopedMultiCollectionIndexes(
 }
 
 export async function applyMultiCollectionIndexes(
-  collection: m.Collection<any>,
+  collection: IndexTarget,
   schemasPerType: Record<string, v.ObjectSchema<any, any>>,
   options: ApplyIndexesOptions = {},
 ): Promise<void> {

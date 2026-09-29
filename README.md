@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/diister-dev/mongodbee/main/brand/logo.svg" alt="MongoDBee" width="160" />
+  <img src="https://raw.githubusercontent.com/diister-dev/mongodbee/main/brand/logo-wordmark.svg" alt="mongodbee" width="360" />
 
 # MongoDBee
 
@@ -352,6 +352,22 @@ if (status.database && !status.database.isUpToDate) {
 📖 [**MIGRATIONS.md**](https://github.com/diister-dev/mongodbee/blob/main/doc/MIGRATIONS.md)
 — the complete migration reference.
 
+## Studio
+
+A local web explorer for the database of a MongoDBee project: collections by
+type and scope, schemas next to their validators, indexes, the migration chain
+and a configurable `check`. It is read-only unless started with `--write`.
+It lives in its own npm package, installed next to the core with the same
+version:
+
+```bash
+npm install --save-dev @diister/mongodbee-studio
+npx mongodbee studio
+```
+
+📖 [**STUDIO.md**](https://github.com/diister-dev/mongodbee/blob/main/doc/STUDIO.md)
+explains every view, the options and the write mode.
+
 ## Transactions
 
 `withSession` runs its callback inside a MongoDB transaction. Every MongoDBee
@@ -459,6 +475,27 @@ const stats = await collection(db, "stats", schema, {
 - **`paginate` on a secondary** may compute its `total` and its page on two
   different members, so the count can be slightly off while writes replicate.
 
+### A read preference for a unit of work
+
+When one collection serves both reads that must be fresh (permissions, a read
+right after a write) and reads that can lag (analytics), set the preference
+around the code instead of on the collection:
+
+```ts
+import { withReadPreference } from "@diister/mongodbee/session";
+
+const report = await withReadPreference("secondaryPreferred", () =>
+  buildReport(expositionId),
+);
+```
+
+Every MongoDBee read inside it follows that preference, unless the call passes
+its own `readPreference` or runs inside a transaction, which still reads the
+primary. It overrides the collection's preference, not a per-call one.
+Internal reads stay on the primary. A driver collection obtained with
+`readingCollection(db, name)` follows it too, for code that reads with the raw
+driver. `currentReadPreference()` returns the one in effect, if any.
+
 ## Change streams
 
 Opt in with `enableWatching`, then subscribe. `on()` returns its unsubscribe
@@ -513,13 +550,21 @@ plain `collection()`.
 
 ## Development
 
+The repository is a Bun workspace: `library/` is `@diister/mongodbee`,
+`studio/` is `@diister/mongodbee-studio`. Install once at the root, then work
+in either package; the studio consumes the core's built `dist`, so build the
+core first.
+
 ```bash
+bun install        # at the repository root
 cd library
-bun install
 bun test           # needs a MongoDB on localhost:27017
 bun run check      # tsc
 bun run lint       # biome
 bun run build      # dist/ for npm
+cd ../studio
+bun run build      # server and prebuilt UI
+bun test
 ```
 
 The suite targets `node:test`, so it runs unchanged under `bun test`,

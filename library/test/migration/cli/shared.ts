@@ -27,6 +27,17 @@ import * as path from "node:path";
 /** Absolute path to the library root, i.e. the package under test. */
 const LIBRARY_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
+export function moduleDir(name: string): string | undefined {
+  let dir = LIBRARY_ROOT;
+  while (true) {
+    const candidate = path.join(dir, "node_modules", name);
+    if (existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
+}
+
 /**
  * Makes a scratch project able to resolve `@diister/mongodbee`, as a real one can.
  *
@@ -103,8 +114,8 @@ export async function installLibrary(projectDir: string): Promise<void> {
   // The generated schema and migration files import the runtime dependencies
   // directly, and those resolve from the generated file's own directory too.
   for (const dep of ["valibot", "mongodb", "@opentelemetry"]) {
-    const target = path.join(LIBRARY_ROOT, "node_modules", dep);
-    if (!existsSync(target)) continue;
+    const target = moduleDir(dep);
+    if (!target) continue;
     const link = path.join(projectDir, "node_modules", dep);
     await mkdir(path.dirname(link), { recursive: true });
     if (!existsSync(link)) await symlink(target, link, "dir");

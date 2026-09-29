@@ -20,6 +20,7 @@ import { initCommand } from "./commands/init.ts";
 import { checkCommand } from "./commands/check.ts";
 import { syncCommand } from "./commands/sync.ts";
 import { baselineCommand } from "./commands/baseline.ts";
+import { studioEntry } from "./commands/studio-entry.ts";
 
 import { VERSION } from "../../version.ts";
 import { isMainModule } from "../utils/platform.ts";
@@ -77,6 +78,11 @@ const commands = [
     description: "Show migration operation history",
     handler: historyCommand,
   },
+  {
+    name: "studio",
+    description: "Open a local, read-only database explorer",
+    handler: studioEntry,
+  },
 ];
 
 /**
@@ -99,6 +105,7 @@ ${yellow("COMMANDS:")}
   ${green("history")}   Show migration operation history
   ${green("rollback")}  Rollback the last applied migration
   ${green("baseline")}  Record migrations as applied without running them
+  ${green("studio")}    Open a local, read-only database explorer
 
 ${yellow("GLOBAL OPTIONS:")}
   -h, --help        Show this help message
@@ -109,6 +116,10 @@ ${yellow("GLOBAL OPTIONS:")}
 ${yellow("CHECK OPTIONS:")}
   -m, --mode        Simulation mode: quick, normal, hard (default: normal)
   -l, --last        Only validate the last N migrations
+  --docs            Mock documents per collection, 1 to 5000, overriding
+                    the mode (quick 10, normal 100, hard 500)
+  --retention       Share of each migration's documents carried into the
+                    next one, 0 to 1 (default: 0.5)
   --verbose         Print every warning under the migration that raised it
                     (default: warnings are deduplicated into a single digest)
   --check-indexes   Check database indexes against schema (requires database connection)
@@ -144,6 +155,16 @@ ${yellow("ROLLBACK OPTIONS:")}
   --skip-privilege-check
                     Do not verify the account's privileges before starting
 
+${yellow("STUDIO OPTIONS:")}
+  --port            Port to listen on (default: 4983)
+  --host            Interface to bind (default: 127.0.0.1)
+  --project         Project directory to open (config discovery and relative paths)
+  --uri             MongoDB connection string (or set MONGODBEE_STUDIO_URI)
+  --db              Database name
+  --migrations      Migrations directory
+  --schemas         Schemas file (schemas.ts)
+  --write           Allow editing, creating and deleting documents (loopback only)
+
 ${yellow("SYNC OPTIONS:")}
   --force           Sync even if pending migrations exist (not recommended)
   --verbose         Show detailed schema information
@@ -175,13 +196,26 @@ async function main(): Promise<void> {
       "validate",
       "progress",
       "skip-privilege-check",
+      "write",
     ],
     // `progress` stays tri-state: `--progress` forces the live line on,
     // `--no-progress` forces it off, and omitting it leaves `undefined` so the
     // command falls back to TTY auto-detection.
     negatable: ["progress"],
     default: { progress: undefined },
-    string: ["config", "env", "name", "mode", "target"],
+    string: [
+      "config",
+      "env",
+      "name",
+      "mode",
+      "target",
+      "host",
+      "project",
+      "uri",
+      "db",
+      "migrations",
+      "schemas",
+    ],
     alias: {
       v: "version",
       h: "help",

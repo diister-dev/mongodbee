@@ -23,9 +23,9 @@ import {
   PRIMARY,
   type ReadOptions,
   type ReadPreferenceInput,
+  readingCollection,
   readOpts,
   type WithReadPreferenceInput,
-  withReadPreference,
 } from "./read-preference.ts";
 import {
   aggregateThrough,
@@ -834,7 +834,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
   const collection = maintainedCollection(
     db,
-    db.collection<StoredDocument>(collectionName, withReadPreference(opts)),
+    readingCollection<StoredDocument, typeof opts>(db, collectionName, opts),
     collectionName,
     Object.values(collectionSchema).some((fields) => COMPUTED_ROOT in fields),
   );

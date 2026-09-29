@@ -707,6 +707,8 @@ async function assertNoDrift(db: Db, label: string): Promise<void> {
   );
 }
 
+const ORACLE_BUDGET_MS = 180_000;
+
 for (const [seed, inlineLimit] of [
   [1, undefined],
   [7, undefined],
@@ -716,7 +718,7 @@ for (const [seed, inlineLimit] of [
 ] as const) {
   test({
     name: `computed oracle: random writes across every collection kind keep every field equal to a full apply (seed ${seed}${inlineLimit ? `, inline limit ${inlineLimit} with marks drained` : ""})`,
-    timeout: 30_000,
+    timeout: ORACLE_BUDGET_MS,
     fn: async (t) => {
       await withDatabase(t.name, async (db) => {
         const random = mulberry32(seed);

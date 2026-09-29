@@ -111,16 +111,23 @@ test("lookup: planner uses the withIndex-created partial index", async () => {
     const expoB = catalog.scope(EXPO_B);
 
     const N = 50;
-    for (let i = 0; i < N; i++) {
-      const pid = await expoA.insertOne("participant", { name: `p-${i}` });
-      await expoA.insertOne("badge", { participantId: pid, label: `b-${i}` });
-    }
+    const seed = async (view: typeof expoA, prefix: string) => {
+      const ids = await view.insertMany(
+        "participant",
+        Array.from({ length: N }, (_, i) => ({ name: `${prefix}-${i}` })),
+      );
+      await view.insertMany(
+        "badge",
+        ids.map((participantId, i) => ({
+          participantId,
+          label: `${prefix}-badge-${i}`,
+        })),
+      );
+    };
+    await seed(expoA, "p");
     // Same volume in another scope: an un-scoped or $expr-only lookup would
     // have to wade through these keys too.
-    for (let i = 0; i < N; i++) {
-      const pid = await expoB.insertOne("participant", { name: `q-${i}` });
-      await expoB.insertOne("badge", { participantId: pid, label: `c-${i}` });
-    }
+    await seed(expoB, "q");
 
     // Capture the pipeline the library actually emits, then explain it.
     let captured: AggregationStage[] = [];

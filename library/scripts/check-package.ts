@@ -110,8 +110,62 @@ if (requested) {
   }
 }
 
+const studioDir = path.join(repoRoot, "studio");
+const studioPath = path.join(studioDir, "package.json");
+const STUDIO_NAME = "@diister/mongodbee-studio";
+
+function withDependency(source: string, name: string, version: string): string {
+  const pattern = new RegExp(`("${name}"\\s*:\\s*)"[^"]*"`, "g");
+  if (!pattern.test(source)) {
+    throw new Error(`no \`${name}\` entry found to update`);
+  }
+  return source.replace(pattern, `$1${JSON.stringify(version)}`);
+}
+
+let studioSource = await readFile(studioPath, "utf8");
+if (requested) {
+  studioSource = withDependency(
+    withVersion(studioSource, requested),
+    manifest.name,
+    requested,
+  );
+  await writeFile(studioPath, studioSource);
+  packageSource = withDependency(packageSource, STUDIO_NAME, requested);
+  await writeFile(packagePath, packageSource);
+}
+const studio = JSON.parse(studioSource);
+const core = JSON.parse(packageSource);
+const studioChecks: Array<[string, unknown, unknown]> = [
+  ["studio version", studio.version, core.version],
+  [
+    `studio dependency on ${core.name}`,
+    studio.dependencies?.[core.name],
+    core.version,
+  ],
+  [
+    `core optional peer ${STUDIO_NAME}`,
+    core.peerDependencies?.[STUDIO_NAME],
+    core.version,
+  ],
+  [
+    "studio mongodb driver",
+    studio.dependencies?.mongodb,
+    core.dependencies?.mongodb,
+  ],
+];
+for (const [label, actual, expected] of studioChecks) {
+  if (actual !== expected) {
+    throw new Error(
+      `${label} is ${String(actual)}, expected ${String(expected)}. Run \`bun run version:set <version>\`.`,
+    );
+  }
+}
+
 for (const file of ["README.md", "LICENSE"]) {
   await copyFile(path.join(repoRoot, file), path.join(packageDir, file));
 }
+await copyFile(path.join(repoRoot, "LICENSE"), path.join(studioDir, "LICENSE"));
 
-process.stdout.write(`checked ${manifest.name}@${manifest.version}\n`);
+process.stdout.write(
+  `checked ${manifest.name}@${manifest.version} and ${STUDIO_NAME}@${studio.version}\n`,
+);

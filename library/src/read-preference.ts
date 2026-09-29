@@ -14,6 +14,8 @@
 
 import * as m from "mongodb";
 import type { ClientSession, Db } from "./mongodb.ts";
+import { contextVariable } from "./context-variable.ts";
+import { isRecord } from "./utils/guards.ts";
 
 /** The primary read preference. */
 export const PRIMARY: m.ReadPreference = m.ReadPreference.primary;
@@ -40,8 +42,7 @@ export function toReadPreference(input: ReadPreferenceInput): m.ReadPreference {
   });
 }
 
-/** Options with their `readPreference`, if any, turned into a driver one. */
-export function withReadPreference<
+function driverReadOptions<
   T extends { readonly readPreference?: ReadPreferenceInput },
 >(
   options: T,
@@ -50,6 +51,82 @@ export function withReadPreference<
   return readPreference === undefined
     ? rest
     : { ...rest, readPreference: toReadPreference(readPreference) };
+}
+
+const ambientReadPreference = contextVariable<m.ReadPreference>(
+  "mongodbee.readPreference",
+);
+
+export function withReadPreference<T>(
+  preference: ReadPreferenceInput,
+  fn: () => T,
+): T {
+  return ambientReadPreference.run(toReadPreference(preference), fn);
+}
+
+export function currentReadPreference(): m.ReadPreference | undefined {
+  return ambientReadPreference.get();
+}
+
+const READ_OPTIONS_POSITION: Readonly<Record<string, number>> = {
+  find: 1,
+  findOne: 1,
+  aggregate: 1,
+  countDocuments: 1,
+  distinct: 2,
+  estimatedDocumentCount: 0,
+};
+
+function inTransaction(options: Record<string, unknown>): boolean {
+  const session = options.session;
+  return session instanceof m.ClientSession && session.inTransaction();
+}
+
+function withAmbientPreference(
+  args: readonly unknown[],
+  position: number,
+): unknown[] {
+  const preference = ambientReadPreference.get();
+  if (preference === undefined) return [...args];
+  const given = args[position];
+  const options = isRecord(given) ? given : {};
+  if (options.readPreference !== undefined || inTransaction(options)) {
+    return [...args];
+  }
+  const next = Array.from(
+    { length: Math.max(args.length, position + 1) },
+    (_, index) => args[index],
+  );
+  next[position] = { ...options, readPreference: preference };
+  return next;
+}
+
+function ambientReads<T extends m.Document>(
+  target: m.Collection<T>,
+): m.Collection<T> {
+  return new Proxy(target, {
+    get(object, property, receiver) {
+      const value = Reflect.get(object, property, receiver);
+      if (typeof property !== "string" || typeof value !== "function") {
+        return value;
+      }
+      const position = READ_OPTIONS_POSITION[property];
+      if (position === undefined) return value;
+      return (...args: unknown[]) =>
+        value.apply(object, withAmbientPreference(args, position));
+    },
+  });
+}
+
+export function readingCollection<
+  T extends m.Document = m.Document,
+  O extends {
+    readonly readPreference?: ReadPreferenceInput;
+  } = DriverCollectionOptions,
+>(db: Db | m.Db, name: string, options?: O): m.Collection<T> {
+  return ambientReads(
+    db.collection<T>(name, options ? driverReadOptions(options) : {}),
+  );
 }
 
 /** Driver options `O` whose `readPreference` accepts every mongodbee form. */

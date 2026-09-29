@@ -41,6 +41,22 @@ jobs:
       - name: Build
         run: bun run build
 
+      - name: Typecheck the studio
+        working-directory: studio
+        run: bun run check
+
+      - name: Lint the studio
+        working-directory: studio
+        run: bun run lint
+
+      - name: Format the studio
+        working-directory: studio
+        run: bun run fmt:check
+
+      - name: Build the studio
+        working-directory: studio
+        run: bun run build
+
   test:
     name: Tests (${{ matrix.runtime }})
     runs-on: ubuntu-latest
@@ -98,6 +114,28 @@ jobs:
         if: matrix.runtime == 'deno'
         run: deno test -A --parallel --no-check --ignore=test/migration/cli test/
 
+      - name: Build the core for the studio
+        run: bun run build
+
+      - name: Build the studio UI
+        working-directory: studio
+        run: bun run build:ui
+
+      - name: Test the studio (bun)
+        if: matrix.runtime == 'bun'
+        working-directory: studio
+        run: bun test --parallel
+
+      - name: Test the studio (node)
+        if: matrix.runtime == 'node'
+        working-directory: studio
+        run: node --test "test/**/*.test.ts"
+
+      - name: Test the studio (deno)
+        if: matrix.runtime == 'deno'
+        working-directory: studio
+        run: deno test -A --parallel --no-check --ignore=test/check.test.ts,test/studio-target.test.ts test/
+
   consumers:
     name: Consume the built package (${{ matrix.runtime }})
     runs-on: ubuntu-latest
@@ -134,12 +172,18 @@ jobs:
           bun run build
           npm pack --pack-destination /tmp
 
+      - name: Build and pack the studio
+        working-directory: studio
+        run: |
+          bun run build
+          npm pack --pack-destination /tmp
+
       - name: Install into an empty project
         working-directory: /tmp
         run: |
           mkdir -p consumer && cd consumer
           echo '{"name":"consumer","type":"module","private":true}' > package.json
-          npm install /tmp/diister-mongodbee-*.tgz
+          npm install /tmp/diister-mongodbee-[0-9]*.tgz
 
       - name: Import every entry point
         working-directory: /tmp/consumer
@@ -173,3 +217,35 @@ jobs:
           out=$(deno run -A npm:@diister/mongodbee/migration/cli/bin --version)
           echo "$out"
           test -n "$out"
+
+      - name: Report a missing studio from the CLI
+        working-directory: /tmp/consumer
+        run: |
+          set +e
+          out=$(./node_modules/.bin/mongodbee studio)
+          code=$?
+          set -e
+          echo "$out"
+          test "$code" = 1
+          echo "$out" | grep -q "npm install --save-dev @diister/mongodbee-studio"
+
+      - name: Install the studio next to the core
+        working-directory: /tmp/consumer
+        run: npm install /tmp/diister-mongodbee-[0-9]*.tgz /tmp/diister-mongodbee-studio-*.tgz
+
+      - name: Load the studio entry point
+        working-directory: /tmp/consumer
+        run: |
+          cat > studio.js <<'EOF'
+          import { startStudioServer, studioCommand } from "@diister/mongodbee-studio";
+          import { plannedIndexes, runCheck } from "@diister/mongodbee/inspect";
+          for (const [name, value] of Object.entries({ startStudioServer, studioCommand, plannedIndexes, runCheck })) {
+            if (typeof value !== "function") throw new Error(`${name} did not load`);
+          }
+          console.log("the studio and the inspect contract loaded");
+          EOF
+          if [ "${{ matrix.runtime }}" = "deno" ]; then
+            deno run -A studio.js
+          else
+            ${{ matrix.runtime }} studio.js
+          fi

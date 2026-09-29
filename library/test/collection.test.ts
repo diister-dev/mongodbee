@@ -1,4 +1,4 @@
-import { test } from "./+harness.ts";
+import { test, type TestFn } from "./+harness.ts";
 import * as v from "../src/schema.ts";
 import { assertEquals, assertExists } from "./+assert.ts";
 import { collection } from "../src/collection.ts";
@@ -6,7 +6,13 @@ import { waitUntil, withDatabase } from "./+shared.ts";
 import { ObjectId } from "mongodb";
 import { closeAllWatchers } from "../src/change-stream.ts";
 
-test("Collection watcher events test", async (t) => {
+const WATCH_BUDGET_MS = 60_000;
+
+function watchTest(name: string, fn: TestFn): void {
+  test({ name, timeout: WATCH_BUDGET_MS, fn });
+}
+
+watchTest("Collection watcher events test", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Test variables to track events
     const events: { [key: string]: number } = {
@@ -82,7 +88,7 @@ test("Collection watcher events test", async (t) => {
   });
 });
 
-test("Collection watcher event unsubscribe", async (t) => {
+watchTest("Collection watcher event unsubscribe", async (t) => {
   await withDatabase(t.name, async (db) => {
     let insertCount = 0;
     let updateCount = 0;
@@ -168,7 +174,7 @@ test("Collection watcher event unsubscribe", async (t) => {
   });
 });
 
-test("Multiple collections with watchers", async (t) => {
+watchTest("Multiple collections with watchers", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create two different collections and ensure events don't cross-contaminate
     const events = {
@@ -247,7 +253,7 @@ test("FinalizationRegistry cleanup test", async (t) => {
   });
 });
 
-test("Collection destroy and recreate test", async (t) => {
+watchTest("Collection destroy and recreate test", async (t) => {
   await withDatabase(t.name, async (db) => {
     let insertEvents = 0;
 

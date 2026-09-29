@@ -1,6 +1,7 @@
 import { BSON } from "mongodb";
 import type * as m from "mongodb";
 import { contextVariable } from "./context-variable.ts";
+import { currentReadPreference } from "./read-preference.ts";
 
 export interface RequestContextOptions {
   memoizeReads?: boolean;
@@ -109,7 +110,7 @@ function readKey(
 ): string | undefined {
   try {
     return `${target.dbName}.${target.collectionName}\u0000${operation}\u0000${BSON.EJSON.stringify(
-      args,
+      [currentReadPreference()?.toJSON() ?? null, ...args],
       { relaxed: false },
     )}`;
   } catch {
