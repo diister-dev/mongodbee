@@ -86,6 +86,7 @@ test({
         CLUSTER_LEASE_MS: "1500",
       };
       let killed = false;
+      const drainers: Node[] = [];
       let victim: Node | undefined;
       victim = spawnNode(
         "drainer-victim",
@@ -94,15 +95,16 @@ test({
           if (line === "IN_DRAIN" && !killed && victim) {
             killed = true;
             victim.kill();
+            for (const index of [1, 2])
+              drainers.push(
+                spawnNode(`drainer-${index}`, {
+                  ...base,
+                  CLUSTER_ROLE: "drainer",
+                  CLUSTER_DURATION_MS: "6000",
+                }),
+              );
           }
         },
-      );
-      const drainers = [1, 2].map((index) =>
-        spawnNode(`drainer-${index}`, {
-          ...base,
-          CLUSTER_ROLE: "drainer",
-          CLUSTER_DURATION_MS: "6000",
-        }),
       );
       const writers = [1, 2, 3, 4].map((index) =>
         spawnNode(`writer-${index}`, {
@@ -126,8 +128,8 @@ test({
           0,
           `${result.name} failed:\n${result.output}`,
         );
-      await Promise.all(drainers.map((node) => node.exited));
       const victimCode = await victim.exited;
+      await Promise.all(drainers.map((node) => node.exited));
 
       assert(
         killed,

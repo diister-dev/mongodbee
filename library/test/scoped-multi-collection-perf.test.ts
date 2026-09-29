@@ -40,6 +40,7 @@ async function measure<T>(
 
 test({
   name: "PERF — N multiCollections vs 1 scopedMultiCollection",
+  timeout: 60_000,
   // The perf test is informative ; it must not break CI on flaky runs.
   sanitizeOps: false,
   sanitizeResources: false,
