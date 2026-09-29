@@ -22,7 +22,11 @@ import {
 } from "./stored-document.ts";
 import { markFar, markWhole } from "./computed-marks.ts";
 import { checkTransactionEnabled, getSessionContext } from "./session.ts";
-import { type RetryOptions, retryOnWriteConflict } from "./utils/retry.ts";
+import {
+  isRetryableTransactionFailure,
+  type RetryOptions,
+  retryOnWriteConflict,
+} from "./utils/retry.ts";
 import { primaryCollection } from "./read-preference.ts";
 import { isRecord } from "./utils/guards.ts";
 
@@ -847,7 +851,10 @@ export function maintainedCollection<T extends Document>(
         }
         return await retryOnWriteConflict(
           () => sessionContext.withSession((session) => run(session)),
-          plan.registration.retry,
+          {
+            ...plan.registration.retry,
+            shouldRetry: isRetryableTransactionFailure,
+          },
         );
       };
     },
