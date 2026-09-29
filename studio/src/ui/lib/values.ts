@@ -295,3 +295,15 @@ export function idTime(value: unknown): number | null {
   const id = parseTypedId(value)?.id ?? value;
   return ulidTime(id) ?? objectIdTime(id);
 }
+
+export function sharedPrefix(values: readonly unknown[]): string | undefined {
+  let shared: string | undefined;
+  for (const value of values) {
+    if (typeof value !== "string") return undefined;
+    const prefix = parseTypedId(value)?.prefix;
+    if (!prefix || (shared !== undefined && prefix !== shared))
+      return undefined;
+    shared = prefix;
+  }
+  return shared;
+}

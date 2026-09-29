@@ -20,6 +20,7 @@ import { getPlan } from "./api/plan.ts";
 import { getDrift } from "./api/drift.ts";
 import { getHistory } from "./api/history.ts";
 import { streamCheck } from "./api/check.ts";
+import { checkComputedDrift, getComputedReport } from "./api/computed.ts";
 import { getCollectionSummary } from "./api/summary.ts";
 import { listFieldValues } from "./api/values.ts";
 import { getLabels } from "./api/labels.ts";
@@ -100,7 +101,7 @@ async function write(
 }
 
 const COLLECTION_ROUTE =
-  /^\/api\/collections\/([^/]+)\/(documents|document|schema|indexes|scopes|summary|values|coverage|restore|validate)$/;
+  /^\/api\/collections\/([^/]+)\/(documents|document|schema|indexes|scopes|summary|values|coverage|computed|computed-check|restore|validate)$/;
 
 export function getMeta(context: StudioContext): Record<string, unknown> {
   return {
@@ -153,6 +154,10 @@ async function route(context: StudioContext, url: URL): Promise<unknown> {
         return await listFieldValues(context, name, params);
       case "coverage":
         return await getFieldCoverage(context, name, params);
+      case "computed":
+        return await getComputedReport(context, name, params);
+      case "computed-check":
+        return await checkComputedDrift(context, name, params);
       case "scopes":
         return await listScopes(
           context,

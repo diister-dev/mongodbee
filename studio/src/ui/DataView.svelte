@@ -29,7 +29,7 @@
   import { labels, requestLabel } from "./lib/labels.js";
   import { quiet } from "./lib/motion.ts";
   import { FIELD_FAMILY_LABEL, fieldFamily } from "./lib/values.ts";
-  import { conditionParams, isComplete } from "./lib/query.ts";
+  import { conditionParams, isComplete, parseConditionParam } from "./lib/query.ts";
   import { requiredDefaults } from "./lib/form-model.ts";
   import { useStudio } from "./lib/studio.js";
   import { nestedPaths } from "../field-paths.ts";
@@ -42,20 +42,24 @@
   import Tooltip from "./controls/Tooltip.svelte";
   import Value from "./values/Value.svelte";
   import JsonDrawer from "./JsonDrawer.svelte";
+  import SystemTag from "./values/SystemTag.svelte";
+  import { computedName, isComputedColumn, valueAt, withComputedColumns } from "./lib/computed.ts";
   import DocumentCard from "./DocumentCard.svelte";
   import EmptyState from "./EmptyState.svelte";
   import ErrorState from "./ErrorState.svelte";
   import JsonPage from "./JsonPage.svelte";
   import Segmented from "./controls/Segmented.svelte";
 
-  let { collection, schema, type, initialScope = "", initialOpen = "" } = $props();
+  let { collection, schema, type, navigate, initialScope = "", initialOpen = "", initialWhere = [] } = $props();
 
   const PAGE_SIZES = [25, 50, 100, 200];
   const typed = isTypedKind(collection.kind);
   const scoped = collection.kind === "scopedMultiCollection";
 
-  let conditions = $state([]);
   let nextConditionId = 1;
+  let conditions = $state(
+    initialWhere.flatMap((raw) => parseConditionParam(raw, nextConditionId++) ?? []),
+  );
   let focusCondition = $state(null);
   let sortField = $state("_id");
   let sortDir = $state("asc");
@@ -96,10 +100,14 @@
 
   const schemaTypes = $derived(type ? schema.types.filter((t) => t.name === type) : schema.types);
 
+  const typeFieldMaps = $derived(
+    Object.fromEntries(schema.types.map((t) => [t.name, withComputedColumns(t.fields)])),
+  );
+
   const fieldMeta = $derived.by(() => {
     const meta = {};
     for (const t of schemaTypes) {
-      for (const [name, node] of Object.entries(t.fields)) meta[name] ??= node;
+      for (const [name, node] of Object.entries(typeFieldMaps[t.name] ?? {})) meta[name] ??= node;
     }
     return meta;
   });
@@ -129,12 +137,12 @@
     const present = new Set(items.map((item) => item._type));
     const allowed = new Set();
     for (const t of schema.types) {
-      if (present.has(t.name)) for (const name of Object.keys(t.fields)) allowed.add(name);
+      if (present.has(t.name)) for (const name of Object.keys(typeFieldMaps[t.name] ?? {})) allowed.add(name);
     }
     return columns.filter(
       (column) =>
         HEAD_COLUMNS.includes(column) ||
-        (allowed.has(column) && items.some((item) => item[column] !== undefined)),
+        (allowed.has(column) && items.some((item) => valueAt(item, column) !== undefined)),
     );
   });
 
@@ -143,7 +151,7 @@
   const MAX_TYPE_SECTIONS = 6;
 
   function sectionColumns(typeName, rows) {
-    const own = schema.types.find((t) => t.name === typeName)?.fields ?? {};
+    const own = typeFieldMaps[typeName] ?? {};
     const head = ["_id"];
     if (scoped && !scope) head.push("_scope");
     return [
@@ -152,7 +160,7 @@
         (column) =>
           !HEAD_COLUMNS.includes(column) &&
           column in own &&
-          rows.some(({ item }) => item[column] !== undefined),
+          rows.some(({ item }) => valueAt(item, column) !== undefined),
       ),
     ];
   }
@@ -234,8 +242,7 @@
   }
 
   function fieldsOfItem(item) {
-    const own = typeof item._type === "string" ? schema.types.find((t) => t.name === item._type) : undefined;
-    return own?.fields ?? fieldMeta;
+    return (typeof item._type === "string" ? typeFieldMaps[item._type] : undefined) ?? fieldMeta;
   }
 
   const pageJson = $derived(page ? JSON.stringify(page.items, null, 2) : "");
@@ -258,7 +265,7 @@
         result[column] = kind === "number" || kind === "bigint";
         continue;
       }
-      const values = (page?.items ?? []).map((item) => item[column]).filter((v) => v !== undefined && v !== null);
+      const values = (page?.items ?? []).map((item) => valueAt(item, column)).filter((v) => v !== undefined && v !== null);
       result[column] = values.length > 0 && values.every((v) => typeof v === "number");
     }
     return result;
@@ -539,6 +546,7 @@
   function headerTitle(column) {
     const node = fieldMeta[column];
     if (!node) return column;
+    if (node.computed) return `${computedName(column)}: computed by mongodbee, ${node.computed}`;
     const parts = [node.kind.replaceAll("_", " ")];
     if (node.ref) parts.push(`reference to ${node.ref}`);
     if (node.optional) parts.push("optional");
@@ -705,7 +713,12 @@
           >
             <Tooltip text={headerTitle(column)}>
               <button class="head" class:sorted={sortField === column} type="button" onclick={() => toggleSort(column)}>
-                <span class="mono">{column}</span>
+                {#if isComputedColumn(column)}
+                  <span class="mono">{computedName(column)}</span>
+                  <SystemTag />
+                {:else}
+                  <span class="mono">{column}</span>
+                {/if}
                 {#if fieldMeta[column]?.ref}
                   <span class="ref-target mono">{fieldMeta[column].ref}</span>
                 {/if}
@@ -732,15 +745,15 @@
           {#each section.columns as column (column)}
             {@const own = fieldsOfItem(item)}
             <td class:num={numeric[column]}>
-              {#if !HEAD_COLUMNS.includes(column) && own !== fieldMeta && own[column] === undefined && item[column] === undefined}
+              {#if !HEAD_COLUMNS.includes(column) && own !== fieldMeta && own[column] === undefined && valueAt(item, column) === undefined}
                 <span class="not-in-type" aria-label="Not a field of {item._type}"></span>
               {:else}
                 <Value
-                  value={item[column]}
+                  value={valueAt(item, column)}
                   node={own[column] ?? fieldMeta[column]}
                   field={column}
                   reveal
-                  onopen={() => openRow(item, [column])}
+                  onopen={() => openRow(item, isComputedColumn(column) ? ["_computed", computedName(column)] : [column])}
                 />
               {/if}
             </td>
@@ -852,6 +865,7 @@
 {#if openId || creating}
   <JsonDrawer
     collection={collection.name}
+    {navigate}
     id={openId}
     {focusPath}
     fields={fieldMeta}

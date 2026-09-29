@@ -24,9 +24,10 @@
     target?: string;
     self?: boolean;
     reveal?: boolean;
+    bare?: boolean;
   }
 
-  let { value, target, self = false, reveal = false }: Props = $props();
+  let { value, target, self = false, reveal = false, bare = false }: Props = $props();
 
   const studio = useStudio();
   const parsed = $derived(parseTypedId(value));
@@ -51,7 +52,7 @@
 <HoverCard label="{prefix} reference {value}">
   {#if collection}
     <button class="ref linked" type="button" onclick={open}>
-      <span class="prefix mono">{prefix}</span>
+      {#if !bare}<span class="prefix mono">{prefix}</span>{/if}
       {#if showName}
         <span class="name">{named?.label}</span>
       {:else}
@@ -61,7 +62,7 @@
     </button>
   {:else}
     <span class="ref">
-      {#if prefix}<span class="prefix mono">{prefix}</span>{/if}
+      {#if prefix && !bare}<span class="prefix mono">{prefix}</span>{/if}
       <IdChunks value={id} />
     </span>
   {/if}

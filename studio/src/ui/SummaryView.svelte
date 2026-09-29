@@ -9,6 +9,7 @@
   import ChartFrame from "./charts/ChartFrame.svelte";
   import MonthColumns from "./charts/MonthColumns.svelte";
   import StatStrip from "./charts/StatStrip.svelte";
+  import ComputedHealth from "./ComputedHealth.svelte";
   import Scope from "./values/Scope.svelte";
   import TypeTag from "./values/TypeTag.svelte";
 
@@ -21,7 +22,26 @@
   let summary = $state(null);
   let error = $state(null);
   let coverage = $state(null);
+  let computed = $state(null);
+  let computedError = $state(null);
   let attempt = $state(0);
+
+  const hasComputed = $derived((schema?.types ?? []).some((type) => type.fields?._computed));
+
+  $effect(() => {
+    const name = collection.name;
+    attempt;
+    computed = null;
+    computedError = null;
+    if (!hasComputed || !collection.exists) return;
+    api(collectionPath(name, "computed"))
+      .then((result) => {
+        if (name === collection.name) computed = result;
+      })
+      .catch((e) => {
+        if (name === collection.name) computedError = e;
+      });
+  });
 
   const typed = $derived(isTypedKind(collection.kind));
 
@@ -391,6 +411,22 @@
             </ChartFrame>
           </div>
         {/if}
+
+        {#if computedError}
+          <div class="inset">
+            <ErrorState error={computedError} compact title="The computed fields could not be measured" onretry={() => attempt++} />
+          </div>
+        {:else if hasComputed && collection.exists && !computed}
+          <div class="inset"><p class="faint small"><span class="shimmer">Sampling the computed fields</span></p></div>
+        {:else if computed?.topologyError}
+          <div class="inset">
+            <ErrorState error={{ message: computed.topologyError }} compact title="The computed fields of this project are not consistent" />
+          </div>
+        {:else if computed && computed.fields.length > 0}
+          <div class="inset stack">
+            <ComputedHealth {collection} report={computed} {typed} {navigate} index={7} />
+          </div>
+        {/if}
       {/if}
     </div>
   </div>
@@ -417,6 +453,12 @@
 
   .inset {
     margin: 0 24px;
+  }
+
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
   }
 
   .split {

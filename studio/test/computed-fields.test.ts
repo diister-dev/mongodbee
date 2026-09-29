@@ -39,7 +39,7 @@ test("typeFields marks _computed and its revision as system fields", () => {
   assertEquals(entries.organizationIds.system, "computed");
   assertEquals(
     entries.organizationIds.computed,
-    "organizationId of membership by participantId, where status",
+    "organizationId of membership by participantId where status = active",
   );
   assertEquals(
     entries.membershipCount.computed,

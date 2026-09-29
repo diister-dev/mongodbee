@@ -6,6 +6,7 @@
   import { fade, rise } from "./lib/motion.ts";
   import Enum from "./values/Enum.svelte";
   import TypeTag from "./values/TypeTag.svelte";
+  import SystemTag from "./values/SystemTag.svelte";
   import { jsonSchemaChild, jsonSchemaFactDetails, jsonTypeOf, isRequired } from "./lib/json-schema.ts";
   import { formatCount } from "./lib/values.ts";
 
@@ -128,7 +129,7 @@
     {/each}
     {#if node.system && !node.computed}
       <Tooltip text={node.system === "revision" ? "Written by mongodbee, never by the application" : "Maintained by mongodbee from the type computed declarations; the studio never edits it"}>
-        <span class="system">{node.system === "revision" ? "revision" : "computed"}</span>
+        <SystemTag label={node.system === "revision" ? "revision" : "computed"} />
       </Tooltip>
     {/if}
     </div>
@@ -276,17 +277,6 @@
   .modifier {
     color: var(--text-faint);
     font-size: var(--text-xs);
-  }
-
-  .system {
-    display: inline-flex;
-    align-items: center;
-    height: 18px;
-    padding: 0 5px;
-    border: 1px dashed var(--card-border);
-    color: var(--text-faint);
-    font-family: var(--font-mono);
-    font-size: 11px;
   }
 
   .system-name {

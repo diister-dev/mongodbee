@@ -1,15 +1,22 @@
+<script module>
+  const infoCache = new Map();
+</script>
+
 <script>
   import { onMount } from "svelte";
   import { api, collectionPath, send } from "./lib/api.js";
   import { Check, Copy, X } from "./lib/icons.js";
+  import ComputedBlock from "./ComputedBlock.svelte";
   import DocumentEditor from "./DocumentEditor.svelte";
+  import { computedOf, withoutComputed } from "./lib/computed.ts";
   import ErrorState from "./ErrorState.svelte";
   import Icon from "./Icon.svelte";
   import Tooltip from "./controls/Tooltip.svelte";
   import JsonTree from "./JsonTree.svelte";
   import TypeTag from "./values/TypeTag.svelte";
   import Value from "./values/Value.svelte";
-  import { quiet, slide } from "./lib/motion.ts";
+  import { fade, quiet, slide } from "./lib/motion.ts";
+  import { modal } from "./lib/modal.ts";
   import { plural } from "./lib/format.js";
 
   let {
@@ -24,6 +31,7 @@
     oncreated,
     ondeleted,
     fieldsFor = () => ({}),
+    navigate,
   } = $props();
 
   let document = $state(null);
@@ -32,6 +40,28 @@
   let mode = $state("view");
   let deleting = $state(false);
   let deleteError = $state(null);
+  let panel = $state();
+  let computedInfos = $state([]);
+
+  $effect(() => {
+    const doc = document;
+    if (!doc || !computedOf(doc)) return;
+    const type = typeof doc._type === "string" ? doc._type : "";
+    const key = `${collection}|${type}`;
+    const cached = infoCache.get(key);
+    if (cached) {
+      computedInfos = cached;
+      return;
+    }
+    api(collectionPath(collection, "computed"), { type: type || undefined, stats: "false" })
+      .then((report) => {
+        infoCache.set(key, report.fields);
+        if (document === doc) computedInfos = report.fields;
+      })
+      .catch(() => {
+        if (document === doc) computedInfos = [];
+      });
+  });
 
   const editType = $derived(creating ? create?.type || undefined : typeof document?._type === "string" ? document._type : undefined);
   const editFields = $derived(fieldsFor(editType));
@@ -239,9 +269,21 @@
   });
 </script>
 
+<dialog class="drawer-layer" aria-label={creating ? "New document" : `Document ${label}`} use:modal={{ onclose, initialFocus: () => panel }}>
+<button
+  type="button"
+  class="scrim"
+  tabindex="-1"
+  aria-label="Close the document"
+  onclick={onclose}
+  in:fade
+  out:fade={{ exit: true }}
+></button>
 <aside
+  bind:this={panel}
   class="bezel drawer"
   class:resizing
+  tabindex="-1"
   aria-label="Document {label}"
   style:width="{applied}px"
   in:slide
@@ -327,7 +369,16 @@
     {:else}
       {#key shown}
         <div class="tree">
-          <JsonTree value={document} focus={focusPath} {fields} />
+          <JsonTree value={withoutComputed(document)} focus={focusPath} {fields} />
+          {#if computedOf(document)}
+            <ComputedBlock
+              {document}
+              node={fieldsFor(editType)?._computed}
+              infos={computedInfos}
+              focus={focusPath}
+              {navigate}
+            />
+          {/if}
         </div>
       {/key}
     {/if}
@@ -341,15 +392,44 @@
     </button>
   </footer>
 </aside>
+</dialog>
 
 <style>
-  .drawer {
+  .drawer-layer {
     position: fixed;
+    inset: 0;
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    border: 0;
+    background: transparent;
+    color: inherit;
+  }
+
+  .drawer-layer::backdrop {
+    background: transparent;
+  }
+
+  .scrim {
+    position: absolute;
+    inset: 0;
+    padding: 0;
+    border: 0;
+    background: var(--scrim);
+    cursor: default;
+  }
+
+  .drawer {
+    position: absolute;
     top: 12px;
     right: 12px;
     bottom: 12px;
-    z-index: 10;
     max-width: calc(100vw - 24px);
+    outline: none;
     box-shadow: var(--shadow-overlay);
   }
 

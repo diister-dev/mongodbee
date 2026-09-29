@@ -35,9 +35,10 @@
     compact?: boolean;
     json?: boolean;
     reveal?: boolean;
+    bare?: boolean;
   }
 
-  let { value, node, field, onopen, compact = false, json = false, reveal = false }: Props = $props();
+  let { value, node, field, onopen, compact = false, json = false, reveal = false, bare = false }: Props = $props();
 
   function wrapper(v: unknown): string | null {
     if (!v || typeof v !== "object" || Array.isArray(v)) return null;
@@ -112,7 +113,7 @@
 {:else if kind === "numeric"}
   <Num value={String(Object.values(wrapped)[0])} />
 {:else if kind === "ref"}
-  <RefId value={value as string} target={node?.ref} self={field === "_id"} {reveal} />
+  <RefId value={value as string} target={node?.ref} self={field === "_id"} {reveal} {bare} />
 {:else if kind === "enum"}
   <Enum value={value as string} options={node?.values} {field} />
 {:else if kind === "bool"}

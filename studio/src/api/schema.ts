@@ -45,23 +45,32 @@ function sourceLabel(source: ComputedDescriptor["source"]): string {
   return source.model ? `${source.model}.${source.type}` : source.type;
 }
 
+function whereLabel(where: ComputedDescriptor["where"]): string {
+  return Object.entries(where)
+    .map(([path, value]) =>
+      Array.isArray(value)
+        ? `${path} in ${value.map(String).join(", ")}`
+        : `${path} = ${String(value)}`,
+    )
+    .join(" and ");
+}
+
 export function describeComputed(descriptor: ComputedDescriptor): string {
   const aggregate =
     descriptor.aggregate.kind === "count"
       ? "count of"
       : `${descriptor.aggregate.distinct ? "distinct " : ""}${descriptor.aggregate.path} of`;
-  const parts = [
-    `${aggregate} ${sourceLabel(descriptor.source)} by ${descriptor.by}`,
-  ];
-  const where = Object.keys(descriptor.where);
-  if (where.length > 0) parts.push(`where ${where.join(", ")}`);
+  const nearWhere = whereLabel(descriptor.where);
+  const scope = descriptor.sameScope ? ", in the same scope" : "";
   if (descriptor.through) {
-    parts.push(
-      `through ${sourceLabel(descriptor.through.source)}.${descriptor.through.via}`,
+    const farWhere = whereLabel(descriptor.through.where);
+    return (
+      `${aggregate} ${sourceLabel(descriptor.through.source)}${farWhere ? ` where ${farWhere}` : ""}` +
+      `, through ${sourceLabel(descriptor.source)}.${descriptor.through.via} by ${descriptor.by}` +
+      `${nearWhere ? ` where ${nearWhere}` : ""}${scope}`
     );
   }
-  if (descriptor.sameScope) parts.push("in the same scope");
-  return parts.join(", ");
+  return `${aggregate} ${sourceLabel(descriptor.source)} by ${descriptor.by}${nearWhere ? ` where ${nearWhere}` : ""}${scope}`;
 }
 
 export function typeFields(source: TypeSource): Record<string, SchemaNode> {

@@ -2,7 +2,9 @@
   import Tooltip from "../controls/Tooltip.svelte";
   import HoverCard from "./HoverCard.svelte";
   import Value from "./Value.svelte";
+  import RefPrefix from "./RefPrefix.svelte";
   import { plural } from "../lib/format.js";
+  import { sharedPrefix } from "../lib/values.ts";
 
   interface Props {
     value: unknown[];
@@ -16,6 +18,7 @@
   const shown = $derived(value.slice(0, visible));
   const rest = $derived(value.length - shown.length);
   const listed = $derived(value.slice(0, 50));
+  const prefix = $derived(sharedPrefix(value));
 </script>
 
 {#if value.length === 0}
@@ -23,8 +26,9 @@
 {:else}
   <HoverCard label={plural(value.length, "item")}>
     <span class="array">
+      {#if prefix}<RefPrefix name={prefix} />{/if}
       {#each shown as entry, index (index)}
-        <span class="entry"><Value value={entry} node={item} {field} compact /></span>
+        <span class="entry"><Value value={entry} node={item} {field} compact bare={Boolean(prefix)} /></span>
       {/each}
       {#if rest > 0}
         <span class="more num">+{rest} more</span>
