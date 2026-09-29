@@ -20,7 +20,7 @@ import {
   storedCollection,
 } from "./stored-document.ts";
 import { getSessionContext } from "./session.ts";
-import { retryOnWriteConflict } from "./utils/retry.ts";
+import { retryOnWriteConflict, TRANSACTION_REPLAY } from "./utils/retry.ts";
 import { primaryCollection } from "./read-preference.ts";
 import {
   ComputedNotRegisteredError,
@@ -236,7 +236,7 @@ async function drainSubject(
         );
         return removed.deletedCount === 1;
       }),
-    { maxRetries: 8 },
+    TRANSACTION_REPLAY,
   );
 }
 
@@ -276,7 +276,7 @@ async function drainFar(
           const read = await readSubjectsById(db, field, chunk, session);
           await recomputeSubjects(db, [field], read, session);
         }),
-      { maxRetries: 8 },
+      TRANSACTION_REPLAY,
     );
   }
 }

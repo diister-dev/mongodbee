@@ -22,7 +22,7 @@ import {
   locationFilter,
 } from "./computed-topology.ts";
 import { getSessionContext } from "./session.ts";
-import { retryOnWriteConflict } from "./utils/retry.ts";
+import { retryOnWriteConflict, TRANSACTION_REPLAY } from "./utils/retry.ts";
 import { isRecord } from "./utils/guards.ts";
 
 export interface ComputedSubject {
@@ -327,7 +327,7 @@ function inBatchTransaction<T>(
   work: (session?: ClientSession) => Promise<T>,
 ): Promise<T> {
   const { withSession } = getSessionContext(db.client);
-  return retryOnWriteConflict(() => withSession(work), { maxRetries: 8 });
+  return retryOnWriteConflict(() => withSession(work), TRANSACTION_REPLAY);
 }
 
 function subjectFields(
