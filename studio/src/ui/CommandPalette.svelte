@@ -279,11 +279,13 @@
   }
 
   .card {
+    flex: 1;
     min-height: 0;
   }
 
   .search {
     display: flex;
+    flex: none;
     align-items: center;
     gap: 10px;
     height: 48px;
@@ -308,9 +310,16 @@
 
   .list {
     display: flex;
+    flex: 1;
     flex-direction: column;
+    min-height: 0;
     padding: 4px;
     overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .list > :global(*) {
+    flex: none;
   }
 
   .group-label {
@@ -377,6 +386,7 @@
   }
 
   .foot {
+    flex: none;
     min-height: 36px;
   }
 
