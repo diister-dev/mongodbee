@@ -320,8 +320,10 @@ export async function runScript(
   args: string[],
   cwd?: string,
 ): Promise<{ code: number; stderr: string; stdout: string }> {
+  const { FORCE_COLOR: _forceColor, ...env } = process.env;
   const child = spawn(process.execPath, [entry, ...args], {
     cwd,
+    env,
     stdio: ["ignore", "pipe", "pipe"],
   });
 

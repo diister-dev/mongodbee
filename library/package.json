@@ -24,7 +24,7 @@
     "node": ">=22.18"
   },
   "bin": {
-    "mongodbee": "./dist/src/migration/cli/bin.js"
+    "mongodbee": "dist/src/migration/cli/bin.js"
   },
   "files": [
     "dist",

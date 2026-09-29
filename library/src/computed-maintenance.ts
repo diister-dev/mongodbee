@@ -29,6 +29,13 @@ import {
 } from "./utils/retry.ts";
 import { primaryCollection } from "./read-preference.ts";
 import { isRecord } from "./utils/guards.ts";
+import {
+  invalidateReadersAtCommit,
+  invalidateReadersFor,
+  type WriteFootprint,
+} from "./reader-cache.ts";
+import { asMongodbeeWrite } from "./request-context.ts";
+import { ClientRegistry } from "./client-registry.ts";
 
 export const DEFAULT_INLINE_RECOMPUTE_LIMIT = 1000;
 
@@ -70,47 +77,27 @@ export class ComputedNotRegisteredError extends Error {
   override readonly name = "ComputedNotRegisteredError";
 }
 
-const registrations = new WeakMap<MongoClient, Map<string, Registration>>();
-
-const EVERY_DATABASE = "*";
-
-function isDb(target: Db | MongoClient): target is Db {
-  return "databaseName" in target && "client" in target;
-}
-
-function registrationKey(target: Db | MongoClient): {
-  client: MongoClient;
-  name: string;
-} {
-  return isDb(target)
-    ? { client: target.client, name: target.databaseName }
-    : { client: target, name: EVERY_DATABASE };
-}
+const registrations = new ClientRegistry<Registration>();
 
 export function registerComputed(
   target: Db | MongoClient,
   topology: ComputedTopology,
   options: ComputedRegistrationOptions = {},
 ): void {
-  const { client, name } = registrationKey(target);
-  const byName = registrations.get(client) ?? new Map<string, Registration>();
-  byName.set(name, {
+  registrations.set(target, {
     topology,
     inlineLimit: options.inlineLimit ?? DEFAULT_INLINE_RECOMPUTE_LIMIT,
     standaloneMode: options.standaloneMode ?? "refuse",
     retry: options.retry ?? DEFAULT_COMPUTED_RETRY,
   });
-  registrations.set(client, byName);
 }
 
 export function unregisterComputed(target: Db | MongoClient): void {
-  const { client, name } = registrationKey(target);
-  registrations.get(client)?.delete(name);
+  registrations.delete(target);
 }
 
 export function computedRegistration(db: Db): Registration | undefined {
-  const byName = registrations.get(db.client);
-  return byName?.get(db.databaseName) ?? byName?.get(EVERY_DATABASE);
+  return registrations.get(db);
 }
 
 interface Plan {
@@ -797,7 +784,9 @@ export function maintainedCollection<T extends Document>(
               `${property} cannot maintain computed fields on "${collectionName}"; use bulkWrite`,
             );
           }
-          return value.apply(object, args);
+          return withReaderInvalidationOnExecute(value.apply(object, args), [
+            wholeCollection(db, collectionName),
+          ]);
         };
       }
       if (property === "drop") {
@@ -811,52 +800,214 @@ export function maintainedCollection<T extends Document>(
               `source collection "${collectionName}" was dropped`,
             );
           }
-          return await value.apply(object, args);
+          return await invalidatingReaders(
+            [wholeCollection(db, collectionName)],
+            () => value.apply(object, args) as Promise<unknown>,
+          );
         };
       }
       if (!WRITE_METHODS.has(property)) return value;
       return async (...args: unknown[]) => {
         const plan = planFor(db, collectionName, declaresComputed);
-        const original = (...callArgs: unknown[]) =>
-          value.apply(object, callArgs) as Promise<unknown>;
-        if (!plan) return await original(...args);
-        const sessionContext = getSessionContext(db.client);
-        const given =
-          (
-            args[OPTIONS_INDEX[property]!] as
-              | { session?: ClientSession }
-              | undefined
-          )?.session ?? sessionContext.getSession();
-        const run = (session: ClientSession | undefined) =>
-          maintainedCall(
-            {
+        return await invalidatingReaders(
+          readerFootprints(db, collectionName, property, args, plan),
+          () =>
+            maintainedWrite(
               db,
-              name: collectionName,
+              collectionName,
               plan,
-              session,
-            },
-            property,
-            args,
-            original,
-          );
-        if (given?.inTransaction()) return await run(given);
-        const transactions = await checkTransactionEnabled(db.client, db);
-        if (!transactions || given) {
-          if (plan.registration.standaloneMode !== "best-effort") {
-            throw new ComputedRequiresTransactionError(
-              `a write on "${collectionName}" feeds computed fields and needs a transaction; this deployment has none (declare standaloneMode: "best-effort" for tests and development only)`,
-            );
-          }
-          return await run(given);
-        }
-        return await retryOnWriteConflict(
-          () => sessionContext.withSession((session) => run(session)),
-          {
-            ...plan.registration.retry,
-            shouldRetry: isRetryableTransactionFailure,
-          },
+              property,
+              args,
+              (...callArgs) =>
+                value.apply(object, callArgs) as Promise<unknown>,
+            ),
         );
       };
     },
   });
+}
+
+async function maintainedWrite(
+  db: Db,
+  collectionName: string,
+  plan: Plan | undefined,
+  property: string,
+  args: unknown[],
+  original: (...callArgs: unknown[]) => Promise<unknown>,
+): Promise<unknown> {
+  if (!plan) return await original(...args);
+  const sessionContext = getSessionContext(db.client);
+  const given =
+    (args[OPTIONS_INDEX[property]!] as { session?: ClientSession } | undefined)
+      ?.session ?? sessionContext.getSession();
+  const run = (session: ClientSession | undefined) =>
+    maintainedCall(
+      { db, name: collectionName, plan, session },
+      property,
+      args,
+      original,
+    );
+  if (given?.inTransaction()) return await run(given);
+  const transactions = await checkTransactionEnabled(db.client, db);
+  if (!transactions || given) {
+    if (plan.registration.standaloneMode !== "best-effort") {
+      throw new ComputedRequiresTransactionError(
+        `a write on "${collectionName}" feeds computed fields and needs a transaction; this deployment has none (declare standaloneMode: "best-effort" for tests and development only)`,
+      );
+    }
+    return await run(given);
+  }
+  return await retryOnWriteConflict(
+    () => sessionContext.withSession((session) => run(session)),
+    {
+      ...plan.registration.retry,
+      shouldRetry: isRetryableTransactionFailure,
+    },
+  );
+}
+
+function wholeCollection(db: Db, collection: string): WriteFootprint {
+  return {
+    database: db.databaseName,
+    collection,
+    types: "*",
+    scopes: "*",
+    touched: "all",
+  };
+}
+
+function constrainedTo(
+  filter: unknown,
+  field: "_type" | "_scope",
+): readonly string[] | "*" {
+  if (!isRecord(filter)) return "*";
+  const value = filter[field];
+  if (typeof value === "string") return [value];
+  if (isRecord(value)) {
+    if (typeof value.$eq === "string") return [value.$eq];
+    if (
+      Array.isArray(value.$in) &&
+      value.$in.every((item) => typeof item === "string")
+    )
+      return value.$in as string[];
+  }
+  if (Array.isArray(filter.$and)) {
+    for (const part of filter.$and) {
+      const found = constrainedTo(part, field);
+      if (found !== "*") return found;
+    }
+  }
+  return "*";
+}
+
+function footprint(
+  db: Db,
+  collection: string,
+  target: unknown,
+  touched: readonly string[] | "all",
+): WriteFootprint {
+  return {
+    database: db.databaseName,
+    collection,
+    types: constrainedTo(target, "_type"),
+    scopes: constrainedTo(target, "_scope"),
+    touched,
+  };
+}
+
+function updateFootprint(
+  db: Db,
+  collection: string,
+  filter: unknown,
+  update: unknown,
+  options: unknown,
+): WriteFootprint {
+  const upsert = isRecord(options) && options.upsert === true;
+  const shape = Array.isArray(update) || isRecord(update) ? update : undefined;
+  return footprint(
+    db,
+    collection,
+    filter,
+    upsert ? "all" : touchedPaths(shape as UpdateShape | undefined),
+  );
+}
+
+function readerFootprints(
+  db: Db,
+  collection: string,
+  method: string,
+  args: readonly unknown[],
+  plan: Plan | undefined,
+): WriteFootprint[] {
+  const written: WriteFootprint[] = [];
+  switch (method) {
+    case "insertOne":
+      written.push(footprint(db, collection, args[0], "all"));
+      break;
+    case "insertMany":
+      for (const document of Array.isArray(args[0]) ? args[0] : [])
+        written.push(footprint(db, collection, document, "all"));
+      break;
+    case "updateOne":
+    case "updateMany":
+    case "findOneAndUpdate":
+      written.push(updateFootprint(db, collection, args[0], args[1], args[2]));
+      break;
+    case "bulkWrite":
+      for (const operation of Array.isArray(args[0]) ? args[0] : []) {
+        if (!isRecord(operation)) continue;
+        const [kind, body] = Object.entries(operation)[0] ?? [];
+        if (!isRecord(body)) continue;
+        if (kind === "insertOne")
+          written.push(footprint(db, collection, body.document, "all"));
+        else if (kind === "updateOne" || kind === "updateMany")
+          written.push(
+            updateFootprint(db, collection, body.filter, body.update, body),
+          );
+        else written.push(footprint(db, collection, body.filter, "all"));
+      }
+      break;
+    default:
+      written.push(footprint(db, collection, args[0], "all"));
+  }
+  for (const field of [...(plan?.near ?? []), ...(plan?.far ?? [])]) {
+    written.push({
+      database: db.databaseName,
+      collection: field.at.collection,
+      types: field.at.kind === "collection" ? "*" : [field.at.type],
+      scopes: "*",
+      touched: [COMPUTED_ROOT],
+    });
+  }
+  return written;
+}
+
+async function invalidatingReaders<T>(
+  footprints: readonly WriteFootprint[],
+  write: () => Promise<T>,
+): Promise<T> {
+  invalidateReadersFor(footprints);
+  try {
+    return await asMongodbeeWrite(write);
+  } finally {
+    invalidateReadersFor(footprints);
+    invalidateReadersAtCommit(footprints);
+  }
+}
+
+function withReaderInvalidationOnExecute<T>(
+  operation: T,
+  footprints: readonly WriteFootprint[],
+): T {
+  if (!isBulkOperation(operation)) return operation;
+  const execute = operation.execute.bind(operation);
+  operation.execute = (...args: unknown[]) =>
+    invalidatingReaders(footprints, () => execute(...args));
+  return operation;
+}
+
+function isBulkOperation(
+  value: unknown,
+): value is { execute: (...args: unknown[]) => Promise<unknown> } {
+  return isRecord(value) && typeof value.execute === "function";
 }

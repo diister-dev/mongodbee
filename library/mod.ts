@@ -86,3 +86,27 @@ export {
   pendingComputed,
 } from "./src/computed-marks.ts";
 export type { ReadOptions } from "./src/read-preference.ts";
+export {
+  type AnyReader,
+  type CompositeReader,
+  DEFAULT_READER_LIMITS,
+  type DeepReadonly,
+  type FrozenDate,
+  invalidateAllReaders,
+  type Plain,
+  type QueryReader,
+  type ReaderArgument,
+  ReaderArgumentError,
+  ReaderDatabaseError,
+  ReaderDefinitionError,
+  ReaderDirectReadError,
+  type ReaderLimits,
+  ReaderNotRegisteredError,
+  type ReaderQuery,
+  type ReaderRegistrationOptions,
+  type ReaderStats,
+  reader,
+  registerReaders,
+  requestReaderStats,
+  unregisterReaders,
+} from "./src/readers.ts";

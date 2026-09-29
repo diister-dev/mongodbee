@@ -2,7 +2,7 @@ import type { ClientSession, Db, MongoClient } from "../mod.ts";
 import * as m from "mongodb";
 import { contextVariable } from "./context-variable.ts";
 import { PRIMARY } from "./read-preference.ts";
-import { invalidateReads } from "./request-context.ts";
+import { asMongodbeeWrite, invalidateReads } from "./request-context.ts";
 import { getTransactionTracer } from "./telemetry.ts";
 import {
   runInTransactionScope,
@@ -306,12 +306,15 @@ export function createSessionContext(mongoClient: MongoClient): {
               throw e;
             }
             try {
-              await commitWithRetry(newSession, startedAt);
+              await asMongodbeeWrite(() =>
+                commitWithRetry(newSession, startedAt),
+              );
             } catch (e) {
               if (canRetry(e)) continue;
               throw e;
             } finally {
               invalidateReads();
+              for (const invalidate of result.atCommit) invalidate();
             }
             return result;
           }

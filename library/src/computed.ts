@@ -5,13 +5,25 @@ import {
   type FieldsOf,
   fieldPath,
 } from "./index-builder.ts";
-import { findSchemaAtPath } from "./schema-navigator.ts";
+import {
+  findSchemaAtPath,
+  findSchemasAtFieldPath,
+} from "./schema-navigator.ts";
 import { isRecord, isSchema } from "./utils/guards.ts";
 import {
   fieldsOf,
   type FieldsOfInput,
   type TypeInput,
 } from "./type-definition.ts";
+import {
+  type KeyArgs,
+  type KeyOf,
+  type KeysOfAny,
+  ReaderQuery,
+  type ReaderQueryDescriptor,
+  type ScopeArgs,
+  type SelectedRow,
+} from "./reader-query.ts";
 
 type AnySchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
 
@@ -73,9 +85,23 @@ interface ModelLike {
   readonly schema: Record<string, TypeInput>;
 }
 
+export interface ScopedModel<M extends ModelLike, S extends AnySchema> {
+  readonly name: M["name"];
+  readonly schema: M["schema"];
+  readonly scope: S;
+}
+
+export function scoped<M extends ModelLike, S extends AnySchema>(
+  model: M,
+  scope: S,
+): ScopedModel<M, S> {
+  return Object.freeze({ name: model.name, schema: model.schema, scope });
+}
+
 interface ResolvedSource {
   readonly ref: ComputedSourceRef;
   readonly entries: Record<string, AnySchema>;
+  readonly scope: AnySchema | undefined;
 }
 
 interface BuilderState {
@@ -164,6 +190,8 @@ function resolveSource(
     return {
       ref: { model: first.name, type: second },
       entries: fieldsOf(input),
+      scope:
+        "scope" in first && isSchema(first.scope) ? first.scope : undefined,
     };
   }
   if (typeof second === "string") {
@@ -171,18 +199,25 @@ function resolveSource(
       `from("${first}", fields) takes the source fields as its second argument`,
     );
   }
-  return { ref: { type: first }, entries: fieldsOf(second) };
+  return { ref: { type: first }, entries: fieldsOf(second), scope: undefined };
 }
 
 function schemaAt(source: ResolvedSource, path: string): AnySchema {
   if (path === "_id") return v.string();
-  const found = findSchemaAtPath(v.object(source.entries), path.split("."));
-  if (found === undefined || !("kind" in found) || found.kind !== "schema") {
+  const root = v.object(source.entries);
+  const found = findSchemaAtPath(root, path.split("."));
+  if (found !== undefined && "kind" in found && found.kind === "schema") {
+    return unwrapOptional(found);
+  }
+  const alternatives = findSchemasAtFieldPath(root, path.split(".")).map(
+    unwrapOptional,
+  );
+  if (alternatives.length === 0) {
     throw new ComputedDefinitionError(
       `"${path}" does not exist on source type "${source.ref.type}"`,
     );
   }
-  return unwrapOptional(found);
+  return alternatives.length === 1 ? alternatives[0]! : v.union(alternatives);
 }
 
 function unwrapOptional(schema: AnySchema): AnySchema {
@@ -217,7 +252,12 @@ function freezeWhere(
   );
 }
 
-export class ComputedFrom<T> {
+type QueryArgs<S, K> = [...ScopeArgs<S>, ...KeyArgs<K>];
+
+declare const QUERYABLE: unique symbol;
+
+export class ComputedFrom<T, S = never, K = never, Q extends boolean = true> {
+  declare readonly [QUERYABLE]?: Q;
   readonly #state: BuilderState;
 
   constructor(state: BuilderState) {
@@ -228,24 +268,67 @@ export class ComputedFrom<T> {
     return this.#state.through?.far ?? this.#state.near;
   }
 
-  by(pick: (source: FieldsOf<T>) => FieldRef<unknown>): ComputedFrom<T> {
+  by<V>(
+    pick: (source: FieldsOf<T>) => FieldRef<V>,
+  ): ComputedFrom<T, S, KeyOf<V>, Q> {
     if (this.#state.through)
       throw new ComputedDefinitionError(
         "by() names the subject on the near source; declare it before through()",
       );
-    return new ComputedFrom<T>({
+    return new ComputedFrom<T, S, KeyOf<V>, Q>({
       ...this.#state,
       by: pathOf(this.#state.near, pick(createFieldProxy<T>())),
     });
   }
 
-  sameScope(): ComputedFrom<T> {
-    return new ComputedFrom<T>({ ...this.#state, sameScope: true });
+  sameScope(): ComputedFrom<T, S, K, false> {
+    return new ComputedFrom<T, S, K, false>({
+      ...this.#state,
+      sameScope: true,
+    });
   }
 
-  where<V>(
-    pick: (source: FieldsOf<T>) => readonly [FieldRef<V>, V | readonly V[]],
-  ): ComputedFrom<T> {
+  one(this: ComputedFrom<T, S, K, true>): ReaderOne<T, S, K> {
+    return new ReaderOne<T, S, K>((fields) => this.#query(fields, true));
+  }
+
+  select<const P extends KeysOfAny<T>>(
+    this: ComputedFrom<T, S, K, true>,
+    fields: readonly P[],
+  ): ReaderQuery<QueryArgs<S, K>, readonly SelectedRow<T, P>[], S, K> {
+    return new ReaderQuery(this.#query(fields, false));
+  }
+
+  #query(fields: readonly string[], one: boolean) {
+    const { near, by, where, through, sameScope } = this.#state;
+    if (through || sameScope)
+      throw new ComputedDefinitionError(
+        "a reader reads one source: through() and sameScope() belong to computed fields",
+      );
+    if (fields.length === 0)
+      throw new ComputedDefinitionError(
+        `a reader over "${near.ref.type}" selects at least one field`,
+      );
+    for (const field of fields) {
+      if (field.includes("."))
+        throw new ComputedDefinitionError(
+          `select() takes top-level fields, got "${field}"`,
+        );
+      schemaAt(near, field);
+    }
+    return Object.freeze({
+      source: Object.freeze({ ...near.ref }),
+      scope: near.scope,
+      ...(by !== undefined && { by }),
+      where: freezeWhere(where),
+      select: Object.freeze([...new Set(fields)]),
+      one,
+    });
+  }
+
+  where<V, const W extends (V | null) & ComputedLiteral>(
+    pick: (source: FieldsOf<T>) => readonly [FieldRef<V>, W | readonly W[]],
+  ): ComputedFrom<T, S, K, Q> {
     const [ref, value] = pick(createFieldProxy<T>());
     const current = this.#current();
     const path = pathOf(current, ref);
@@ -255,8 +338,14 @@ export class ComputedFrom<T> {
         `where("${path}") takes string, number, boolean or null values only`,
       );
     }
+    const declared = this.#state.through?.where ?? this.#state.where;
+    if (Object.hasOwn(declared, path)) {
+      throw new ComputedDefinitionError(
+        `where("${path}") is declared twice; give one where() the list of accepted values`,
+      );
+    }
     if (this.#state.through) {
-      return new ComputedFrom<T>({
+      return new ComputedFrom<T, S, K, Q>({
         ...this.#state,
         through: {
           ...this.#state.through,
@@ -264,7 +353,7 @@ export class ComputedFrom<T> {
         },
       });
     }
-    return new ComputedFrom<T>({
+    return new ComputedFrom<T, S, K, Q>({
       ...this.#state,
       where: { ...this.#state.where, [path]: entry },
     });
@@ -274,24 +363,24 @@ export class ComputedFrom<T> {
     type: string,
     source: I,
     via: (near: FieldsOf<T>) => FieldRef<unknown>,
-  ): ComputedFrom<SourceDocument<I>>;
-  through<M extends ModelLike, K extends keyof M["schema"] & string>(
+  ): ComputedFrom<SourceDocument<I>, S, K, false>;
+  through<M extends ModelLike, N extends keyof M["schema"] & string>(
     model: M,
-    type: K,
+    type: N,
     via: (near: FieldsOf<T>) => FieldRef<unknown>,
-  ): ComputedFrom<SourceDocument<M["schema"][K]>>;
+  ): ComputedFrom<SourceDocument<M["schema"][N]>, S, K, false>;
   through(
     first: string | ModelLike,
     second: TypeInput | string,
     via: (near: FieldsOf<T>) => FieldRef<unknown>,
-  ): ComputedFrom<unknown> {
+  ): ComputedFrom<unknown, S, K, false> {
     if (this.#state.through)
       throw new ComputedDefinitionError(
         "a computed field follows at most one extra hop",
       );
     const far = resolveSource(first, second);
     const viaPath = pathOf(this.#state.near, via(createFieldProxy<T>()));
-    return new ComputedFrom<unknown>({
+    return new ComputedFrom<unknown, S, K, false>({
       ...this.#state,
       through: { far, via: viaPath, where: {} },
     });
@@ -393,18 +482,39 @@ export class ComputedCollect<V> extends ComputedDeclaration<V[]> {
   }
 }
 
+export class ReaderOne<T, S, K> {
+  readonly #finish: (fields: readonly string[]) => ReaderQueryDescriptor;
+
+  constructor(finish: (fields: readonly string[]) => ReaderQueryDescriptor) {
+    this.#finish = finish;
+  }
+
+  select<const P extends KeysOfAny<T>>(
+    fields: readonly P[],
+  ): ReaderQuery<QueryArgs<S, K>, SelectedRow<T, P> | null, S, K> {
+    return new ReaderQuery(this.#finish(fields));
+  }
+}
+
+export function from<
+  M extends ScopedModel<ModelLike, AnySchema>,
+  N extends keyof M["schema"] & string,
+>(
+  model: M,
+  type: N,
+): ComputedFrom<SourceDocument<M["schema"][N]>, v.InferOutput<M["scope"]>>;
 export function from<I extends TypeInput>(
   type: string,
   source: I,
 ): ComputedFrom<SourceDocument<I>>;
-export function from<M extends ModelLike, K extends keyof M["schema"] & string>(
+export function from<M extends ModelLike, N extends keyof M["schema"] & string>(
   model: M,
-  type: K,
-): ComputedFrom<SourceDocument<M["schema"][K]>>;
+  type: N,
+): ComputedFrom<SourceDocument<M["schema"][N]>>;
 export function from(
   first: string | ModelLike,
   second: TypeInput | string,
-): ComputedFrom<unknown> {
+): ComputedFrom<unknown, unknown> | ComputedFrom<unknown> {
   return new ComputedFrom<unknown>({
     near: resolveSource(first, second),
     sameScope: false,

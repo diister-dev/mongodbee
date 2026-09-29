@@ -15,6 +15,7 @@
 import * as m from "mongodb";
 import type { ClientSession, Db } from "./mongodb.ts";
 import { contextVariable } from "./context-variable.ts";
+import { assertOutsideComposite } from "./reader-frame.ts";
 import { isRecord } from "./utils/guards.ts";
 
 /** The primary read preference. */
@@ -112,8 +113,10 @@ function ambientReads<T extends m.Document>(
       }
       const position = READ_OPTIONS_POSITION[property];
       if (position === undefined) return value;
-      return (...args: unknown[]) =>
-        value.apply(object, withAmbientPreference(args, position));
+      return (...args: unknown[]) => {
+        assertOutsideComposite(property);
+        return value.apply(object, withAmbientPreference(args, position));
+      };
     },
   });
 }

@@ -140,6 +140,10 @@
     overflow: auto;
   }
 
+  .page > :global(.bezel) {
+    flex: none;
+  }
+
   .group-head {
     position: sticky;
     top: 0;

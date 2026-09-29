@@ -2,9 +2,18 @@ import { BSON } from "mongodb";
 import type * as m from "mongodb";
 import { contextVariable } from "./context-variable.ts";
 import { currentReadPreference } from "./read-preference.ts";
+import type { Db } from "./mongodb.ts";
+
+export type DatabaseSource = Db | (() => Db | undefined);
 
 export interface RequestContextOptions {
   memoizeReads?: boolean;
+  database?: DatabaseSource;
+}
+
+export interface RequestScope {
+  readonly database: DatabaseSource | undefined;
+  readonly parent: RequestScope | undefined;
 }
 
 export interface RequestReadStats {
@@ -15,7 +24,7 @@ export interface RequestReadStats {
 
 const MEMOIZED_ROWS_LIMIT = 100;
 
-interface RequestState {
+interface RequestState extends RequestScope {
   reads: Map<string, Promise<Uint8Array | undefined>> | undefined;
   stats: RequestReadStats;
 }
@@ -53,6 +62,22 @@ const DRIVER_WRITE_COMMANDS: ReadonlySet<string> = new Set([
 
 const requestState = contextVariable<RequestState>("mongodbee.request");
 
+const mongodbeeWrite = contextVariable<true>("mongodbee.write");
+
+const driverWriteListeners = new Set<() => void>();
+
+export function onUntrackedWrite(listener: () => void): void {
+  driverWriteListeners.add(listener);
+}
+
+export function asMongodbeeWrite<T>(fn: () => T): T {
+  return mongodbeeWrite.run(true, fn);
+}
+
+export function currentRequestScope(): RequestScope | undefined {
+  return requestState.get();
+}
+
 export function invalidateReadsOnDriverWrites(
   client: m.MongoClient,
 ): () => void {
@@ -62,7 +87,9 @@ export function invalidateReadsOnDriverWrites(
     );
   }
   const onCommand = (event: { commandName: string }) => {
-    if (DRIVER_WRITE_COMMANDS.has(event.commandName)) invalidateReads();
+    if (!DRIVER_WRITE_COMMANDS.has(event.commandName)) return;
+    invalidateReads();
+    if (!mongodbeeWrite.get()) notifyUntrackedWrite();
   };
   client.on("commandStarted", onCommand);
   client.on("commandSucceeded", onCommand);
@@ -80,6 +107,8 @@ export function withRequestContext<T>(
 ): T {
   return requestState.run(
     {
+      database: options.database,
+      parent: requestState.get(),
       reads: options.memoizeReads === true ? new Map() : undefined,
       stats: { loaded: 0, reused: 0, invalidations: 0 },
     },
@@ -163,6 +192,63 @@ export async function readThrough<T>(
   return await loading;
 }
 
+export interface RecordedRead {
+  readonly dbName: string;
+  readonly collectionName: string;
+  readonly projected: boolean;
+  readonly primary: boolean;
+  readonly inTransaction: boolean;
+  readonly documents: readonly m.Document[];
+}
+
+const readRecorder = contextVariable<(read: RecordedRead) => void>(
+  "mongodbee.readRecorder",
+);
+
+export function recordingReads<T>(
+  recorder: (read: RecordedRead) => void,
+  fn: () => T,
+): T {
+  return readRecorder.run(recorder, fn);
+}
+
+interface RecordedSource extends ReadTarget {
+  readonly dbName: string;
+  readonly readPreference?: m.ReadPreference;
+}
+
+function recorded<T>(
+  collection: RecordedSource,
+  driverOptions: m.FindOptions & { session?: m.ClientSession },
+  load: () => Promise<T>,
+): () => Promise<T> {
+  const recorder = readRecorder.get();
+  if (!recorder) return load;
+  return async () => {
+    const value = await load();
+    const preference =
+      driverOptions.readPreference ??
+      currentReadPreference() ??
+      collection.readPreference;
+    recorder({
+      dbName: collection.dbName,
+      collectionName: collection.collectionName,
+      projected: driverOptions.projection !== undefined,
+      primary:
+        preference === undefined ||
+        (typeof preference === "string" ? preference : preference.mode) ===
+          "primary",
+      inTransaction: driverOptions.session?.inTransaction() === true,
+      documents: Array.isArray(value)
+        ? value
+        : value === null || value === undefined
+          ? []
+          : [value as m.Document],
+    });
+    return value;
+  };
+}
+
 export function findOneThrough<TDoc extends m.Document>(
   collection: m.Collection<TDoc>,
   query: m.Filter<TDoc>,
@@ -174,7 +260,9 @@ export function findOneThrough<TDoc extends m.Document>(
     "findOne",
     [query, options],
     driverOptions.session,
-    () => collection.findOne(query, driverOptions),
+    recorded(collection, driverOptions, () =>
+      collection.findOne(query, driverOptions),
+    ),
   );
 }
 
@@ -189,7 +277,9 @@ export function findThrough<TDoc extends m.Document>(
     "find",
     [query, options],
     driverOptions.session,
-    () => collection.find(query, driverOptions).toArray(),
+    recorded(collection, driverOptions, () =>
+      collection.find(query, driverOptions).toArray(),
+    ),
   );
 }
 
@@ -217,9 +307,15 @@ export async function aggregateThrough<
     );
   }
   invalidateReads();
+  notifyUntrackedWrite();
   try {
     return await load();
   } finally {
     invalidateReads();
+    notifyUntrackedWrite();
   }
+}
+
+export function notifyUntrackedWrite(): void {
+  for (const listener of driverWriteListeners) listener();
 }

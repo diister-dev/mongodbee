@@ -63,6 +63,7 @@ OTel Collector ──── spanmetrics ────► Prometheus ──► Gra
 | **Errors** | Errors/s by `error.type` (spot `ValiError` = client-side validation), error ratio by collection |
 | **Transactions** | Rate by outcome (committed/aborted), transaction duration quantiles |
 | **Document types** | Rate and p95 by `mongodbee.doc_type` (multi-collection / scoped) |
+| **Readers** | Calls by outcome, hit ratio by reader, p95 load duration, bypasses (`registerReaders` with telemetry, see [READERS.md](../READERS.md)) |
 
 Dashboard variables: `Data source`, `Service`, `Database`, `Collection`
 (multi-select, default All). The error-rate and latency thresholds on the stat
@@ -82,6 +83,10 @@ The `spanmetrics` connector turns span attributes into Prometheus labels
 | `error.type` | `error_type` |
 | `mongodbee.doc_type` | `mongodbee_doc_type` |
 | `mongodbee.transaction.outcome` | `mongodbee_transaction_outcome` |
+| `mongodbee.reader` | `mongodbee_reader` (reader spans carry no `db_system_name`) |
+| `mongodbee.reader.kind` | `mongodbee_reader_kind` |
+| `mongodbee.reader.level` | `mongodbee_reader_level` |
+| `mongodbee.reader.outcome` | `mongodbee_reader_outcome` |
 | — (span name, built-in) | `span_name` (`"insertOne users"`, `"mongodb.transaction"`) |
 | — (span status, built-in) | `status_code` (`STATUS_CODE_ERROR`, ...) |
 
