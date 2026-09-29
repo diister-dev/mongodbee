@@ -25,6 +25,12 @@ function optionalString(value: unknown): string | undefined {
     : undefined;
 }
 
+export function mongoHosts(uri: string): string {
+  const withoutScheme = uri.replace(/^mongodb(\+srv)?:\/\//, "");
+  const authority = withoutScheme.split(/[/?]/, 1)[0] ?? "";
+  return authority.slice(authority.lastIndexOf("@") + 1);
+}
+
 function parsePort(raw: number | string | undefined): number | undefined {
   if (raw === undefined || raw === "") return undefined;
   const port = typeof raw === "number" ? raw : Number.parseInt(raw, 10);
@@ -50,8 +56,10 @@ export async function studioCommand(
     migrationsDir: optionalString(options.migrations),
     schemaPath: optionalString(options.schemas),
   });
+  console.log(dim(`Connecting to ${mongoHosts(project.connectionUri)}…`));
   const client = new MongoClient(project.connectionUri);
   await client.connect();
+  console.log(dim("Connected"));
   const db = client.db(project.dbName);
 
   const server = await startStudioServer(
