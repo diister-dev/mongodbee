@@ -77,7 +77,7 @@ function bunRuntime(): BunBundler {
   const bun: unknown = Reflect.get(globalThis, "Bun");
   if (!isBunBundler(bun)) {
     throw new Error(
-      "mongodbee studio: building the UI from source needs Bun. Run `bun run build:studio` in the library first",
+      "mongodbee studio: building the UI from source needs Bun. Run `bun run build:ui` in the studio package first",
     );
   }
   return bun;

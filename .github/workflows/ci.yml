@@ -117,6 +117,10 @@ jobs:
       - name: Build the core for the studio
         run: bun run build
 
+      - name: Build the studio UI
+        working-directory: studio
+        run: bun run build:ui
+
       - name: Test the studio (bun)
         if: matrix.runtime == 'bun'
         working-directory: studio
