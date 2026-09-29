@@ -42,6 +42,7 @@
   --syntax-number: #a64b00;
   --card-shadow: none;
   --shadow-overlay: 0 12px 32px -16px rgb(20 26 21 / 0.35);
+  --scrim: rgb(20 26 21 / 0.18);
   --shadow-popover: 0 12px 32px -16px rgb(20 26 21 / 0.35);
   --scroll-thumb: #d3ccba;
   --scroll-thumb-hover: #aea68f;
@@ -266,6 +267,10 @@ h3,
     opacity: 0;
     transform: translateY(6px);
   }
+}
+
+:root[data-modal] {
+  overflow: hidden;
 }
 
 :root[data-quiet] .stagger {

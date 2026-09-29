@@ -20,6 +20,7 @@
   import { defaultTab, kindLabel } from "./lib/format.js";
   import { matchScore, moveSelection } from "./lib/interaction.ts";
   import { quiet } from "./lib/motion.ts";
+  import { modal } from "./lib/modal.ts";
   import { resolveReference } from "./lib/refs.ts";
   import { isObjectIdHex, isUlid, parseTypedId } from "./lib/values.ts";
 
@@ -184,9 +185,9 @@
   });
 </script>
 
-<div class="palette-root" data-palette>
+<dialog class="palette-root" data-palette aria-label="Jump to" use:modal={{ onclose, initialFocus: () => input }}>
   <button class="backdrop" aria-label="Close" tabindex="-1" onclick={onclose}></button>
-  <div class="bezel palette" role="dialog" aria-modal="true" aria-label="Jump to">
+  <div class="bezel palette">
     <div class="bezel-card card">
       <label class="search">
         <Icon icon={Search} size={16} />
@@ -238,24 +239,35 @@
       </span>
     </footer>
   </div>
-</div>
+</dialog>
 
 <style>
   .palette-root {
     position: fixed;
     inset: 0;
-    z-index: 40;
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    max-height: none;
+    margin: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
     display: flex;
     flex-direction: column;
     align-items: center;
     padding: 14vh 16px 16px;
   }
 
+  .palette-root::backdrop {
+    background: transparent;
+  }
+
   .backdrop {
     position: absolute;
     inset: 0;
     border: 0;
-    background: rgb(20 26 21 / 0.16);
+    background: var(--scrim);
     cursor: default;
   }
 
