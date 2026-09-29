@@ -86,6 +86,10 @@ jobs:
           npm stage publish --access public --tag "$tag"
           echo "Staged. Release it with: npm stage list && npm stage approve <id>"
 
+      - name: Publish to JSR
+        if: inputs.registry != 'npm'
+        run: npx jsr publish
+
       - name: Stage the studio npm release
         if: inputs.registry != 'jsr'
         working-directory: studio
@@ -97,7 +101,3 @@ jobs:
           esac
           echo "staging the studio $version under dist-tag '$tag'"
           npm stage publish --access public --tag "$tag"
-
-      - name: Publish to JSR
-        if: inputs.registry != 'npm'
-        run: npx jsr publish
