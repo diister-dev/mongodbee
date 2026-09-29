@@ -123,6 +123,11 @@ watchTest("Collection watcher event unsubscribe", async (t) => {
       { $set: { email: "hello@example.com" } },
     );
 
+    await waitUntil(
+      () => insertCount >= 1 && updateCount >= 1,
+      "the first insert and update events, before unsubscribing",
+    );
+
     // Unsubscribe one of the listeners
     unsubscribeInsert();
 
@@ -138,10 +143,7 @@ watchTest("Collection watcher event unsubscribe", async (t) => {
       { $set: { email: "bob.updated@example.com" } },
     );
 
-    await waitUntil(
-      () => insertCount >= 1 && updateCount >= 2,
-      "the insert and update events",
-    );
+    await waitUntil(() => updateCount >= 2, "the second update event");
 
     // Insert count should still be 1, update count should be 2
     assertEquals(
