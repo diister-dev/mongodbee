@@ -139,6 +139,22 @@ declared fields are actually used, how many documents the latest month
 brought and the age of the newest one, then the share of documents that
 fill each field (fields found in the data but not in the schema are marked).
 
+A collection whose types declare computed fields gets three more panels:
+
+- **computed fields**: the share of sampled documents (up to 5,000 per type)
+  holding a value for each field, the recomputations waiting for the drainer
+  per field and the age of the oldest one, and a warning when no sampled
+  document holds any value, which means the migration that applies them has
+  not run on this database.
+- **recomputations**: documents by `_computed._rev`, with the ones never
+  recomputed set apart.
+- **stored values against a full recompute**: recomputes the first 200, 1,000
+  or 2,000 documents of each type from their sources, the way
+  `checkComputed` does, and compares. It only reads. Each field says "in
+  step" or how many documents drifted, drifts still waiting for the drainer
+  are said as such, and up to 20 examples show the stored and the recomputed
+  value, each opening its document.
+
 For every collection, a "created per month" chart reads the creation time
 carried by the ids (ULIDs, typed ids built on them, ObjectIds) of a random
 sample of up to 5,000 documents and scales it to the collection. Ids without
@@ -166,8 +182,9 @@ sorted by year descending`, and every part of it is a control:
   and any value can be typed.
 - Add conditions with `/` or the `where` button. Each condition is a field
   (searchable, grouped by type), an operator that fits the field (is, is not,
-  above, at least, below, at most, contains, starts with, is set, is empty) and
-  a value; picklists and booleans offer their values. Any other value field
+  is one of, above, at least, below, at most, contains, starts with, is set,
+  is empty) and a value; "is one of" takes a comma separated list or a JSON
+  array; picklists and booleans offer their values. Any other value field
   suggests the most frequent values recorded for that field, with their
   counts, narrowed by the type, the scope, the other conditions and what is
   typed (a prefix match). The list opens on focus and with `ctrl space`;
@@ -221,6 +238,23 @@ sorted by year descending`, and every part of it is a control:
   line. The drawer is resized by dragging its left edge or, once the edge is
   focused, with the arrow keys, Home and End; a double click restores the
   default width, and the width is remembered in the browser.
+- The drawer is modal, like the search palette: it opens in the browser's top
+  layer over a light veil, the rest of the page cannot be clicked, focused or
+  scrolled while it is open, and focus stays inside it. A click on the veil,
+  Escape or the close button closes it and gives focus back. J and K still
+  move to the previous and next document of the page behind it. The search
+  palette opens above an open drawer.
+- Computed fields (`_computed`) are never mixed with the application's own
+  fields. In the table each one is its own column, after the user fields,
+  headed by its name and a dashed "computed" tag, and it can be filtered and
+  sorted like any field (`_computed.organizationIds`). In the documents view
+  they sit under a dashed "computed" rule. In the drawer they get their own
+  block below the document: the revision, each value (a list of references
+  shows its type once), the declaration it comes from ("organizationId of
+  org_membership by participantId where status = active"), and a link that
+  opens the source documents already filtered: the `by` field equal to this
+  document, the declaration's `where` conditions, and the scope when the
+  sources are scoped.
 
 ### Schema
 
@@ -374,6 +408,8 @@ serialized as relaxed extended JSON (`{"$date": ...}`, `{"$oid": ...}`).
 | `GET /api/collections/:name/values`         | `field`, `q` (prefix), `limit` (≤ 100), plus `type`, `scope`, `w` |
 | `GET /api/labels`                           | `id` (repeatable typed id, ≤ 100): a readable name for each       |
 | `GET /api/collections/:name/coverage`       | `type`, `scope`, `w`: filled share of each field on a 5,000 sample |
+| `GET /api/collections/:name/computed`       | `type`, `scope`, `stats` (`false` skips the sample): each computed field, its declaration and source collection, filled share, revisions, pending recomputations |
+| `GET /api/collections/:name/computed-check` | `type`, `scope`, `limit` (1 to 2,000, default 200): drifts against a full recompute |
 | `GET /api/collections/:name/schema`         |                                                                   |
 | `GET /api/collections/:name/indexes`        |                                                                   |
 | `GET /api/migrations`                       |                                                                   |
