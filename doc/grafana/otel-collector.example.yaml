@@ -44,6 +44,10 @@ connectors:
       - name: error.type
       - name: mongodbee.doc_type
       - name: mongodbee.transaction.outcome
+      - name: mongodbee.reader
+      - name: mongodbee.reader.kind
+      - name: mongodbee.reader.level
+      - name: mongodbee.reader.outcome
       # ⚠ mongodbee.scope is deliberately NOT a dimension: one label value per
       # tenant/scope can explode Prometheus cardinality, and scope values may
       # be sensitive. Uncomment only if your scope set is small and non-PII

@@ -1,6 +1,15 @@
 # Readers: declared reads, cached at the right level, invalidated by the database
 
-Status: proposal, revision 3, 2026-09-29. Nothing below is implemented yet.
+Status: proposal, revision 3, 2026-09-29. Steps 1 and 2 of section 14 are
+implemented on `feat/readers`, with `primeFrom` for singleton readers (section
+3.5) and reader spans (section 12.1, `doc/TELEMETRY.md`). Template-typed refIds
+(step 0) are not done: swapped string arguments still compile. Diivento's
+branch `feat/readers` runs its exposition permission providers (participant
+roles, org memberships, lead, map, programme org space) on five readers: on
+real data, one request calling the five providers makes 4 reads and 6 hits
+where it made about 11 reads. The implementation went through three more
+reviews (two adversarial, one overall); this text describes what was built,
+where it differs from the plan.
 Revisions 2 and 3 each follow an adversarial review that rewrote five real
 Diivento loaders against the previous revision and typechecked the result;
 section 16 lists what each review changed and why.
@@ -44,7 +53,7 @@ the automatic invalidation of the first, and scales from L0 to L1.
 1. **Nothing the author writes by hand can fail silently in the stale
    direction.** Keys, the fields that matter and the dependencies between
    readers are derived, never declared as free text; the safe choice is the
-   default (`consistency` defaults to `"strict"`).
+   default (`consistency`, which arrives with L1, will default to `"strict"`).
 2. **A reader is a computed field that is not stored.** It reuses the
    `from(...).by(...).where(...)` builder, the topology and the write
    interceptor of computed fields (`doc/COMPUTED.md`), so an application
@@ -86,7 +95,7 @@ export const participationsOf = reader(
 
 export const entrepriseMemberships = reader(
   "entreprise-memberships-of-user",
-  from(EntreprisesModel, "member")
+  from("member", MemberType)
     .by((m) => m.userId)
     .where((m) => [m.status, ["active", "invited"]])
     .select(["tenantId", "role", "status"]),
@@ -100,11 +109,11 @@ export const orgRoleByKey = reader(
 export const expositionInformation = reader(
   "exposition-information",
   from(Expo, "information").one().select(["name", "entreprise", "modules"]),
-  { consistency: "eventual" },
 );
 
 const rows = await participationsOf(expositionId, userId);
-const roles = await orgRolesOf.many(expositionId, organizationIds);
+const roles = await orgRoleByKey.many(expositionId, roleKeys);
+roles.get("staff");
 ```
 
 - `from` is the computed fields' `from`, with one more terminal, `select`. A
@@ -120,16 +129,34 @@ const roles = await orgRolesOf.many(expositionId, organizationIds);
   that is not selected is not in the type and not in memory: `invitationToken`
   cannot reach a cache.
 - `select` is required: a reader over full documents is what made narrowing
-  unsafe in revision 1, and what puts tokens in memory.
+  unsafe in revision 1, and what puts tokens in memory. It takes top-level
+  fields. The computed fields of a type are read by selecting `_computed`,
+  which brings every computed field of the document; a recomputation of the
+  subject invalidates the entries that selected it.
 - `where` takes the computed fields' equality and membership predicates. Its
-  values are typed against the field (`[p.status, "actve"]` does not compile)
-  and validated against the schema at boot.
-- **`.many(scope, keys)`** reads several keys in one `$in` read and stores each
-  key separately, exact per key. It replaces today's `$in` reads.
+  values are strings, numbers, booleans or `null`, typed against the field
+  (`[p.status, "actve"]` does not compile); `null` also matches a missing
+  field, which is how "`$exists: false`" is written. A path takes one `where`;
+  a second one on the same path is refused rather than silently replacing the
+  first. A date, "an array field contains", `$ne`, `$nin` and `$or` are not
+  expressible: `$ne` and `$nin` become the list of accepted values, or a
+  selected field filtered by the caller; `$or` becomes two readers and a
+  composite.
+- **`.many(scope, keys)`** reads the keys that are not cached in one `$in`
+  read, stores each key separately, and returns a `ReadonlyMap` from each key
+  to its value, so the grouping does not depend on the `by` field being
+  selected. The map is keyed by the values the caller passed: a key given as a
+  `Date` or an `ObjectId` is found again with that same instance only. A
+  reader without `by()` has no `many` (its type is `never`). Only the keys not
+  cached yet count against `entriesPerRequest`.
+- `select` and `one` exist only on a builder a reader can use: after
+  `through()` or `sameScope()`, which belong to computed fields, they do not
+  typecheck.
 - The load uses the full filter, `where` included, so partial indexes serve it
   (Diivento's `personRef.userId` index is partial on `kind: "user"`).
-  Registration checks that an index covers `(scope, by)` under the `where`, as
-  the computed topology checks its `by` fields.
+  Registration checks that a declared index leads with the `by` field, as the
+  computed topology does; it does not yet check the scope prefix nor the
+  partial filter against the `where`.
 
 ### 3.2 Composite readers
 
@@ -145,53 +172,88 @@ export const affiliations = reader(
       orgsCreatedBy(expositionId, userId),
     ]);
     const active = entreprises.filter((m) => m.status === "active").map((m) => m.tenantId);
-    const viaEntreprise = await orgsOfEntreprise.many(expositionId, active);
-    const reached = [...created, ...viaEntreprise];
+    const viaEntreprise = [...(await orgsOfEntreprise.many(expositionId, active)).values()].flat();
+    const reached = [...new Map([...created, ...viaEntreprise].map((o) => [o._id, o])).values()];
     const orgIds = [...new Set([...memberships.map((m) => m.organizationId), ...reached.map((o) => o._id)])];
-    return { memberships, reached, roles: await orgRolesOf.many(expositionId, orgIds) };
+    const roles = [...(await orgRolesOf.many(expositionId, orgIds)).values()].flat();
+    return { memberships, reached, roles };
   },
 );
 ```
 
 - Every reader called inside the function is recorded as an edge; invalidating
   an inner entry invalidates the composite entries that used it.
-- A direct collection read inside a composite throws. This is what makes a
+- A direct read inside a composite throws `ReaderDirectReadError`, through a
+  mongodbee collection or through `readingCollection`. This is what makes a
   composite sound without recording filters: revision 2's routing of an update
   by id to "the entries that returned that id" missed a `pending` membership
-  accepted by id, which no entry had returned.
+  accepted by id, which no entry had returned. A bare `db.collection()` read
+  cannot be seen and stays the author's responsibility.
 - No `reads` list: the edges are recorded, and a list would repeat them.
+- Arguments are plain data (`ReaderArgument`: strings, numbers, booleans,
+  bigints, `null`, `undefined`, dates, BSON values, arrays and plain objects),
+  so they can be keyed exactly. A `Set`, a class instance or a function does
+  not typecheck, and is refused at the call if it gets through a cast.
+- A composite that calls itself with the same arguments while loading is
+  refused instead of waiting on itself, inside a request context or not.
+- A composite is kept only when every reader it used is an entry of the same
+  request cache: an inner reader that bypassed the limits, ran in a
+  transaction, or ran in a nested `withRequestContext` (whose cache nobody
+  invalidates once it ends) makes the composite load and not store.
 
 ### 3.3 Values
 
 A value is **deep-frozen and shared**: no copy on a hit, typed `DeepReadonly`
-so that `roles[0].permissions.push(...)` does not compile. The freeze stops at
-BSON values (`_bsontype`: `ObjectId`, `Binary`, `Decimal128`), which
-`Object.freeze` cannot freeze. A composite may return `ReadonlyMap` and
-`ReadonlySet`; they are frozen into instances whose mutators throw, which is
-safer than a `Record` keyed by user data such as a role key (`"constructor"`).
+so that `roles[0].permissions.push(...)` does not compile.
+
+- A query reader's value is built from the driver's documents, so it is frozen
+  in place.
+- A composite's value is frozen as a **copy**: the objects the function
+  returns may belong to its caller or to a module, and freezing them in place
+  would break their owner. Values of other readers inside it are already
+  frozen and are shared, not copied. Cycles are preserved.
+- A `Date` is frozen by making its setters throw, and is typed without them
+  (`FrozenDate`). A `Map` or a `Set` is frozen by making its mutators throw;
+  a composite may return them, which is safer than a `Record` keyed by user
+  data such as a role key (`"constructor"`).
+- BSON values (`_bsontype`: `ObjectId`, `Binary`, `Decimal128`) and binary
+  views are shared as they are: `Object.freeze` cannot freeze them.
+
 A composite's value type is checked as `Promise<T & Plain<T>>`, since
 `T extends Plain<T>` is a circular constraint.
 
 ### 3.4 Keys
 
-The library builds the key from the argument tuple itself, exactly, plus the
-database name, so two e2e scopes in one process never share an entry. Only
-metrics and logs see a hashed key.
+The library builds the key from the argument tuple itself, exactly (after the
+scope argument has gone through its scope schema, as writes do), plus the
+database name, so two e2e scopes in one process never share an entry, plus the
+reader's identity rather than its name, so two readers declared with the same
+name never read each other's entries. An argument that cannot be encoded
+exactly throws `ReaderArgumentError`. Only metrics and logs will see a hashed
+key.
 
 ### 3.5 Priming
 
 ```ts
-const page = await expositionInformation.primeFrom(() =>
-  catalog.unscoped.paginate("information", { entreprise }, pagination),
+const expositions = await expositionInformation.primeFrom(() =>
+  catalog.unscoped.find("information", { entreprise }),
 );
 ```
 
-`primeFrom` runs the given read and records the reads of the reader's type it
-makes, so it also works through a helper such as `paginate`. It primes only
-from reads whose filter constrains nothing beyond the scope, the `by` value and
-`_id` (anything narrower would store an incomplete key), it projects on the
-reader's selection, and it stores nothing when the read ran in a transaction,
-off the primary, or raced a write.
+`primeFrom` runs the given read and records the `find` and `findOne` calls it
+makes, including through a helper. Built for now, it primes **singleton
+readers only**: `.one()` without `by()`, whose value is the one document of
+its scope, so a document read by anyone is the whole value of its key. A list
+reader would need every document of a key, which a filtered or paginated read
+does not prove, so it has no `primeFrom` (its type is `never`).
+
+A recorded document primes its scope's entry when it is of the reader's type,
+matches its `where`, and the entry is not cached yet; it is projected on the
+selection and frozen as a copy. Nothing is primed from a read that ran in a
+transaction, off the primary, through a projection (`findProject`), or while a
+write reached the request. An `aggregate` or `paginate` read is not recorded,
+and neither is a read the request memo (`withRequestContext({ memoizeReads })`)
+answered from its own copy: priming sees only the reads that went to MongoDB.
 
 ### 3.6 Registration
 
@@ -200,19 +262,27 @@ registerReaders(client, {
   topology: computedTopology(schemas),
   readers: [participationsOf, entrepriseMemberships, orgRoleByKey, expositionInformation, affiliations],
   limits: { entriesPerRequest: 500, rowsPerEntry: 200 },
-  process: { enabled: flags.readersL1, readers: { "exposition-information": { ttlMs: 300_000 } } },
+  database: () => getDatabase(),
 });
 ```
 
 - `topology` places each reader's source in its physical collection, as for
-  computed fields, and gives readers their own write-interception plan: the
-  computed interceptor passes through collections that carry no computed
-  field (`+entreprises` today), readers must not.
-- The database a reader reads is the one of the ambient request context, which
-  is how the e2e scope header already selects it. Tests use a real database the
-  same way; a reader has no in-memory fake.
-- Names are unique per client; a duplicate throws at registration.
-- `limits` bound L0 (section 4). `process` is the L1 opt-in (section 6).
+  computed fields. Readers ride every write through the same interceptor,
+  including collections that carry no computed field (`+entreprises` today).
+- `readers` is required. A query reader must be listed to be called: the
+  registration is where its placement, its scope and its index are checked,
+  so a reader left out would skip them; it throws `ReaderNotRegisteredError`
+  instead. Names are unique within a registration.
+- **The database** a reader reads, in this order: the `database` given to the
+  nearest `withRequestContext(fn, { database })`, a `Db` or a function called
+  at each read; otherwise the `database` resolver of the registration, when
+  exactly one is registered; otherwise, outside any request context only, the
+  one `Db` registered with `registerReaders(db, ...)`. Inside a request
+  context nothing is guessed. The resolver is how Diivento plugs in its own
+  database resolution, which already follows the e2e scope header and the
+  test databases, without the header being parsed twice.
+- Tests use a real database the same way; a reader has no in-memory fake.
+- The L1 opt-in (`process`) comes with step 5 (section 6).
 
 ## 4. Level 0: the request
 
@@ -242,25 +312,35 @@ collection, types, scope and update. A write invalidates, in the current
 request, **every entry of the readers over that type in that scope**, unless
 it is an update that touches none of the reader's `select`, `where` and `by`
 paths. A request holds few entries, so this costs a reload at most, and it
-needs no reverse index and no routing. Writes whose scope is not a single
-value (`unscoped`, `_scope: { $in }`, a multi-scope view) invalidate the type
-in every scope; a replacement, a pipeline update, an insert, an upsert and a
-delete always count as touching.
+needs no reverse index and no routing. The type and the scope are read from
+the write's filter or document, `$and` clauses included: a `$in` list of
+scopes invalidates those scopes, and a write whose filter does not constrain
+`_scope` (or `_type`) invalidates every scope (or type) of the collection. A
+replacement, a pipeline update, an insert, an upsert and a delete always count
+as touching.
 
-A transaction invalidates at each write and again after its commit, before any
-`afterCommit` callback runs. Computed maintenance's internal transactions count
-as commits.
+A write invalidates before it runs and again when it returns. Inside a
+transaction, its footprint is also replayed at the commit, before any
+`afterCommit` callback runs, so a read outside the transaction that cached the
+pre-commit state is dropped. A read-only transaction invalidates nothing, and a
+transaction's commit does not flush readers of collections it never wrote.
 
-**Generations** close the race between a load and a write. They are
-hierarchical: `(collection, type, scope)`, `(collection, type, all scopes)`,
-`(collection)`. A load captures the three before reading and is stored only if
-none moved. A write bumps the level that matches what it knows: a scoped write
-the first, an unscoped or multi-scope write the second, a raw write the third.
+**The race between a load and a write** is closed per entry: an entry exists
+from the moment its load starts, and an invalidation marks it stale and removes
+it, so its load is returned to the callers that joined it before the write and
+never stored, and a caller after the write starts a new load. This replaces the
+generations of revision 3: at L0 every load has its entry, so a counter would
+say nothing more. L1 will need them again (section 5.2).
 
-**Raw driver writes** (`invalidateReadsOnDriverWrites`) invalidate every reader
-of the collection and bump its collection generation on `commandSucceeded`,
-never on `commandStarted`, where a racing load would store the old value under
-the new generation.
+**Writes mongodbee cannot attribute** to a type and scope invalidate every entry
+of the request, and again at the commit when they happen inside a transaction:
+a raw driver write seen through `invalidateReadsOnDriverWrites` (on the
+command's start, its success and its failure, so at least once after it
+landed), an aggregation with `$out` or `$merge`, and `invalidateAllReaders()`.
+A raw write is invisible without `invalidateReadsOnDriverWrites`.
+
+Invalidation reaches the enclosing request contexts too: a write inside a
+nested `withRequestContext` is seen by the outer request.
 
 ### 5.2 At L1: precise routing (built with L1)
 
@@ -374,28 +454,29 @@ Readers read the primary (section 4). Other reads that go to secondaries under
 `withReadPreference` honour the freshness floor with
 `readConcern: { level: "majority", afterClusterTime }`.
 
-## 11. What Diivento puts in readers
+## 11. What belongs in a reader
 
-| Reader | Kind | Consistency | L1 |
-|---|---|---|---|
-| exposition information (name, entreprise, modules, brand) | query `.one()` | eventual | first candidate |
-| platform role permissions | query | strict | no, until measured |
-| entreprise memberships of a user | query | strict | no, until measured |
-| participations of a user in an exposition | query | strict | no, until measured |
-| team roles of a user | query | strict | no, until measured |
-| org memberships of a participant (`roleKey`, `organizationId`) | query | strict | no, until measured |
-| organisations created by a user, organisations of an entreprise, active roles of an organisation | query | strict | no, until measured |
-| affiliations | composite of the above | strict | no, until measured |
-| session and session user | query | strict | no |
+A reader earns its place when the same small fact is read several times per
+request, by code that does not share variables: authorization, the context a
+request is resolved in, the settings of the tenant it runs under.
 
-The lifecycle fields of the information document (`lifecycle.executions`,
-`lifecycle.history`) are not selected, so the scheduler's writes to them do not
-invalidate it. Callers that read fields a reader does not select today
-(`findByUserId`, `findParticipantByUserId`, `getViewerContext`'s role keys)
-either widen the selection or keep their own read.
+| Fact | Kind | L1 |
+|---|---|---|
+| the settings document of a tenant (name, enabled features, branding) | query `.one()` | first candidate, once `consistency` exists |
+| the roles or memberships a subject holds | query | no, until measured |
+| the permissions a role grants, by role key | query `.one()` or `.many()` | no, until measured |
+| a projection joining several of the above | composite | no, until measured |
+| a session and its user | query | no |
 
-Never in readers: scans, full participant documents, registrations and seat
-counts, leads, flow sessions, jobs, mails, secrets, key material, tokens.
+Select only what the callers read. A field that changes often and that no
+caller reads (a scheduler's bookkeeping, a counter) stays out of the
+selection, so writes to it do not invalidate the reader. A caller that needs a
+field the reader does not select either widens the selection or keeps its own
+read.
+
+Never in readers: documents that grow without bound or are written on every
+request (scans, events, counters, queues, workflow state), whole documents
+read once, and anything secret: key material, tokens, credentials.
 
 ## 12. Observability and control
 
@@ -405,6 +486,14 @@ telemetry mongodbee already has (OpenTelemetry, opt-in with the same
 no deployment.
 
 ### 12.1 See
+
+Built: one `INTERNAL` span per reader call, `reader <name>`, with its kind,
+level, outcome, `many()` key count and discarded flag (`doc/TELEMETRY.md`),
+enabled by `registerReaders(target, { telemetry })`. mongodbee emits traces
+only, so the metrics below come from the collector's span metrics connector,
+with the reader attributes as dimensions (`doc/grafana`); a composite's span
+parents the spans of the readers it calls. `requestReaderStats()` gives the
+request's counters, `primed` included. What follows is the target.
 
 - **Metrics**, per reader and level:
   - calls by outcome: `hit`, `miss`, `bypass` with its reason (strict request,
@@ -455,32 +544,41 @@ no deployment.
 
 ## 13. Tests that must fail without the mechanism
 
-Step 1:
+Steps 1 and 2, each a test in `test/readers*.test.ts`:
 
-- a write through a service invalidates the reader without any `forget` call;
+- a write through a collection invalidates the reader without any `forget`
+  call, including `updateMany`, `deleteMany` and `dropScope`;
 - a status flip into the `where` by id, with a patch holding no `by` field,
   is seen by the next call;
-- an update touching an unselected field (`lifecycle.history`) does not
-  invalidate;
+- with computed fields registered, and with driver writes monitored, a write
+  touching no selected, `where` or `by` path keeps every entry;
+- a reader selecting `_computed` follows the recomputation of its subject;
 - a load started before a write is not joined by a call after it;
 - a load that raced a write is returned but not stored, and a write to another
-  type of the same collection does not discard it;
-- an unscoped write invalidates the type in every scope;
-- a raw driver write invalidates on success;
-- a rolled back transaction leaves the cache untouched, a committed one
-  invalidates before `afterCommit` runs;
-- a reader over `+entreprises`, which carries no computed field, is
-  invalidated by its writes;
-- a value with an `ObjectId` freezes; mutating a nested array throws and does
-  not compile;
-- `.many` stores each key and a later single call hits;
+  type or scope of the same collection does not discard it;
+- a raw driver write invalidates when writes are monitored;
+- a read-only transaction invalidates nothing; a rolled back one leaves
+  nothing stale; a committed one invalidates before `afterCommit` runs, even
+  over a read that raced it;
+- a write in a nested request context reaches the enclosing one;
+- readers over `+entreprises` (no computed field) and over a plain
+  `collection()` are invalidated by their writes;
+- values are frozen and shared; a composite's value is a frozen copy through
+  maps, dates, cycles and frozen parents, and BSON values survive;
+- `.many` maps each key, a later single call hits, and at the entry limit the
+  keys already held are served without a query;
+- the scope argument goes through the scope schema;
 - two request contexts on two databases share no entry;
 - a reader under `withReadPreference("secondaryPreferred")` reads the primary;
 - past a limit, a reader loads and stores nothing;
-- `primeFrom` inside a transaction, under `secondaryPreferred`, or from a read
-  filtered beyond the key stores nothing;
+- `primeFrom` fills a singleton and stores nothing off the primary, in a
+  transaction, from a projection, or across a write;
 - a composite that reads a collection directly throws; invalidating an inner
-  reader invalidates the composite.
+  reader invalidates the composite; a composite over `.many` follows its keys;
+  a composite whose inner read bypassed, or ran in a nested request context,
+  is not kept; a composite calling itself is refused;
+- composite arguments are keyed exactly; unkeyable ones are refused;
+- reader spans carry their outcome and no key value.
 
 L1 (step 5 onwards): two processes, a write in one invalidates the other's L1
 through the feed for an update by id with no `by` field; the `information`
@@ -499,9 +597,9 @@ beyond the server's cluster time is clamped.
 1. **Query readers at L0**: `select`, `.one()`, `.by().one()`, `.many()`,
    derived arguments and values, ordering by `_id`, single flight with pending
    loads dropped on invalidation, BSON-safe freeze, exact keys with the
-   database, primary reads, limits, coarse invalidation through a reader plan
-   in the interceptor, hierarchical generations, raw writes on success,
-   `primeFrom`, boot index check.
+   database, primary reads, limits, coarse invalidation through the
+   interceptor, footprints replayed at commit, raw writes, `primeFrom`, boot
+   index check.
 2. **Composite readers at L0**: edges between readers, direct reads refused.
    Diivento moves its preamble to readers, deletes every `forget` call and
    `request-scope.ts` (its `enterWith` fix is already covered by mongodbee's
@@ -561,3 +659,41 @@ beyond the server's cluster time is clamped.
 | no batching before step 8 | composites would multiply queries | `.many` in step 1 |
 | interceptor reuse | it passes through collections without computed fields | readers get their own plan |
 | feed filtered by id prefix, presented as cheap | not indexed: every stream scans the whole oplog | measured before L1 |
+
+### Implementation (two reviews of the built code)
+
+One review attacked correctness with failing probe tests, the other ported
+Diivento's real preamble against its real schemas. Each row has a test in
+`test/readers.test.ts` or `test/readers-types.test.ts`.
+
+| Built first | Problem found | Now |
+|---|---|---|
+| a composite whose body throws synchronously | the entry kept its placeholder: every later caller got `undefined` | the load is started under a guard; every caller gets the error |
+| the scope argument used as given | the scope schema transforms writes (`toLowerCase`), so the reader missed the documents | the scope goes through its schema, for the filter, the key and the footprint |
+| keys as EJSON of the arguments | a `Set`, a function or a class instance encode as `{}` or `null`; `undefined` equals `null` | exact encoding, `ReaderArgument` at the type level, `ReaderArgumentError` at run time |
+| keys by reader name | two readers named alike read each other's entries | keys by reader identity |
+| a reader left out of the registration still worked | its placement and index were never checked | an unlisted query reader is refused |
+| any commit, and a computed field's own transaction, flushed the whole request | footprints were bypassed on every write to a collection with computed fields | the commit replays the transaction's footprints; read-only transactions flush nothing |
+| raw reads inside a composite | cached with no invalidation | `readingCollection` reads are refused there |
+| in-place deep freeze | stopped at a frozen parent, froze the caller's objects, overflowed on cycles, left dates mutable | copy-freeze for composites, cycles kept, dates and collections locked |
+| dependents kept on every inner entry | bypassed and invalidated composites piled up in long contexts | links are removed with the entry; bypassed loads are never linked |
+| a nested request context | its writes did not reach the enclosing request | invalidation walks the enclosing contexts |
+| registrations tracked by `Db` object | `unregisterReaders(client.db(name))` removed nothing; the fallback then refused | tracked by client and name |
+| a composite calling itself | it joined its own placeholder and got `undefined` | refused with a definition error |
+| the database fallback applied inside request contexts | a context without a database silently read the boot database | a registered resolver, and no guess inside a request context |
+| `select`, `one` and `many` on every builder and reader | compiled after `through()`, and on readers without `by()` | typed away where they cannot work |
+| a second `where` on one path | silently replaced the first | refused |
+
+### Overall review of the built code
+
+| Built first | Problem found | Now |
+|---|---|---|
+| composites linked to any inner entry | an inner reader in a nested `withRequestContext` lives in a cache nobody invalidates: the composite stayed stale | a dependency from another cache makes the composite load and not store |
+| `.many()` checked the limit against every key asked | at the limit, keys all cached were queried again and stored nothing | only the missing keys count |
+| a self-call check that needed a cache entry | outside a request context a composite calling itself recursed forever | checked by call key on the composite frames |
+| an entry published with a placeholder promise | the shape that had produced the "`undefined` for later callers" bug | the entry holds its final promise from the start |
+| one 1000-line `readers.ts`, registry plumbing copied from computed fields | hard to review | `reader-freeze`, `reader-key`, `reader-load`, `reader-errors` modules and a shared `ClientRegistry` |
+| spec claims on rollbacks, unscoped writes, `$exists` and priming under the memo | wrong or unbacked | rewritten, each backed by a test |
+| a public `consistency` option | stored and never read: nothing differs at L0 | removed until L1 gives it a meaning |
+| `DeepReadonly<unknown>` | produced `{}`, so a `Record<string, unknown>` field became unusable in Diivento | `unknown` stays `unknown` |
+| two clients registering the same database resolver | counted twice, so the resolver was ambiguous and nothing resolved | distinct resolvers are counted |

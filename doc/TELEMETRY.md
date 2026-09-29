@@ -156,6 +156,27 @@ transaction with each operation nested underneath.
 > actually starts a new transaction. Nested `withSession()` calls reuse the
 > ambient session and do not create additional spans.
 
+### Reader spans (INTERNAL)
+
+With `registerReaders(target, { ..., telemetry: { enabled: true } })`, every
+reader call (`doc/READERS.md`) runs under an `INTERNAL` span named
+`reader <name>`. A composite's span is the parent of the spans of the readers
+it calls, and a load's `find` is not a span of its own: the reader span covers
+it. Reader spans carry no `db.system.name`, so they never count as database
+operations in the dashboard.
+
+| Attribute | Content | Example |
+| --- | --- | --- |
+| `mongodbee.reader` | The reader's name | `participations-of-user` |
+| `mongodbee.reader.kind` | `query` or `composite` | `query` |
+| `mongodbee.reader.level` | `request` inside a request context, `none` outside one or inside a transaction | `request` |
+| `mongodbee.reader.outcome` | `hit`, `load`, or `bypass` when the limits kept the value out of the cache | `hit` |
+| `mongodbee.reader.keys` | Keys asked of a `many()` call | `12` |
+| `mongodbee.reader.discarded` | `true` when a write invalidated the entry while it loaded, so it was not kept | `true` |
+| `db.namespace`, `db.collection.name` | As for operation spans (query readers only) | `+expositions` |
+
+Arguments and keys are never recorded: they are user ids and scopes.
+
 ## Attributes
 
 All attribute names are exported as the `TELEMETRY_ATTRIBUTES` constant from
