@@ -1,8 +1,9 @@
 # Readers: declared reads, cached at the right level, invalidated by the database
 
-Status: proposal, revision 2, 2026-09-29. Nothing below is implemented yet.
-Revision 2 follows an adversarial review that rewrote five real Diivento
-loaders against revision 1; section 16 lists what it changed and why.
+Status: proposal, revision 3, 2026-09-29. Nothing below is implemented yet.
+Revisions 2 and 3 each follow an adversarial review that rewrote five real
+Diivento loaders against the previous revision and typechecked the result;
+section 16 lists what each review changed and why.
 
 ## 1. The problem
 
@@ -41,9 +42,9 @@ the automatic invalidation of the first, and scales from L0 to L1.
 ## 2. Principles
 
 1. **Nothing the author writes by hand can fail silently in the stale
-   direction.** Keys, the fields that matter, the documents an entry depends
-   on and the dependencies between readers are derived or recorded, never
-   declared as free text. This rules out revision 1's `keyOf` and `fields`.
+   direction.** Keys, the fields that matter and the dependencies between
+   readers are derived, never declared as free text; the safe choice is the
+   default (`consistency` defaults to `"strict"`).
 2. **A reader is a computed field that is not stored.** It reuses the
    `from(...).by(...).where(...)` builder, the topology and the write
    interceptor of computed fields (`doc/COMPUTED.md`), so an application
@@ -52,31 +53,35 @@ the automatic invalidation of the first, and scales from L0 to L1.
    and several processes.** When unsure, read the primary: fail open to
    MongoDB, never to a cached "allow".
 4. **Caching is a deployment decision; consistency is a property of the
-   data.** The declaration says what the data needs (`consistency`); which
-   readers use L1, with which TTL, is decided at registration and can change
-   without touching the declaration.
+   data.** The declaration says what the data needs; which readers use L1,
+   with which TTL, is decided at registration.
+5. **Each level pays for its own machinery.** L0 invalidates coarsely, which
+   is exact enough for the handful of entries a request holds; the precise
+   routing that L1 needs is built with L1, not before.
 
 Non-goals: a shared cache between processes (Valkey, L2); caching decisions
 (readers cache inputs such as memberships and roles, never `can()` results);
 putting personal data anywhere but process memory.
 
-## 3. Two kinds of reader
+## 3. Declaring readers
 
-### 3.1 Query readers (declarative)
+### 3.1 Query readers
 
-Most facts are "the documents of one type, in one scope, whose field equals
-the argument". They are declared with the computed-field builder and `select`:
+Every fact the permission preamble needs is "the documents of one type, in one
+scope, whose field equals the argument". It is declared with the computed-field
+builder and a `select` terminal:
 
 ```ts
-import { from, reader } from "@diister/mongodbee/readers";
+import { from, reader } from "@diister/mongodbee";
+
+const Expo = scoped(ExpositionModel, refId("exposition"));
 
 export const participationsOf = reader(
   "participations-of-user",
-  from(ExpositionModel, "participant")
+  from(Expo, "participant")
     .by((p) => p.personRef.userId)
     .where((p) => [p.personRef.kind, "user"])
     .select(["status", "personRef"]),
-  { consistency: "strict" },
 );
 
 export const entrepriseMemberships = reader(
@@ -85,220 +90,209 @@ export const entrepriseMemberships = reader(
     .by((m) => m.userId)
     .where((m) => [m.status, ["active", "invited"]])
     .select(["tenantId", "role", "status"]),
-  { consistency: "strict" },
+);
+
+export const orgRoleByKey = reader(
+  "org-role-by-key",
+  from(Expo, "expo_role").by((r) => r.key).one().select(["permissions"]),
 );
 
 export const expositionInformation = reader(
   "exposition-information",
-  from(ExpositionModel, "information").one().select(["name", "entreprise", "modules"]),
+  from(Expo, "information").one().select(["name", "entreprise", "modules"]),
+  { consistency: "eventual" },
 );
 
 const rows = await participationsOf(expositionId, userId);
-const members = await entrepriseMemberships(userId);
+const roles = await orgRolesOf.many(expositionId, organizationIds);
 ```
 
-- The arguments are derived: the scope first when the model is scoped, then
-  the `by` value, typed from the schema. With refId template types, swapping
+- `from` is the computed fields' `from`, with one more terminal, `select`. A
+  file that declares both computed fields and readers imports one `from`.
+- **Arguments are derived**: the scope first when the source is scoped, then
+  the `by` value. The scope comes from a typed handle, `scoped(Model,
+  refId("exposition"))`, shared with `schemas.ts`, because a model alone does
+  not know it is scoped. With template-typed refIds, swapping
   `(expositionId, userId)` does not compile.
-- The value is derived: `readonly Readonly<Pick<Doc, "_id" | selected>>[]`, or
-  one document or `null` with `.one()`. A field that is not selected is not in
-  the type and not in memory: `invitationToken` cannot reach a cache.
-- `select` is required. A reader over full documents is what made revision 1's
-  field narrowing unsafe, and what puts tokens in memory.
-- `where` takes the same equality and membership predicates as computed
-  fields: serializable, indexable, checkable at boot.
+- **The value is derived**: `DeepReadonly<Pick<Doc, "_id" | selected>>[]`
+  ordered by `_id`, or one document or `null` with `.one()` (on its own for a
+  singleton such as `information`, or after `.by()` for a unique key). A field
+  that is not selected is not in the type and not in memory: `invitationToken`
+  cannot reach a cache.
+- `select` is required: a reader over full documents is what made narrowing
+  unsafe in revision 1, and what puts tokens in memory.
+- `where` takes the computed fields' equality and membership predicates. Its
+  values are typed against the field (`[p.status, "actve"]` does not compile)
+  and validated against the schema at boot.
+- **`.many(scope, keys)`** reads several keys in one `$in` read and stores each
+  key separately, exact per key. It replaces today's `$in` reads.
+- The load uses the full filter, `where` included, so partial indexes serve it
+  (Diivento's `personRef.userId` index is partial on `kind: "user"`).
+  Registration checks that an index covers `(scope, by)` under the `where`, as
+  the computed topology checks its `by` fields.
 
-What makes this kind exact is **how it loads**: by scope and `by` value only,
-with the `where` applied in memory, projected on the selected fields plus the
-`where` paths. The entry therefore holds every document of its key, matching
-or not, and keeps a reverse index `documentId -> entry`. Every change can then
-be routed without reading anything (section 5).
+### 3.2 Composite readers
 
-### 3.2 Composite readers (imperative)
-
-Some facts combine several types and other readers (Diivento's affiliations:
-org memberships, reachable organisations, their roles, entreprise
-memberships). They keep a free-form `load`:
+A fact combining several types is a function **over other readers only**:
 
 ```ts
-export const affiliationsOf = reader(
+export const affiliations = reader(
   "exposition-affiliations",
-  {
-    reads: [
-      from(ExpositionModel, "org_membership"),
-      from(ExpositionModel, "expo_organization"),
-      from(ExpositionModel, "expo_organization_role"),
-      entrepriseMemberships,
-    ],
-    consistency: "strict",
-  },
   async (expositionId: ExpositionId, userId: UserId, participantId: ParticipantId | null) => {
-    const expo = await expositionScope(expositionId);
-    const entreprises = await entrepriseMemberships(userId);
-    const memberships = participantId
-      ? await expo.find("org_membership", { participantId, status: "active" })
-      : [];
-    return { memberships, entrepriseIds: entreprises.map((m) => m.tenantId) };
+    const [memberships, entreprises, created] = await Promise.all([
+      participantId ? orgMembershipsOf(expositionId, participantId) : [],
+      entrepriseMemberships(userId),
+      orgsCreatedBy(expositionId, userId),
+    ]);
+    const active = entreprises.filter((m) => m.status === "active").map((m) => m.tenantId);
+    const viaEntreprise = await orgsOfEntreprise.many(expositionId, active);
+    const reached = [...created, ...viaEntreprise];
+    const orgIds = [...new Set([...memberships.map((m) => m.organizationId), ...reached.map((o) => o._id)])];
+    return { memberships, reached, roles: await orgRolesOf.many(expositionId, orgIds) };
   },
 );
 ```
 
-- `reads` names what `load` may read, at type granularity: other readers, or
-  `from(model, type)`. It feeds the studio, the inspect contract and the
-  change-feed filter. It is **checked, not trusted**: every mongodbee read
-  already goes through one path (`readThrough`), so during `load` the reader
-  records each read: collection, type, scope, the equality paths of its filter,
-  its projection and the ids it returned. A read of a type missing from
-  `reads` throws in test mode, and in production is served but never stored,
-  with a counter and a log.
-- A reader called inside `load` becomes a recorded edge: invalidating the inner
-  entry invalidates the outer one. The author never repeats the inner reader's
-  types.
-- A raw driver read inside `load` (through `readingCollection`) is recorded at
-  collection level; a raw aggregation pipeline too. `verify: "throw"` refuses
-  both, so a composite that needs one says so at registration.
-- Nothing of the old `dependsOn`/`keyOf`/`fields` remains: the recorded ids and
-  filter paths are what section 5 routes on.
+- Every reader called inside the function is recorded as an edge; invalidating
+  an inner entry invalidates the composite entries that used it.
+- A direct collection read inside a composite throws. This is what makes a
+  composite sound without recording filters: revision 2's routing of an update
+  by id to "the entries that returned that id" missed a `pending` membership
+  accepted by id, which no entry had returned.
+- No `reads` list: the edges are recorded, and a list would repeat them.
 
 ### 3.3 Values
 
-A value is **plain data, deep-frozen and shared**: no copy on a hit. The type
-of a composite's value is constrained to plain data (records, arrays,
-primitives, `Date`, `ObjectId`); a `Map` or a `Set` does not compile. Revision
-1 copied values through BSON, which silently turns a `Map` into a plain object
-and a `Set` into `{}`, and would have spent on every L1 hit the decoding that
-L1 exists to save.
+A value is **deep-frozen and shared**: no copy on a hit, typed `DeepReadonly`
+so that `roles[0].permissions.push(...)` does not compile. The freeze stops at
+BSON values (`_bsontype`: `ObjectId`, `Binary`, `Decimal128`), which
+`Object.freeze` cannot freeze. A composite may return `ReadonlyMap` and
+`ReadonlySet`; they are frozen into instances whose mutators throw, which is
+safer than a `Record` keyed by user data such as a role key (`"constructor"`).
+A composite's value type is checked as `Promise<T & Plain<T>>`, since
+`T extends Plain<T>` is a circular constraint.
 
 ### 3.4 Keys
 
 The library builds the key from the argument tuple itself, exactly, plus the
-database name (two e2e scopes in one process never share an entry). Hashing
-only happens where the key leaves the process memory: metrics, logs, the
-explain header, with a keyed hash (a per-process secret), never the 32-bit
-`fnv1a` of the current code, whose collisions in an L1 would serve one person
-another's participation.
+database name, so two e2e scopes in one process never share an entry. Only
+metrics and logs see a hashed key.
 
 ### 3.5 Priming
 
-A list read that already holds the documents can fill a query reader:
-
 ```ts
-const docs = await expositionInformation.primeFrom(() =>
-  catalog.unscoped.find("information", { entreprise }),
+const page = await expositionInformation.primeFrom(() =>
+  catalog.unscoped.paginate("information", { entreprise }, pagination),
 );
 ```
 
-`primeFrom` runs the read itself, so it can capture the generation before it,
-project the documents on the reader's selection, and refuse to store when the
-read ran in a transaction, off the primary, or raced a write. Revision 1's
-`prime(key, value)` could do none of this: a `Promise.all` running the list
-read next to a write would re-store the pre-write document after the write had
-invalidated it.
+`primeFrom` runs the given read and records the reads of the reader's type it
+makes, so it also works through a helper such as `paginate`. It primes only
+from reads whose filter constrains nothing beyond the scope, the `by` value and
+`_id` (anything narrower would store an incomplete key), it projects on the
+reader's selection, and it stores nothing when the read ran in a transaction,
+off the primary, or raced a write.
 
 ### 3.6 Registration
 
 ```ts
 registerReaders(client, {
   topology: computedTopology(schemas),
-  readers: [participationsOf, entrepriseMemberships, expositionInformation, affiliationsOf],
-  verify: isTest ? "throw" : "log",
-  process: {
-    enabled: flags.readersL1,
-    readers: { "exposition-information": { ttlMs: 300_000 } },
-    maxEntries: 50_000,
-  },
+  readers: [participationsOf, entrepriseMemberships, orgRoleByKey, expositionInformation, affiliations],
+  limits: { entriesPerRequest: 500, rowsPerEntry: 200 },
+  process: { enabled: flags.readersL1, readers: { "exposition-information": { ttlMs: 300_000 } } },
 });
 ```
 
-- `topology` is the one computed fields use: it places `from(ExpositionModel,
-  "participant")` in its physical collection without the application holding a
-  collection object at module load (Diivento opens its collections
-  asynchronously, per database).
+- `topology` places each reader's source in its physical collection, as for
+  computed fields, and gives readers their own write-interception plan: the
+  computed interceptor passes through collections that carry no computed
+  field (`+entreprises` today), readers must not.
 - The database a reader reads is the one of the ambient request context, which
-  is how the e2e scope header already selects it. Tests inject a database the
-  same way, instead of passing a `getMultiCollection` into each loader.
+  is how the e2e scope header already selects it. Tests use a real database the
+  same way; a reader has no in-memory fake.
 - Names are unique per client; a duplicate throws at registration.
-- `process` is the L1 opt-in, per reader, with its TTL. Section 6.
+- `limits` bound L0 (section 4). `process` is the L1 opt-in (section 6).
 
 ## 4. Level 0: the request
 
 A reader called inside `withRequestContext` caches per key for that request:
 
-- **single flight**: concurrent calls with the same key share one load;
-- **shared values** (section 3.3);
+- **single flight**: concurrent calls with the same key share one load, and
+  an invalidation **drops the pending load** too: a load started before a write
+  is never joined by a caller that comes after it;
+- **shared frozen values** (section 3.3);
 - **transactions**: inside a transaction a reader neither reads nor stores any
   cache, it loads through the session;
 - **primary**: a reader always reads the primary, whatever the ambient
   `withReadPreference`, because its value may authorise;
+- **bounded**: past `entriesPerRequest` entries, or for a result of more than
+  `rowsPerEntry` rows, the reader loads without storing and counts a bypass;
 - outside any request context, a reader simply loads;
 - reader loads go around the request memo's storage, so nothing is held twice.
 
-Readers are active for every HTTP method, because their invalidation is
-precise. A request that writes through the raw driver must have registered
-`invalidateReadsOnDriverWrites`; without it, readers on non-GET requests load
-every time and count a bypass, instead of guessing.
+Readers are active for every HTTP method.
 
 ## 5. Invalidation
 
-A write invalidates entries; the routing is derived, so no repository calls a
-`forget`.
+### 5.1 At L0: coarse and derived
 
-### 5.1 In the writing process
+The computed interceptor sees every write through mongodbee with its
+collection, types, scope and update. A write invalidates, in the current
+request, **every entry of the readers over that type in that scope**, unless
+it is an update that touches none of the reader's `select`, `where` and `by`
+paths. A request holds few entries, so this costs a reload at most, and it
+needs no reverse index and no routing. Writes whose scope is not a single
+value (`unscoped`, `_scope: { $in }`, a multi-scope view) invalidate the type
+in every scope; a replacement, a pipeline update, an insert, an upsert and a
+delete always count as touching.
 
-The computed-field interceptor already sees every write through mongodbee,
-with the collection, the type, the scope, the ids or the filter, and the
-update. Readers reuse it:
+A transaction invalidates at each write and again after its commit, before any
+`afterCommit` callback runs. Computed maintenance's internal transactions count
+as commits.
 
-| Write | Query reader | Composite reader |
-|---|---|---|
-| insert | the key of the inserted `by` value | entries whose recorded filter paths match the document |
-| update or delete by id | the entry holding that id (reverse index) | entries that returned that id |
-| update setting the `by` field | also the key of the new value | as above |
-| update or delete by filter | entries of that type in that scope | same |
-| an update touching no selected, `where` or `by` path | nothing | nothing when it touches no recorded path |
+**Generations** close the race between a load and a write. They are
+hierarchical: `(collection, type, scope)`, `(collection, type, all scopes)`,
+`(collection)`. A load captures the three before reading and is stored only if
+none moved. A write bumps the level that matches what it knows: a scoped write
+the first, an unscoped or multi-scope write the second, a raw write the third.
 
-Invalidation happens twice for a transaction: at the write, and again after
-the commit and before any `afterCommit` callback runs, so a load that raced the
-transaction is dropped and a callback never reads the old value. Computed
-maintenance's internal transactions count as commits.
+**Raw driver writes** (`invalidateReadsOnDriverWrites`) invalidate every reader
+of the collection and bump its collection generation on `commandSucceeded`,
+never on `commandStarted`, where a racing load would store the old value under
+the new generation.
 
-**Generations** close the race between a load and a write: every
-`(collection, type, scope)` has a counter, bumped by each invalidation. A load
-captures it before reading; if it moved when the load returns, the value is
-given to the caller and not stored. The granularity matters: a per-collection
-counter would make any lead or programme write discard every permission load
-of `+expositions` during a show.
+### 5.2 At L1: precise routing (built with L1)
 
-**Raw driver writes** (`invalidateReadsOnDriverWrites`, command monitoring) bump
-on `commandSucceeded`, never on `commandStarted`: a load that starts after the
-start and ends before the write lands would store the old value under the new
-generation. The command's filter is parsed for `_id`, `_type` and `_scope`
-(Diivento's raw writes carry them), which keeps raw-write invalidation as
-precise as the table; a filter without them invalidates the collection.
-`commitTransaction` carries no namespace, so the writes of a raw transaction
-are tracked by session until its commit.
+Across processes the change feed is the only source, and a change event of an
+update or a delete carries `documentKey: { _id }` and the updated fields, but
+no `_type`, `_scope` or unchanged field. Precise routing therefore needs more
+than L0 has:
 
-### 5.2 In the other processes: the change feed
-
-A change event of an update or a delete carries `documentKey: { _id }` and the
-updated field names and values, but not `_type`, `_scope` or any unchanged
-field. Revision 1 assumed otherwise. The routing therefore relies on what the
-event does carry:
-
-- **insert** carries the full document: routed like an in-process insert;
-- **update and delete** are routed by `_id` through the reverse indexes; an id
-  held by no entry needs nothing, because a query reader holds every document
-  of its keys, matching its `where` or not;
-- **an update that changes a `by` field** carries the new value in
-  `updatedFields`: the matching keys are invalidated, in every scope, since the
-  event has no scope;
-- the type is read from the refId prefix of `_id`, which lets the change stream
-  filter by type on the server; a collection without typed ids is routed at
-  collection level;
+- **type from `_id`**: the prefix-to-type map is built from each type's
+  declared `_id` schema, never from the type's name (`information._id` is an
+  `exposition:` refId). A type whose prefix is shared or which has no refId is
+  routed at collection level. Checked at boot.
+- **reverse index** `documentId -> entries` for the ids an L1 entry holds; an
+  update touching a `where` path of a document the entry did not return (a
+  status flip into the `where`) is invisible to it, so an L1 query reader
+  routes `where`-path updates of its type at `(type, all scopes)` for the
+  matching `by` value when the event carries it, and at type level otherwise;
+- **`by` values from `updatedFields`**, normalised: a whole `personRef` object
+  set at once, dotted keys, array indexes such as `userIds.3`;
+- **a scope or type change** (a document moved to another scope) invalidates
+  the type in the new scope;
+- **upserts** arrive as inserts, with their full document;
+- **the load/event race**: an event for a document whose entry is not stored
+  yet finds nothing in the reverse index. Each L1 load is stamped with its
+  read time, and at store time it is checked against a short log of recent
+  events keyed by `_id` and by `by` value;
 - `drop`, `rename`, `dropDatabase` and `invalidate` flush every reader of the
   collection.
 
-No `updateLookup` and no pre-images: neither costs anything per event.
+Whether L1 query readers can keep loading with their `where` (and so their
+partial indexes) under this scheme, or must load by key only, is the first
+question of step 5, answered by measurement.
 
 ## 6. Level 1: the process
 
@@ -307,63 +301,51 @@ store:
 
 - **bounded** by entry count, with sampled sizes for the byte metric; a TTL per
   reader, jittered, as a safety net, never as the invalidation;
-- **invalidated by the change feed** (section 5.2) and by the local writes
-  (section 5.1);
-- **no negative entries** by default: a `null` or an empty list stays in L0,
-  so probes with random ids cannot fill memory;
-- **stamped with a cluster time**: the `operationTime` of the load, which the
-  freshness floor compares against;
-- **fail open**: when the feed is not live, `strict` readers bypass L1 and
-  eventual ones serve until their TTL; the feed is live when its
+- **invalidated by the change feed** (section 5.2) and by the local writes;
+- **no negative entries** by default: a `null` or an empty list stays in L0;
+- **stamped with a cluster time**, the `operationTime` of the load;
+- **fail open**: when the feed is not live, eventual readers serve until their
+  TTL and nothing strict is in L1 anyway; the feed is live when its
   `postBatchResumeToken` keeps advancing, so an idle healthy stream is not
   mistaken for a late one;
-- **lost continuity flushes**: a stream that cannot resume
-  (`ChangeStreamHistoryLost`) drops every entry and bumps every generation;
+- **lost continuity flushes**: a stream that cannot resume drops every entry and
+  bumps every generation;
 - **freshness floor**: a request may carry a minimum cluster time, for example
-  from a real-time signal or the user's own last write. An entry stamped
-  earlier is reloaded. The floor comes from the client, so the application
-  signs it, and mongodbee clamps it to the server's cluster time: a forged
-  far-future floor cannot turn every request into a bypass.
+  from a real-time signal or the user's own last write; an older entry is
+  reloaded. The application signs the floor, and mongodbee clamps it to the
+  server's cluster time.
 
-### 6.1 Strict readers in L1
+### 6.1 Strict readers stay at L0
 
-The feed has lag. For an eventual reader (exposition information, module
-configuration) a lag of tens of milliseconds is invisible. For a strict one
-(memberships, roles) it is a window where a revoked grant still authorises.
-Two gates can close it, and `doc/COMPUTED.md` section 13 already describes the
-first:
+The feed has lag, a window in which a revoked grant would still authorise.
+Strict readers are therefore **L0 only**. After L0, `.many` and the computed
+fields (`organizationIds` is computed, `roleKeys` can be), what remains of the
+preamble is measured; strict L1 is built only if the measurement says it pays,
+with one of two gates chosen then:
 
-1. **dependency versions**: every write of a key bumps a version in the same
-   transaction; a strict L1 hit reads the versions of its keys in one round
-   trip. Exact, sees nothing raw, costs a write per write and a read per
-   request;
+1. **dependency versions** (`doc/COMPUTED.md` section 13): every write of a key
+   bumps a version in the same transaction, and a strict hit reads its keys'
+   versions in one round trip. If built, section 13 is this gate, not a
+   separate mechanism;
 2. **an authorisation epoch** on the user, read with the session the request
-   loads anyway, bumped by every revocation: exact for revocations, free per
-   request, but relies on every revoking path bumping it.
-
-Decision for now: **strict readers are L0 only.** After L0 and the computed
-fields (`organizationIds` is already computed, `roleKeys` can be), what remains
-of the preamble is measured; strict L1 is built only if that measurement says
-it pays, with the gate chosen then. Section 13 of `COMPUTED.md` is not built
-separately: if it is built, it is this gate.
+   loads anyway, bumped by every revoking path.
 
 ## 7. The change feed
 
 `watchChanges(client, spec)` opens one change stream per process:
 
-- filtered on the server by collection and by refId prefix of the types that
-  readers or subscribers declared; projected on `_id`, the operation, the
-  updated field names, the `by` values of query readers and the cluster time;
+- filtered on the server by collection and by `_id` prefix (an anchored
+  `$regex` on `documentKey._id`). The filter is not indexed: every stream still
+  reads the whole oplog once per process; it saves the network and the event
+  building, not the scan. Its cost is measured before L1 ships. Projecting only
+  field names and `by` values needs `$objectToArray` or `$getField`, since the
+  updated keys contain dots;
 - majority-committed only, so nothing announced can roll back;
 - resumable from its last token, reporting a continuity loss when it cannot;
 - with a state: live (progress of the resume token), lag, restarts;
 - **public**: `feed.subscribe(filter, handler)` runs after the commit, on every
   process, for changes made by the worker, another cluster, a migration or the
   raw driver, which an in-memory event bus cannot see.
-
-Volume: every process receives the changes of every declared type. For
-Diivento that means the permission types of `+expositions`, not leads or
-scans, since the server filters by id prefix.
 
 ## 8. Real time
 
@@ -377,39 +359,40 @@ SSE. With readers and the feed:
 4. an SSE connection never holds one request context for its lifetime: each
    signal or permission check opens its own.
 
-Revocation: when a strict reader's entry is invalidated, the application's
-real-time hub is told through a subscriber and re-checks that user's open
-subscriptions.
+Revocation: a subscriber on the permission types tells the real-time hub,
+which re-checks that user's open subscriptions.
 
 ## 9. Batching (later)
 
-Calls of one query reader for different keys in the same tick can coalesce
-into one `$in` read, as DataLoader does. The declaration already holds what
-this needs (the `by` field), so it costs the author nothing. It comes after L1.
+Calls of one query reader for different keys in the same tick coalesce into
+one `.many` read, as DataLoader does. `.many` is the explicit form and ships
+first.
 
 ## 10. Read preference and causal reads
 
 Readers read the primary (section 4). Other reads that go to secondaries under
 `withReadPreference` honour the freshness floor with
-`readConcern: { level: "majority", afterClusterTime }`: a lagging secondary
-waits instead of answering stale.
+`readConcern: { level: "majority", afterClusterTime }`.
 
 ## 11. What Diivento puts in readers
 
 | Reader | Kind | Consistency | L1 |
 |---|---|---|---|
-| exposition information (name, entreprise, modules, brand) | query `.one()` | eventual | yes, first candidate |
-| platform role permissions | query | strict | after measurement |
-| entreprise memberships of a user | query | strict | after measurement |
-| participations of a user in an exposition | query | strict | after measurement |
-| team roles of a user | query | strict | after measurement |
-| affiliations | composite | strict | after measurement |
+| exposition information (name, entreprise, modules, brand) | query `.one()` | eventual | first candidate |
+| platform role permissions | query | strict | no, until measured |
+| entreprise memberships of a user | query | strict | no, until measured |
+| participations of a user in an exposition | query | strict | no, until measured |
+| team roles of a user | query | strict | no, until measured |
+| org memberships of a participant (`roleKey`, `organizationId`) | query | strict | no, until measured |
+| organisations created by a user, organisations of an entreprise, active roles of an organisation | query | strict | no, until measured |
+| affiliations | composite of the above | strict | no, until measured |
 | session and session user | query | strict | no |
 
-`activeOrgMembershipsOf` disappears: `participant._computed.organizationIds`
-(merged in #388) is the same fact. The lifecycle fields of the information
-document (`lifecycle.executions`, `lifecycle.history`) are not selected, so the
-scheduler's writes to them do not invalidate the exposition information.
+The lifecycle fields of the information document (`lifecycle.executions`,
+`lifecycle.history`) are not selected, so the scheduler's writes to them do not
+invalidate it. Callers that read fields a reader does not select today
+(`findByUserId`, `findParticipantByUserId`, `getViewerContext`'s role keys)
+either widen the selection or keep their own read.
 
 Never in readers: scans, full participant documents, registrations and seat
 counts, leads, flow sessions, jobs, mails, secrets, key material, tokens.
@@ -425,20 +408,19 @@ no deployment.
 
 - **Metrics**, per reader and level:
   - calls by outcome: `hit`, `miss`, `bypass` with its reason (strict request,
-    feed not live, freshness floor, transaction, undeclared read, no raw-write
-    monitoring);
+    transaction, limit, feed not live, freshness floor, raw-write monitoring
+    absent);
   - loads and load duration;
   - invalidations by source (write, commit, raw driver, feed, TTL) and width
-    (one key, one scope, whole reader);
-  - discarded loads (generation race), entries, sampled bytes, evictions.
+    (one key, one scope, one type, collection);
+  - discarded loads (generation race), dropped pending loads, entries, sampled
+    bytes, evictions.
 - **Feed metrics**: live, lag, restarts, continuity losses, events per second.
 - **Spans**: a reader call inside a traced request records `mongodbee.reader`,
-  `mongodbee.reader.level` and `mongodbee.reader.outcome`, so a slow request
-  shows which facts came from memory and which went to the database.
+  `mongodbee.reader.level` and `mongodbee.reader.outcome`.
 - **Logs**, paired with a counter, for every anomaly: a continuity loss, a
-  strict reader bypassing because the feed is late, an undeclared read, a drift
-  (12.3). Values are never logged, only the reader, the key hash and the
-  reason.
+  limit reached, a drift (12.3). Values are never logged, only the reader, the
+  key hash and the reason.
 - **Dashboard and alerts**: the Grafana dashboard in `doc/grafana` gains a
   readers row and alert rules: drift above zero, feed not live, lag above its
   limit, continuity loss, a sudden hit ratio drop.
@@ -448,8 +430,7 @@ no deployment.
 - **Switches without deployment**, through mongodbee's runtime configuration:
   all readers, one reader, or L1 only, each falling back to plain loads
   instantly.
-- **Strict requests**: `withRequestContext(fn, { fresh: true })` for the routes
-  that must read at the source.
+- **Strict requests**: `withRequestContext(fn, { fresh: true })`.
 - **Rollout per reader**: L1 is enabled one reader at a time.
 
 ### 12.3 Prove
@@ -457,98 +438,126 @@ no deployment.
 - **Shadow mode**: before a reader serves from L1, it always loads, compares
   with what L1 would have returned, and counts mismatches. It serves only once
   the drift is zero over a representative period.
-- **Continuous verification**: once serving, a sampled share of hits (for
-  example 1%) is reloaded in the background and compared; a mismatch is
-  counted, logged, and drops the entry. The cache's `checkComputed`.
-- **Recorded reads in tests** (section 3.2): an undeclared read throws.
+- **Continuous verification**: once serving, a sampled share of hits is
+  reloaded in the background and compared; a mismatch is counted, logged, and
+  drops the entry.
 - **Explain**: in development, a request can list the readers it used, with
-  level, outcome and key hash, for example in a response header.
+  level, outcome and key hash.
 
 ### 12.4 Tooling
 
 - `@diister/mongodbee/inspect` exposes the declarations: name, kind, arguments,
-  selection, reads, consistency, and the registration's L1 settings.
-- The studio, which runs in its own process and never sees the application's
-  memory, shows the declarations, a map of which types feed which readers,
+  selection, edges, consistency, and the registration's limits and L1 settings.
+- The studio shows the declarations, a map of which types feed which readers,
   "what does a write to this type and field invalidate", and the database side
-  of the feed (oplog window, the indexes the query readers' `by` fields need).
+  of the feed (oplog window, the indexes the readers' `by` fields need).
 - Live hit rates and lag belong in Grafana, not in the studio.
 
 ## 13. Tests that must fail without the mechanism
 
+Step 1:
+
 - a write through a service invalidates the reader without any `forget` call;
-- an update by id whose patch holds no `by` field invalidates the entry
-  holding that id;
-- an update setting the `by` field invalidates both the old and the new key;
-- a status flip into or out of the `where` invalidates its key;
-- an update touching an unselected field (`lifecycle.history`) does not;
-- a composite that reads an undeclared type throws in test mode;
-- invalidating an inner reader invalidates the composite that called it;
-- a `Map` in a composite's value does not compile;
-- a raw driver write invalidates on success, and a load racing it is not
-  stored;
-- a load that raced a write is returned but not stored (generation), and a
-  write to another type of the same collection does not discard it;
+- a status flip into the `where` by id, with a patch holding no `by` field,
+  is seen by the next call;
+- an update touching an unselected field (`lifecycle.history`) does not
+  invalidate;
+- a load started before a write is not joined by a call after it;
+- a load that raced a write is returned but not stored, and a write to another
+  type of the same collection does not discard it;
+- an unscoped write invalidates the type in every scope;
+- a raw driver write invalidates on success;
 - a rolled back transaction leaves the cache untouched, a committed one
   invalidates before `afterCommit` runs;
-- `primeFrom` inside a transaction or under `secondaryPreferred` stores
-  nothing;
-- two request contexts on two databases in one process share no entry;
+- a reader over `+entreprises`, which carries no computed field, is
+  invalidated by its writes;
+- a value with an `ObjectId` freezes; mutating a nested array throws and does
+  not compile;
+- `.many` stores each key and a later single call hits;
+- two request contexts on two databases share no entry;
 - a reader under `withReadPreference("secondaryPreferred")` reads the primary;
-- two processes: a write in one invalidates the other's L1 through the feed,
-  for an update by id that carries no `by` field;
-- an idle feed stays live; a lost resume token flushes L1;
-- a strict reader bypasses L1 while the feed is not live;
-- a freshness floor newer than an entry forces a reload, and a floor beyond
-  the server's cluster time is clamped.
+- past a limit, a reader loads and stores nothing;
+- `primeFrom` inside a transaction, under `secondaryPreferred`, or from a read
+  filtered beyond the key stores nothing;
+- a composite that reads a collection directly throws; invalidating an inner
+  reader invalidates the composite.
+
+L1 (step 5 onwards): two processes, a write in one invalidates the other's L1
+through the feed for an update by id with no `by` field; the `information`
+type is routed although its ids are `exposition:` refIds; an event racing a
+load is caught at store time; an idle feed stays live; a lost resume token
+flushes L1; a freshness floor newer than an entry forces a reload and a floor
+beyond the server's cluster time is clamped.
 
 ## 14. Build order
 
-1. **Query readers at L0**: builder, derived arguments and values, `select`,
-   single flight, frozen shared values, exact keys with the database, primary
-   reads, `primeFrom`, in-process invalidation through the computed
-   interceptor, generations per `(collection, type, scope)`, raw-write
-   invalidation on success. Diivento moves exposition information,
-   memberships, participations and team roles to readers and deletes their
-   `forget` calls.
-2. **Composite readers at L0**: recorded reads, `verify`, reader edges.
-   Diivento moves affiliations and deletes `request-scope.ts` (its `enterWith`
-   fix stays in the request context of mongodbee).
-3. **Measure** the preamble on the performance scenario.
-4. **The change feed**: typed, filtered by id prefix, resumable, with state and
-   subscribers.
-5. **L1 for eventual readers**, one at a time: shadow mode, then serving, then
-   continuous verification. Exposition information first.
+0. **Typing prerequisites** in the computed builder, which readers share: a
+   distributive field proxy (so `personRef.userId` works on a `v.variant`),
+   `where` values typed against their field, the `scoped(Model, refId)` handle,
+   and template-typed `refId` outputs. The last one is a breaking typing change
+   across Diivento and is planned as its own step.
+1. **Query readers at L0**: `select`, `.one()`, `.by().one()`, `.many()`,
+   derived arguments and values, ordering by `_id`, single flight with pending
+   loads dropped on invalidation, BSON-safe freeze, exact keys with the
+   database, primary reads, limits, coarse invalidation through a reader plan
+   in the interceptor, hierarchical generations, raw writes on success,
+   `primeFrom`, boot index check.
+2. **Composite readers at L0**: edges between readers, direct reads refused.
+   Diivento moves its preamble to readers, deletes every `forget` call and
+   `request-scope.ts` (its `enterWith` fix is already covered by mongodbee's
+   request context).
+3. **Measure** the preamble on the performance scenario, with `roleKeys`
+   computed and `.many` in place.
+4. **The change feed**: typed, filtered, resumable, with state and
+   subscribers; its oplog cost measured.
+5. **L1 for eventual readers**, one at a time, with the routing of section
+   5.2: shadow mode, then serving, then continuous verification. Exposition
+   information first.
 6. **Freshness floor**, `afterClusterTime` for secondary reads.
 7. **Strict readers in L1**, only if step 3 says it pays (section 6.1).
-8. Batching; studio views and the inspect contract.
+8. Automatic batching; studio views and the inspect contract.
 
 ## 15. Open questions
 
 - Should the request memo stay once the hot paths are readers? Proposal: yes,
-  as the zero-configuration baseline for undeclared GET reads; readers go
-  around its storage.
+  as the zero-configuration baseline for undeclared GET reads.
+- `select` or `project`: mongodbee says "project" elsewhere (`findProject`).
+- Can L1 query readers keep their `where` in the load (section 5.2)?
 - The strict L1 gate (section 6.1), decided after measurement.
-- Where the feed runs when the worker and the API scale separately: one stream
-  per process, about one connection each.
 
-## 16. What revision 2 changed
+## 16. What the reviews changed
+
+### Revision 2 (review of revision 1)
 
 | Revision 1 | Problem found | Revision 2 |
 |---|---|---|
-| hand-written `key` and `keyOf` | a one-character mismatch compiles and never invalidates; no `keyOf` exists for types that do not carry the key | keys built from the arguments; routing by `by` value and by id |
-| `fields` "whose change matters" | only safe when the value exposes nothing else; the real loaders returned full documents | `select` required; the touched-path check covers `select`, `where` and `by` |
+| hand-written `key` and `keyOf` | a one-character mismatch compiles and never invalidates | keys built from the arguments |
+| `fields` "whose change matters" | only safe when the value exposes nothing else | `select` required; the touched-path check covers `select`, `where` and `by` |
 | `dependsOn` repeated for nested readers | forgotten on the first rewrite | reader-in-reader recorded as an edge |
-| `dependsOn` trusted | nothing checked it | `reads` checked against recorded reads |
 | `expositions.type("participant")` | collections are opened asynchronously, per database | `from(Model, type)` through the computed topology |
-| values copied through BSON | a `Map` becomes an object, a `Set` becomes `{}`; each L1 hit re-decodes | frozen, shared, plain data enforced by type |
+| values copied through BSON | a `Map` becomes an object, a `Set` becomes `{}` | frozen, shared |
 | `prime(key, value)` | races writes, leaks transaction snapshots and secondary reads | `primeFrom(read)` |
 | `process` in the declaration | L1 is a rollout decision | `consistency` in the declaration, L1 at registration |
-| feed routing by `_type`, `_scope` and `keyOf` fields | update and delete events carry none of them | reverse index by `_id`, `by` values from `updatedFields`, type from the refId prefix |
-| per-namespace generation, undefined | per collection would thrash during a show | per `(collection, type, scope)` |
-| raw writes bump on the command | a racing load stores the old value under the new generation | bump on `commandSucceeded` |
-| L1 loads under the ambient read preference | a secondary refill after the invalidation stays stale until the TTL | readers read the primary |
-| keys ignored the database | e2e scopes in one process would share entries | the database name is part of every key |
-| freshness floor against generations | no time to compare; forgeable | entries stamped with `operationTime`; floor signed and clamped |
-| feed lag from the last event | an idle feed looks late forever | liveness from the resume token's progress |
-| strict readers in L1 on the feed | a lag window where a revoked grant authorises | strict readers L0 only until measured; gate chosen then, merging `COMPUTED.md` section 13 |
+| feed routing by `_type`, `_scope` and `keyOf` fields | update and delete events carry none of them | routing by `_id` and `updatedFields` |
+| L1 loads under the ambient read preference | a secondary refill stays stale until the TTL | readers read the primary |
+| keys ignored the database | e2e scopes would share entries | the database name is part of every key |
+| raw writes bump on the command | a racing load stores the old value | bump on `commandSucceeded` |
+| strict readers in L1 on the feed | a lag window where a revoked grant authorises | strict readers L0 only until measured |
+
+### Revision 3 (review of revision 2)
+
+| Revision 2 | Problem found | Revision 3 |
+|---|---|---|
+| the flagship example | `personRef.userId` fails on a `v.variant`; a `where` typo compiles; refIds are plain strings; a model does not know its scope | typing prerequisites as step 0 |
+| composites with recorded filters routed by returned ids | a `pending` membership accepted by id was returned by no entry: affiliations stay empty | composites are functions over readers only |
+| single flight | a caller after a write joins a load started before it | invalidation drops pending loads |
+| load by key, `where` in memory, reverse index at L0 | defeats Diivento's partial index; machinery only L1 needs | L0 loads with its `where` and invalidates coarsely; routing moves to L1 |
+| type from the refId prefix | `information._id` is an `exposition:` refId: the first L1 candidate never invalidated | prefix map from the declared `_id` schemas, checked at boot |
+| deep freeze | throws on `ObjectId`; `Readonly<Pick>` is shallow | freeze stops at BSON values; `DeepReadonly` |
+| generations per `(collection, type, scope)` | unscoped and raw writes have no single scope | hierarchical generations |
+| no L0 bound | a request iterating many keys grows without limit | per-request entry and per-entry row limits |
+| `consistency` defaults to eventual | a permission reader that forgets the option becomes L1-eligible | defaults to strict |
+| `activeOrgMembershipsOf` replaced by `organizationIds` | the grants need `roleKey` and `_id` per membership | an org memberships reader |
+| no batching before step 8 | composites would multiply queries | `.many` in step 1 |
+| interceptor reuse | it passes through collections without computed fields | readers get their own plan |
+| feed filtered by id prefix, presented as cheap | not indexed: every stream scans the whole oplog | measured before L1 |
