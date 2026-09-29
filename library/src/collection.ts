@@ -18,9 +18,9 @@ import {
   type DriverCollectionOptions,
   type ReadOptions,
   type ReadPreferenceInput,
+  readingCollection,
   readOpts,
   type WithReadPreferenceInput,
-  withReadPreference,
 } from "./read-preference.ts";
 import { findOneThrough } from "./request-context.ts";
 import { ensureValidator } from "./utils/ensure-validator.ts";
@@ -668,13 +668,13 @@ export async function collection<
 
   const collection = maintainedCollection(
     db,
-    db.collection<TInput>(collectionName, withReadPreference(opts)),
+    readingCollection<TInput, typeof opts>(db, collectionName, opts),
     collectionName,
     COMPUTED_ROOT in collectionSchema,
   );
   const documents = maintainedCollection(
     db,
-    db.collection<StoredDocument>(collectionName, withReadPreference(opts)),
+    readingCollection<StoredDocument, typeof opts>(db, collectionName, opts),
     collectionName,
     COMPUTED_ROOT in collectionSchema,
   );

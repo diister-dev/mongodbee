@@ -459,6 +459,27 @@ const stats = await collection(db, "stats", schema, {
 - **`paginate` on a secondary** may compute its `total` and its page on two
   different members, so the count can be slightly off while writes replicate.
 
+### A read preference for a unit of work
+
+When one collection serves both reads that must be fresh (permissions, a read
+right after a write) and reads that can lag (analytics), set the preference
+around the code instead of on the collection:
+
+```ts
+import { withReadPreference } from "@diister/mongodbee/session";
+
+const report = await withReadPreference("secondaryPreferred", () =>
+  buildReport(expositionId),
+);
+```
+
+Every MongoDBee read inside it follows that preference, unless the call passes
+its own `readPreference` or runs inside a transaction, which still reads the
+primary. It overrides the collection's preference, not a per-call one.
+Internal reads stay on the primary. A driver collection obtained with
+`readingCollection(db, name)` follows it too, for code that reads with the raw
+driver. `currentReadPreference()` returns the one in effect, if any.
+
 ## Change streams
 
 Opt in with `enableWatching`, then subscribe. `on()` returns its unsubscribe
