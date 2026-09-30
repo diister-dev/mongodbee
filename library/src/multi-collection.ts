@@ -63,7 +63,9 @@ import {
   buildSortPaginateStages,
   composeCursorQuery,
   composeCursorStageMatch,
+  countingPipeline,
   normalizePaginateSort,
+  pageBatchSize,
   type SortMachinery,
 } from "./paginate-sort.ts";
 import { assertLetDoesNotShadowJoinBinding } from "./stage-builder.ts";
@@ -1314,30 +1316,28 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           branches: Record<string, unknown>[] | null,
         ): Promise<number> => {
           if (useNaturalIdSort) {
-            const stages: AggregationStage[] = [
+            const stages: AggregationStage[] = countingPipeline([
               { $match: { $and: baseQuery } },
               ulidExtractStage,
               ...(branches
                 ? [{ $match: composeCursorStageMatch(branches) }]
                 : []),
               ...userPipeline,
-              { $count: "total" },
-            ];
+            ]);
             const rows = await collection
               .aggregate(stages, readOptions)
               .toArray();
             return (rows[0]?.total as number | undefined) ?? 0;
           }
           if (userPipeline.length > 0) {
-            const stages: AggregationStage[] = [
+            const stages: AggregationStage[] = countingPipeline([
               {
                 $match: branches
                   ? composeCursorQuery(baseQuery, branches)
                   : { $and: baseQuery },
               },
               ...userPipeline,
-              { $count: "total" },
-            ];
+            ]);
             const rows = await collection
               .aggregate(stages, readOptions)
               .toArray();
@@ -1385,6 +1385,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           }
         }
 
+        const pageOptions = {
+          ...readOptions,
+          ...pageBatchSize(limit, customFilter),
+        };
         if (sortMachinery) {
           // sortPipeline path: the stages the sort depends on run over the
           // whole filtered set (the sort needs every value); the after-sort
@@ -1398,7 +1402,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
               pipeline: userPipeline,
               reverse: Boolean(beforeId),
             }),
-            readOptions,
+            pageOptions,
           );
         } else if (pipelineBuilder || useNaturalIdSort) {
           // For naturalIdSort, we need to add _ulid BEFORE the cursor filter can use it
@@ -1421,10 +1425,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 ...userPipeline,
                 { $sort: sort as Record<string, 1 | -1> },
               ];
-          cursor = collection.aggregate(aggregatePipeline, readOptions);
+          cursor = collection.aggregate(aggregatePipeline, pageOptions);
         } else {
           cursor = collection
-            .find(toStoredFilter(query), readOptions)
+            .find(toStoredFilter(query), pageOptions)
             .sort(sort as m.Sort);
         }
 

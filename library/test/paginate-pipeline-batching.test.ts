@@ -123,14 +123,12 @@ function expectedNames(filtering: boolean) {
 }
 
 async function seedOrgs(db: Db) {
-  await db
-    .collection<{ _id: string; label: string }>("orgs")
-    .insertMany(
-      Array.from({ length: 5 }, (_, i) => ({
-        _id: `org:${i}`,
-        label: `O${i}`,
-      })),
-    );
+  await db.collection<{ _id: string; label: string }>("orgs").insertMany(
+    Array.from({ length: 5 }, (_, i) => ({
+      _id: `org:${i}`,
+      label: `O${i}`,
+    })),
+  );
 }
 
 function rawRow(index: number) {
@@ -353,6 +351,48 @@ for (const surface of surfaces) {
         skipTotal: true,
       });
       assertEquals(names(current), expected.slice(0, 12));
+    });
+  });
+}
+
+function aggregates(commands: Commands) {
+  return commands
+    .filter((entry) => entry.name === "aggregate")
+    .map((entry) => ({
+      stages: (entry.command.pipeline as Record<string, unknown>[]).map(
+        (stage) => Object.keys(stage)[0],
+      ),
+      batchSize: (entry.command.cursor as { batchSize?: number } | undefined)
+        ?.batchSize,
+    }));
+}
+
+for (const surface of surfaces) {
+  test(`paginate pipeline (${surface.kind}): the server builds one page, and counts skip display joins`, async () => {
+    await withMonitoredDatabase(async (db, commands) => {
+      const page = await surface.seed(db);
+
+      commands.length = 0;
+      await page({ limit: 10, peek: true, filtering: false });
+      const display = aggregates(commands);
+      const data = display.find((entry) => entry.stages.includes("$sort"));
+      const count = display.find((entry) => entry.stages.includes("$count"));
+      assertEquals(data?.batchSize, 11);
+      assertEquals(count?.stages.includes("$lookup"), false);
+
+      commands.length = 0;
+      await page({ limit: 10, filtering: true });
+      const filtered = aggregates(commands).find((entry) =>
+        entry.stages.includes("$count"),
+      );
+      assertEquals(filtered?.stages.slice(-3), ["$lookup", "$match", "$count"]);
+
+      commands.length = 0;
+      await page({ limit: 10, filtering: false, jsFilter: true });
+      const unbatched = aggregates(commands).find((entry) =>
+        entry.stages.includes("$sort"),
+      );
+      assertEquals(unbatched?.batchSize, undefined);
     });
   });
 }

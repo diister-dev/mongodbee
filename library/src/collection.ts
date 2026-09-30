@@ -41,7 +41,9 @@ import {
   buildSortMachinery,
   buildSortPaginateStages,
   composeCursorQuery,
+  countingPipeline,
   normalizePaginateSort,
+  pageBatchSize,
   type SortMachinery,
 } from "./paginate-sort.ts";
 import {
@@ -1350,11 +1352,10 @@ export async function collection<
               position = 0;
             }
           } else if (customPipeline.length > 0) {
-            const countPipeline: m.Document[] = [
+            const countPipeline: m.Document[] = countingPipeline([
               { $match: baseQuery },
               ...customPipeline,
-              { $count: "total" },
-            ];
+            ]);
             const totalResult = await collection
               .aggregate(countPipeline, readOptions)
               .toArray();
@@ -1362,7 +1363,7 @@ export async function collection<
 
             if (afterId) {
               if (cursorBranches) {
-                const afterPipeline: m.Document[] = [
+                const afterPipeline: m.Document[] = countingPipeline([
                   {
                     $match: composeCursorQuery(
                       [baseQuery as Record<string, unknown>],
@@ -1370,8 +1371,7 @@ export async function collection<
                     ),
                   },
                   ...customPipeline,
-                  { $count: "total" },
-                ];
+                ]);
                 const afterResult = await collection
                   .aggregate(afterPipeline, readOptions)
                   .toArray();
@@ -1414,6 +1414,7 @@ export async function collection<
         let hardLimit = 10_000;
         let skippedInvalid = 0;
         const elements: R[] = [];
+        const pageBatch = pageBatchSize(limit, customFilter);
 
         // Use aggregation pipeline when custom pipeline is provided
         if (sortMachinery || customPipeline.length > 0) {
@@ -1431,7 +1432,10 @@ export async function collection<
               })
             : [{ $match: query }, { $sort: sort }, ...customPipeline];
 
-          const cursor = collection.aggregate(aggregationPipeline, readOptions);
+          const cursor = collection.aggregate(aggregationPipeline, {
+            ...readOptions,
+            ...pageBatch,
+          });
 
           try {
             while (hardLimit-- > 0 && limit > 0) {
@@ -1474,7 +1478,7 @@ export async function collection<
         } else {
           // Use simple find for non-pipeline queries
           const cursor = collection
-            .find(query, readOptions)
+            .find(query, { ...readOptions, ...pageBatch })
             .sort(sort as m.Sort);
 
           try {
@@ -1551,11 +1555,10 @@ export async function collection<
               if (customPipeline.length > 0) {
                 const rows = await collection
                   .aggregate(
-                    [
+                    countingPipeline([
                       { $match: beforeQuery },
                       ...customPipeline,
-                      { $count: "total" },
-                    ],
+                    ]),
                     readOptions,
                   )
                   .toArray();

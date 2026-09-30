@@ -46,7 +46,9 @@ import {
   buildSortMachinery,
   buildSortPaginateStages,
   composeCursorQuery,
+  countingPipeline,
   normalizePaginateSort,
+  pageBatchSize,
   type SortMachinery,
 } from "./paginate-sort.ts";
 import { assertLetDoesNotShadowJoinBinding } from "./stage-builder.ts";
@@ -1758,22 +1760,20 @@ export async function scopedMultiCollection<S extends AnySchema>(
                 position = 0;
               }
             } else if (userPipeline.length > 0) {
-              const countPipeline: AggregationStage[] = [
+              const countPipeline: AggregationStage[] = countingPipeline([
                 { $match: { $and: baseQuery } },
                 ...userPipeline,
-                { $count: "total" },
-              ];
+              ]);
               const totalResult = await collection
                 .aggregate(countPipeline, { session })
                 .toArray();
               total = (totalResult[0]?.total as number | undefined) ?? 0;
               if (afterId) {
                 if (cursorBranches) {
-                  const afterPipeline: AggregationStage[] = [
+                  const afterPipeline: AggregationStage[] = countingPipeline([
                     { $match: composeCursorQuery(baseQuery, cursorBranches) },
                     ...userPipeline,
-                    { $count: "total" },
-                  ];
+                  ]);
                   const afterResult = await collection
                     .aggregate(afterPipeline, { session })
                     .toArray();
@@ -1819,8 +1819,12 @@ export async function scopedMultiCollection<S extends AnySchema>(
           // callback is set — a rejecting filter can shrink the page, so we keep
           // the cursor open past `limit` and stop in JS instead. With no filter the
           // cap makes it a bounded top-`limit` query (index-friendly). The pipeline
-          // path never server-caps (see below) — it relies on the JS limit.
+          // path never server-caps (see below): it asks for a `limit`-row batch.
           const serverCap = customFilter ? undefined : limit;
+          const pageOptions = {
+            session,
+            ...pageBatchSize(limit, customFilter),
+          };
 
           let cursor:
             | m.FindCursor<StoredDocument>
@@ -1839,13 +1843,13 @@ export async function scopedMultiCollection<S extends AnySchema>(
                 pipeline: userPipeline,
                 reverse: Boolean(beforeId),
               }),
-              { session },
+              pageOptions,
             );
           } else if (userPipeline.length > 0) {
             // `$sort` goes BEFORE the user pipeline so it can ride an index, and
             // so the expensive pipeline stages ($lookup, …) run LAZILY — only for
-            // the ~`limit` docs the JS loop consumes before it closes the cursor,
-            // not for the whole cursor-filtered set. No server-side `$limit` here:
+            // the `limit`-row batches the JS loop consumes before it closes the
+            // cursor, not for the whole cursor-filtered set. No server-side `$limit` here:
             // a filtering pipeline can shrink the page, so `limit` is enforced
             // JS-side (which is also what lets the cursor close early).
             // Sorting on a field this pipeline computes is impossible in this
@@ -1856,7 +1860,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
               { $sort: sort },
               ...userPipeline,
             ];
-            cursor = collection.aggregate(dataPipeline, { session });
+            cursor = collection.aggregate(dataPipeline, pageOptions);
           } else {
             const findCursor = collection
               .find(finalQuery, { session })
@@ -1933,11 +1937,10 @@ export async function scopedMultiCollection<S extends AnySchema>(
                 // pipeline's filtering stages).
                 let beforeCount: number;
                 if (userPipeline.length > 0) {
-                  const beforePipeline: AggregationStage[] = [
+                  const beforePipeline: AggregationStage[] = countingPipeline([
                     { $match: composeCursorQuery(baseQuery, cursorBranches) },
                     ...userPipeline,
-                    { $count: "total" },
-                  ];
+                  ]);
                   const beforeResult = await collection
                     .aggregate(beforePipeline, { session })
                     .toArray();
