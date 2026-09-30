@@ -7,7 +7,8 @@ import {
   requestReadStats,
   withRequestContext,
 } from "../src/request-context.ts";
-import { withDatabase } from "./+shared.ts";
+import { MongoClient } from "../src/mongodb.ts";
+import { TEST_URI, withDatabase } from "./+shared.ts";
 
 const personSchema = {
   name: v.pipe(
@@ -113,5 +114,54 @@ test("Collection findOne: the request memo serves one copy per caller", async (t
       },
       { memoizeReads: true },
     );
+  });
+});
+
+test("Collection findOne: a valid read sends the caller's filter alone", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const client = new MongoClient(TEST_URI, { monitorCommands: true });
+    const filters: Record<string, unknown>[] = [];
+    client.on("commandStarted", (event) => {
+      if (event.commandName === "find")
+        filters.push(event.command.filter as Record<string, unknown>);
+    });
+    try {
+      const people = await collection(
+        client.db(db.databaseName),
+        "people",
+        personSchema,
+      );
+      const id = await people.insertOne({ name: "Ada", group: "g", rank: 1 });
+      filters.length = 0;
+      assertEquals((await people.findOne({ _id: id }))?.name, "Ada");
+      assertEquals(filters, [{ _id: id }]);
+
+      await people.collection.insertOne(
+        { _id: "broken", name: 42, group: "g", rank: 0 } as never,
+        { bypassDocumentValidation: true },
+      );
+      filters.length = 0;
+      assertEquals(await people.findOne({ _id: "broken" }), null);
+      assertEquals(filters.length, 2);
+      assert("$jsonSchema" in filters[1]);
+    } finally {
+      await client.close();
+    }
+  });
+});
+
+test("Collection findOne: a document Valibot accepts is found like getById finds it", async (t) => {
+  await withDatabase(t.name, async (db) => {
+    const people = await collection(db, "people", {
+      name: v.string(),
+      level: v.optional(v.number(), 1),
+    });
+    await people.collection.insertOne({ _id: "legacy", name: "Ada" } as never, {
+      bypassDocumentValidation: true,
+    });
+    const byId = await people.getById("legacy");
+    const found = await people.findOne({ _id: "legacy" });
+    assertEquals(found, byId);
+    assertEquals(found?.level, 1);
   });
 });

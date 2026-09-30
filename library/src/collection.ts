@@ -936,14 +936,25 @@ export async function collection<
     async findOne(filter, options?) {
       const run = async () => {
         const session = sessionContext.getSession();
+        const driverOptions = readOpts(session, options);
+        const first = await findOneThrough(
+          collection,
+          filter as unknown as m.Filter<TInput>,
+          options,
+          driverOptions,
+        );
+        if (!first) return null;
+        const parsed = v.safeParse(schema, first);
+        if (parsed.success) return parsed.output as WithId<TOutput>;
+
         const result = await findOneThrough(
           collection,
           {
-            ...validator, // Prevent returning invalid documents
+            ...validator,
             ...(filter as unknown as m.Filter<TInput>),
           },
           options,
-          readOpts(session, options),
+          driverOptions,
         );
 
         if (!result) {
