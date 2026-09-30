@@ -99,7 +99,7 @@
   "dependencies": {
     "@diister/valibot-mock": "0.1.9",
     "@opentelemetry/api": "1.9.1",
-    "mongodb": "6.21.0",
+    "mongodb": "7.7.0",
     "valibot": "1.5.0"
   },
   "peerDependencies": {
