@@ -87,6 +87,14 @@ async function computedOf(db: Db, id: string) {
   return values;
 }
 
+async function revisionOf(db: Db, id: string): Promise<number | undefined> {
+  return (
+    (await db.collection("+expositions").findOne({ _id: id as never })) as {
+      _computed?: { _rev?: number };
+    } | null
+  )?._computed?._rev;
+}
+
 async function markIds(db: Db): Promise<string[]> {
   return (
     await db
@@ -132,7 +140,7 @@ test("computed through: a near-side write is exact at commit", async (t) => {
   });
 });
 
-test("computed through: a far-side change is marked durably, stays late until drained, then exact", async (t) => {
+test("computed through: a far-side change is exact at commit, every subject it reaches recomputed with no mark", async (t) => {
   await withDatabase(t.name, async (db) => {
     const { topology, view } = await open(db);
     const participant = await view.insertOne("participant", { name: "Ada" });
@@ -150,30 +158,28 @@ test("computed through: a far-side change is marked durably, stays late until dr
       (await computedOf(db, participant))?.validatedOrganizationIds,
       [organization],
     );
+
+    const colleague = await view.insertOne("participant", { name: "Bob" });
+    await view.insertOne("org_membership", {
+      participantId: colleague,
+      organizationId: organization,
+      status: "active",
+    });
 
     await view.updateOne("expo_organization", organization, {
       status: "pending",
     });
-    assertEquals(await markIds(db), [
-      `participant.validatedNames|far|${EXPO}|${organization}`,
-      `participant.validatedOrganizationIds|far|${EXPO}|${organization}`,
-    ]);
-    assertEquals(
-      (await computedOf(db, participant))?.validatedOrganizationIds,
-      [organization],
-      "late, never lost",
-    );
-
-    await drainComputedPending(db, { topology });
-    assertEquals(
-      (await computedOf(db, participant))?.validatedOrganizationIds,
-      [],
-    );
+    assertEquals(await markIds(db), []);
+    for (const subject of [participant, colleague])
+      assertEquals(await computedOf(db, subject), {
+        validatedOrganizationIds: [],
+        validatedNames: [],
+      });
     assertEquals((await checkComputed(db, topology)).drifts, []);
   });
 });
 
-test("computed through: only the far fields an update can change are marked", async (t) => {
+test("computed through: only a far update that can change a value recomputes its subjects", async (t) => {
   await withDatabase(t.name, async (db) => {
     const { topology, view } = await open(db);
     const participant = await view.insertOne("participant", { name: "Ada" });
@@ -187,28 +193,27 @@ test("computed through: only the far fields an update can change are marked", as
       status: "active",
     });
     await drainComputedPending(db, { topology });
+    const revision = await revisionOf(db, participant);
 
     await view.updateOne("expo_organization", organization, {
       note: "unrelated",
     });
+    assertEquals(await markIds(db), []);
     assertEquals(
-      await markIds(db),
-      [],
-      "a field no computed value reads writes no mark",
+      await revisionOf(db, participant),
+      revision,
+      "a field no computed value reads recomputes nobody",
     );
 
     await view.updateOne("expo_organization", organization, {
       name: "Acme Corp",
     });
-    assertEquals(
-      await markIds(db),
-      [`participant.validatedNames|far|${EXPO}|${organization}`],
-      "a rename marks only the field that collects the name",
-    );
-    await drainComputedPending(db, { topology });
+    assertEquals(await markIds(db), []);
+    assertEquals(await revisionOf(db, participant), (revision ?? 0) + 1);
     assertEquals((await computedOf(db, participant))?.validatedNames, [
       "Acme Corp",
     ]);
+    assertEquals((await checkComputed(db, topology)).drifts, []);
   });
 });
 

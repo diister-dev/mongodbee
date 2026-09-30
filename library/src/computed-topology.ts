@@ -142,6 +142,42 @@ function describe(location: ComputedLocation): string {
     : `"${location.type}" in "${location.collection}"`;
 }
 
+function readIndexed(
+  location: ComputedLocation,
+  input: unknown,
+  path: string,
+  readsWithinScope: boolean,
+): boolean {
+  if (path === "_id") return true;
+  const candidates = leadingIndexes(input).filter(
+    (index) => index.path === path,
+  );
+  return location.kind === "scoped" && !readsWithinScope
+    ? candidates.some((index) => index.global)
+    : candidates.length > 0;
+}
+
+const farLookups = new WeakMap<ComputedField, boolean>();
+
+export function farLookupIndexed(
+  topology: ComputedTopology,
+  field: ComputedField,
+): boolean {
+  const known = farLookups.get(field);
+  if (known !== undefined) return known;
+  const via = field.descriptor.through?.via;
+  const indexed =
+    via !== undefined &&
+    readIndexed(
+      field.source,
+      topology.types.get(field.descriptor.source.type)?.input,
+      via,
+      field.scoped && field.farScoped,
+    );
+  farLookups.set(field, indexed);
+  return indexed;
+}
+
 function assertReadIndexed(
   label: string,
   location: ComputedLocation,
@@ -149,15 +185,8 @@ function assertReadIndexed(
   path: string,
   readsWithinScope: boolean,
 ): void {
-  if (path === "_id") return;
-  const candidates = leadingIndexes(input).filter(
-    (index) => index.path === path,
-  );
+  if (readIndexed(location, input, path, readsWithinScope)) return;
   const acrossScopes = location.kind === "scoped" && !readsWithinScope;
-  const usable = acrossScopes
-    ? candidates.some((index) => index.global)
-    : candidates.length > 0;
-  if (usable) return;
   throw new ComputedTopologyError(
     `computed field ${label}: recomputing it reads ${describe(location)} by "${path}"${acrossScopes ? " across every scope" : ""}, ` +
       `and no declared index leads with "${path}"${acrossScopes ? " without the scope prefix" : ""}. ` +

@@ -26,7 +26,7 @@ This feature makes the pattern a declared, maintained, verified part of the sche
 | 3 | You are reinventing a job queue inside the ODM: who runs the drainer across N nodes? | Mongodbee writes marks and exports `drainComputedPending()`. It never schedules anything. The application calls the drainer from its own recurring job. |
 | 4 | Migrations write sources in bulk and bypass maintenance. | A migration that writes a source type marks every computed field that type feeds; the migration ends with a full apply of those fields (§12). |
 | 5 | A foreign key can be an array (one source document naming several subjects). | `.by()` accepts an array path. The affected subjects are the union of the arrays before and after the write. |
-| 6 | Snapshot isolation anomalies. | Two transactions that touch the same subject both WRITE the subject document, so MongoDB raises a write conflict and one replays. This argument does not hold for a second hop (`through`), where the far-side write only leaves a mark; there, exactness rests on the drainer and is declared "eventual" (§6). |
+| 6 | Snapshot isolation anomalies. | Two transactions that touch the same subject both WRITE the subject document, so MongoDB raises a write conflict and one replays. A second hop (`through`) adds a pair that shares no document: a far-side write that cannot see a link being created, and the write creating that link that cannot see the far change. Both write one fence document per far document, so they conflict too (§21). |
 | 7 | The subject document is also written by the application; recomputations will collide with those writes. | Accepted; the collision is a write conflict, replayed by the whole-transaction retry. Measured under load before adoption (§16). |
 | 8 | Dependency versions for caches: is that an ODM concern? | Split: mongodbee bumps versions because it sees the write; the cache itself (keys, storage, eviction, a shared store if ever) belongs to the application. |
 | 9 | No replica set, no transaction. | Explicit mode (§7.5): refuse by default; degrade only when the connection declares it. |
@@ -144,10 +144,10 @@ Definition-time checks (thrown by `defineType`, so a mistake fails at boot, not 
 |---|---|---|---|
 | 1. Source in the subject's collection or another collection, same scope | `organizationIds`, `scanKinds` | In the writing transaction | Exact at commit |
 | 2. Global subject, sources across scopes | `user._computed.expositionCount` | In the writing transaction | Exact at commit |
-| 3. Condition or value on a far document (`through`) | `validatedOrganizationIds` | Near-side write: in the transaction. Far-side write: a mark in the transaction, drained after. | Exact at commit for near-side changes; eventually exact, durably, for far-side changes |
+| 3. Condition or value on a far document (`through`) | `validatedOrganizationIds` | Near-side and far-side writes: in the transaction. Past the inline limit, or when no index serves the far lookup: a far mark in the transaction, drained after (§21). | Exact at commit under the limit; eventually exact, durably, past it |
 | 4. Computed on computed | a field filtered on `organization._computed.memberCount` | Recomputing a field marks its dependents | Eventually exact, durably |
 
-"Durably" means the obligation to recompute is written in the same transaction as the change that causes it. It can be late; it cannot be lost. A reader that needs a case 3 or 4 value exact at this instant reads the relation itself.
+"Durably" means the obligation to recompute is written in the same transaction as the change that causes it. It can be late; it cannot be lost. A reader that needs a case 4 value, or a case 3 value past the inline limit, exact at this instant reads the relation itself.
 
 ## 7. Maintenance on write
 
@@ -165,11 +165,11 @@ Recomputing the whole value from the subject's sources, rather than applying a d
 
 ### 7.2 Far side (`through`) and chains
 
-A write on the far type (`expo_organization` for `validatedOrganizationIds`) does not know its subjects without reading back through the near relation, which can reach thousands of documents. It writes one mark `{ field, far: <far id> }` in its transaction; the drainer expands it into subjects by reading the near relation and recomputes them in bounded transactions.
+A write on the far type (`expo_organization` for `validatedOrganizationIds`) finds its subjects by reading back through the near relation, `{ <link>: { $in: <far ids> } }` under the near `where` (and the scope, §21), in its transaction and bounded to `inlineLimit + 1` near documents, then recomputes them there like any other subject. Past the limit, it writes one mark `{ field, far: <far id> }` per far document instead; the drainer expands it into subjects by reading the near relation and recomputes them in bounded transactions.
 
 ### 7.3 Bounds
 
-- `inlineLimit` (default 1000, `registerComputed(db, topology, { inlineLimit })`): the most source documents a write may target, and the most subjects it may affect per field, for the recomputation to stay inside the write. Past it the write is never refused: it writes one `whole` mark per affected field in its own transaction and leaves the recomputation to the drainer. Reading past the limit stops at `inlineLimit + 1` documents, so an oversized write costs a bounded read. The default is to be confirmed by measurement (§16).
+- `inlineLimit` (default 1000, `registerComputed(db, topology, { inlineLimit })`): the most source documents a write may target, the most near documents and subjects the far documents it changes may reach per field (all of them together), and the most subjects it may affect per field, for the recomputation to stay inside the write. Past it the write is never refused: it writes one `whole` mark per affected field in its own transaction and leaves the recomputation to the drainer. Reading past the limit stops at `inlineLimit + 1` documents, so an oversized write costs a bounded read. The default is to be confirmed by measurement (§16).
 - `maxEntries`: a `collect` that would exceed it throws `ComputedEntriesExceededError` inside the transaction, so the write that would produce it fails. A field that legitimately grows past it must be a `count`.
 
 ### 7.4 Coverage matrix
@@ -210,7 +210,8 @@ A test per cell asserts the stored value equals a full apply after the write.
 
 - Marks live in the internal collection `__dbee_computed_pending__`, next to `__dbee_migration__`. The `_id` is the identity, so repeated marks collapse into one document:
   - `whole`: `"<subject>.<field>|whole|<scope or *>"`. Recompute the field for every subject, or for one scope when the field is scoped and the write was bounded to a scope. Written past the inline limit (a `deleteMany`, an `updateMany`, a `dropScope` over a large scope, a write touching many subjects) and before a source collection is dropped.
-  - `subject`: `"<subject>.<field>|subject|<id>"`. Recompute one subject. Used by `through` (§9) and chains (§10).
+  - `subject`: `"<subject>.<field>|subject|<id>"`. Recompute one subject. Used by chains (§10).
+  - `far`: `"<subject>.<field>|far|<scope or *>|<far id>"`. Recompute every subject the far document reaches. Written by a far-side write past the inline limit, or when no index serves the far lookup (§21).
 - Each mark carries a `generation`, incremented by every write that marks it again. The drainer deletes a mark only if its generation is unchanged since it claimed it; a mark renewed while it was being drained is requeued, never lost (proved by a test whose mutant, deleting by `_id` only, is killed).
 - `drainComputedPending(db, { topology, limit, batchSize, leaseMs })` claims one mark at a time with a lease (`claimedUntil`), so concurrent drainers on every worker do not duplicate work, and a crashed drainer's lease expires. A `whole` mark runs the full apply path (§11), batched transactions; a `subject` mark recomputes its subject and deletes the mark in one transaction. It returns `{ drained, requeued, remaining, oldestAgeMs }`. A mark whose field no longer exists in the topology is discarded. Idempotent: a mark drained twice recomputes the same truth.
 - Mongodbee never schedules it. The application runs it from its recurring job infrastructure, on every worker.
@@ -221,8 +222,9 @@ A test per cell asserts the stored value equals a full apply after the write.
 
 - The near relation carries the `by` link and its `where`; the far relation carries its own `where` and the collected field.
 - Near-side writes: §7.1, exact at commit.
-- Far-side writes: §7.2, a far mark; the drainer finds subjects with `{ <fk>: far }` on the near type under the near `where`.
-- A far write that cannot change the value (the far `where` fields and the collected field are untouched by the update) writes no mark. Detected from the update document, not from a read.
+- Far-side writes: §7.2, exact at commit under the inline limit; past it a far mark, and the drainer finds subjects with `{ <fk>: far }` on the near type under the near `where`.
+- A far write that cannot change the value (the far `where` fields and the collected field are untouched by the update) reads nothing, recomputes nothing and writes nothing. Detected from the update document, not from a read.
+- Both sides write a fence (§21), so a far change and a link created concurrently never both commit on stale snapshots.
 
 ## 10. Computed on computed
 
@@ -393,3 +395,56 @@ A separate collection of lock documents, one per subject, bumped instead of the 
 The lock collection avoids the change-stream event and the waits: a non-transactional write to a document a transaction holds waits for it, so renaming a participant queues behind membership transactions under `_rev`. `_rev` was kept because it is MongoDB's documented pattern, needs no extra collection to create (a transaction cannot create one in a multi-shard write) or purge, and keeps transactions single-shard; its cost is one `update` event on the subject per maintained write and about 30% more time under heavy contention on one subject. Consumers of change streams on subjects can filter events whose only updated field is `_computed._rev`.
 
 Sources: MongoDB manual, [Production Considerations for Transactions](https://www.mongodb.com/docs/manual/core/transactions-production-consideration/) and [Transactions and Operations](https://www.mongodb.com/docs/manual/core/transactions-operations/).
+
+## 21. Far-side writes at commit
+
+### 21.1 What changed
+
+A far-side write used to leave a `far` mark, so a `through` value stayed stale until the next drain even when one subject was concerned. It now recomputes in its own transaction:
+
+1. The far documents the write changed, and whose read fields it touched (§9), are collected as before.
+2. Their subjects are found through the near relation: `{ <link>: { $in: <far ids> } }` under the near `where`, restricted to the far document's scope when the field is scoped and the far type shares the subject's scope. The read joins the ambient session and stops at `inlineLimit + 1` near documents.
+3. The subjects are recomputed with the others of the write, like a near-side change.
+
+It falls back to a `far` mark per far document, as before, when the near documents or their subjects exceed `inlineLimit` (counted over every far document of the field the write changed together), or when no index leads that read with the link (§21.3). More far documents than the limit in one write still give a `whole` mark.
+
+Deleting a far document and inserting one that existing links already point to go through the same path. Changing the link on the near side was already recomputed at commit (§7.1).
+
+### 21.2 Write skew, and fences
+
+Inline recomputation alone would be weaker than the mark in one case. A far write reads the near relation in its snapshot and misses a link created concurrently; the write creating that link reads the far document in its own snapshot and misses the far change. They write no common document, both commit, and the subject keeps a stale value with no mark left to repair it. The same holds for a near document whose `where` starts matching, a link moved to another far document, and a subject created after the links that name it.
+
+Both sides therefore write a fence in `__dbee_computed_fences__` (`COMPUTED_FENCES_COLLECTION`), `_id` `"<subject>.<field>|fence|<scope or *>|<far id>"`, which materialises the conflict:
+
+- A far-side write fences every far document it changed (updated, inserted or deleted).
+- A near-side write fences each far document it newly links: a link present after the write that was not present before, counting `where`, `by` and the link itself. Removing a link needs no fence: the far write sees it and writes the subject.
+- A write that creates a subject fences every far document the subject's links reach.
+
+Writing a fence is an upsert immediately followed by a delete of the same `_id`, in the same transaction and one round trip: the collection stays empty, and a concurrent transaction writing the same `_id` still gets a write conflict, whether the first one has committed or not. Two transactions of the race above therefore always write a common fence, so one replays on fresh data. Fences are written first, before any recomputation, so the transaction that loses fails before doing its work. Outside a transaction (`standaloneMode: "best-effort"`) no fence is written, as no `_rev` is bumped (§20.2).
+
+The price is that writes creating links to the same far document now serialise, as writes feeding the same subject already did through `_rev` (§20). For `activeParticipantCount` (one badge per participant, unique link) it never happens; for a relation with a large fan-in (memberships of one organisation) it does, and §21.4 measures it. Striping the fence (a near-side write takes one of K fences at random, a far-side write takes all K) was measured and not kept: it cuts that contention but costs the far-side write about 0.5 ms per extra fence, per far document (§21.4).
+
+The collection is created implicitly by the first transaction that writes a fence, like `__dbee_computed_pending__` for marks. Two transactions creating it at the same instant make one of them fail with `Collection namespace ... is already in use. Please retry your operation or multi-document transaction` (seen in a test that started two such transactions on an empty database); this first-use race is the one marks already had.
+
+`test/computed-through-far.test.ts` reproduces the race for a new badge, a moved badge, a kiosk whose `where` starts matching, a subject created after its links, and a far document deleted while a link to it is created, each with either side first; every case drifts once fences are disabled.
+
+What remains outside the guarantee: a far-side write that targets more documents than `inlineLimit` falls back to a `whole` mark without reading the far ids, so it writes no fence. The drain of that mark recomputes every subject and repairs a link created concurrently, unless the drain itself reads while that link's transaction is still open; far-side writes had that exposure on every mark before this change.
+
+### 21.3 Indexes
+
+`computedTopology` already refuses a field whose recompute read has no index leading with the link (§19). One case was not covered, because the drainer was the only reader: a scoped subject over a scoped near type whose far type is global. The far lookup then reads the near type across every scope, and the scope-prefixed index does not serve it. The maintenance recomputes inline only when an index leading with the link is declared `global` on the near type, and falls back to a `far` mark otherwise, so a write never scans a collection inside its transaction. The drainer still reads that relation without an index, as it did.
+
+### 21.4 Cost
+
+Local replica set, one process; `bench/computed-far.ts` measures this version alone. The comparison below ran both versions in one process on the same server, alternating samples, 300 samples each (medians):
+
+| Write | Mark (before) | At commit (now) |
+|---|---|---|
+| far status change reaching 1 subject | 2.2 ms, then 5.9 ms per mark in the drain | 4.0 ms, nothing to drain |
+| far status change reaching 100 subjects | 1.7 ms, then 10 ms in the drain | 6.2 ms, nothing to drain |
+| near insert creating a link | 2.0 ms | 2.1 ms |
+| 50 concurrent links to one far document, median of 7 | 41 ms | 412 ms |
+
+The first three rows are the cost the change was made for: a far write pays the recomputation it used to defer, plus one fence. The last row is the serialisation of §21.2. The same machine gave large run-to-run variations (a 100-subject far write measured between 6 and 20 ms across runs), so read the rows as orders of magnitude. Striped fences, measured the same way with 150 samples: 8 fences per far document gave +5 ms per far write and 110 ms for the 50 concurrent links, 16 gave +8 ms and 65 ms.
+
+Telemetry is unchanged: there is no span dedicated to the maintenance, so the far lookup, the recomputation and the fence writes are part of the triggering operation's span and of its transaction span. `pendingComputed` now counts a `far` mark only for a fallback, which makes a growing `far` count a sign of oversized far writes or of a missing `global` index.

@@ -11,16 +11,28 @@ import { COMPUTED_ROOT } from "./computed.ts";
 import {
   type ComputedField,
   type ComputedTopology,
+  farLookupIndexed,
   locationFilter,
 } from "./computed-topology.ts";
-import { recomputeSubjects, toSubjects } from "./computed-apply.ts";
+import {
+  type FarTarget,
+  farLinksOf,
+  recomputeSubjects,
+  subjectsReachingFar,
+  toSubjects,
+} from "./computed-apply.ts";
 import {
   type DocumentId,
   isDocumentId,
   type StoredDocument,
   storedCollection,
 } from "./stored-document.ts";
-import { markFar, markWhole } from "./computed-marks.ts";
+import {
+  farFenceId,
+  fenceFarLinks,
+  markFar,
+  markWhole,
+} from "./computed-marks.ts";
 import { checkTransactionEnabled, getSessionContext } from "./session.ts";
 import {
   isRetryableTransactionFailure,
@@ -228,7 +240,12 @@ function projectionFor(fields: readonly ComputedField[]): Document {
     "_id",
     "_type",
     "_scope",
-    ...fields.map((field) => field.descriptor.by),
+    ...fields.flatMap(({ descriptor }) => [
+      descriptor.by,
+      ...(descriptor.through
+        ? [descriptor.through.via, ...Object.keys(descriptor.where)]
+        : []),
+    ]),
   ]);
   const kept = [...paths].filter(
     (path, _, all) =>
@@ -312,25 +329,56 @@ class Affected {
     }
   }
 
+  readonly #created = new Map<ComputedField, Set<string>>();
+
   fromSubjects(
     fields: readonly ComputedField[],
     documents: readonly Document[],
   ): void {
     for (const document of documents) {
       for (const field of fields) {
-        if (isOfType(document, field.at)) this.add(field, document._id);
+        if (!isOfType(document, field.at)) continue;
+        this.add(field, document._id);
+        if (!field.descriptor.through) continue;
+        const created = this.#created.get(field) ?? new Set<string>();
+        created.add(String(document._id));
+        this.#created.set(field, created);
       }
     }
+  }
+
+  created(field: ComputedField, subject: string): boolean {
+    return this.#created.get(field)?.has(subject) === true;
+  }
+
+  readonly #links = new Set<string>();
+
+  linksFrom(
+    fields: readonly ComputedField[],
+    before: readonly Document[],
+    after: readonly Document[],
+  ): void {
+    const previous = new Map(
+      before.map((document) => [String(document._id), document]),
+    );
+    for (const field of fields) {
+      if (!field.descriptor.through) continue;
+      for (const document of after) {
+        const had = farLinksOf(field, previous.get(String(document._id)));
+        for (const [key, far] of farLinksOf(field, document)) {
+          if (!had.has(key)) this.#links.add(farFenceId(field, far));
+        }
+      }
+    }
+  }
+
+  linkFences(): ReadonlySet<string> {
+    return this.#links;
   }
 
   entries(): IterableIterator<[ComputedField, Map<string, DocumentId>]> {
     return this.#bySubjectField.entries();
   }
-}
-
-interface FarTarget {
-  readonly id: DocumentId;
-  readonly scope: string | undefined;
 }
 
 function idCandidates(ids: Iterable<DocumentId>): DocumentId[] {
@@ -347,8 +395,16 @@ async function recomputeAffected(
   db: Db,
   affected: Affected,
   session: ClientSession | undefined,
-  limit: number,
+  registration: Registration,
 ): Promise<void> {
+  const limit = registration.inlineLimit;
+  const fenced = new Set<string>(affected.linkFences());
+  for (const [field, targets] of affected.farEntries()) {
+    for (const target of targets.values())
+      fenced.add(farFenceId(field, target));
+  }
+  await fenceFarLinks(db, fenced, session);
+  const late = new Set<string>();
   const marked = new Set<ComputedField>();
   for (const [field, scopes] of affected.wholeEntries()) {
     marked.add(field);
@@ -375,16 +431,32 @@ async function recomputeAffected(
       );
       continue;
     }
-    for (const { id, scope } of targets.values()) {
-      await markFar(
-        db,
-        field,
-        id,
-        scope,
-        "a far document of a through field changed",
-        session,
-      );
+    const indexed = farLookupIndexed(registration.topology, field);
+    const subjects = indexed
+      ? await subjectsReachingFar(
+          db,
+          field,
+          [...targets.values()],
+          session,
+          limit,
+        )
+      : undefined;
+    if (subjects === undefined) {
+      for (const { id, scope } of targets.values()) {
+        await markFar(
+          db,
+          field,
+          id,
+          scope,
+          indexed
+            ? "a far document of a through field changed and reaches more subjects than the inline limit"
+            : "a far document of a through field changed and no index leads the near read with its link",
+          session,
+        );
+      }
+      continue;
     }
+    for (const id of subjects.values()) affected.add(field, id);
   }
   const byLocation = new Map<
     string,
@@ -429,9 +501,20 @@ async function recomputeAffected(
       const concerned = subjects.filter((subject) =>
         ids.has(String(subject._id)),
       );
-      await recomputeSubjects(db, [field], concerned, session);
+      await recomputeSubjects(
+        db,
+        [field],
+        concerned,
+        session,
+        (reachedField, subject, far) => {
+          const fence = farFenceId(reachedField, far);
+          if (affected.created(reachedField, subject) && !fenced.has(fence))
+            late.add(fence);
+        },
+      );
     }
   }
+  await fenceFarLinks(db, late, session);
 }
 
 const WRITE_METHODS = new Set([
@@ -580,13 +663,14 @@ async function maintainedCall(
           ? [args[0] as Document]
           : (args[0] as Document[]);
       affected.fromSource(plan.near, documents);
+      affected.linksFrom(plan.near, [], documents);
       affected.fromSubjects(plan.subjects, documents);
       affected.fromFar(plan.far, documents);
       await recomputeAffected(
         context.db,
         affected,
         context.session,
-        plan.registration.inlineLimit,
+        plan.registration,
       );
       return result;
     }
@@ -654,6 +738,7 @@ async function maintainedCall(
       ]);
       affected.fromSource(fields, before);
       affected.fromSource(fields, after);
+      affected.linksFrom(fields, before, after);
       const created = after.filter(
         (document) =>
           upsertedId !== undefined &&
@@ -663,13 +748,14 @@ async function maintainedCall(
       affected.fromFar(farFields, after);
       if (upsertedId !== undefined && upsertedId !== null) {
         affected.fromSource(plan.near, created);
+        affected.linksFrom(plan.near, [], created);
         affected.fromFar(plan.far, created);
       }
       await recomputeAffected(
         context.db,
         affected,
         context.session,
-        plan.registration.inlineLimit,
+        plan.registration,
       );
       return result;
     }
@@ -700,7 +786,7 @@ async function maintainedCall(
         context.db,
         affected,
         context.session,
-        plan.registration.inlineLimit,
+        plan.registration,
       );
       return result;
     }
@@ -737,6 +823,8 @@ async function maintainedCall(
       affected.fromSource(plan.near, before);
       affected.fromSource(plan.near, after);
       affected.fromSource(plan.near, inserted);
+      affected.linksFrom(plan.near, before, after);
+      affected.linksFrom(plan.near, [], inserted);
       affected.fromSubjects(plan.subjects, inserted);
       affected.fromFar(plan.far, [...before, ...after, ...inserted]);
       const replacedOrUpserted = new Set([
@@ -755,7 +843,7 @@ async function maintainedCall(
         context.db,
         affected,
         context.session,
-        plan.registration.inlineLimit,
+        plan.registration,
       );
       return result;
     }
