@@ -21,7 +21,7 @@
   "imports": {
     "@diister/valibot-mock": "jsr:@diister/valibot-mock@0.1.9",
     "@opentelemetry/api": "npm:@opentelemetry/api@1.9.1",
-    "mongodb": "npm:mongodb@6.21.0",
+    "mongodb": "npm:mongodb@7.7.0",
     "valibot": "npm:valibot@1.5.0"
   },
   "publish": {

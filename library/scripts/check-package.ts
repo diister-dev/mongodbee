@@ -85,6 +85,16 @@ if (jsr.version !== manifest.version) {
   );
 }
 
+for (const [name, version] of Object.entries(manifest.dependencies ?? {})) {
+  const mapped = jsr.imports?.[name];
+  if (typeof mapped !== "string" || !mapped.startsWith("npm:")) continue;
+  if (mapped !== `npm:${name}@${String(version)}`) {
+    throw new Error(
+      `dependency mismatch — package.json pins ${name}@${String(version)}, jsr.json maps ${mapped}.`,
+    );
+  }
+}
+
 // `src/version.ts` is what the CLI prints and the telemetry tracer reports. It
 // is a tracked module rather than a JSON import because the manifest sits at a
 // different relative depth in `dist/` than in the source tree — so it is
