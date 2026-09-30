@@ -1,6 +1,6 @@
 {
   "name": "@diister/mongodbee",
-  "version": "0.23.0-beta.35",
+  "version": "0.23.0-beta.36",
   "description": "A type-safe MongoDB wrapper with built-in validation powered by Valibot",
   "license": "MIT",
   "type": "module",
@@ -103,7 +103,7 @@
     "valibot": "1.5.0"
   },
   "peerDependencies": {
-    "@diister/mongodbee-studio": "0.23.0-beta.35"
+    "@diister/mongodbee-studio": "0.23.0-beta.36"
   },
   "peerDependenciesMeta": {
     "@diister/mongodbee-studio": {
