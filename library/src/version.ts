@@ -18,4 +18,4 @@
 export const NAME = "@diister/mongodbee";
 
 /** The package version, mirroring `package.json`. */
-export const VERSION = "0.23.0-beta.36";
+export const VERSION = "0.23.0-beta.37";
