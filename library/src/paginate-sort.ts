@@ -112,18 +112,6 @@ export function buildExprCursorFilter(
   };
 }
 
-/**
- * Assemble a paginate pipeline for the sortPipeline path. ONE builder emits
- * both the data shape and the `$count` shape so the two can never drift —
- * counting a cursor against a pipeline that never computed the sort keys is
- * exactly the bug family this feature must not reintroduce.
- *
- * Data shape:  `$match(base) → ...sortStages → normalize → $match(cursor)?
- *               → $sort(hidden) → $unset(hidden) → ...pipeline`
- * Count shape: same head, no `$sort` (counts are order-independent), plus a
- *              trailing `$count` — the `$unset` stays so `pipeline` sees the
- *              same document shape in both.
- */
 function keepsEveryRow(stage: AggregationStage): boolean {
   const names = Object.keys(stage);
   if (names.length !== 1) return false;
@@ -175,6 +163,18 @@ export function pageBatchSize(
   return filter === undefined && limit > 0 ? { batchSize: limit } : {};
 }
 
+/**
+ * Assemble a paginate pipeline for the sortPipeline path. ONE builder emits
+ * both the data shape and the `$count` shape so the two can never drift:
+ * counting a cursor against a pipeline that never computed the sort keys is
+ * exactly the bug family this feature must not reintroduce.
+ *
+ * Data shape:  `$match(base) → ...sortStages → normalize → $match(cursor)?
+ *               → $sort(hidden) → $unset(hidden) → ...pipeline`
+ * Count shape: same head, no `$sort` (counts are order-independent), then
+ *              `$unset(hidden) → ...pipeline` through {@link countingPipeline},
+ *              so `pipeline` sees the same document shape in both.
+ */
 export function buildSortPaginateStages(opts: {
   baseMatch: Record<string, unknown>;
   sortStages: AggregationStage[];
