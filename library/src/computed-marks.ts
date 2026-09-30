@@ -9,13 +9,13 @@ import {
 import {
   applyComputed,
   type ComputedSubject,
+  type FarTarget,
   recomputeSubjects,
+  subjectsReachingFar,
   toSubjects,
-  whereFilter,
 } from "./computed-apply.ts";
 import {
   type DocumentId,
-  isDocumentId,
   type StoredDocument,
   storedCollection,
 } from "./stored-document.ts";
@@ -28,6 +28,8 @@ import {
 } from "./computed-maintenance.ts";
 
 export const COMPUTED_PENDING_COLLECTION = "__dbee_computed_pending__";
+
+export const COMPUTED_FENCES_COLLECTION = "__dbee_computed_fences__";
 
 export type ComputedMarkKind = "whole" | "subject" | "far";
 
@@ -153,6 +155,34 @@ export async function markFar(
   );
 }
 
+export function farFenceId(field: ComputedField, far: FarTarget): string {
+  return `${computedFieldKey(field)}|fence|${far.scope ?? "*"}|${String(far.id)}`;
+}
+
+export async function fenceFarLinks(
+  db: Db,
+  fences: ReadonlySet<string>,
+  session: ClientSession | undefined,
+): Promise<void> {
+  if (fences.size === 0 || session?.inTransaction() !== true) return;
+  await primaryCollection<{ _id: string; bumps: number }>(
+    db,
+    COMPUTED_FENCES_COLLECTION,
+  ).bulkWrite(
+    [...fences].flatMap((_id) => [
+      {
+        updateOne: {
+          filter: { _id },
+          update: { $inc: { bumps: 1 } },
+          upsert: true,
+        },
+      },
+      { deleteOne: { filter: { _id } } },
+    ]),
+    { session, ordered: true },
+  );
+}
+
 export interface DrainComputedOptions {
   readonly topology?: ComputedTopology;
   readonly limit?: number;
@@ -246,27 +276,14 @@ async function drainFar(
   mark: ComputedMark,
   batchSize: number,
 ): Promise<void> {
-  const { descriptor } = field;
-  if (!descriptor.through || mark.far === undefined) return;
-  const nearFilter: Filter<StoredDocument> = {
-    ...locationFilter(field.source),
-    ...whereFilter(descriptor.where),
-    [descriptor.through.via]: mark.far,
-    ...(field.scoped && mark.scope !== null && { _scope: mark.scope }),
-  };
-  const near = await primaryCollection<StoredDocument>(
+  if (!field.descriptor.through || mark.far === undefined) return;
+  const subjects = await subjectsReachingFar(
     db,
-    field.source.collection,
-  )
-    .find(nearFilter, { projection: { [descriptor.by]: 1 } })
-    .toArray();
-  const subjects = new Map<string, DocumentId>();
-  for (const document of near) {
-    const by = document[descriptor.by];
-    const values: readonly unknown[] = Array.isArray(by) ? by : [by];
-    for (const id of values.filter(isDocumentId)) subjects.set(String(id), id);
-  }
-  const ids = [...subjects.values()];
+    field,
+    [{ id: mark.far, scope: mark.scope ?? undefined }],
+    undefined,
+  );
+  const ids = [...(subjects?.values() ?? [])];
   const { withSession } = getSessionContext(db.client);
   for (let start = 0; start < ids.length; start += batchSize) {
     const chunk = ids.slice(start, start + batchSize);

@@ -112,17 +112,68 @@ export function buildExprCursorFilter(
   };
 }
 
+function keepsEveryRow(stage: AggregationStage): boolean {
+  const names = Object.keys(stage);
+  if (names.length !== 1) return false;
+  switch (names[0]) {
+    case "$lookup":
+    case "$unset":
+      return true;
+    case "$project": {
+      const spec = stage.$project;
+      return (
+        typeof spec === "object" &&
+        spec !== null &&
+        Object.values(spec).every(
+          (value) =>
+            value === 0 || value === 1 || value === true || value === false,
+        )
+      );
+    }
+    default:
+      return false;
+  }
+}
+
+/**
+ * `stages` followed by `$count`, without the trailing stages that emit
+ * exactly one document per input document (`$lookup`, `$unset`, an
+ * inclusion or exclusion `$project`): they cannot change the count, and a
+ * display join would otherwise run over every row the count reads.
+ */
+export function countingPipeline(
+  stages: AggregationStage[],
+): AggregationStage[] {
+  let end = stages.length;
+  while (end > 0 && keepsEveryRow(stages[end - 1])) end--;
+  return [...stages.slice(0, end), { $count: "total" }];
+}
+
+/**
+ * Cursor batch for a page read: the server produces `limit` rows first
+ * instead of its default 101, so after-sort stages (display `$lookup`s) run
+ * on the page rather than on four pages. A skipped row only costs a
+ * `getMore`. A `filter(doc)` callback can reject any number of rows, so it
+ * keeps the default batch.
+ */
+export function pageBatchSize(
+  limit: number,
+  filter: unknown,
+): { batchSize?: number } {
+  return filter === undefined && limit > 0 ? { batchSize: limit } : {};
+}
+
 /**
  * Assemble a paginate pipeline for the sortPipeline path. ONE builder emits
- * both the data shape and the `$count` shape so the two can never drift —
+ * both the data shape and the `$count` shape so the two can never drift:
  * counting a cursor against a pipeline that never computed the sort keys is
  * exactly the bug family this feature must not reintroduce.
  *
  * Data shape:  `$match(base) → ...sortStages → normalize → $match(cursor)?
  *               → $sort(hidden) → $unset(hidden) → ...pipeline`
- * Count shape: same head, no `$sort` (counts are order-independent), plus a
- *              trailing `$count` — the `$unset` stays so `pipeline` sees the
- *              same document shape in both.
+ * Count shape: same head, no `$sort` (counts are order-independent), then
+ *              `$unset(hidden) → ...pipeline` through {@link countingPipeline},
+ *              so `pipeline` sees the same document shape in both.
  */
 export function buildSortPaginateStages(opts: {
   baseMatch: Record<string, unknown>;
@@ -145,12 +196,7 @@ export function buildSortPaginateStages(opts: {
     ...(opts.cursorFilter ? [{ $match: opts.cursorFilter }] : []),
   ];
   if (opts.count) {
-    return [
-      ...head,
-      machinery.unsetStage,
-      ...opts.pipeline,
-      { $count: "total" },
-    ];
+    return countingPipeline([...head, machinery.unsetStage, ...opts.pipeline]);
   }
   return [
     ...head,

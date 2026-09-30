@@ -25,7 +25,7 @@ export interface RequestReadStats {
 const MEMOIZED_ROWS_LIMIT = 100;
 
 interface RequestState extends RequestScope {
-  reads: Map<string, Promise<Uint8Array | undefined>> | undefined;
+  reads: Map<string, Promise<RawRead | undefined>> | undefined;
   stats: RequestReadStats;
 }
 
@@ -132,64 +132,164 @@ export function isReadOperation(operationName: string): boolean {
   return READ_OPERATIONS.has(operationName);
 }
 
+function keyPart(value: unknown): string {
+  switch (typeof value) {
+    case "undefined":
+      return "n";
+    case "string":
+      return JSON.stringify(value);
+    case "number":
+      return `d${Object.is(value, -0) ? "-0" : String(value)}`;
+    case "boolean":
+      return value ? "T" : "F";
+    case "bigint":
+      return `i${value}`;
+    case "object":
+      break;
+    default:
+      return "n";
+  }
+  if (value === null) return "n";
+  if (Array.isArray(value)) {
+    let out = "[";
+    for (let index = 0; index < value.length; index++) {
+      if (index > 0) out += ",";
+      out += keyPart(value[index]);
+    }
+    return `${out}]`;
+  }
+  if (value instanceof Date) return `t${value.getTime()}`;
+  if ("_bsontype" in value) {
+    return value._bsontype === "ObjectId"
+      ? `o${(value as BSON.ObjectId).toHexString()}`
+      : `x${BSON.EJSON.stringify(value as BSON.Document, { relaxed: false })}`;
+  }
+  if (value instanceof RegExp) return `r${String(value)}`;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return `x${BSON.EJSON.stringify(value as BSON.Document, { relaxed: false })}`;
+  }
+  let out = "{";
+  let first = true;
+  for (const name of Object.keys(value)) {
+    const entry = (value as Record<string, unknown>)[name];
+    if (typeof entry === "function" || typeof entry === "symbol") continue;
+    if (!first) out += ",";
+    first = false;
+    out += `${JSON.stringify(name)}:${keyPart(entry)}`;
+  }
+  return `${out}}`;
+}
+
 function readKey(
   target: ReadTarget,
   operation: string,
   args: readonly unknown[],
 ): string | undefined {
   try {
-    return `${target.dbName}.${target.collectionName}\u0000${operation}\u0000${BSON.EJSON.stringify(
+    return `${target.dbName}.${target.collectionName}\u0000${operation}\u0000${keyPart(
       [currentReadPreference()?.toJSON() ?? null, ...args],
-      { relaxed: false },
     )}`;
   } catch {
     return undefined;
   }
 }
 
-function copyOf<T>(bytes: Uint8Array): T {
-  return BSON.deserialize(bytes).value as T;
+type RawRead = Uint8Array | Uint8Array[] | null;
+
+type BsonSource = { readonly bsonOptions: m.BSONSerializeOptions };
+
+interface MemoizedRead<T> {
+  readonly load: () => Promise<T>;
+  readonly loadRaw: () => Promise<RawRead>;
+  readonly decode: (raw: RawRead) => T;
+  readonly loaded?: (value: T) => void;
 }
 
-function memoizable(value: unknown): boolean {
-  return !Array.isArray(value) || value.length <= MEMOIZED_ROWS_LIMIT;
+function memoizable(raw: RawRead): boolean {
+  return !Array.isArray(raw) || raw.length <= MEMOIZED_ROWS_LIMIT;
 }
 
-export async function readThrough<T>(
+async function readThrough<T>(
   target: ReadTarget,
   operation: string,
   args: readonly unknown[],
   session: unknown,
-  load: () => Promise<T>,
+  read: MemoizedRead<T>,
 ): Promise<T> {
   const state = requestState.get();
   const reads = state?.reads;
-  if (!state || !reads || session !== undefined) return await load();
+  if (!state || !reads || session !== undefined) return await read.load();
   const key = readKey(target, operation, args);
-  if (key === undefined) return await load();
+  if (key === undefined) return await read.load();
   const shared = reads.get(key);
   if (shared) {
-    const bytes = await shared;
-    if (bytes !== undefined) {
+    const raw = await shared;
+    if (raw !== undefined) {
       state.stats.reused++;
-      return copyOf<T>(bytes);
+      return read.decode(raw);
     }
     state.stats.loaded++;
-    return await load();
+    return await read.load();
   }
   state.stats.loaded++;
-  const loading = load();
-  const entry = loading.then((value) =>
-    memoizable(value) ? BSON.serialize({ value }) : undefined,
-  );
+  const loading = read.loadRaw();
+  const entry = loading.then((raw) => (memoizable(raw) ? raw : undefined));
   reads.set(key, entry);
   const forget = () => {
     if (reads.get(key) === entry) reads.delete(key);
   };
-  entry.then((bytes) => {
-    if (bytes === undefined) forget();
+  entry.then((raw) => {
+    if (raw === undefined) forget();
   }, forget);
-  return await loading;
+  const value = read.decode(await loading);
+  read.loaded?.(value);
+  return value;
+}
+
+function decodeOptions(
+  collection: BsonSource,
+  options: m.BSONSerializeOptions,
+): BSON.DeserializeOptions {
+  const parent = collection.bsonOptions;
+  return {
+    useBigInt64: options.useBigInt64 ?? parent.useBigInt64,
+    promoteLongs: options.promoteLongs ?? parent.promoteLongs,
+    promoteValues: options.promoteValues ?? parent.promoteValues,
+    promoteBuffers: options.promoteBuffers ?? parent.promoteBuffers,
+    bsonRegExp: options.bsonRegExp ?? parent.bsonRegExp,
+    fieldsAsRaw: options.fieldsAsRaw ?? parent.fieldsAsRaw,
+    validation: {
+      utf8:
+        (options.enableUtf8Validation ?? parent.enableUtf8Validation) !== false,
+    },
+  };
+}
+
+function documentRead<T>(
+  collection: BsonSource,
+  driverOptions: m.BSONSerializeOptions,
+  load: () => Promise<T>,
+  loadRaw: () => Promise<RawRead>,
+  loaded?: (value: T) => void,
+): MemoizedRead<T> {
+  let options: BSON.DeserializeOptions | undefined;
+  const decodeOne = (bytes: Uint8Array) =>
+    BSON.deserialize(
+      bytes,
+      (options ??= decodeOptions(collection, driverOptions)),
+    );
+  return {
+    load,
+    loadRaw,
+    decode: (raw) =>
+      (raw === null
+        ? null
+        : Array.isArray(raw)
+          ? raw.map(decodeOne)
+          : decodeOne(raw)) as T,
+    loaded,
+  };
 }
 
 export interface RecordedRead {
@@ -217,15 +317,13 @@ interface RecordedSource extends ReadTarget {
   readonly readPreference?: m.ReadPreference;
 }
 
-function recorded<T>(
+function recorderOf(
   collection: RecordedSource,
   driverOptions: m.FindOptions & { session?: m.ClientSession },
-  load: () => Promise<T>,
-): () => Promise<T> {
+): ((value: unknown) => void) | undefined {
   const recorder = readRecorder.get();
-  if (!recorder) return load;
-  return async () => {
-    const value = await load();
+  if (!recorder) return undefined;
+  return (value) => {
     const preference =
       driverOptions.readPreference ??
       currentReadPreference() ??
@@ -245,6 +343,17 @@ function recorded<T>(
           ? []
           : [value as m.Document],
     });
+  };
+}
+
+function recorded<T>(
+  load: () => Promise<T>,
+  record: ((value: unknown) => void) | undefined,
+): () => Promise<T> {
+  if (!record) return load;
+  return async () => {
+    const value = await load();
+    record(value);
     return value;
   };
 }
@@ -255,13 +364,24 @@ export function findOneThrough<TDoc extends m.Document>(
   options: object | undefined,
   driverOptions: m.FindOptions & { session?: m.ClientSession },
 ): Promise<m.WithId<TDoc> | null> {
+  const record = recorderOf(collection, driverOptions);
+  const load = recorded(() => collection.findOne(query, driverOptions), record);
+  if (driverOptions.raw === true) return load();
   return readThrough(
     collection,
     "findOne",
     [query, options],
     driverOptions.session,
-    recorded(collection, driverOptions, () =>
-      collection.findOne(query, driverOptions),
+    documentRead(
+      collection,
+      driverOptions,
+      load,
+      () =>
+        collection.findOne(query, {
+          ...driverOptions,
+          raw: true,
+        }) as Promise<RawRead>,
+      record,
     ),
   );
 }
@@ -272,13 +392,26 @@ export function findThrough<TDoc extends m.Document>(
   options: object | undefined,
   driverOptions: m.FindOptions & { session?: m.ClientSession },
 ): Promise<m.WithId<TDoc>[]> {
+  const record = recorderOf(collection, driverOptions);
+  const load = recorded(
+    () => collection.find(query, driverOptions).toArray(),
+    record,
+  );
+  if (driverOptions.raw === true) return load();
   return readThrough(
     collection,
     "find",
     [query, options],
     driverOptions.session,
-    recorded(collection, driverOptions, () =>
-      collection.find(query, driverOptions).toArray(),
+    documentRead(
+      collection,
+      driverOptions,
+      load,
+      () =>
+        collection
+          .find(query, { ...driverOptions, raw: true })
+          .toArray() as unknown as Promise<RawRead>,
+      record,
     ),
   );
 }
@@ -298,12 +431,21 @@ export async function aggregateThrough<
 ): Promise<R[]> {
   const load = () => collection.aggregate<R>(pipeline, driverOptions).toArray();
   if (!writesThroughPipeline(pipeline)) {
+    if (driverOptions.raw === true) return await load();
     return await readThrough(
       collection,
       "aggregate",
       [pipeline, options],
       driverOptions.session,
-      load,
+      documentRead(
+        collection,
+        driverOptions,
+        load,
+        () =>
+          collection
+            .aggregate(pipeline, { ...driverOptions, raw: true })
+            .toArray() as unknown as Promise<RawRead>,
+      ),
     );
   }
   invalidateReads();

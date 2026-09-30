@@ -41,7 +41,9 @@ import {
   buildSortMachinery,
   buildSortPaginateStages,
   composeCursorQuery,
+  countingPipeline,
   normalizePaginateSort,
+  pageBatchSize,
   type SortMachinery,
 } from "./paginate-sort.ts";
 import {
@@ -177,6 +179,16 @@ type UpdateFilterWithRemovable<T> = Omit<
   $setOnInsert?: WithRemovableFields<T>;
 };
 
+function isExplicitId(id: unknown): boolean {
+  if (typeof id === "string") return true;
+  if (typeof id === "number") return Number.isFinite(id);
+  return (
+    typeof id === "object" &&
+    id !== null &&
+    (id as { _bsontype?: unknown })._bsontype === "ObjectId"
+  );
+}
+
 /**
  * Process update filter to extract removeField() symbols from $set and convert to $unset
  */
@@ -281,6 +293,17 @@ export type CollectionResult<
     id: string | m.ObjectId,
     options?: ReadOptions,
   ) => Promise<WithId<TOutput<T>>>;
+  /**
+   * Deletes the documents whose `_id` is in `ids` and returns how many were
+   * removed. The list is explicit: every id must be a string, a finite number
+   * or an ObjectId, so an operator or a missing value can never widen the
+   * delete. An empty list deletes nothing. Unlike `deleteMany`, needs no
+   * other field in the filter.
+   */
+  deleteIds: (
+    ids: ReadonlyArray<string | number | m.ObjectId>,
+    options?: m.DeleteOptions,
+  ) => Promise<number>;
   find: (
     filter: m.Filter<TInput<T>>,
     options?: WithReadPreferenceInput<m.FindOptions> & m.Abortable,
@@ -936,14 +959,25 @@ export async function collection<
     async findOne(filter, options?) {
       const run = async () => {
         const session = sessionContext.getSession();
+        const driverOptions = readOpts(session, options);
+        const first = await findOneThrough(
+          collection,
+          filter as unknown as m.Filter<TInput>,
+          options,
+          driverOptions,
+        );
+        if (!first) return null;
+        const parsed = v.safeParse(schema, first);
+        if (parsed.success) return parsed.output as WithId<TOutput>;
+
         const result = await findOneThrough(
           collection,
           {
-            ...validator, // Prevent returning invalid documents
+            ...validator,
             ...(filter as unknown as m.Filter<TInput>),
           },
           options,
-          readOpts(session, options),
+          driverOptions,
         );
 
         if (!result) {
@@ -1339,11 +1373,10 @@ export async function collection<
               position = 0;
             }
           } else if (customPipeline.length > 0) {
-            const countPipeline: m.Document[] = [
+            const countPipeline: m.Document[] = countingPipeline([
               { $match: baseQuery },
               ...customPipeline,
-              { $count: "total" },
-            ];
+            ]);
             const totalResult = await collection
               .aggregate(countPipeline, readOptions)
               .toArray();
@@ -1351,7 +1384,7 @@ export async function collection<
 
             if (afterId) {
               if (cursorBranches) {
-                const afterPipeline: m.Document[] = [
+                const afterPipeline: m.Document[] = countingPipeline([
                   {
                     $match: composeCursorQuery(
                       [baseQuery as Record<string, unknown>],
@@ -1359,8 +1392,7 @@ export async function collection<
                     ),
                   },
                   ...customPipeline,
-                  { $count: "total" },
-                ];
+                ]);
                 const afterResult = await collection
                   .aggregate(afterPipeline, readOptions)
                   .toArray();
@@ -1403,6 +1435,7 @@ export async function collection<
         let hardLimit = 10_000;
         let skippedInvalid = 0;
         const elements: R[] = [];
+        const pageBatch = pageBatchSize(limit, customFilter);
 
         // Use aggregation pipeline when custom pipeline is provided
         if (sortMachinery || customPipeline.length > 0) {
@@ -1420,7 +1453,10 @@ export async function collection<
               })
             : [{ $match: query }, { $sort: sort }, ...customPipeline];
 
-          const cursor = collection.aggregate(aggregationPipeline, readOptions);
+          const cursor = collection.aggregate(aggregationPipeline, {
+            ...readOptions,
+            ...pageBatch,
+          });
 
           try {
             while (hardLimit-- > 0 && limit > 0) {
@@ -1463,7 +1499,7 @@ export async function collection<
         } else {
           // Use simple find for non-pipeline queries
           const cursor = collection
-            .find(query, readOptions)
+            .find(query, { ...readOptions, ...pageBatch })
             .sort(sort as m.Sort);
 
           try {
@@ -1540,11 +1576,10 @@ export async function collection<
               if (customPipeline.length > 0) {
                 const rows = await collection
                   .aggregate(
-                    [
+                    countingPipeline([
                       { $match: beforeQuery },
                       ...customPipeline,
-                      { $count: "total" },
-                    ],
+                    ]),
                     readOptions,
                   )
                   .toArray();
@@ -1753,6 +1788,39 @@ export async function collection<
         () => ({ [TA.FILTER_KEYS]: filterKeys(filter) }),
         run,
         (r) => ({ [TA.DELETED_COUNT]: r.deletedCount }),
+      );
+    },
+    deleteIds(ids, options?) {
+      const run = async () => {
+        if (!Array.isArray(ids)) {
+          throw new TypeError("deleteIds: ids must be an array");
+        }
+        for (const id of ids) {
+          if (!isExplicitId(id)) {
+            throw new TypeError(
+              "deleteIds: every id must be a string, a finite number or an ObjectId",
+            );
+          }
+          v.parse(schema.entries._id, id);
+        }
+        if (ids.length === 0) return 0;
+        const session = sessionContext.getSession();
+        const result = await collection.deleteMany(
+          { _id: { $in: [...ids] } } as m.Filter<TInput>,
+          { session, ...options },
+        );
+        if (!result.acknowledged) throw new Error("Delete failed");
+        return result.deletedCount;
+      };
+      return traced(
+        tele,
+        "deleteIds",
+        () => ({
+          [TA.FILTER_KEYS]: "_id",
+          [TA.BATCH_SIZE]: Array.isArray(ids) ? ids.length : 0,
+        }),
+        run,
+        (count) => ({ [TA.DELETED_COUNT]: count }),
       );
     },
 

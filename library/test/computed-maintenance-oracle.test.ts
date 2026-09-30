@@ -14,7 +14,10 @@ import { from } from "../src/computed.ts";
 import { computedTopology } from "../src/computed-topology.ts";
 import { registerComputed } from "../src/computed-maintenance.ts";
 import { checkComputed } from "../src/computed-apply.ts";
-import { drainComputedPending } from "../src/computed-marks.ts";
+import {
+  drainComputedPending,
+  pendingComputed,
+} from "../src/computed-marks.ts";
 import { getSessionContext } from "../src/session.ts";
 
 const SCOPES = ["exposition:expoaaaaa01", "exposition:expobbbbb02"] as const;
@@ -749,6 +752,14 @@ for (const [seed, inlineLimit] of [
             await chosen.run();
           }
           applied.set(chosen.name, (applied.get(chosen.name) ?? 0) + 1);
+          if (!inlineLimit) {
+            assertEquals(
+              (await pendingComputed(db)).count,
+              0,
+              `${label}: under the inline limit nothing is deferred`,
+            );
+            await assertNoDrift(db, `${label} before any drain`);
+          }
           const drained = await drainComputedPending(db, {
             topology: computedTopology(schemas),
           });

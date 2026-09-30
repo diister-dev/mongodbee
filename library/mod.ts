@@ -77,6 +77,7 @@ export {
   unregisterComputed,
 } from "./src/computed-maintenance.ts";
 export {
+  COMPUTED_FENCES_COLLECTION,
   COMPUTED_PENDING_COLLECTION,
   type ComputedMark,
   type DrainComputedOptions,

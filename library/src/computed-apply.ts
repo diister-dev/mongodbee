@@ -25,6 +25,7 @@ import {
 import { getSessionContext } from "./session.ts";
 import { retryOnWriteConflict, TRANSACTION_REPLAY } from "./utils/retry.ts";
 import { isRecord } from "./utils/guards.ts";
+import { primaryCollection } from "./read-preference.ts";
 
 export interface ComputedSubject {
   readonly _id: DocumentId;
@@ -131,11 +132,94 @@ function groupByScope(
   return groups;
 }
 
+export interface FarTarget {
+  readonly id: DocumentId;
+  readonly scope: string | undefined;
+}
+
+export type FarReached = (
+  field: ComputedField,
+  subject: string,
+  far: FarTarget,
+) => void;
+
+export function farLinksOf(
+  field: ComputedField,
+  document: Document | undefined,
+): Map<string, FarTarget> {
+  const links = new Map<string, FarTarget>();
+  const through = field.descriptor.through;
+  if (
+    !through ||
+    document === undefined ||
+    (field.source.kind !== "collection" &&
+      document._type !== field.source.type) ||
+    !matchesWhere(document, field.descriptor.where)
+  )
+    return links;
+  const scope =
+    field.farScoped && typeof document._scope === "string"
+      ? document._scope
+      : undefined;
+  const owners = asList(valueAt(document, field.descriptor.by)).map(String);
+  for (const via of asList(valueAt(document, through.via))) {
+    if (!isDocumentId(via)) continue;
+    for (const owner of owners)
+      links.set(`${owner}|${keyOf(via)}`, { id: via, scope });
+  }
+  return links;
+}
+
+export async function subjectsReachingFar(
+  db: Db,
+  field: ComputedField,
+  targets: readonly FarTarget[],
+  session: ClientSession | undefined,
+  limit?: number,
+): Promise<Map<string, DocumentId> | undefined> {
+  const { descriptor } = field;
+  const subjects = new Map<string, DocumentId>();
+  if (!descriptor.through) return subjects;
+  const byScope = new Map<string | undefined, DocumentId[]>();
+  for (const target of targets) {
+    const scope = field.scoped ? target.scope : undefined;
+    byScope.set(scope, [...(byScope.get(scope) ?? []), target.id]);
+  }
+  let read = 0;
+  for (const [scope, ids] of byScope) {
+    const filter: Filter<StoredDocument> = {
+      ...locationFilter(field.source),
+      ...whereFilter(descriptor.where),
+      [descriptor.through.via]: ids.length === 1 ? ids[0] : { $in: ids },
+      ...(scope !== undefined && { _scope: scope }),
+    };
+    const near = await primaryCollection<StoredDocument>(
+      db,
+      field.source.collection,
+    )
+      .find(filter, {
+        session,
+        projection: projectionOf([descriptor.by]),
+        ...(limit !== undefined && { limit: limit + 1 - read }),
+      })
+      .toArray();
+    read += near.length;
+    if (limit !== undefined && read > limit) return undefined;
+    for (const document of near) {
+      for (const id of asList(valueAt(document, descriptor.by)))
+        if (isDocumentId(id)) subjects.set(String(id), id);
+    }
+  }
+  if (limit !== undefined && subjects.size > limit) return undefined;
+  return subjects;
+}
+
 export async function computeTruth(
   db: Db,
   field: ComputedField,
   subjects: readonly ComputedSubject[],
   session?: ClientSession,
+  reached?: FarReached,
 ): Promise<Map<string, unknown>> {
   const { descriptor } = field;
   const aggregate = descriptor.aggregate;
@@ -173,6 +257,21 @@ export async function computeTruth(
         },
       )
       .toArray();
+
+    if (reached && descriptor.through) {
+      const wanted = new Set(ids.map(String));
+      const farScope = field.farScoped ? scope : undefined;
+      for (const document of near) {
+        const owners = asList(valueAt(document, descriptor.by))
+          .map(String)
+          .filter((owner) => wanted.has(owner));
+        for (const via of asList(valueAt(document, descriptor.through.via))) {
+          if (!isDocumentId(via)) continue;
+          for (const owner of owners)
+            reached(field, owner, { id: via, scope: farScope });
+        }
+      }
+    }
 
     let farById: Map<string, Document> | undefined;
     if (descriptor.through && field.far) {
@@ -365,13 +464,14 @@ export async function recomputeSubjects(
   fields: readonly ComputedField[],
   subjects: readonly ComputedSubject[],
   session?: ClientSession,
+  reached?: FarReached,
 ): Promise<number> {
   if (subjects.length === 0) return 0;
   const revise = session?.inTransaction() === true;
   const updates = new Map<string, SubjectUpdate>();
   let written = 0;
   for (const field of fields) {
-    const truth = await computeTruth(db, field, subjects, session);
+    const truth = await computeTruth(db, field, subjects, session, reached);
     for (const subject of subjects) {
       const key = `${field.at.collection}|${String(subject._id)}`;
       const update = updates.get(key) ?? {
