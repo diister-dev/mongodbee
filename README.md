@@ -82,7 +82,8 @@ if (user) user.email; // string — inferred from the schema
 ```
 
 Invalid data is rejected before it reaches MongoDB, the unique index on `email`
-is created for you, and `deleteMany()` without a filter is refused.
+is created for you, and `deleteMany()` without a filter is refused (delete an
+explicit list of ids with `deleteIds([...])`).
 
 ## The collection shapes
 

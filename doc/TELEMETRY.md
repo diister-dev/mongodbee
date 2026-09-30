@@ -113,8 +113,8 @@ re-thrown unchanged.
 **`collection()` operations:**
 
 - Writes: `insertOne`, `insertMany`, `replaceOne`, `updateOne`, `updateMany`,
-  `deleteOne`, `deleteMany`, `findOneAndDelete`, `findOneAndReplace`,
-  `findOneAndUpdate`, `bulkWrite`
+  `deleteOne`, `deleteMany`, `deleteIds`, `findOneAndDelete`,
+  `findOneAndReplace`, `findOneAndUpdate`, `bulkWrite`
 - Reads: `findOne`, `getById`, `find` (span covers `toArray()`), `findInvalid`
   (span covers `toArray()`), `paginate`, `countDocuments`,
   `estimatedDocumentCount`, `distinct`

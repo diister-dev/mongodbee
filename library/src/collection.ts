@@ -179,6 +179,16 @@ type UpdateFilterWithRemovable<T> = Omit<
   $setOnInsert?: WithRemovableFields<T>;
 };
 
+function isExplicitId(id: unknown): boolean {
+  if (typeof id === "string") return true;
+  if (typeof id === "number") return Number.isFinite(id);
+  return (
+    typeof id === "object" &&
+    id !== null &&
+    (id as { _bsontype?: unknown })._bsontype === "ObjectId"
+  );
+}
+
 /**
  * Process update filter to extract removeField() symbols from $set and convert to $unset
  */
@@ -283,6 +293,17 @@ export type CollectionResult<
     id: string | m.ObjectId,
     options?: ReadOptions,
   ) => Promise<WithId<TOutput<T>>>;
+  /**
+   * Deletes the documents whose `_id` is in `ids` and returns how many were
+   * removed. The list is explicit: every id must be a string, a finite number
+   * or an ObjectId, so an operator or a missing value can never widen the
+   * delete. An empty list deletes nothing. Unlike `deleteMany`, needs no
+   * other field in the filter.
+   */
+  deleteIds: (
+    ids: ReadonlyArray<string | number | m.ObjectId>,
+    options?: m.DeleteOptions,
+  ) => Promise<number>;
   find: (
     filter: m.Filter<TInput<T>>,
     options?: WithReadPreferenceInput<m.FindOptions> & m.Abortable,
@@ -1767,6 +1788,39 @@ export async function collection<
         () => ({ [TA.FILTER_KEYS]: filterKeys(filter) }),
         run,
         (r) => ({ [TA.DELETED_COUNT]: r.deletedCount }),
+      );
+    },
+    deleteIds(ids, options?) {
+      const run = async () => {
+        if (!Array.isArray(ids)) {
+          throw new TypeError("deleteIds: ids must be an array");
+        }
+        for (const id of ids) {
+          if (!isExplicitId(id)) {
+            throw new TypeError(
+              "deleteIds: every id must be a string, a finite number or an ObjectId",
+            );
+          }
+          v.parse(schema.entries._id, id);
+        }
+        if (ids.length === 0) return 0;
+        const session = sessionContext.getSession();
+        const result = await collection.deleteMany(
+          { _id: { $in: [...ids] } } as m.Filter<TInput>,
+          { session, ...options },
+        );
+        if (!result.acknowledged) throw new Error("Delete failed");
+        return result.deletedCount;
+      };
+      return traced(
+        tele,
+        "deleteIds",
+        () => ({
+          [TA.FILTER_KEYS]: "_id",
+          [TA.BATCH_SIZE]: Array.isArray(ids) ? ids.length : 0,
+        }),
+        run,
+        (count) => ({ [TA.DELETED_COUNT]: count }),
       );
     },
 
