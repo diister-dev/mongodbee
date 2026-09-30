@@ -234,3 +234,57 @@ test("request memo: the read recorder sees the rows of a loaded read", async () 
     assertEquals(recorded[1].documents.length, 1);
   });
 });
+
+test("request memo: a reused read keeps the client's BSON options", async () => {
+  await withCountedDatabase(
+    async (db, reads) => {
+      const counters = await collection(db, "counters", {
+        _id: v.string(),
+        value: v.unknown(),
+      });
+      const id = await counters.insertOne({ _id: "counter:1", value: 0 });
+      await counters.collection.updateOne(
+        { _id: id },
+        { $set: { value: BSON.Long.fromString("9007199254740993") } },
+      );
+      assertEquals((await counters.getById(id)).value, 9007199254740993n);
+      const before = reads();
+      await withRequestContext(
+        async () => {
+          assertEquals((await counters.getById(id)).value, 9007199254740993n);
+          assertEquals((await counters.getById(id)).value, 9007199254740993n);
+        },
+        { memoizeReads: true },
+      );
+      assertEquals(reads() - before, 1);
+    },
+    { useBigInt64: true },
+  );
+});
+
+test("request memo: an undefined filter value is not the empty filter", async () => {
+  await withCountedDatabase(async (db, reads) => {
+    const things = await collection(db, "things", {
+      tag: v.nullish(v.string()),
+      rank: v.number(),
+    });
+    await things.insertOne({ tag: "t", rank: 1 });
+    await things.insertOne({ rank: 2 });
+    const before = reads();
+    await withRequestContext(
+      async () => {
+        assertEquals(
+          (await things.findOne({}, { sort: { rank: 1 } }))?.rank,
+          1,
+        );
+        assertEquals(
+          (await things.findOne({ tag: undefined }, { sort: { rank: 1 } }))
+            ?.rank,
+          2,
+        );
+      },
+      { memoizeReads: true },
+    );
+    assertEquals(reads() - before, 2);
+  });
+});
