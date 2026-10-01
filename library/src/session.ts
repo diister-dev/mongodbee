@@ -6,6 +6,7 @@ import { asMongodbeeWrite, invalidateReads } from "./request-context.ts";
 import { getTransactionTracer } from "./telemetry.ts";
 import {
   runInTransactionScope,
+  runOutsideTransactionScope,
   type TransactionRun,
 } from "./transaction-scope.ts";
 import { createLogger } from "./utils/logger.ts";
@@ -169,6 +170,39 @@ export async function checkTransactionEnabled(
   }
 }
 
+/** A transaction's session, and the `outsideTransaction` call it was opened in. */
+type AmbientSession = {
+  readonly session: ClientSession;
+  readonly detachment: object | undefined;
+};
+
+const detachment = contextVariable<object>("mongodbee.outsideTransaction");
+
+/**
+ * Runs `fn` outside the ambient `withSession` transaction, on every client:
+ * the typed operations it makes see no session and commit on their own,
+ * `insideTransaction()` is false and `afterCommit` runs right away. A
+ * `withSession` inside `fn` opens a transaction of its own.
+ *
+ * For writes that must not join the caller's transaction, whose conflict
+ * would abort the caller's work or whose effect must survive its rollback:
+ * a job claim, a lease, a cross-pod lock.
+ *
+ * @example
+ * ```typescript
+ * await withSession(async () => {
+ *   const claimed = await outsideTransaction(() =>
+ *     jobs.findOneAndUpdate("job", { _id: id, status: "pending" }, {
+ *       status: "running",
+ *     }),
+ *   );
+ * });
+ * ```
+ */
+export function outsideTransaction<T>(fn: () => T): T {
+  return detachment.run({}, () => runOutsideTransactionScope(fn));
+}
+
 const sessionContextMap = new WeakMap<
   MongoClient,
   ReturnType<typeof createSessionContext>
@@ -251,10 +285,13 @@ export function createSessionContext(mongoClient: MongoClient): {
   let warningDisplayed = false;
   let transactionsEnabledPromise: Promise<boolean> | undefined;
 
-  const asyncSession = contextVariable<ClientSession>("mongodbee.session");
+  const asyncSession = contextVariable<AmbientSession>("mongodbee.session");
 
   function getSession(): ClientSession | undefined {
-    return asyncSession.get();
+    const ambient = asyncSession.get();
+    return ambient && ambient.detachment === detachment.get()
+      ? ambient.session
+      : undefined;
   }
 
   async function withSession<T>(
@@ -284,7 +321,8 @@ export function createSessionContext(mongoClient: MongoClient): {
     }
 
     const newSession = mongoClient.startSession();
-    const committed = await asyncSession.run(newSession, () => {
+    const ambient = { session: newSession, detachment: detachment.get() };
+    const committed = await asyncSession.run(ambient, () => {
       const txOptions = transactionOptions(options);
       const startedAt = Date.now();
       const canRetry = (e: unknown) =>
@@ -341,4 +379,77 @@ export function createSessionContext(mongoClient: MongoClient): {
     getSession,
     withSession,
   };
+}
+
+const SESSION_OPTIONS_POSITION: Readonly<Record<string, number>> = {
+  insertOne: 1,
+  insertMany: 1,
+  updateOne: 2,
+  updateMany: 2,
+  replaceOne: 2,
+  deleteOne: 1,
+  deleteMany: 1,
+  findOneAndUpdate: 2,
+  findOneAndReplace: 2,
+  findOneAndDelete: 1,
+  bulkWrite: 1,
+  initializeOrderedBulkOp: 0,
+  initializeUnorderedBulkOp: 0,
+  find: 1,
+  findOne: 1,
+  aggregate: 1,
+  countDocuments: 1,
+  distinct: 2,
+};
+
+/**
+ * A driver collection whose operations join the ambient `withSession`
+ * transaction: every CRUD, read and bulk call that is not given a `session`
+ * option gets the current one, so a raw write rolls back with the
+ * transaction instead of committing on its own. Passing `session`, even
+ * `session: undefined`, keeps the call as written. `watch`, DDL (indexes,
+ * `drop`, `rename`) and `estimatedDocumentCount` are left alone: none of
+ * them may run inside a transaction.
+ *
+ * `collection.collection`, and `.collection` on a multi-collection or a
+ * scoped multi-collection, are already wrapped this way.
+ *
+ * @example
+ * ```typescript
+ * const raw = ambientSessionCollection(db.collection("jobs"));
+ * await withSession(async () => {
+ *   await raw.updateOne({ _id: id }, { $inc: { attempts: 1 } });
+ * });
+ * ```
+ */
+export function ambientSessionCollection<T extends m.Document>(
+  target: m.Collection<T>,
+): m.Collection<T> {
+  const context = getSessionContext(target.db.client as MongoClient);
+  return new Proxy(target, {
+    get(object, property, receiver) {
+      const value = Reflect.get(object, property, receiver);
+      if (typeof property !== "string" || typeof value !== "function") {
+        return value;
+      }
+      const position = SESSION_OPTIONS_POSITION[property];
+      if (position === undefined) return value.bind(object);
+      return (...args: unknown[]) => {
+        const session = context.getSession();
+        const given = args[position];
+        if (
+          session === undefined ||
+          (typeof given === "object" && given !== null && "session" in given)
+        ) {
+          return value.apply(object, args);
+        }
+        const next = Array.from(
+          { length: Math.max(args.length, position + 1) },
+          (_, index) => args[index],
+        );
+        next[position] = { ...(given as object | undefined), session };
+        return value.apply(object, next);
+      };
+    },
+  });
 }

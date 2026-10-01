@@ -160,6 +160,68 @@ await posts.updateOne("post", postId, {
 });
 ```
 
+#### Update operators
+
+A field value can also be an operator, the way `removeField()` unsets one.
+They work in every typed update (`updateOne`, `updateMany`, `updateWhere`,
+`findOneAndUpdate`, scoped views included), on dot paths too, and in the
+`$set` of a plain `collection` (whose raw `$inc`, `$push`, ... still pass as
+written):
+
+| Sentinel | Becomes | Checked against the field schema |
+| --- | --- | --- |
+| `increment(n)` | `$inc` | the field must accept numbers |
+| `push(...items)` | `$push` with `$each` | the field must be an array, each item valid |
+| `addToSet(...items)` | `$addToSet` with `$each` | same as `push` |
+| `pull(value)` / `pull(condition)` | `$pull` | a plain value must be a valid item; a condition object passes through |
+| `min(v)` / `max(v)` | `$min` / `$max` | `v` must be a valid value |
+
+```ts
+import { addToSet, increment, max, pull } from "@diister/mongodbee";
+
+await posts.updateOne("post", postId, {
+  "metadata.views": increment(1),
+  "metadata.tags": addToSet("featured"),
+});
+await inbox.updateWhere("cursor", { _id: id }, { seenUpTo: max(lastId) });
+await orders.updateOne("order", orderId, { lines: pull({ sku: "A-1" }) });
+```
+
+The update types only accept a sentinel where it fits: `increment` on a
+number, `push` / `addToSet` / `pull` on an array of the right item type,
+`min` / `max` on a comparable value, dot paths included on every collection
+kind. An update that writes one path twice, or
+a path and its parent, is refused before it reaches the server. A sentinel
+must sit at a field path: inside a plain nested object (which replaces the
+whole field) it is refused; write the dot path or wrap the object in
+`partial()`. Computed fields that depend on a field an operator touches are
+recomputed as they are after a `$set`. The `max` option of `updateWhere`
+still works and is the same `$max` as the `max()` sentinel.
+
+Positional paths take their conditions in `arrayFilters`, on `updateOne`,
+`updateWhere` and `findOneAndUpdate`; the value is checked against the array
+item's schema:
+
+```ts
+await posts.updateOne(
+  "post",
+  postId,
+  { "comments.$[c].reactions": push("like") },
+  { arrayFilters: [{ "c.id": commentId }] },
+);
+```
+
+`findOneAndUpdate` also takes `sort`, to update the first match in that order
+(promote the head of a waitlist), and `upsert` with `setOnInsert`, which
+inserts the validated document on a miss and returns it.
+
+`distinct(type, field, filter?)` returns the distinct values of a dot path for
+one type (scoped views and read-only views bound to their scopes). `find` and
+`findAny` refuse a `projection`, which would make every document fail
+validation and vanish; `findProject(type, fields, filter?)` is the projected
+read, partial and unvalidated by design. Its fields may be dot paths
+(`"meta.color"`, `"lines.sku"`), and each row has their nested shape.
+
 ### Scoped multi-collections
 
 A scoped multi-collection partitions one physical collection by a `_scope`
@@ -400,6 +462,53 @@ outside the database:
 await users.withSession(async () => {
   /* ... */
 }, { retry: true, writeConcern: { w: "majority", wtimeoutMS: 5000 } });
+```
+
+### Outside the transaction
+
+`outsideTransaction(fn)` runs `fn` as if no transaction were open, for every
+client: the typed operations it makes commit on their own, `afterCommit`
+runs right away, and a `withSession` inside it opens a transaction of its
+own. It is for writes that must not join the caller's transaction, a job
+claim, a lease, a cross-pod lock: their conflict would otherwise abort the
+caller's work, and their effect must survive its rollback.
+
+```ts
+import { outsideTransaction } from "@diister/mongodbee/session";
+
+await users.withSession(async () => {
+  const claimed = await outsideTransaction(() =>
+    jobs.findOneAndUpdate("job", { _id: id, status: "pending" }, {
+      status: "running",
+    }),
+  );
+  // ...
+});
+```
+
+A write outside the transaction to a document the transaction has already
+written waits for the transaction to end, like any other write, so keep the
+two on different documents.
+
+### The raw driver collection
+
+`collection.collection`, and `.collection` on a multi-collection or a scoped
+multi-collection, hand out the driver collection for what the typed API does
+not cover: change streams, exotic pipelines. It skips validation and the type
+and scope guards (computed fields are still maintained), but it does not skip
+the transaction: every CRUD, read and bulk call made without a `session` option
+gets the ambient one, so a raw write rolls back with the rest. Pass
+`session: undefined` to run a call outside the transaction on purpose.
+`watch`, index and collection DDL, and `estimatedDocumentCount` never get the
+session, since none of them may run in a transaction.
+`ambientSessionCollection(db.collection(name))`, from
+`@diister/mongodbee/session`, wraps any other driver collection the same way.
+
+```ts
+await jobs.withSession(async () => {
+  await jobs.collection.updateOne({ _id: id }, { $inc: { attempts: 1 } });
+  throw new Error("rolled back, attempts included");
+});
 ```
 
 ### After the commit

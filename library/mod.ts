@@ -37,6 +37,19 @@ export * from "./src/security.ts";
 export * from "./src/runtime-config.ts";
 export * from "./src/ids.ts";
 export { partial, removeField } from "./src/sanitizer.ts";
+export {
+  addToSet,
+  increment,
+  isUpdateOperator,
+  max,
+  min,
+  type OperatorFor,
+  pull,
+  push,
+  type UpdateFieldValue,
+  UpdateOperator,
+  type UpdateOperatorName,
+} from "./src/update-operators.ts";
 export { DocumentValidationError } from "./src/validation-error.ts";
 export type { Page } from "./src/page.ts";
 export type { TelemetryOptions } from "./src/telemetry.ts";

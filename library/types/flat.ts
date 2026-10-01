@@ -16,8 +16,8 @@ type HandleArray<
     ?
         | { path: K; value: T }
         | { path: `${K}.${number}`; value: T[number] }
-        | { path: `${K}.$[]`; value: T[number] }
-        | NodesType<T[number], `${K}.$[]`, DECREMENT[MAX]>
+        | { path: `${K}.$[${string}]`; value: T[number] }
+        | NodesType<T[number], `${K}.$[${string}]`, DECREMENT[MAX]>
         | NodesType<T[number], `${K}.${number}`, DECREMENT[MAX]>
     : never;
 

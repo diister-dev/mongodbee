@@ -25,6 +25,10 @@ export async function runInTransactionScope<T>(
   return { result, afterCommit: scope.afterCommit, atCommit: scope.atCommit };
 }
 
+export function runOutsideTransactionScope<T>(fn: () => T): T {
+  return transactionScope.run(undefined as unknown as TransactionScope, fn);
+}
+
 export function insideTransaction(): boolean {
   return transactionScope.get() !== undefined;
 }

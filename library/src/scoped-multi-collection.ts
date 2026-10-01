@@ -21,8 +21,17 @@ import { type Page, warnSkippedInvalid } from "./page.ts";
 import { parseStored } from "./validation-error.ts";
 import { createLogger } from "./utils/logger.ts";
 import { dbId, newId } from "./ids.ts";
-import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
-import { getSessionContext } from "./session.ts";
+import { sanitizeForMongoDB } from "./sanitizer.ts";
+import type { OperatorFor } from "./update-operators.ts";
+import type { FlatType } from "../types/flat.ts";
+import {
+  type DistinctField,
+  type DistinctValue,
+  type ProjectedShape,
+  type ProjectionPath,
+  refuseProjection,
+} from "./typed-reads.ts";
+import { ambientSessionCollection, getSessionContext } from "./session.ts";
 import { COMPUTED_ROOT } from "./computed-guard.ts";
 import { maintainedCollection } from "./computed-maintenance.ts";
 import {
@@ -34,7 +43,9 @@ import {
 } from "./read-preference.ts";
 import { createDotNotationSchema } from "./dot-notation.ts";
 import {
+  type GuardedFindOneAndUpdateOptions,
   type GuardedUpdateOptions,
+  type TypedUpdateOneOptions,
   guardedUpdateOps,
   type GuardedWriteResult,
   upsertInsertFields,
@@ -205,8 +216,8 @@ type Projected<
   T extends ScopedMultiCollectionTypes,
   K extends keyof T,
   S extends AnySchema,
-  P extends keyof OutputDoc<T, K, S>,
-> = Pick<OutputDoc<T, K, S>, P | "_id" | "_type" | "_scope">;
+  P extends string,
+> = ProjectedShape<OutputDoc<T, K, S>, P | "_id" | "_type" | "_scope">;
 
 /** Output shape returned by reads. Always includes _scope. */
 type OutputDoc<
@@ -228,17 +239,48 @@ type AnyScopedOutput<
 export type { OmitScopedMeta, ScopedMetaField } from "./types.ts";
 
 /**
- * Allow `removeField()` (a symbol) anywhere in an update document, mirroring
+ * Allow `removeField()` (a symbol) and the update operator sentinels
+ * (`increment()`, `push()`, ...) in an update document, mirroring
  * `multiCollection.updateOne`. Recurses into nested objects so a field can be
  * removed at any depth.
  */
 type DeepWithRemovable<X> =
   X extends Record<string, unknown>
-    ? { [K in keyof X]: DeepWithRemovable<X[K]> | symbol }
+    ? {
+        [K in keyof X]:
+          | DeepWithRemovable<X[K]>
+          | symbol
+          | OperatorFor<NonNullable<X[K]>>;
+      }
     : X;
-type WithRemovable<X> = { [K in keyof X]: DeepWithRemovable<X[K]> | symbol };
+type WithRemovable<X> = {
+  [K in keyof X]:
+    | DeepWithRemovable<X[K]>
+    | symbol
+    | OperatorFor<NonNullable<X[K]>>;
+};
 
-export type { GuardedUpdateOptions, GuardedWriteResult };
+/**
+ * An update document of `type`: its fields and their dot paths
+ * (`"lifecycle.phase"`, `"lines.$[l].qty"`), each typed by the schema.
+ */
+type UpdateDoc<
+  T extends ScopedMultiCollectionTypes,
+  K extends keyof T,
+> = WithRemovable<Partial<FlatType<UserInputDoc<T, K>>>>;
+
+/** `max` and `setOnInsert` values of `type`, dot paths included. */
+type UpdateValues<
+  T extends ScopedMultiCollectionTypes,
+  K extends keyof T,
+> = Partial<FlatType<UserInputDoc<T, K>>>;
+
+export type {
+  GuardedFindOneAndUpdateOptions,
+  GuardedUpdateOptions,
+  GuardedWriteResult,
+  TypedUpdateOneOptions,
+};
 
 // -------- Views ----------------------------------------------------------
 
@@ -271,11 +313,34 @@ export type ScopedView<
     filter?: m.Filter<OutputDoc<T, K, S>>,
   ): Promise<OutputDoc<T, K, S> | null>;
 
+  /**
+   * Every document of `type` in the bound scope matching `filter`,
+   * validated. A `projection` is refused unless `validate: false`: a
+   * projected document fails validation, so it would be dropped; use
+   * {@link ScopedView.findProject}.
+   */
   find<K extends keyof T>(
     type: K,
     filter?: m.Filter<OutputDoc<T, K, S>>,
     options?: WithReadPreferenceInput<m.FindOptions> & { validate?: boolean },
   ): Promise<OutputDoc<T, K, S>[]>;
+
+  /**
+   * The distinct values of `field` (a dot path) across the documents of
+   * `type` in the bound scope matching `filter`; an array field contributes
+   * each of its items. The values are returned as stored, not validated.
+   *
+   * @example
+   * ```typescript
+   * const tags = await expo.distinct("artwork", "tags", { published: true });
+   * ```
+   */
+  distinct<K extends keyof T, F extends DistinctField<OutputDoc<T, K, S>>>(
+    type: K,
+    field: F,
+    filter?: m.Filter<OutputDoc<T, K, S>>,
+    options?: WithReadPreferenceInput<m.DistinctOptions>,
+  ): Promise<DistinctValue<OutputDoc<T, K, S>, F>[]>;
 
   /**
    * Projected read: return only the listed fields, plus the meta fields
@@ -286,7 +351,7 @@ export type ScopedView<
    * read — measured ~2.3× faster than a full validated `find`. Use it when you
    * need a few fields from many documents.
    */
-  findProject<K extends keyof T, P extends keyof OutputDoc<T, K, S>>(
+  findProject<K extends keyof T, P extends ProjectionPath<OutputDoc<T, K, S>>>(
     type: K,
     fields: readonly P[],
     filter?: m.Filter<OutputDoc<T, K, S>>,
@@ -337,7 +402,8 @@ export type ScopedView<
   updateOne<K extends keyof T>(
     type: K,
     id: string,
-    doc: WithRemovable<Partial<UserInputDoc<T, K>>>,
+    doc: UpdateDoc<T, K>,
+    options?: TypedUpdateOneOptions,
   ): Promise<number>;
 
   /**
@@ -352,7 +418,7 @@ export type ScopedView<
   updateMany(
     ops: {
       [K in keyof T]?: {
-        [id: string]: WithRemovable<Partial<UserInputDoc<T, K>>>;
+        [id: string]: UpdateDoc<T, K>;
       };
     },
   ): Promise<number>;
@@ -377,21 +443,33 @@ export type ScopedView<
   updateWhere<K extends keyof T>(
     type: K,
     filter: m.Filter<OutputDoc<T, K, S>>,
-    doc: WithRemovable<Partial<UserInputDoc<T, K>>>,
-    options?: GuardedUpdateOptions<Partial<UserInputDoc<T, K>>>,
+    doc: UpdateDoc<T, K>,
+    options?: GuardedUpdateOptions<UpdateValues<T, K>>,
   ): Promise<GuardedWriteResult>;
 
   /**
    * Atomically update the first document of `type` matching `filter` in the
-   * bound scope and return it — as it was (`"before"`) or as it became
-   * (`"after"`, the default). `null` when nothing matched. The returned
-   * document is validated against the type's storage schema.
+   * bound scope (the first in `sort` order when given) and return it, as it
+   * was (`"before"`) or as it became (`"after"`, the default). `null` when
+   * nothing matched. With `upsert`, a miss inserts the document `updateWhere`
+   * would create and returns it. The returned document is validated against
+   * the type's storage schema.
+   *
+   * @example
+   * ```typescript
+   * const head = await expo.findOneAndUpdate(
+   *   "registration",
+   *   { status: "waitlisted" },
+   *   { status: "confirmed" },
+   *   { sort: { createdAt: 1 } },
+   * );
+   * ```
    */
   findOneAndUpdate<K extends keyof T>(
     type: K,
     filter: m.Filter<OutputDoc<T, K, S>>,
-    doc: WithRemovable<Partial<UserInputDoc<T, K>>>,
-    options?: { returnDocument?: "before" | "after" },
+    doc: UpdateDoc<T, K>,
+    options?: GuardedFindOneAndUpdateOptions<UpdateValues<T, K>>,
   ): Promise<OutputDoc<T, K, S> | null>;
 
   aggregate<R extends m.Document = m.Document>(
@@ -526,11 +604,22 @@ export type ReadOnlyMultiScopeView<
   ): Promise<OutputDoc<T, K, S>[]>;
 
   /**
+   * Distinct values of `field` across the view's scopes. See
+   * {@link ScopedView.distinct}.
+   */
+  distinct<K extends keyof T, F extends DistinctField<OutputDoc<T, K, S>>>(
+    type: K,
+    field: F,
+    filter?: m.Filter<OutputDoc<T, K, S>>,
+    options?: WithReadPreferenceInput<m.DistinctOptions>,
+  ): Promise<DistinctValue<OutputDoc<T, K, S>, F>[]>;
+
+  /**
    * Projected read across the view's scopes — returns the listed fields plus
    * `_id`/`_type`/`_scope`. Partial + unvalidated by construction; cuts
    * deserialization cost. See {@link ScopedView.findProject}.
    */
-  findProject<K extends keyof T, P extends keyof OutputDoc<T, K, S>>(
+  findProject<K extends keyof T, P extends ProjectionPath<OutputDoc<T, K, S>>>(
     type: K,
     fields: readonly P[],
     filter?: m.Filter<OutputDoc<T, K, S>>,
@@ -614,6 +703,14 @@ export type ScopedMultiCollectionResult<
    * session.
    */
   withSession: ReturnType<typeof getSessionContext>["withSession"];
+
+  /**
+   * The driver collection behind every scope, for what the typed API does
+   * not cover (change streams, exotic pipelines). It bypasses the scope and
+   * type guards and validation, but its operations still join the ambient
+   * `withSession` transaction; see {@link ambientSessionCollection}.
+   */
+  readonly collection: m.Collection<StoredDocument>;
 
   /**
    * Drop the underlying MongoDB collection entirely. Destroys every scope
@@ -815,9 +912,22 @@ export async function scopedMultiCollection<S extends AnySchema>(
   ) {
     assertNoReservedFields(doc);
     if (max) assertNoReservedFields(max);
+    for (const key of [...Object.keys(doc), ...Object.keys(max ?? {})]) {
+      const root = key.split(".")[0];
+      if (root !== key && (RESERVED_FIELDS.has(root) || root === "_id")) {
+        throw new Error(
+          `${operation}: "${key}" cannot be written, "${root}" is owned by the scoped view`,
+        );
+      }
+    }
     const dotSchema = dotSchemaElements[typeName];
     if (!dotSchema) throw new Error(`${operation}: unknown type "${typeName}"`);
-    return guardedUpdateOps(operation, dotSchema, doc, max);
+    return guardedUpdateOps(
+      operation,
+      { root: insertSchemas[typeName], dot: dotSchema },
+      doc,
+      max,
+    );
   }
 
   function scopedInsertFields(
@@ -844,6 +954,35 @@ export async function scopedMultiCollection<S extends AnySchema>(
   }
 
   function buildScopedView(scopeId: string): ScopedView<T, S> {
+    function guardedWrite(
+      operation: string,
+      typeName: string,
+      filter: Record<string, unknown>,
+      doc: Record<string, unknown>,
+      options: GuardedUpdateOptions<Record<string, unknown>> | undefined,
+    ) {
+      const { ops, written, inserted } = scopedUpdateOps(
+        operation,
+        typeName,
+        doc,
+        options?.max,
+      );
+      const upsert = options?.upsert === true;
+      if (upsert) {
+        const onInsert = scopedInsertFields(
+          typeName,
+          scopeId,
+          filter,
+          inserted,
+          options?.setOnInsert,
+          written,
+        );
+        if (Object.keys(onInsert).length > 0) ops.$setOnInsert = onInsert;
+      }
+      const guard = { ...filter, _type: typeName, _scope: scopeId };
+      return { ops, guard, upsert };
+    }
+
     return {
       _scope: scopeId,
 
@@ -997,6 +1136,13 @@ export async function scopedMultiCollection<S extends AnySchema>(
           const typeName = type as string;
           const session = sessionContext.getSession();
           const { validate = true, ...findOptions } = options ?? {};
+          if (validate) {
+            refuseProjection(
+              "find",
+              findOptions,
+              "findProject(type, fields), or validate: false",
+            );
+          }
           const conditions: Record<string, unknown>[] = [
             { _type: typeName },
             { _scope: scopeId },
@@ -1041,7 +1187,10 @@ export async function scopedMultiCollection<S extends AnySchema>(
         );
       },
 
-      async findProject<K extends keyof T, P extends keyof OutputDoc<T, K, S>>(
+      async findProject<
+        K extends keyof T,
+        P extends ProjectionPath<OutputDoc<T, K, S>>,
+      >(
         type: K,
         fields: readonly P[],
         filter?: m.Filter<OutputDoc<T, K, S>>,
@@ -1106,6 +1255,13 @@ export async function scopedMultiCollection<S extends AnySchema>(
         const run = async () => {
           const session = sessionContext.getSession();
           const { validate = true, ...findOptions } = options ?? {};
+          if (validate) {
+            refuseProjection(
+              "findAny",
+              findOptions,
+              "findProject(type, fields), or validate: false",
+            );
+          }
           const conditions: Record<string, unknown>[] = [{ _scope: scopeId }];
           if (filter) conditions.push(toStoredFilter(filter));
           const raw = await findThrough(
@@ -1137,6 +1293,34 @@ export async function scopedMultiCollection<S extends AnySchema>(
           }),
           run,
           (docs) => ({ [TA.RETURNED_ROWS]: docs.length }),
+        );
+      },
+
+      distinct(type, field, filter, options) {
+        const run = async () => {
+          const conditions: Record<string, unknown>[] = [
+            { _type: type as string },
+            { _scope: scopeId },
+          ];
+          if (filter) conditions.push(toStoredFilter(filter));
+          const session = sessionContext.getSession();
+          const values = await collection.distinct(
+            field,
+            { $and: conditions },
+            readOpts(session, options),
+          );
+          return values as never[];
+        };
+        return traced(
+          tele,
+          "distinct",
+          () => ({
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: filterKeys(filter),
+          }),
+          run,
+          (values) => ({ [TA.RETURNED_ROWS]: values.length }),
         );
       },
 
@@ -1256,30 +1440,16 @@ export async function scopedMultiCollection<S extends AnySchema>(
         );
       },
 
-      async updateOne(type, id, doc) {
+      async updateOne(type, id, doc, options) {
         const run = async (op?: OpContext) => {
           const typeName = type as string;
-          assertNoReservedFields(doc as Record<string, unknown>);
-
-          // Split out removeField() symbols → $unset, the rest → $set.
-          const { set, unset } = extractFieldsToRemove(
+          // Validated before the retry: a validation error is not a transient conflict.
+          const { ops: updateOps } = scopedUpdateOps(
+            "updateOne",
+            typeName,
             doc as Record<string, unknown>,
+            undefined,
           );
-
-          // Validate the $set paths against the per-type dot-notation schema
-          // (runs the schema's pipe checks/transforms) so a bad value surfaces
-          // a clear Valibot error instead of Mongo's opaque "Document failed
-          // validation". Reserved fields are already rejected above. Mirrors
-          // multiCollection.updateOne. Done before the retry — a validation
-          // error is not a transient write conflict — but inside `run` so the
-          // failure is recorded on the span.
-          const dotSchema = dotSchemaElements[typeName];
-          if (!dotSchema) {
-            throw new Error(`updateOne: unknown type "${typeName}"`);
-          }
-          if (Object.keys(set).length > 0) v.parse(dotSchema, set);
-
-          const updateOps = buildUpdateOps(set, unset);
           if (Object.keys(updateOps).length === 0) return 0;
 
           return retryOnWriteConflict(
@@ -1292,7 +1462,12 @@ export async function scopedMultiCollection<S extends AnySchema>(
                   _scope: scopeId,
                 },
                 updateOps,
-                { session },
+                {
+                  session,
+                  ...(options?.arrayFilters && {
+                    arrayFilters: options.arrayFilters,
+                  }),
+                },
               );
               if (!result.acknowledged) throw new Error("Update failed");
               if (result.matchedCount === 0) {
@@ -1328,21 +1503,12 @@ export async function scopedMultiCollection<S extends AnySchema>(
             for (const id in items) {
               const partial = items[id];
               if (!partial) continue;
-              assertNoReservedFields(partial as Record<string, unknown>);
-              const { set, unset } = extractFieldsToRemove(
+              const { ops: updateOps } = scopedUpdateOps(
+                "updateMany",
+                typeName,
                 partial as Record<string, unknown>,
+                undefined,
               );
-
-              // Validate the $set paths against the per-type dot-notation schema
-              // (pipe checks/transforms) before building the bulk op — same as
-              // updateOne / multiCollection.updateMany.
-              const dotSchema = dotSchemaElements[typeName];
-              if (!dotSchema) {
-                throw new Error(`updateMany: unknown type "${typeName}"`);
-              }
-              if (Object.keys(set).length > 0) v.parse(dotSchema, set);
-
-              const updateOps = buildUpdateOps(set, unset);
               if (Object.keys(updateOps).length === 0) continue;
               bulkOps.push({
                 updateOne: {
@@ -1384,32 +1550,15 @@ export async function scopedMultiCollection<S extends AnySchema>(
 
       async updateWhere(type, filter, doc, options) {
         const run = async (op?: OpContext) => {
-          const typeName = type as string;
-          const record = doc as Record<string, unknown>;
-          const max = options?.max as Record<string, unknown> | undefined;
-          const { ops, set, written } = scopedUpdateOps(
+          const { ops, guard, upsert } = guardedWrite(
             "updateWhere",
-            typeName,
-            record,
-            max,
+            type as string,
+            filter as Record<string, unknown>,
+            doc as Record<string, unknown>,
+            options as
+              | GuardedUpdateOptions<Record<string, unknown>>
+              | undefined,
           );
-          const upsert = options?.upsert === true;
-          const guard = {
-            ...(filter as Record<string, unknown>),
-            _type: typeName,
-            _scope: scopeId,
-          };
-          if (upsert) {
-            const onInsert = scopedInsertFields(
-              typeName,
-              scopeId,
-              filter as Record<string, unknown>,
-              { ...set, ...max },
-              options?.setOnInsert as Record<string, unknown> | undefined,
-              written,
-            );
-            if (Object.keys(onInsert).length > 0) ops.$setOnInsert = onInsert;
-          }
           if (Object.keys(ops).length === 0)
             return { matched: 0, modified: 0, upsertedId: null };
 
@@ -1419,6 +1568,9 @@ export async function scopedMultiCollection<S extends AnySchema>(
               const result = await collection.updateOne(guard, ops, {
                 session,
                 upsert,
+                ...(options?.arrayFilters && {
+                  arrayFilters: options.arrayFilters,
+                }),
               });
               if (!result.acknowledged) throw new Error("Update failed");
               return {
@@ -1450,28 +1602,31 @@ export async function scopedMultiCollection<S extends AnySchema>(
       async findOneAndUpdate(type, filter, doc, options) {
         const run = async (op?: OpContext) => {
           const typeName = type as string;
-          const { ops } = scopedUpdateOps(
+          const { ops, guard, upsert } = guardedWrite(
             "findOneAndUpdate",
             typeName,
+            filter as Record<string, unknown>,
             doc as Record<string, unknown>,
-            undefined,
+            options as
+              | GuardedUpdateOptions<Record<string, unknown>>
+              | undefined,
           );
           if (Object.keys(ops).length === 0) {
             throw new Error(
               `findOneAndUpdate(${typeName}): the update document writes nothing`,
             );
           }
-          const guard = {
-            ...(filter as Record<string, unknown>),
-            _type: typeName,
-            _scope: scopeId,
-          };
           const raw = await retryOnWriteConflict(
             async () => {
               const session = sessionContext.getSession();
               return await collection.findOneAndUpdate(guard, ops, {
                 session,
+                upsert,
                 returnDocument: options?.returnDocument ?? "after",
+                ...(options?.sort && { sort: options.sort }),
+                ...(options?.arrayFilters && {
+                  arrayFilters: options.arrayFilters,
+                }),
               });
             },
             op ? { onRetry: op.onRetry } : undefined,
@@ -2048,6 +2203,13 @@ export async function scopedMultiCollection<S extends AnySchema>(
           const typeName = type as string;
           const session = sessionContext.getSession();
           const { validate = true, ...findOptions } = options ?? {};
+          if (validate) {
+            refuseProjection(
+              "find",
+              findOptions,
+              "findProject(type, fields), or validate: false",
+            );
+          }
           const conditions: Record<string, unknown>[] = [{ _type: typeName }];
           const sm = scopeMatch();
           if (sm) conditions.push(sm);
@@ -2088,7 +2250,10 @@ export async function scopedMultiCollection<S extends AnySchema>(
         );
       },
 
-      async findProject<K extends keyof T, P extends keyof OutputDoc<T, K, S>>(
+      async findProject<
+        K extends keyof T,
+        P extends ProjectionPath<OutputDoc<T, K, S>>,
+      >(
         type: K,
         fields: readonly P[],
         userFilter?: m.Filter<OutputDoc<T, K, S>>,
@@ -2122,6 +2287,35 @@ export async function scopedMultiCollection<S extends AnySchema>(
           }),
           run,
           (docs) => ({ [TA.RETURNED_ROWS]: docs.length }),
+        );
+      },
+
+      distinct(type, field, userFilter, options) {
+        const run = async () => {
+          const conditions: Record<string, unknown>[] = [
+            { _type: type as string },
+          ];
+          const sm = scopeMatch();
+          if (sm) conditions.push(sm);
+          if (userFilter) conditions.push(toStoredFilter(userFilter));
+          const session = sessionContext.getSession();
+          const values = await collection.distinct(
+            field,
+            { $and: conditions },
+            readOpts(session, options),
+          );
+          return values as never[];
+        };
+        return traced(
+          tele,
+          "distinct",
+          () => ({
+            [TA.SCOPE]: scopeAttr,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: filterKeys(userFilter),
+          }),
+          run,
+          (values) => ({ [TA.RETURNED_ROWS]: values.length }),
         );
       },
 
@@ -2307,6 +2501,8 @@ export async function scopedMultiCollection<S extends AnySchema>(
 
     withSession: sessionContext.withSession,
 
+    collection: ambientSessionCollection(collection),
+
     async drop(options) {
       // Guard runs INSIDE `run` so a misuse (missing `{ force: true }`) still
       // emits an ERROR span — mirroring `multiCollection().drop`.
@@ -2472,25 +2668,6 @@ function buildProjection(fields: readonly string[]): Record<string, 1> {
   const projection: Record<string, 1> = { _id: 1, _type: 1, _scope: 1 };
   for (const field of fields) projection[field] = 1;
   return projection;
-}
-
-/**
- * Build a Mongo update document from a `{ set, unset }` split (as produced
- * by {@link extractFieldsToRemove}). `set` values are sanitized ; `unset`
- * keys become a `$unset`. Returns `{}` when there is nothing to do.
- */
-function buildUpdateOps(
-  set: Record<string, unknown>,
-  unset: Record<string, unknown>,
-): Record<string, unknown> {
-  const sanitized = sanitizeForMongoDB(set, {
-    undefinedBehavior: "remove",
-    deep: true,
-  }) as Record<string, unknown>;
-  const ops: Record<string, unknown> = {};
-  if (Object.keys(sanitized).length > 0) ops.$set = sanitized;
-  if (Object.keys(unset).length > 0) ops.$unset = unset;
-  return ops;
 }
 
 function validateConfig(
