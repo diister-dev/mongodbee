@@ -7,15 +7,26 @@ import {
 } from "./stored-document.ts";
 import { toMongoValidator } from "./validator.ts";
 import { dbId, newId } from "./ids.ts";
-import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
+import { sanitizeForMongoDB } from "./sanitizer.ts";
+import type { OperatorFor } from "./update-operators.ts";
+import {
+  type DistinctField,
+  type DistinctValue,
+  type ProjectedShape,
+  type ProjectionPath,
+  refuseProjection,
+  type ValidatedFindOptions as FindOptions,
+} from "./typed-reads.ts";
 import { createDotNotationSchema } from "./dot-notation.ts";
 import {
+  type GuardedFindOneAndUpdateOptions,
   type GuardedUpdateOptions,
+  type TypedUpdateOneOptions,
   guardedUpdateOps,
   type GuardedWriteResult,
   upsertInsertFields,
 } from "./guarded-write.ts";
-import { getSessionContext } from "./session.ts";
+import { ambientSessionCollection, getSessionContext } from "./session.ts";
 import { COMPUTED_ROOT } from "./computed-guard.ts";
 import { maintainedCollection } from "./computed-maintenance.ts";
 import {
@@ -164,11 +175,19 @@ type MultiSchema<T extends MultiCollectionSchema> = Elements<T>;
  */
 type DeepWithRemovable<T> =
   T extends Record<string, unknown>
-    ? { [K in keyof T]: DeepWithRemovable<T[K]> | symbol }
+    ? {
+        [K in keyof T]:
+          | DeepWithRemovable<T[K]>
+          | symbol
+          | OperatorFor<NonNullable<T[K]>>;
+      }
     : T;
 
 type WithRemovable<T> = {
-  [K in keyof T]: DeepWithRemovable<T[K]> | symbol;
+  [K in keyof T]:
+    | DeepWithRemovable<T[K]>
+    | symbol
+    | OperatorFor<NonNullable<T[K]>>;
 };
 
 import type { AggregationStage } from "./types.ts";
@@ -459,6 +478,13 @@ export type MultiPaginateOptions<
  */
 type MultiCollectionResult<T extends MultiCollectionSchema> = {
   withSession: Awaited<ReturnType<typeof getSessionContext>>["withSession"];
+  /**
+   * The driver collection, for what the typed API does not cover (change
+   * streams, exotic pipelines). It skips validation and the `_type` guard,
+   * but its operations still join the ambient `withSession` transaction;
+   * see {@link ambientSessionCollection}.
+   */
+  readonly collection: m.Collection<StoredDocument>;
   insertOne<E extends keyof T>(key: E, doc: InsertDoc<T, E>): Promise<string>;
   insertMany<E extends keyof T>(
     key: E,
@@ -474,11 +500,60 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
     filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
     options?: ReadOptions,
   ): Promise<v.InferOutput<OutputElementSchema<T, E>> | null>;
+  /**
+   * Every `key` document matching `filter`, validated. A `projection` is
+   * refused: a projected document fails validation, so it would be dropped;
+   * use {@link MultiCollectionResult.findProject}.
+   */
   find<E extends keyof T>(
     key: E,
     filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
-    options?: WithReadPreferenceInput<m.FindOptions>,
+    options?: FindOptions,
   ): Promise<v.InferOutput<OutputElementSchema<T, E>>[]>;
+  /**
+   * Projected read: only the listed fields or dot paths, plus `_id` and
+   * `_type`, in their nested shape. The documents are partial, so they are
+   * not validated.
+   *
+   * @example
+   * ```typescript
+   * const rows = await catalog.findProject("product", ["name", "meta.color"]);
+   * // rows: { _id, _type, name, meta: { color } }[]
+   * ```
+   */
+  findProject<
+    E extends keyof T,
+    P extends ProjectionPath<v.InferOutput<OutputElementSchema<T, E>>>,
+  >(
+    key: E,
+    fields: readonly P[],
+    filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
+    options?: FindOptions,
+  ): Promise<
+    ProjectedShape<
+      v.InferOutput<OutputElementSchema<T, E>>,
+      P | "_id" | "_type"
+    >[]
+  >;
+  /**
+   * The distinct values of `field` (a dot path) across the `key` documents
+   * matching `filter`; an array field contributes each of its items. The
+   * values are returned as stored, not validated.
+   *
+   * @example
+   * ```typescript
+   * const tags = await catalog.distinct("product", "tags", { active: true });
+   * ```
+   */
+  distinct<
+    E extends keyof T,
+    F extends DistinctField<v.InferOutput<OutputElementSchema<T, E>>>,
+  >(
+    key: E,
+    field: F,
+    filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
+    options?: WithReadPreferenceInput<m.DistinctOptions>,
+  ): Promise<DistinctValue<v.InferOutput<OutputElementSchema<T, E>>, F>[]>;
   /**
    * Find the first document matching a cross-type filter — no `_type`
    * constraint injected. Symmetric to `deleteAny` ; useful when the
@@ -500,7 +575,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
    */
   findAny(
     filter: m.Filter<Input<T>>,
-    options?: WithReadPreferenceInput<m.FindOptions>,
+    options?: FindOptions,
   ): Promise<Output<T>[]>;
   paginate<E extends keyof T, EN = ExtractByType<T, E>, R = EN>(
     key: E,
@@ -561,6 +636,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
       WithRemovable<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>>,
       "_id" | "type"
     >,
+    options?: TypedUpdateOneOptions,
   ): Promise<number>;
   updateMany(
     operation: {
@@ -591,8 +667,11 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
     >,
   ): Promise<GuardedWriteResult>;
   /**
-   * Atomically update the first `key` document matching `filter` and return
-   * it, before or after (the default) the write; `null` on a miss.
+   * Atomically update the first `key` document matching `filter` (the first
+   * in `sort` order when given) and return it, before or after (the default)
+   * the write; `null` on a miss. With `upsert`, a miss inserts the document
+   * the filter, `setOnInsert` and `doc` describe, validated first, and
+   * returns it. Same contract as the scoped view's `findOneAndUpdate`.
    */
   findOneAndUpdate<E extends keyof T>(
     key: E,
@@ -601,7 +680,9 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
       WithRemovable<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>>,
       "_id" | "type"
     >,
-    options?: { returnDocument?: "before" | "after" },
+    options?: GuardedFindOneAndUpdateOptions<
+      Omit<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>, "_id" | "type">
+    >,
   ): Promise<v.InferOutput<OutputElementSchema<T, E>> | null>;
   aggregate<R extends m.Document = m.Document>(
     stageBuilder: (stage: StageBuilder<T>) => AggregationStage[],
@@ -722,20 +803,62 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     doc: Record<string, unknown>,
     max: Record<string, unknown> | undefined,
     setOnInsert: Record<string, unknown> | undefined,
+    undefinedBehavior?: "remove" | "ignore" | "error",
   ) {
     for (const part of [doc, max, setOnInsert]) {
       if (!part) continue;
-      for (const reserved of GUARDED_RESERVED_FIELDS) {
-        if (reserved in part) {
+      for (const key of Object.keys(part)) {
+        const root = key.split(".")[0];
+        if ((GUARDED_RESERVED_FIELDS as readonly string[]).includes(root)) {
           throw new Error(
-            `${operation}: "${reserved}" cannot be written — it is owned by the multi-collection`,
+            `${operation}: "${root}" cannot be written — it is owned by the multi-collection`,
           );
         }
       }
     }
     const dotSchema = dotSchemaElements[typeName as keyof T];
     if (!dotSchema) throw new Error(`${operation}: unknown type "${typeName}"`);
-    return guardedUpdateOps(operation, dotSchema, doc, max);
+    return guardedUpdateOps(
+      operation,
+      { root: schemaElements[typeName as keyof T], dot: dotSchema },
+      doc,
+      max,
+      undefinedBehavior,
+    );
+  }
+
+  /** The update, `_type`-guarded filter and upsert flag of `updateWhere` / `findOneAndUpdate`. */
+  function guardedWrite(
+    operation: string,
+    typeName: string,
+    filter: Record<string, unknown>,
+    doc: Record<string, unknown>,
+    options: GuardedUpdateOptions<Record<string, unknown>> | undefined,
+  ) {
+    const setOnInsert = options?.setOnInsert;
+    const { ops, written, inserted } = multiUpdateOps(
+      operation,
+      typeName,
+      doc,
+      options?.max,
+      setOnInsert,
+    );
+    const upsert = options?.upsert === true;
+    if (upsert) {
+      const onInsert = upsertInsertFields({
+        insertSchema: schemaElements[typeName as keyof T],
+        filter,
+        values: inserted,
+        setOnInsert,
+        written,
+        injected: (candidate) => ({
+          _id: candidate._id ?? `${typeName}:${newId()}`,
+        }),
+        ignored: ["_type"],
+      });
+      if (Object.keys(onInsert).length > 0) ops.$setOnInsert = onInsert;
+    }
+    return { ops, guard: { ...filter, _type: typeName }, upsert };
   }
 
   const opts: DriverCollectionOptions & CollectionOptions = {
@@ -851,6 +974,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
   return {
     withSession: sessionContext!.withSession,
+    collection: ambientSessionCollection(collection),
     async insertOne(key, doc) {
       const run = async () => {
         const _id = doc._id ?? `${key as string}:${newId()}`;
@@ -982,6 +1106,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     },
     async find(key, filter, options) {
       const run = async () => {
+        refuseProjection("find", options, "findProject(type, fields)");
         const typeChecker = {
           _type: key as string,
         };
@@ -1021,6 +1146,70 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         }),
         run,
         (docs) => ({ [TA.RETURNED_ROWS]: docs.length }),
+      );
+    },
+    async findProject<
+      E extends keyof T,
+      P extends ProjectionPath<v.InferOutput<OutputElementSchema<T, E>>>,
+    >(
+      key: E,
+      fields: readonly P[],
+      filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
+      options?: FindOptions,
+    ) {
+      const run = async () => {
+        const projection: Record<string, 1> = { _id: 1, _type: 1 };
+        for (const field of fields) projection[field as string] = 1;
+        const conditions: Record<string, unknown>[] = [
+          { _type: key as string },
+        ];
+        if (filter !== undefined) conditions.push(toStoredFilter(filter));
+        const session = sessionContext.getSession();
+        const rows = await findThrough(
+          collection,
+          { $and: conditions },
+          { ...options, projection },
+          { ...readOpts(session, options), projection },
+        );
+        return rows as unknown as ProjectedShape<
+          v.InferOutput<OutputElementSchema<T, E>>,
+          P | "_id" | "_type"
+        >[];
+      };
+      return traced(
+        tele,
+        "findProject",
+        () => ({
+          [TA.DOC_TYPE]: String(key),
+          [TA.FILTER_KEYS]: filterKeys(filter),
+        }),
+        run,
+        (docs) => ({ [TA.RETURNED_ROWS]: docs.length }),
+      );
+    },
+    distinct(key, field, filter, options) {
+      const run = async () => {
+        const conditions: Record<string, unknown>[] = [
+          { _type: key as string },
+        ];
+        if (filter !== undefined) conditions.push(toStoredFilter(filter));
+        const session = sessionContext.getSession();
+        const values = await collection.distinct(
+          field,
+          { $and: conditions },
+          readOpts(session, options),
+        );
+        return values as never[];
+      };
+      return traced(
+        tele,
+        "distinct",
+        () => ({
+          [TA.DOC_TYPE]: String(key),
+          [TA.FILTER_KEYS]: filterKeys(filter),
+        }),
+        run,
+        (values) => ({ [TA.RETURNED_ROWS]: values.length }),
       );
     },
     async paginate<K extends keyof T, EN = ExtractByType<T, K>, R = EN>(
@@ -1712,6 +1901,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     },
     async findAny(filter, options) {
       const run = async () => {
+        refuseProjection("findAny", options, "findProject(type, fields)");
         const session = sessionContext.getSession();
         const result = await findThrough(
           collection,
@@ -1743,53 +1933,39 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         (docs) => ({ [TA.RETURNED_ROWS]: docs.length }),
       );
     },
-    async updateOne(key, id, doc) {
+    async updateOne(key, id, doc, options) {
       const run = (op?: OpContext) => {
         // Validation happens inside run (so failures emit an ERROR span) but
         // outside retry - no need to retry validation errors
-        const dotSchema = dotSchemaElements[key];
-        if (!dotSchema) {
+        if (!dotSchemaElements[key]) {
           throw new Error(`Invalid element type`);
         }
-
-        // Extract fields to remove before validation (symbols would fail validation)
-        const { set, unset } = extractFieldsToRemove(
+        const { ops: updateOps } = multiUpdateOps(
+          "updateOne",
+          key as string,
           doc as Record<string, unknown>,
+          undefined,
+          undefined,
+          opts.undefinedBehavior || "remove",
         );
-
-        // Validate only the fields that will be set (not the removed ones)
-        if (Object.keys(set).length > 0) {
-          v.parse(dotSchema, set);
-        }
 
         return retryOnWriteConflict(
           async () => {
             const session = sessionContext.getSession();
 
-            // Sanitize the remaining fields
-            const sanitizedDoc = sanitizeForMongoDB(set, {
-              undefinedBehavior: opts.undefinedBehavior || "remove",
-              deep: true,
-            });
-
-            // Build update operations
-            const updateOps: m.UpdateFilter<StoredDocument> = {};
-            if (Object.keys(sanitizedDoc).length > 0) {
-              updateOps.$set = sanitizedDoc;
-            }
-            if (Object.keys(unset).length > 0) {
-              updateOps.$unset = unset;
-            }
-
-            // If no operations, return early
             if (Object.keys(updateOps).length === 0) {
-              return 0; // No modifications
+              return 0;
             }
 
             const result = await collection.updateOne(
               { _id: id, _type: key as string },
               updateOps,
-              { session },
+              {
+                session,
+                ...(options?.arrayFilters && {
+                  arrayFilters: options.arrayFilters,
+                }),
+              },
             );
 
             if (!result.acknowledged) {
@@ -1827,43 +2003,21 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
               const elements = operation[type];
               for (const id in elements) {
                 const element = elements[id];
-                const dotSchema = dotSchemaElements[type];
                 if (!id.startsWith(`${type}:`)) {
                   throw new Error(`Invalid id format`);
                 }
-                if (!dotSchema) {
+                if (!dotSchemaElements[type]) {
                   throw new Error(`Invalid element type`);
                 }
-
-                // Extract fields to remove before validation (symbols would fail validation)
-                const { set, unset } = extractFieldsToRemove(
+                const { ops: updateOps } = multiUpdateOps(
+                  "updateMany",
+                  type,
                   element as Record<string, unknown>,
+                  undefined,
+                  undefined,
+                  opts.undefinedBehavior || "remove",
                 );
 
-                // Validate only the fields that will be set (not the removed ones)
-                if (Object.keys(set).length > 0) {
-                  v.parse(dotSchema, set);
-                }
-
-                // Sanitize the remaining fields
-                const sanitizedElement = sanitizeForMongoDB(set, {
-                  undefinedBehavior: opts.undefinedBehavior || "remove",
-                  deep: true,
-                });
-
-                // Build update operations
-                const updateOps: Record<string, unknown> = {};
-                if (
-                  Object.keys(sanitizedElement as Record<string, unknown>)
-                    .length > 0
-                ) {
-                  updateOps.$set = sanitizedElement;
-                }
-                if (Object.keys(unset).length > 0) {
-                  updateOps.$unset = unset;
-                }
-
-                // Skip if no operations
                 if (Object.keys(updateOps).length === 0) {
                   continue;
                 }
@@ -1907,38 +2061,13 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     },
     async updateWhere(key, filter, doc, options) {
       const run = async (op?: OpContext) => {
-        const typeName = key as string;
-        const record = doc as Record<string, unknown>;
-        const max = options?.max as Record<string, unknown> | undefined;
-        const setOnInsert = options?.setOnInsert as
-          | Record<string, unknown>
-          | undefined;
-        const { ops, set, written } = multiUpdateOps(
+        const { ops, guard, upsert } = guardedWrite(
           "updateWhere",
-          typeName,
-          record,
-          max,
-          setOnInsert,
+          key as string,
+          filter as Record<string, unknown>,
+          doc as Record<string, unknown>,
+          options as GuardedUpdateOptions<Record<string, unknown>> | undefined,
         );
-        const upsert = options?.upsert === true;
-        const guard = {
-          ...(filter as Record<string, unknown>),
-          _type: typeName,
-        };
-        if (upsert) {
-          const onInsert = upsertInsertFields({
-            insertSchema: schemaElements[key],
-            filter: filter as Record<string, unknown>,
-            values: { ...set, ...max },
-            setOnInsert,
-            written,
-            injected: (candidate) => ({
-              _id: candidate._id ?? `${typeName}:${newId()}`,
-            }),
-            ignored: ["_type"],
-          });
-          if (Object.keys(onInsert).length > 0) ops.$setOnInsert = onInsert;
-        }
         if (Object.keys(ops).length === 0)
           return { matched: 0, modified: 0, upsertedId: null };
 
@@ -1948,6 +2077,9 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             const result = await collection.updateOne(guard, ops, {
               session,
               upsert,
+              ...(options?.arrayFilters && {
+                arrayFilters: options.arrayFilters,
+              }),
             });
             if (!result.acknowledged) throw new Error("Update failed");
             return {
@@ -1977,28 +2109,29 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     async findOneAndUpdate(key, filter, doc, options) {
       const run = async (op?: OpContext) => {
         const typeName = key as string;
-        const { ops } = multiUpdateOps(
+        const { ops, guard, upsert } = guardedWrite(
           "findOneAndUpdate",
           typeName,
+          filter as Record<string, unknown>,
           doc as Record<string, unknown>,
-          undefined,
-          undefined,
+          options as GuardedUpdateOptions<Record<string, unknown>> | undefined,
         );
         if (Object.keys(ops).length === 0) {
           throw new Error(
             `findOneAndUpdate(${typeName}): the update document writes nothing`,
           );
         }
-        const guard = {
-          ...(filter as Record<string, unknown>),
-          _type: typeName,
-        };
         const raw = await retryOnWriteConflict(
           async () => {
             const session = sessionContext.getSession();
             return await collection.findOneAndUpdate(guard, ops, {
               session,
+              upsert,
               returnDocument: options?.returnDocument ?? "after",
+              ...(options?.sort && { sort: options.sort }),
+              ...(options?.arrayFilters && {
+                arrayFilters: options.arrayFilters,
+              }),
             });
           },
           op ? { onRetry: op.onRetry } : undefined,

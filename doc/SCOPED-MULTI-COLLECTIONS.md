@@ -41,7 +41,9 @@ findProject<K, P>(
 
 - **Partial**: only the fields you list are returned, plus the meta fields
   (`_id`, `_type`, `_scope`) which are always kept so a projected document stays
-  identifiable.
+  identifiable. A field may be a dot path (`"lifecycle.phase"`, `"lines.sku"`
+  across an array); the row then has the nested shape
+  (`{ lifecycle: { phase } }`).
 - **Unvalidated**: projected documents are returned _raw_. Validating a subset
   of fields against the full type schema would reject the omitted ones, so
   `findProject` deliberately skips the per-document parse. Schema transforms are
@@ -60,9 +62,27 @@ const rows = await catalog
 ```
 
 `findProject` is available on the single-scope view (`.scope(id)`) and on the
-read-only multi-scope views (`.scopes([...])` and `.unscoped`). It is **not** a
+read-only multi-scope views (`.scopes([...])` and `.unscoped`), and on
+`multiCollection` (meta fields `_id` and `_type`). It is **not** a
 `paginate` option — use `paginate`'s `pipeline` / `prepare` / `format` hooks for
 projected pagination.
+
+`find` and `findAny` refuse a `projection` option unless `validate: false`
+is passed: a projected document fails validation, so it would be silently
+dropped. `multiCollection.find` and `findAny` always refuse it.
+
+## `distinct`
+
+`distinct(type, field, filter?, options?)` returns the distinct values of a
+dot path across the documents of `type`, bound to the view's scope (or scopes).
+An array field contributes each of its items. `field` is typed as a path of the
+type and the values as its item type; they are returned as stored, not
+validated.
+
+```typescript
+const tags = await catalog.scope("exposition:abc123").distinct("artwork", "tags");
+const scopes = await catalog.unscoped.distinct("artwork", "_scope");
+```
 
 ## Guarded writes — `updateWhere` and `findOneAndUpdate`
 
@@ -98,9 +118,13 @@ const retired = await inbox.findOneAndUpdate(
 );
 ```
 
-- `doc` accepts `removeField()` and is validated against the type's
-  dot-notation schema, exactly like `updateOne`. `max` is validated the same
-  way; a field cannot be both set and bounded by `max` in one write.
+- `doc` accepts `removeField()` and the update operator sentinels
+  (`increment`, `push`, `addToSet`, `pull`, `min`, `max`, see the README), and
+  is validated against the type's schema, exactly like `updateOne`. The `max`
+  option is the same `$max` as the `max()` sentinel and is validated the same
+  way; a field cannot be both written and bounded by `max` in one write.
+- An upsert stores what each operator would: `increment(n)` stores `n`,
+  `push` / `addToSet` store their items, `min` / `max` their value.
 - **Upsert never mints an invalid document.** The document the insert would
   create — filter equalities, `setOnInsert`, `doc`, `max` — is validated
   against the type's insert schema before the write. `_id` comes from a filter
@@ -114,7 +138,9 @@ const retired = await inbox.findOneAndUpdate(
 - The same contract holds on `multiCollection` (`updateWhere`,
   `findOneAndUpdate`) and on `collection`, whose `updateOne` / `updateMany` /
   `findOneAndUpdate` validate `$set`, `$setOnInsert`, `$max` and `$min`
-  against the schema and, with `upsert`, the document the insert would create
+  against the schema, check the sentinels given in `$set` (raw `$inc`,
+  `$push`, ... pass as written), and, with `upsert`, validate the document
+  the insert would create
   (including what `$inc`, `$push` and `$currentDate` would store); its schema
   defaults land in `$setOnInsert`. A pipeline update passes unchecked.
 - Two concurrent upserts of the same unique key surface as the driver's
@@ -122,7 +148,15 @@ const retired = await inbox.findOneAndUpdate(
   finds the document and updates it).
 - `findOneAndUpdate` returns the document validated against the storage schema,
   or `null` when nothing matched. Of two racing calls on the same guard,
-  exactly one gets the document.
+  exactly one gets the document. It takes the same `upsert` / `setOnInsert`
+  as `updateWhere` (a miss inserts and returns the new document) and a
+  `sort` that picks which match is updated, e.g. `{ createdAt: 1 }` to
+  promote the head of a waitlist.
+- `updateOne`, `updateWhere` and `findOneAndUpdate` take `arrayFilters` for
+  positional paths (`"comments.$[c].reactions"`); the value written there is
+  checked against the array item's schema. Update documents, `max` and
+  `setOnInsert` are typed with the dot paths of the type, positional ones
+  included.
 
 ## `paginate` — options and cursor semantics
 

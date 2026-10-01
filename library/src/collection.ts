@@ -1,11 +1,18 @@
 import * as v from "./schema.ts";
 import { toMongoValidator } from "./validator.ts";
-import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
+import { sanitizeForMongoDB } from "./sanitizer.ts";
+import {
+  assertDisjointPaths,
+  checkOperators,
+  liftSetOperators,
+  type OperatorFor,
+} from "./update-operators.ts";
 import { COMPUTED_ROOT, refuseComputedWrite } from "./computed-guard.ts";
 import { maintainedCollection } from "./computed-maintenance.ts";
 import { createDotNotationSchema } from "./dot-notation.ts";
 import {
   insertedValues,
+  checkPositionalValues,
   isPlainRecord,
   upsertInsertFields,
   VALUE_OPERATORS,
@@ -13,7 +20,7 @@ import {
 } from "./guarded-write.ts";
 import { EventEmitter } from "./events.ts";
 import { watchEvent } from "./change-stream.ts";
-import { getSessionContext } from "./session.ts";
+import { ambientSessionCollection, getSessionContext } from "./session.ts";
 import {
   type DriverCollectionOptions,
   type ReadOptions,
@@ -168,14 +175,38 @@ type WithRemovableFields<T> = {
   [key: string]: unknown;
 };
 
+type DeepUpdatable<T> =
+  T extends Record<string, unknown>
+    ? {
+        [K in keyof T]?:
+          | DeepUpdatable<T[K]>
+          | symbol
+          | OperatorFor<NonNullable<T[K]>>;
+      }
+    : T;
+
 /**
- * Update filter type that supports removeField() symbols in $set and other operators
+ * `$set` fields: a value, `removeField()`, or an update operator sentinel
+ * (`increment()`, `push()`, ...) that becomes its own operator.
+ */
+type UpdatableFields<T> = {
+  [K in keyof T]?:
+    | DeepUpdatable<T[K]>
+    | symbol
+    | OperatorFor<NonNullable<T[K]>>;
+} & {
+  [key: string]: unknown;
+};
+
+/**
+ * Update filter type that supports removeField() symbols and update operator
+ * sentinels in $set
  */
 type UpdateFilterWithRemovable<T> = Omit<
   m.UpdateFilter<T>,
   "$set" | "$setOnInsert"
 > & {
-  $set?: WithRemovableFields<T>;
+  $set?: UpdatableFields<T>;
   $setOnInsert?: WithRemovableFields<T>;
 };
 
@@ -187,37 +218,6 @@ function isExplicitId(id: unknown): boolean {
     id !== null &&
     (id as { _bsontype?: unknown })._bsontype === "ObjectId"
   );
-}
-
-/**
- * Process update filter to extract removeField() symbols from $set and convert to $unset
- */
-function processUpdateWithRemoveField(
-  update: Record<string, unknown>,
-): Record<string, unknown> {
-  const result = { ...update };
-
-  // Process $set to extract removeField() symbols
-  if (result.$set && typeof result.$set === "object") {
-    const { set, unset } = extractFieldsToRemove(
-      result.$set as Record<string, unknown>,
-    );
-
-    if (Object.keys(set).length > 0) {
-      result.$set = set;
-    } else {
-      delete result.$set;
-    }
-
-    if (Object.keys(unset).length > 0) {
-      result.$unset = {
-        ...((result.$unset as Record<string, 1>) || {}),
-        ...unset,
-      };
-    }
-  }
-
-  return result;
 }
 
 type TInput<
@@ -273,6 +273,12 @@ export type CollectionResult<
   | "aggregate"
   | "watch"
 > & {
+  /**
+   * The driver collection, for what the typed API does not cover (change
+   * streams, exotic pipelines). It skips validation, but its operations
+   * still join the ambient `withSession` transaction; see
+   * {@link ambientSessionCollection}.
+   */
   collection: m.Collection<TInput<T>>;
   schema: v.ObjectSchema<
     { readonly _id: v.OptionalSchema<v.UnknownSchema, undefined> } & T,
@@ -555,6 +561,9 @@ export async function collection<
    * that store a value (`$set`, `$setOnInsert`, `$max`, `$min`) are validated
    * against the dot-notation schema, and an upsert first validates the whole
    * document its insert would create — its defaults land in `$setOnInsert`.
+   * Update operator sentinels in `$set` (`increment()`, `push()`, ...) become
+   * their own operators, checked against the field schema. Raw `$inc`,
+   * `$push`, ... pass as written, for the server to judge.
    * A pipeline update (an array) cannot be checked statically and passes as is.
    */
   function checkedUpdate(
@@ -566,13 +575,20 @@ export async function collection<
       refuseComputedWrite(update);
       return update;
     }
-    const processed = processUpdateWithRemoveField(
+    const { update: processed, operators } = liftSetOperators(
+      "update",
       update as Record<string, unknown>,
     );
     for (const operator of VALUE_OPERATORS) {
       const fields = processed[operator];
-      if (isPlainRecord(fields) && Object.keys(fields).length > 0)
+      if (isPlainRecord(fields) && Object.keys(fields).length > 0) {
         v.parse(dotSchema, fields);
+        checkPositionalValues(schema, fields);
+      }
+    }
+    if (Object.keys(operators).length > 0) {
+      checkOperators("update", schema, operators);
+      assertDisjointPaths("update", writtenPaths(processed));
     }
     if (upsert) {
       const setOnInsert = isPlainRecord(processed.$setOnInsert)
@@ -854,8 +870,7 @@ export async function collection<
   }
 
   const result: CollectionResult<T> = {
-    // Raw collection
-    collection,
+    collection: ambientSessionCollection(collection),
 
     // Schema
     schema,

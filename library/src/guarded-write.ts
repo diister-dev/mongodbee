@@ -7,7 +7,17 @@
  */
 
 import * as v from "./schema.ts";
-import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
+import { sanitizeForMongoDB } from "./sanitizer.ts";
+import { refuseComputedWrite } from "./computed-guard.ts";
+import {
+  assertDisjointPaths,
+  checkOperators,
+  operatorDocuments,
+  parseAgainst,
+  refuseOperators,
+  schemasAtPath,
+  splitUpdate,
+} from "./update-operators.ts";
 
 type AnyObjectSchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
 
@@ -19,6 +29,25 @@ export type GuardedUpdateOptions<P> = {
   upsert?: boolean;
   /** Fields written only when the upsert inserts. */
   setOnInsert?: P;
+  /**
+   * Conditions of the `$[name]` positional paths of the update, e.g.
+   * `[{ "c.id": commentId }]` for `"comments.$[c].reactions": push(r)`.
+   */
+  arrayFilters?: Record<string, unknown>[];
+};
+
+/** Options of `findOneAndUpdate`. */
+export type GuardedFindOneAndUpdateOptions<P> = GuardedUpdateOptions<P> & {
+  /** The document returned: as it was, or as it became (the default). */
+  returnDocument?: "before" | "after";
+  /** Which match is updated when several do: the first in this order. */
+  sort?: Record<string, 1 | -1>;
+};
+
+/** Options of a typed `updateOne`. */
+export type TypedUpdateOneOptions = {
+  /** Conditions of the `$[name]` positional paths of the update. */
+  arrayFilters?: Record<string, unknown>[];
 };
 
 /** Outcome of `updateWhere`. */
@@ -113,40 +142,91 @@ export function leavesNotWritten(
   return out;
 }
 
+/** The schemas a typed update is checked against. */
+export type UpdateSchemas = {
+  /** The document schema, to resolve the field under a sentinel's path. */
+  root: AnyObjectSchema;
+  /** Its dot-notation schema, for `$set` values. */
+  dot: AnyObjectSchema;
+};
+
 /**
- * The `$set` / `$unset` / `$max` of an `updateWhere`, each validated against
- * the dot-notation schema. A field cannot be both written and bounded by
- * `max` in one write.
+ * The MongoDB update of a typed update document: `$set` / `$unset` from plain
+ * values and `removeField()`, one operator per sentinel (`increment()`,
+ * `push()`, ...), and `$max` from the `max` option. Every value is checked
+ * against the schema at its path, and no path may be written twice.
+ * `inserted` holds the values an upsert's insert would store.
  */
 export function guardedUpdateOps(
   operation: string,
-  dotSchema: AnyObjectSchema,
+  schemas: UpdateSchemas,
   doc: Record<string, unknown>,
   max: Record<string, unknown> | undefined,
+  undefinedBehavior: "remove" | "ignore" | "error" = "remove",
 ): {
   ops: Record<string, unknown>;
   set: Record<string, unknown>;
   written: string[];
+  inserted: Record<string, unknown>;
 } {
-  const { set, unset } = extractFieldsToRemove(doc);
-  if (Object.keys(set).length > 0) v.parse(dotSchema, set);
-  const ops: Record<string, unknown> = {};
-  if (Object.keys(set).length > 0) ops.$set = sanitize(set);
-  if (Object.keys(unset).length > 0) ops.$unset = unset;
-  const written = [...Object.keys(set), ...Object.keys(unset)];
+  const { set, unset, operators } = splitUpdate(doc);
+  refuseOperators(operation, max);
   if (max && Object.keys(max).length > 0) {
-    for (const key of Object.keys(max)) {
-      if (written.includes(key)) {
+    const bounded = (operators.$max ??= {});
+    for (const [key, value] of Object.entries(max)) {
+      if (
+        key in set ||
+        key in unset ||
+        Object.values(operators).some((fields) => key in fields)
+      ) {
         throw new Error(
           `${operation}: "${key}" cannot be both set and bounded by max in one write`,
         );
       }
+      bounded[key] = value;
     }
-    v.parse(dotSchema, max);
-    ops.$max = sanitize(max);
-    written.push(...Object.keys(max));
   }
-  return { ops, set, written };
+  if (Object.keys(set).length > 0) v.parse(schemas.dot, set);
+  checkPositionalValues(schemas.root, set);
+  checkOperators(operation, schemas.root, operators);
+  const clean = (fields: Record<string, unknown>) =>
+    sanitizeForMongoDB(fields, {
+      undefinedBehavior,
+      deep: true,
+    }) as Record<string, unknown>;
+  const ops: Record<string, unknown> = {};
+  const sanitizedSet = clean(set);
+  if (Object.keys(sanitizedSet).length > 0) ops.$set = sanitizedSet;
+  if (Object.keys(unset).length > 0) ops.$unset = unset;
+  Object.assign(ops, operatorDocuments(operators, clean));
+  refuseComputedWrite(ops);
+  const written = writtenPaths(ops);
+  assertDisjointPaths(operation, written);
+  const inserted = Object.fromEntries(
+    Object.entries(insertedValues(ops)).filter(
+      ([path]) => !POSITIONAL.test(path),
+    ),
+  );
+  return { ops, set, written, inserted };
+}
+
+// `$[]` is resolved by the dot-notation schema; `$` and `$[name]` are not.
+const POSITIONAL = /(^|\.)\$(\[[^\]]+\])?(\.|$)/;
+
+/**
+ * Checks the values written at positional paths (`"a.$.b"`,
+ * `"a.$[x].b"`) against the array item's schema, which the dot-notation
+ * schema does not resolve.
+ */
+export function checkPositionalValues(
+  root: AnyObjectSchema,
+  fields: Record<string, unknown>,
+): void {
+  for (const [path, value] of Object.entries(fields)) {
+    if (!POSITIONAL.test(path)) continue;
+    const nodes = schemasAtPath(root, path);
+    if (nodes.length > 0) parseAgainst(nodes, value);
+  }
 }
 
 /**
@@ -166,6 +246,7 @@ export function upsertInsertFields(input: {
   injected?: (candidate: Record<string, unknown>) => Record<string, unknown>;
   ignored?: readonly string[];
 }): Record<string, unknown> {
+  refuseOperators("setOnInsert", input.setOnInsert);
   const ignored = input.ignored ?? [];
   const equalities = filterEqualities(input.filter, ignored);
   const candidate = expandDottedPaths({
