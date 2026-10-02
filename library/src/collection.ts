@@ -29,7 +29,8 @@ import {
   readOpts,
   type WithReadPreferenceInput,
 } from "./read-preference.ts";
-import { findOneThrough } from "./request-context.ts";
+import { findOneThrough, findThrough } from "./request-context.ts";
+import { type ReturningPlan, returnInserted } from "./insert-returning.ts";
 import { ensureValidator } from "./utils/ensure-validator.ts";
 import { withDatabaseDdlLock } from "./ddl-lock.ts";
 import { applyCollectionIndexes } from "./indexes-applier.ts";
@@ -290,6 +291,24 @@ export type CollectionResult<
     doc: m.OptionalUnlessRequiredId<TInput<T>>,
     options?: m.InsertOneOptions,
   ) => Promise<WithId<TOutput<T>>["_id"]>;
+  /**
+   * Inserts like `insertOne` and returns the document as `getById` would read
+   * it, without the read. A collection with computed fields is read back,
+   * since its computed values are filled while the document is written.
+   */
+  insertOneReturning: (
+    doc: m.OptionalUnlessRequiredId<TInput<T>>,
+    options?: m.InsertOneOptions,
+  ) => Promise<WithId<TOutput<T>>>;
+  /**
+   * Inserts like `insertMany` and returns the documents, in input order, as
+   * `getById` would read them: no read, except one `$in` read back for a
+   * collection with computed fields.
+   */
+  insertManyReturning: (
+    docs: readonly m.OptionalUnlessRequiredId<TInput<T>>[],
+    options?: m.BulkWriteOptions,
+  ) => Promise<WithId<TOutput<T>>[]>;
   findOne: (
     filter: m.Filter<WithId<TInput<T>>>,
     options?: WithReadPreferenceInput<Omit<m.FindOptions, "timeoutMode">> &
@@ -726,6 +745,80 @@ export async function collection<
   });
   registerClientTelemetry(db.client, opts.telemetry);
 
+  async function insertStored(
+    doc: unknown,
+    options?: m.InsertOneOptions,
+  ): Promise<{ id: WithId<TOutput>["_id"]; stored: Record<string, unknown> }> {
+    const validatedDoc = v.parse(
+      schema,
+      doc,
+    ) as m.OptionalUnlessRequiredId<TInput>;
+
+    // Apply sanitization based on configuration
+    const safeDoc = sanitizeForMongoDB(validatedDoc, {
+      undefinedBehavior: opts.undefinedBehavior || "remove",
+      deep: true,
+    }) as unknown as m.OptionalUnlessRequiredId<TInput>;
+
+    const session = sessionContext.getSession();
+    const inserted = await collection.insertOne(safeDoc, {
+      session,
+      ...options,
+    });
+    if (!inserted.acknowledged) {
+      throw new Error("Insert failed");
+    }
+    return {
+      id: inserted.insertedId as WithId<TOutput>["_id"],
+      stored: safeDoc as Record<string, unknown>,
+    };
+  }
+
+  async function insertManyStored(
+    docs: readonly unknown[],
+    options?: m.BulkWriteOptions,
+  ): Promise<{ result: m.InsertManyResult<TInput>; stored: Record<string, unknown>[] }> {
+    const validatedDocs = docs.map((doc) => v.parse(schema, doc));
+
+    // Apply sanitization based on configuration
+    const safeDocs = validatedDocs.map(
+      (doc) =>
+        sanitizeForMongoDB(doc, {
+          undefinedBehavior: opts.undefinedBehavior || "remove",
+          deep: true,
+        }) as unknown as m.OptionalUnlessRequiredId<TInput>,
+    );
+
+    const session = sessionContext.getSession();
+    const inserted = await collection.insertMany(safeDocs, {
+      session,
+      ...options,
+    });
+    if (!inserted.acknowledged) {
+      throw new Error("Insert failed");
+    }
+    return { result: inserted, stored: safeDocs as Record<string, unknown>[] };
+  }
+
+  function returningPlan(operation: string): ReturningPlan<WithId<TOutput>> {
+    return {
+      label: `${operation} in "${collectionName}"`,
+      computed: COMPUTED_ROOT in collectionSchema,
+      decode: (doc) => {
+        const validation = v.safeParse(schema, doc);
+        if (validation.success) return validation.output as WithId<TOutput>;
+        throw new DocumentValidationError(validation, doc);
+      },
+      readBack: (ids) =>
+        findThrough(
+          documents,
+          { _id: { $in: [...ids] } } as m.Filter<StoredDocument>,
+          undefined,
+          { session: sessionContext.getSession() },
+        ) as Promise<Record<string, unknown>[]>,
+    };
+  }
+
   function findOneAndDelete(
     filter: m.Filter<TInput>,
     options: m.FindOneAndDeleteOptions & { includeResultMetadata: true },
@@ -912,61 +1005,49 @@ export async function collection<
     },
     // Document creation operations with validation
     async insertOne(doc, options?) {
+      const run = async () => (await insertStored(doc, options)).id;
+      return traced(tele, "insertOne", undefined, run, () => ({
+        [TA.INSERTED_COUNT]: 1,
+      }));
+    },
+    async insertOneReturning(doc, options?) {
       const run = async () => {
-        const validatedDoc = v.parse(
-          schema,
-          doc,
-        ) as m.OptionalUnlessRequiredId<TInput>;
-
-        // Apply sanitization based on configuration
-        const safeDoc = sanitizeForMongoDB(validatedDoc, {
-          undefinedBehavior: opts.undefinedBehavior || "remove",
-          deep: true,
-        }) as unknown as m.OptionalUnlessRequiredId<TInput>;
-
-        const session = sessionContext.getSession();
-        const inserted = await collection.insertOne(safeDoc, {
-          session,
-          ...options,
+        const { id, stored } = await insertStored(doc, options);
+        const [returned] = await returnInserted(returningPlan("insertOneReturning"), {
+          ids: [id],
+          stored: [stored],
         });
-        if (!inserted.acknowledged) {
-          throw new Error("Insert failed");
-        }
-        return inserted.insertedId as WithId<TOutput>["_id"];
+        return returned;
       };
       return traced(tele, "insertOne", undefined, run, () => ({
         [TA.INSERTED_COUNT]: 1,
       }));
     },
     async insertMany(docs, options?) {
-      const run = async () => {
-        const validatedDocs = docs.map((doc) => v.parse(schema, doc));
-
-        // Apply sanitization based on configuration
-        const safeDocs = validatedDocs.map(
-          (doc) =>
-            sanitizeForMongoDB(doc, {
-              undefinedBehavior: opts.undefinedBehavior || "remove",
-              deep: true,
-            }) as unknown as m.OptionalUnlessRequiredId<TInput>,
-        );
-
-        const session = sessionContext.getSession();
-        const inserted = await collection.insertMany(safeDocs, {
-          session,
-          ...options,
-        });
-        if (!inserted.acknowledged) {
-          throw new Error("Insert failed");
-        }
-        return inserted;
-      };
+      const run = async () => (await insertManyStored(docs, options)).result;
       return traced(
         tele,
         "insertMany",
         () => ({ [TA.BATCH_SIZE]: docs.length }),
         run,
         (r) => ({ [TA.INSERTED_COUNT]: r.insertedCount }),
+      );
+    },
+    async insertManyReturning(docs, options?) {
+      const run = async () => {
+        const { result, stored } = await insertManyStored(docs, options);
+        const ids = Object.keys(result.insertedIds)
+          .map(Number)
+          .sort((a, b) => a - b)
+          .map((index) => result.insertedIds[index]);
+        return await returnInserted(returningPlan("insertManyReturning"), { ids, stored });
+      };
+      return traced(
+        tele,
+        "insertMany",
+        () => ({ [TA.BATCH_SIZE]: docs.length }),
+        run,
+        (inserted) => ({ [TA.INSERTED_COUNT]: inserted.length }),
       );
     },
 

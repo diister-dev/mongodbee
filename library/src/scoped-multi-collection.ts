@@ -19,6 +19,7 @@ import {
 import { toMongoValidator } from "./validator.ts";
 import { type Page, warnSkippedInvalid } from "./page.ts";
 import { parseStored } from "./validation-error.ts";
+import { type ReturningPlan, returnInserted } from "./insert-returning.ts";
 import { createLogger } from "./utils/logger.ts";
 import { dbId, newId } from "./ids.ts";
 import { sanitizeForMongoDB } from "./sanitizer.ts";
@@ -301,10 +302,31 @@ export type ScopedView<
     doc: UserInputDoc<T, K>,
   ): Promise<string>;
 
+  /**
+   * Inserts like `insertOne` and returns the document as `getById` would read
+   * it, without the read: the validated document that was written, parsed
+   * with the stored schema. A type with computed fields is read back, since
+   * its computed values are filled while it is written.
+   */
+  insertOneReturning<K extends keyof T>(
+    type: K,
+    doc: UserInputDoc<T, K>,
+  ): Promise<OutputDoc<T, K, S>>;
+
   insertMany<K extends keyof T>(
     type: K,
     docs: UserInputDoc<T, K>[],
   ): Promise<string[]>;
+
+  /**
+   * Inserts like `insertMany` and returns the documents, in input order, as
+   * `getById` would read them. Same rule as `insertOneReturning`: no read,
+   * except one `$in` read back for a type with computed fields.
+   */
+  insertManyReturning<K extends keyof T>(
+    type: K,
+    docs: UserInputDoc<T, K>[],
+  ): Promise<OutputDoc<T, K, S>[]>;
 
   getById<K extends keyof T>(type: K, id: string): Promise<OutputDoc<T, K, S>>;
 
@@ -813,6 +835,12 @@ export async function scopedMultiCollection<S extends AnySchema>(
     {} as Record<string, AnySchema>,
   );
 
+  const typesWithComputed: ReadonlySet<string> = new Set(
+    Object.entries(types)
+      .filter(([, fields]) => COMPUTED_ROOT in fields)
+      .map(([name]) => name),
+  );
+
   const collection = maintainedCollection(
     db,
     readingCollection<StoredDocument, DriverCollectionOptions>(
@@ -983,38 +1011,114 @@ export async function scopedMultiCollection<S extends AnySchema>(
       return { ops, guard, upsert };
     }
 
+    async function insertStored(
+      typeName: string,
+      doc: unknown,
+    ): Promise<{ id: string; stored: Record<string, unknown> }> {
+      const record = doc as Record<string, unknown>;
+      assertNoReservedFields(record);
+
+      const schema = insertSchemas[typeName];
+      const parsed = v.parse(schema, {
+        ...record,
+        // Auto-mint `_id` when the caller omits it, mirroring the
+        // multiCollection contract. The per-type `_id` schema is often a
+        // bare `refId(type)` (required, no default), so we cannot rely on a
+        // `dbId` default here — without this, inserting such a type would
+        // throw "Expected _id but received undefined".
+        _id: record._id ?? `${typeName}:${newId()}`,
+        _scope: scopeId,
+      });
+
+      const safeDoc = toStoredDocument(
+        sanitizeForMongoDB(parsed, {
+          undefinedBehavior: "remove",
+          deep: true,
+        }),
+      );
+      const session = sessionContext.getSession();
+      const result = await collection.insertOne(safeDoc, { session });
+      if (!result.acknowledged) throw new Error("Insert failed");
+      return {
+        id: toStringId(result.insertedId),
+        stored: safeDoc as Record<string, unknown>,
+      };
+    }
+
+    function returningPlan(
+      typeName: string,
+      operation: string,
+    ): ReturningPlan<never> {
+      return {
+        label: `${operation}(${typeName}) in scope "${scopeId}"`,
+        computed: typesWithComputed.has(typeName),
+        decode: (doc) => parseStored(storageSchemas[typeName], doc) as never,
+        readBack: (ids) =>
+          findThrough(
+            collection,
+            { _id: { $in: ids.map(toStringId) }, _type: typeName, _scope: scopeId },
+            undefined,
+            { session: sessionContext.getSession() },
+          ) as Promise<Record<string, unknown>[]>,
+      };
+    }
+
+    async function insertManyStored(
+      typeName: string,
+      docs: readonly unknown[],
+    ): Promise<{ ids: string[]; stored: Record<string, unknown>[] }> {
+      const schema = insertSchemas[typeName];
+      const safeDocs = docs.map((d) => {
+        const record = d as Record<string, unknown>;
+        assertNoReservedFields(record);
+        const parsed = v.parse(schema, {
+          ...record,
+          _id: record._id ?? `${typeName}:${newId()}`,
+          _scope: scopeId,
+        });
+        return toStoredDocument(
+          sanitizeForMongoDB(parsed, {
+            undefinedBehavior: "remove",
+            deep: true,
+          }),
+        );
+      });
+
+      const session = sessionContext.getSession();
+      const result = await collection.insertMany(safeDocs, { session });
+      if (!result.acknowledged) throw new Error("Insert failed");
+      return {
+        ids: Object.values(result.insertedIds).map(toStringId),
+        stored: safeDocs as Record<string, unknown>[],
+      };
+    }
+
     return {
       _scope: scopeId,
 
       async insertOne(type, doc) {
+        const run = async () => (await insertStored(type as string, doc)).id;
+        return traced(
+          tele,
+          "insertOne",
+          () => ({
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
+            [TA.DOC_TYPE]: String(type),
+          }),
+          run,
+          () => ({ [TA.INSERTED_COUNT]: 1 }),
+        );
+      },
+
+      async insertOneReturning(type, doc) {
         const run = async () => {
           const typeName = type as string;
-          const record = doc as Record<string, unknown>;
-          assertNoReservedFields(record);
-
-          const schema = insertSchemas[typeName];
-          const parsed = v.parse(schema, {
-            ...record,
-            // Auto-mint `_id` when the caller omits it, mirroring the
-            // multiCollection contract. The per-type `_id` schema is often a
-            // bare `refId(type)` (required, no default), so we cannot rely on a
-            // `dbId` default here — without this, inserting such a type would
-            // throw "Expected _id but received undefined".
-            _id: record._id ?? `${typeName}:${newId()}`,
-            _scope: scopeId,
-          });
-
-          const safeDoc = toStoredDocument(
-            sanitizeForMongoDB(parsed, {
-              undefinedBehavior: "remove",
-              deep: true,
-            }),
+          const { id, stored } = await insertStored(typeName, doc);
+          const [returned] = await returnInserted(
+            returningPlan(typeName, "insertOneReturning"),
+            { ids: [id], stored: [stored] },
           );
-
-          const session = sessionContext.getSession();
-          const result = await collection.insertOne(safeDoc, { session });
-          if (!result.acknowledged) throw new Error("Insert failed");
-          return toStringId(result.insertedId);
+          return returned;
         };
         return traced(
           tele,
@@ -1029,34 +1133,8 @@ export async function scopedMultiCollection<S extends AnySchema>(
       },
 
       async insertMany(type, docs) {
-        const run = async () => {
-          const typeName = type as string;
-          const schema = insertSchemas[typeName];
-
-          const parsed = docs.map((d) => {
-            const record = d as Record<string, unknown>;
-            assertNoReservedFields(record);
-            return v.parse(schema, {
-              ...record,
-              _id: record._id ?? `${typeName}:${newId()}`,
-              _scope: scopeId,
-            });
-          });
-
-          const safeDocs = parsed.map((p) =>
-            toStoredDocument(
-              sanitizeForMongoDB(p, {
-                undefinedBehavior: "remove",
-                deep: true,
-              }),
-            ),
-          );
-
-          const session = sessionContext.getSession();
-          const result = await collection.insertMany(safeDocs, { session });
-          if (!result.acknowledged) throw new Error("Insert failed");
-          return Object.values(result.insertedIds).map(toStringId);
-        };
+        const run = async () =>
+          (await insertManyStored(type as string, docs)).ids;
         return traced(
           tele,
           "insertMany",
@@ -1067,6 +1145,27 @@ export async function scopedMultiCollection<S extends AnySchema>(
           }),
           run,
           (ids) => ({ [TA.INSERTED_COUNT]: ids.length }),
+        );
+      },
+
+      async insertManyReturning(type, docs) {
+        const run = async () => {
+          const typeName = type as string;
+          return await returnInserted(
+            returningPlan(typeName, "insertManyReturning"),
+            await insertManyStored(typeName, docs),
+          );
+        };
+        return traced(
+          tele,
+          "insertMany",
+          () => ({
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
+            [TA.DOC_TYPE]: String(type),
+            [TA.BATCH_SIZE]: docs.length,
+          }),
+          run,
+          (inserted) => ({ [TA.INSERTED_COUNT]: inserted.length }),
         );
       },
 

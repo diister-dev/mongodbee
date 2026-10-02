@@ -129,6 +129,22 @@ const products = await catalog.find("product", { category: electronicsId });
 Unique indexes are scoped to the document type via partial filter expressions,
 so a `product` and a `category` may share a name.
 
+`insertOneReturning` and `insertManyReturning` insert and return the documents
+as `getById` would read them, without the round trip: the validated document
+that was written, parsed with the stored schema, in input order. All three
+shapes have them (`collection` without the type argument). A type with
+computed fields is read back, once per call, since its computed values are
+filled while it is written.
+
+```ts
+const phone = await catalog.insertOneReturning("product", {
+  name: "Tablet",
+  price: 299,
+  category: electronicsId,
+});
+phone._id; // no getById needed
+```
+
 `aggregate` takes a builder whose stages know the document types:
 
 ```ts
