@@ -4,7 +4,9 @@ import {
   type StoredDocument,
   toStoredDocument,
   toStoredFilter,
+  toStringId,
 } from "./stored-document.ts";
+import { type ReturningPlan, returnInserted } from "./insert-returning.ts";
 import { toMongoValidator } from "./validator.ts";
 import { dbId, newId } from "./ids.ts";
 import { sanitizeForMongoDB } from "./sanitizer.ts";
@@ -486,10 +488,28 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
    */
   readonly collection: m.Collection<StoredDocument>;
   insertOne<E extends keyof T>(key: E, doc: InsertDoc<T, E>): Promise<string>;
+  /**
+   * Inserts like `insertOne` and returns the document as `getById` would read
+   * it, without the read. A type with computed fields is read back, since its
+   * computed values are filled while it is written.
+   */
+  insertOneReturning<E extends keyof T>(
+    key: E,
+    doc: InsertDoc<T, E>,
+  ): Promise<v.InferOutput<OutputElementSchema<T, E>>>;
   insertMany<E extends keyof T>(
     key: E,
     docs: InsertDoc<T, E>[],
   ): Promise<string[]>;
+  /**
+   * Inserts like `insertMany` and returns the documents, in input order, as
+   * `getById` would read them: no read, except one `$in` read back for a type
+   * with computed fields.
+   */
+  insertManyReturning<E extends keyof T>(
+    key: E,
+    docs: InsertDoc<T, E>[],
+  ): Promise<v.InferOutput<OutputElementSchema<T, E>>[]>;
   getById<E extends keyof T>(
     key: E,
     id: string,
@@ -972,33 +992,112 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
   });
   registerClientTelemetry(db.client, opts.telemetry);
 
+  async function insertStored(
+    key: keyof T,
+    doc: { _id?: string },
+  ): Promise<{ id: string; stored: Record<string, unknown> }> {
+    const _id = doc._id ?? `${key as string}:${newId()}`;
+    const schema = schemaElements[key];
+    const validation = v.parse(schema, {
+      ...doc,
+      _id,
+    });
+
+    // Apply sanitization based on configuration
+    const safeDoc = toStoredDocument(
+      sanitizeForMongoDB(validation, {
+        undefinedBehavior: opts.undefinedBehavior || "remove",
+        deep: true,
+      }),
+    );
+
+    const session = sessionContext.getSession();
+    const result = await collection.insertOne(safeDoc, { session });
+    if (!result.acknowledged) {
+      throw new Error("Insert failed");
+    }
+
+    return {
+      id: result.insertedId as unknown as string,
+      stored: safeDoc as Record<string, unknown>,
+    };
+  }
+
+  async function insertManyStored(
+    key: keyof T,
+    docs: readonly { _id?: string }[],
+  ): Promise<{ ids: string[]; stored: Record<string, unknown>[] }> {
+    // Validate each doc against the SPECIFIC element schema (as insertOne
+    // does), not the whole union: the union would try every member per doc
+    // (O(types) work) and, on failure, surface an aggregated cross-type error
+    // instead of the precise one. Semantics are identical for valid input.
+    const schema = schemaElements[key];
+    const validation = docs.map((doc) => {
+      const _id = doc._id ?? `${key as string}:${newId()}`;
+      return v.parse(schema, {
+        ...doc,
+        _id,
+      });
+    });
+
+    // Apply sanitization based on configuration
+    const safeDocs = validation.map((doc) =>
+      toStoredDocument(
+        sanitizeForMongoDB(doc, {
+          undefinedBehavior: opts.undefinedBehavior || "remove",
+          deep: true,
+        }),
+      ),
+    );
+
+    const session = sessionContext.getSession();
+    const result = await collection.insertMany(safeDocs, { session });
+    if (!result.acknowledged) {
+      throw new Error("Insert failed");
+    }
+
+    return {
+      ids: Object.values(result.insertedIds) as unknown as string[],
+      stored: safeDocs as Record<string, unknown>[],
+    };
+  }
+
+  function returningPlan(key: keyof T, operation: string): ReturningPlan<never> {
+    return {
+      label: `${operation}(${key as string}) in "${collectionName}"`,
+      computed: COMPUTED_ROOT in collectionSchema[key],
+      decode: (doc) => parseStored(schemaElements[key], doc) as never,
+      readBack: (ids) =>
+        findThrough(
+          collection,
+          { _type: key as string, _id: { $in: ids.map(toStringId) } },
+          undefined,
+          { session: sessionContext.getSession() },
+        ) as Promise<Record<string, unknown>[]>,
+    };
+  }
+
   return {
     withSession: sessionContext!.withSession,
     collection: ambientSessionCollection(collection),
     async insertOne(key, doc) {
+      const run = async () => (await insertStored(key, doc)).id;
+      return traced(
+        tele,
+        "insertOne",
+        () => ({ [TA.DOC_TYPE]: String(key) }),
+        run,
+        () => ({ [TA.INSERTED_COUNT]: 1 }),
+      );
+    },
+    async insertOneReturning(key, doc) {
       const run = async () => {
-        const _id = doc._id ?? `${key as string}:${newId()}`;
-        const schema = schemaElements[key];
-        const validation = v.parse(schema, {
-          ...doc,
-          _id,
-        });
-
-        // Apply sanitization based on configuration
-        const safeDoc = toStoredDocument(
-          sanitizeForMongoDB(validation, {
-            undefinedBehavior: opts.undefinedBehavior || "remove",
-            deep: true,
-          }),
+        const { id, stored } = await insertStored(key, doc);
+        const [returned] = await returnInserted(
+          returningPlan(key, "insertOneReturning"),
+          { ids: [id], stored: [stored] },
         );
-
-        const session = sessionContext.getSession();
-        const result = await collection.insertOne(safeDoc, { session });
-        if (!result.acknowledged) {
-          throw new Error("Insert failed");
-        }
-
-        return result.insertedId as unknown as string;
+        return returned;
       };
       return traced(
         tele,
@@ -1009,38 +1108,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
       );
     },
     async insertMany(key, docs) {
-      const run = async () => {
-        // Validate each doc against the SPECIFIC element schema (as insertOne
-        // does), not the whole union: the union would try every member per doc
-        // (O(types) work) and, on failure, surface an aggregated cross-type error
-        // instead of the precise one. Semantics are identical for valid input.
-        const schema = schemaElements[key];
-        const validation = docs.map((doc) => {
-          const _id = doc._id ?? `${key as string}:${newId()}`;
-          return v.parse(schema, {
-            ...doc,
-            _id,
-          });
-        });
-
-        // Apply sanitization based on configuration
-        const safeDocs = validation.map((doc) =>
-          toStoredDocument(
-            sanitizeForMongoDB(doc, {
-              undefinedBehavior: opts.undefinedBehavior || "remove",
-              deep: true,
-            }),
-          ),
-        );
-
-        const session = sessionContext.getSession();
-        const result = await collection.insertMany(safeDocs, { session });
-        if (!result.acknowledged) {
-          throw new Error("Insert failed");
-        }
-
-        return Object.values(result.insertedIds) as unknown as string[];
-      };
+      const run = async () => (await insertManyStored(key, docs)).ids;
       return traced(
         tele,
         "insertMany",
@@ -1050,6 +1118,23 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         }),
         run,
         (ids) => ({ [TA.INSERTED_COUNT]: ids.length }),
+      );
+    },
+    async insertManyReturning(key, docs) {
+      const run = async () =>
+        await returnInserted(
+          returningPlan(key, "insertManyReturning"),
+          await insertManyStored(key, docs),
+        );
+      return traced(
+        tele,
+        "insertMany",
+        () => ({
+          [TA.DOC_TYPE]: String(key),
+          [TA.BATCH_SIZE]: docs.length,
+        }),
+        run,
+        (inserted) => ({ [TA.INSERTED_COUNT]: inserted.length }),
       );
     },
     async getById(key, id, options?) {

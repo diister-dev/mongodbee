@@ -25,6 +25,18 @@ This document covers the parts of the API that need more than the quickstart in
 the [README](../README.md#-scoped-multi-collections). For a general
 introduction, start there.
 
+## `insertOneReturning` / `insertManyReturning` — insert without reading back
+
+Both insert like `insertOne` / `insertMany` and return the documents as
+`getById` reads them: the document that was written, after the insert schema
+(defaults, transforms) and the sanitizer, parsed with the stored schema. No
+read reaches MongoDB, which removes the usual `insertOne` then `getById` pair.
+`insertManyReturning` keeps the input order.
+
+A type with computed fields is the exception: its computed values are filled
+by the maintained write, so the documents are read back with one `$in` read
+per call. `collection` and `multiCollection` have the same two methods.
+
 ## `findProject` — partial, unvalidated projected reads
 
 `findProject` is a **distinct method**, not a flag on `find`, because its result
