@@ -198,7 +198,9 @@ function rawSchemaAtPath(fields: SchemaContent, path: string): unknown {
         );
       });
       current = option
-        ? (unwrapSchema(option)?.entries as Record<string, unknown>)[segment]
+        ? (
+            unwrapSchema(option)?.entries as Record<string, unknown> | undefined
+          )?.[segment]
         : undefined;
       continue;
     }
