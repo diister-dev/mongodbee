@@ -38,6 +38,8 @@ export { docsOf, resolveTargetKey } from "./state.ts";
 export { SKIP } from "@diister/valibot-mock";
 export {
   countDocuments,
+  type PopulateDatabaseOptions,
+  populateDatabase,
   readStateFromDatabase,
   type ReadStateOptions,
   type WriteStateOptions,

@@ -6,21 +6,25 @@ import { MongoClient } from "../../../mongodb.ts";
 import { loadConfig } from "../../config/loader.ts";
 import { buildMigrationChain, loadAllMigrations } from "../../discovery.ts";
 import { loadProjectSchema } from "../../schema-validation.ts";
-import { markMigrationAsAdopted } from "../../state.ts";
 import { resolveMigrationRef } from "../utils/resolve-ref.ts";
+import { migrationDefinition } from "../../definition.ts";
+import { getAppliedMigrationIds, markMigrationAsAdopted } from "../../state.ts";
 import {
   buildPrivacyPlan,
   createPrivacyTransformer,
   type PrivacyConsistency,
   type PrivacyPlan,
+  remapId,
   type TransformNoteKind,
 } from "../../../privacy/mod.ts";
 import {
   applyMigrationsInMemory,
+  checkScenarioState,
   countDocuments,
   docsOf,
+  populateDatabase,
   readStateFromDatabase,
-  writeStateToDatabase,
+  type ScenarioViolation,
 } from "../../../scenario/mod.ts";
 import {
   createEmptyDatabaseState,
@@ -61,9 +65,23 @@ export interface ExtractSummary {
       readonly notes: Partial<Record<TransformNoteKind, number>>;
     }
   >;
+  readonly skipped: Record<string, Record<string, number>>;
+  readonly violations: readonly ScenarioViolation[];
   readonly secretDiscarded: boolean;
   readonly applied: readonly string[];
 }
+
+export interface TransformStateResult {
+  readonly state: DatabaseState;
+  readonly summary: ExtractSummary["targets"];
+  readonly skipped: ExtractSummary["skipped"];
+}
+
+const REPORTED_VIOLATIONS: ReadonlySet<ScenarioViolation["kind"]> = new Set([
+  "dangling_reference",
+  "owner_unresolved",
+  "duplicate_id",
+]);
 
 function resolveSecret(raw: string | undefined): {
   secret: string;
@@ -98,26 +116,107 @@ function parseConsistency(raw: string | undefined): PrivacyConsistency {
   );
 }
 
+function isMetadataDocument(doc: Record<string, unknown>): boolean {
+  return typeof doc._type === "string" && doc._type.startsWith("_");
+}
+
+async function serverIdentity(client: MongoClient): Promise<string> {
+  const hello = await client.db("admin").command({ hello: 1 });
+  return String(hello.primary ?? hello.me);
+}
+
+async function assertTargetIsNotSource(
+  sourceClient: MongoClient,
+  targetClient: MongoClient,
+  sourceDb: string,
+  toDb: string,
+): Promise<void> {
+  if (toDb !== sourceDb) return;
+  if (
+    (await serverIdentity(sourceClient)) !==
+    (await serverIdentity(targetClient))
+  ) {
+    return;
+  }
+  throw new Error(
+    "extract refuses to write into its own source; pick another --to-db or --to",
+  );
+}
+
 export function transformState(
   state: DatabaseState,
   plan: PrivacyPlan,
   transformer: ReturnType<typeof createPrivacyTransformer>,
-): { state: DatabaseState; summary: ExtractSummary["targets"] } {
+  remapInstanceName: (name: string) => string = (name) => name,
+): TransformStateResult {
   const out = createEmptyDatabaseState();
   const summary: ExtractSummary["targets"] = {};
+  const skipped: Record<string, Record<string, number>> = {};
+  const declaredTypes = new Map<string, Set<string>>();
   for (const target of plan.targets.values()) {
-    const docs = docsOf(state, target);
-    if (docs.length === 0) continue;
+    const key = `${target.bucket}/${target.collection}`;
+    const types = declaredTypes.get(key) ?? new Set<string>();
+    types.add(target.type ?? "");
+    declaredTypes.set(key, types);
+  }
+
+  const countSkipped = (
+    bucket: string,
+    collection: string,
+    docs: readonly Record<string, unknown>[],
+  ) => {
+    const key = `${bucket}/${collection}`;
+    const declared = declaredTypes.get(key);
+    for (const doc of docs) {
+      if (isMetadataDocument(doc)) continue;
+      const type = String(doc._type);
+      if (declared?.has(type)) continue;
+      const counts = (skipped[key] ??= {});
+      counts[type] = (counts[type] ?? 0) + 1;
+    }
+  };
+
+  const record = (
+    key: string,
+    notes: Partial<Record<TransformNoteKind, number>>,
+    documents: number,
+  ) => {
+    const entry = (summary[key] ??= { documents: 0, notes: {} });
+    const merged = { ...entry.notes };
+    for (const [kind, count] of Object.entries(notes)) {
+      const noteKind = kind as TransformNoteKind;
+      merged[noteKind] = (merged[noteKind] ?? 0) + count;
+    }
+    summary[key] = { documents: entry.documents + documents, notes: merged };
+  };
+
+  const transformDocs = (
+    targetKey: string,
+    docs: readonly Record<string, unknown>[],
+    scope?: string,
+  ): Record<string, unknown>[] => {
     const notes: Partial<Record<TransformNoteKind, number>> = {};
     const transformed: Record<string, unknown>[] = [];
     for (const doc of docs) {
-      const result = transformer.transform(target.key, doc);
+      const result = transformer.transform(
+        targetKey,
+        doc,
+        scope === undefined ? undefined : { scope },
+      );
       for (const note of result.notes) {
         notes[note.kind] = (notes[note.kind] ?? 0) + 1;
       }
       transformed.push(result.doc);
     }
-    summary[target.key] = { documents: transformed.length, notes };
+    if (docs.length > 0) record(targetKey, notes, docs.length);
+    return transformed;
+  };
+
+  for (const target of plan.targets.values()) {
+    if (target.bucket === "multiModels") continue;
+    const docs = docsOf(state, target);
+    if (docs.length === 0) continue;
+    const transformed = transformDocs(target.key, docs);
     switch (target.bucket) {
       case "collections":
         out.collections[target.collection] = { content: transformed };
@@ -132,14 +231,49 @@ export function transformState(
           content: [],
         }).content.push(...transformed);
         break;
-      case "multiModels":
-        break;
     }
   }
-  for (const [name, instance] of Object.entries(state.multiModels)) {
-    out.multiModels[name] = { modelType: instance.modelType, content: [] };
+  for (const [name, { content }] of Object.entries(state.multiCollections)) {
+    countSkipped("multiCollections", name, content);
+    const metadata = content.filter(isMetadataDocument);
+    if (metadata.length > 0) {
+      (out.multiCollections[name] ??= { content: [] }).content.push(
+        ...structuredClone(metadata),
+      );
+    }
   }
-  return { state: out, summary };
+  for (const [name, { content }] of Object.entries(
+    state.scopedMultiCollections,
+  )) {
+    countSkipped("scopedMultiCollections", name, content);
+  }
+
+  for (const [name, instance] of Object.entries(state.multiModels)) {
+    countSkipped("multiModels", instance.modelType, instance.content);
+    const content: Record<string, unknown>[] = structuredClone(
+      instance.content.filter(isMetadataDocument),
+    );
+    for (const target of plan.targets.values()) {
+      if (
+        target.bucket !== "multiModels" ||
+        target.collection !== instance.modelType
+      ) {
+        continue;
+      }
+      content.push(
+        ...transformDocs(
+          target.key,
+          instance.content.filter((d) => d._type === target.type),
+          name,
+        ),
+      );
+    }
+    out.multiModels[remapInstanceName(name)] = {
+      modelType: instance.modelType,
+      content,
+    };
+  }
+  return { state: out, summary, skipped };
 }
 
 export async function extractCommand(
@@ -233,72 +367,110 @@ export async function extractCommand(
   }
 
   const sourceClient = new MongoClient(fromUri);
-  await sourceClient.connect();
-  let state: DatabaseState;
+  const targetClient = dryRun ? undefined : new MongoClient(toUri);
   try {
+    await sourceClient.connect();
+    if (targetClient) {
+      await targetClient.connect();
+      await assertTargetIsNotSource(
+        sourceClient,
+        targetClient,
+        sourceDb,
+        toDb!,
+      );
+      const existing = await countDocuments(targetClient.db(toDb!));
+      if (existing > 0 && !options.force) {
+        throw new Error(
+          `Database "${toDb}" already holds ${existing} document(s); extract only writes into an empty database (or pass --force)`,
+        );
+      }
+    }
+
     const sourceSchemas =
       replay.length > 0
         ? resolveMigrationRef(chain, fromMigration!).schemas
         : schemas;
-    state = await readStateFromDatabase(
+    const state = await readStateFromDatabase(
       sourceClient.db(sourceDb),
       sourceSchemas,
       {
         ...(options.scope !== undefined && { scope: options.scope }),
       },
     );
-  } finally {
-    await sourceClient.close();
-  }
-  const replayed = await applyMigrationsInMemory(state, replay);
+    const replayed = await applyMigrationsInMemory(state, replay);
 
-  const transformer = createPrivacyTransformer({
-    plan,
-    schemas,
-    secret,
-    consistency,
-    timeShiftMs: shiftDays * 86_400_000,
-  });
-  const result = transformState(replayed.state, plan, transformer);
-  const summary: ExtractSummary = {
-    targets: result.summary,
-    secretDiscarded: discarded,
-    applied: replayed.applied,
-  };
+    const shiftMs = shiftDays * 86_400_000;
+    const transformer = createPrivacyTransformer({
+      plan,
+      schemas,
+      secret,
+      consistency,
+      timeShiftMs: shiftMs,
+    });
+    const result = transformState(replayed.state, plan, transformer, (name) =>
+      remapId(secret, name, shiftMs),
+    );
+    const violations = checkScenarioState({
+      state: result.state,
+      schemas,
+      plan,
+    }).filter((violation) => REPORTED_VIOLATIONS.has(violation.kind));
+    const summary: ExtractSummary = {
+      targets: result.summary,
+      skipped: result.skipped,
+      violations,
+      secretDiscarded: discarded,
+      applied: replayed.applied,
+    };
 
-  if (options.json) {
-    console.log(JSON.stringify(summary, null, 2));
-  } else {
-    for (const [target, entry] of Object.entries(result.summary)) {
-      const notes = Object.entries(entry.notes)
-        .map(([k, n]) => `${k} ${n}`)
-        .join(", ");
-      console.log(
-        `  ${target.padEnd(60)} ${String(entry.documents).padStart(7)}${
-          notes ? dim(`   ${notes}`) : ""
-        }`,
-      );
+    if (options.json) {
+      console.log(JSON.stringify(summary, null, 2));
+    } else {
+      for (const [target, entry] of Object.entries(result.summary)) {
+        const notes = Object.entries(entry.notes)
+          .map(([k, n]) => `${k} ${n}`)
+          .join(", ");
+        console.log(
+          `  ${target.padEnd(60)} ${String(entry.documents).padStart(7)}${
+            notes ? dim(`   ${notes}`) : ""
+          }`,
+        );
+      }
+      console.log();
+      for (const [collection, types] of Object.entries(result.skipped)) {
+        const detail = Object.entries(types)
+          .map(([type, n]) => `${type} ${n}`)
+          .join(", ");
+        console.log(
+          yellow(
+            `  ! ${collection}: documents of undeclared _type not copied (${detail})`,
+          ),
+        );
+      }
+      for (const violation of violations) {
+        console.log(yellow(`  ! ${violation.target}: ${violation.message}`));
+      }
+      console.log();
     }
-    console.log();
-  }
-  if (dryRun) {
-    if (!options.json) console.log(yellow("Dry run: nothing written"));
-    return;
-  }
+    if (!targetClient) {
+      if (!options.json) console.log(yellow("Dry run: nothing written"));
+      return;
+    }
 
-  const targetClient = new MongoClient(toUri);
-  await targetClient.connect();
-  try {
     const db = targetClient.db(toDb!);
-    const existing = await countDocuments(db);
-    if (existing > 0 && !options.force) {
-      throw new Error(
-        `Database "${toDb}" already holds ${existing} document(s); extract only writes into an empty database (or pass --force)`,
-      );
-    }
-    const written = await writeStateToDatabase(db, result.state);
+    const written = await populateDatabase(db, result.state, {
+      migration:
+        head ??
+        migrationDefinition("extract", "extract", {
+          parent: null,
+          schemas,
+          migrate: (b) => b.compile(),
+        }),
+    });
     if (head) {
+      const adopted = new Set(await getAppliedMigrationIds(db));
       for (const migration of chain) {
+        if (adopted.has(migration.id)) continue;
         await markMigrationAsAdopted(db, migration.id, migration.name);
       }
     }
@@ -316,6 +488,7 @@ export async function extractCommand(
     if (!options.json) console.log(red("✗ Extract failed"));
     throw error;
   } finally {
-    await targetClient.close();
+    await sourceClient.close();
+    await targetClient?.close();
   }
 }
