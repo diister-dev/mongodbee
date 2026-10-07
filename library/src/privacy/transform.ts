@@ -143,7 +143,10 @@ function mapTemporal(
   const match = TEMPORAL_PATTERN.exec(value);
   if (!match) return undefined;
   const [, date, time, seconds, fraction, zone] = match;
-  const wall = Date.parse(`${date}T${time ?? "00:00"}:${seconds ?? "00"}Z`);
+  const millis = (fraction ?? "0").padEnd(3, "0").slice(0, 3);
+  const wall = Date.parse(
+    `${date}T${time ?? "00:00"}:${seconds ?? "00"}.${millis}Z`,
+  );
   if (Number.isNaN(wall)) return undefined;
   const iso = new Date(map(wall)).toISOString();
   let out = iso.slice(0, 10);
@@ -338,10 +341,9 @@ export function createPrivacyTransformer(
 ): PrivacyTransformer {
   const { plan, schemas, secret } = options;
   const consistency = options.consistency ?? "relationship";
-  const strict =
-    (plan as PrivacyPlan & { posture?: string }).posture === "strict";
   const shift = Math.round(
-    options.timeShiftMs ?? (strict ? defaultTimeShiftMs(secret) : 0),
+    options.timeShiftMs ??
+      (plan.posture === "strict" ? defaultTimeShiftMs(secret) : 0),
   );
   const validate = options.validate ?? true;
 
@@ -623,7 +625,7 @@ export function createPrivacyTransformer(
             }),
             ...(override.space !== undefined && { space: override.space }),
             treatment: {
-              ...defaultTreatments(override.role ?? found.role),
+              ...defaultTreatments(override.role ?? found.role, plan.posture),
               ...override.treatment,
             },
           }
@@ -670,10 +672,15 @@ export function createPrivacyTransformer(
           if (isObjectId(leaf.value)) {
             return remapObjectId(secret, leaf.value, shift);
           }
-          notes.push({ path: leaf.path, kind: "mismatch" });
+          const expectsId = extractIdPrefix(schema) !== "";
+          if (expectsId) notes.push({ path: leaf.path, kind: "mismatch" });
           return produce(
-            spaceOf(cls),
-            valueMessage(cls, leaf.path, leaf.value),
+            expectsId ? spaceOf(cls) : "direct",
+            valueMessage(
+              expectsId ? cls : { ...cls, space: "direct" },
+              leaf.path,
+              leaf.value,
+            ),
             false,
             schema,
             leaf.path,

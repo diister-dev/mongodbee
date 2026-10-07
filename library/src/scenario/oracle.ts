@@ -4,6 +4,9 @@ import type { PrivacyPlan } from "../privacy/plan.ts";
 import { KEEP, walkDocument } from "../privacy/walk.ts";
 import type { ScenarioViolation, SeedInvariant } from "./types.ts";
 import { docsOf, fieldsOfTarget, resolveTargetKey } from "./state.ts";
+import { createDocLookup, mirrorExpectations } from "./mirror.ts";
+import { valueAt } from "./doc-path.ts";
+import { partitionedDocs, uniqueIndexesOf, uniqueKeysOf } from "./unique.ts";
 
 export interface CheckScenarioOptions {
   readonly state: DatabaseState;
@@ -19,6 +22,7 @@ export function checkScenarioState(
   const violations: ScenarioViolation[] = [];
   const ids = new Map<string, Set<string>>();
   const owned = new Set<string>();
+  const lookup = createDocLookup(state, plan);
 
   for (const target of plan.targets.values()) {
     if (!target.space) continue;
@@ -39,6 +43,7 @@ export function checkScenarioState(
     const seen = new Set<string>();
     let duplicates = 0;
     let invalid = 0;
+    let mirrored = 0;
     const dangling = new Map<string, number>();
     const ownerMissing = new Map<string, number>();
 
@@ -53,6 +58,19 @@ export function checkScenarioState(
       }
       if (!v.safeParse(v.object(fields as v.ObjectEntries), doc).success) {
         invalid++;
+      }
+      for (const { path, candidates } of mirrorExpectations(
+        target,
+        doc,
+        lookup,
+      )) {
+        const actual = valueAt(doc, path);
+        if (
+          actual !== undefined &&
+          !candidates.some((c) => JSON.stringify(c) === JSON.stringify(actual))
+        ) {
+          mirrored++;
+        }
       }
       const { _id: _i, _scope: _s, _type: _t, ...rest } = doc;
       walkDocument(fields, rest, (leaf) => {
@@ -76,6 +94,33 @@ export function checkScenarioState(
         target: target.key,
         message: `${duplicates} duplicate _id`,
         count: duplicates,
+      });
+    }
+    const unique = uniqueIndexesOf(fields);
+    if (unique.length > 0) {
+      const keys = new Set<string>();
+      let collisions = 0;
+      for (const { doc, partition } of partitionedDocs(state, target)) {
+        for (const key of uniqueKeysOf(unique, doc, partition)) {
+          if (keys.has(key)) collisions++;
+          keys.add(key);
+        }
+      }
+      if (collisions > 0) {
+        violations.push({
+          kind: "unique_index",
+          target: target.key,
+          message: `${collisions} value(s) break a unique index`,
+          count: collisions,
+        });
+      }
+    }
+    if (mirrored > 0) {
+      violations.push({
+        kind: "mirror_mismatch",
+        target: target.key,
+        message: `${mirrored} mirrored value(s) differ from their source`,
+        count: mirrored,
       });
     }
     if (invalid > 0) {

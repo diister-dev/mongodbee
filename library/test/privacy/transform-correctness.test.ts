@@ -1,3 +1,4 @@
+import { ObjectId } from "mongodb";
 import { test } from "../+harness.ts";
 import { assert, assertEquals, assertNotEquals } from "../+assert.ts";
 import * as v from "../../src/schema.ts";
@@ -6,6 +7,7 @@ import { dbId, refId } from "../../src/ids.ts";
 import {
   buildPrivacyPlan,
   createPrivacyTransformer,
+  defaultTimeShiftMs,
   dynamic,
   type DynamicResolution,
   isUlid,
@@ -375,4 +377,153 @@ test("collisions: an exhausted output space is reported instead of looping", () 
       .notes.map((n) => n.kind),
   );
   assert(kinds.includes("collision"));
+});
+
+test("dates: zone-less and offset timestamps keep their shape under the shift", () => {
+  const { doc } = transformOne(
+    {
+      a: personal(v.string(), { role: "technical" }),
+      b: personal(v.string(), { role: "technical" }),
+      c: personal(v.string(), { role: "technical" }),
+    },
+    {
+      a: "2026-03-10T09:15",
+      b: "2026-03-10T09:15:30.250",
+      c: "2026-03-10T09:15:30+02:00",
+    },
+    { timeShiftMs: 86_400_000, validate: false },
+  );
+  assertEquals(doc.a, "2026-03-11T09:15");
+  assertEquals(doc.b, "2026-03-11T09:15:30.250");
+  assertEquals(doc.c, "2026-03-11T09:15:30+02:00");
+});
+
+test("keep: a value that does not fit its technical schema is faked and reported", () => {
+  const { doc, notes } = transformOne(
+    { count: v.number(), flag: v.optional(v.boolean()) },
+    { count: "+33 6 12 34 56 78", flag: "zebulon" },
+  );
+  assertEquals(typeof doc.count, "number");
+  assertEquals(doc.flag, undefined);
+  assertEquals(
+    notes.filter((n) => n.kind === "mismatch").map((n) => n.path),
+    ["count", "flag"],
+  );
+});
+
+test("remap: a reference holding a non-id is faked and reported, a union option that is not an id is pseudonymised silently", () => {
+  const email = v.pipe(v.string(), v.email());
+  const { doc, notes } = transformOne(
+    {
+      manager: refId("user"),
+      assignee: v.union([refId("user"), email]),
+    },
+    { manager: "zebulon@acme.fr", assignee: "zebulon@acme.fr" },
+  );
+  assert(v.is(refId("user"), doc.manager));
+  assert(v.is(email, doc.assignee));
+  assertNotEquals(doc.assignee, "zebulon@acme.fr");
+  assertEquals(
+    notes.filter((n) => n.kind === "mismatch").map((n) => n.path),
+    ["manager"],
+  );
+});
+
+test("record keys: ids are remapped, vocabulary kept, anything else pseudonymised without collision", () => {
+  const { doc } = transformOne(
+    {
+      seenBy: v.record(refId("user"), v.boolean()),
+      perRole: v.record(v.picklist(["admin", "guest"]), v.number()),
+      byContact: v.record(v.pipe(v.string(), v.email()), v.number()),
+    },
+    {
+      seenBy: { [USER_ID]: true },
+      perRole: { admin: 1, guest: 2 },
+      byContact: { "a@corp.fr": 1, "b@corp.fr": 2, "A@corp.fr ": 3 },
+    },
+  );
+  assertEquals(Object.keys(doc.seenBy as object), [doc._id]);
+  assertEquals(doc.perRole, { admin: 1, guest: 2 });
+  const keys = Object.keys(doc.byContact as object);
+  assertEquals(keys.length, 3);
+  assert(keys.every((key) => v.is(v.pipe(v.string(), v.email()), key)));
+  assert(!keys.some((key) => key.toLowerCase().includes("corp.fr")));
+});
+
+test("ids: an ObjectId _id is remapped with its timestamp shifted, any other object _id is dropped", () => {
+  const original = new ObjectId("665f1c2a9b3e4d5a6b7c8d9e");
+  const { doc } = transformOne({}, {}, { timeShiftMs: -86_400_000 });
+  assertEquals(typeof doc._id, "string");
+  const schemas = {
+    collections: {
+      "+users": { _id: personId("user") },
+      sessions: { device: v.string() },
+    },
+  } as never;
+  const transformer = createPrivacyTransformer({
+    plan: buildPrivacyPlan({ schemas }),
+    schemas,
+    secret: "s3cret",
+    timeShiftMs: -86_400_000,
+  });
+  const remapped = transformer.transform("collections/sessions/", {
+    _id: original,
+    device: "web",
+  }).doc._id as ObjectId;
+  assert(remapped instanceof ObjectId);
+  assertNotEquals(remapped.toHexString(), original.toHexString());
+  assertEquals(
+    original.getTimestamp().getTime() - remapped.getTimestamp().getTime(),
+    86_400_000,
+  );
+  const hostile = transformer.transform("collections/sessions/", {
+    _id: { email: "zebulon@acme.fr" },
+    device: "web",
+  });
+  assertEquals(hostile.doc._id, undefined);
+  assert(hostile.notes.some((n) => n.kind === "dropped" && n.path === "_id"));
+});
+
+test("shift: a strict plan shifts time by a secret-derived default, an explicit zero wins", () => {
+  const schemas = {
+    collections: {
+      "+users": {
+        _id: personId("user"),
+        at: v.pipe(v.string(), v.isoTimestamp()),
+      },
+    },
+  } as never;
+  const plan = buildPrivacyPlan({ schemas, posture: "strict" });
+  const shifted = (timeShiftMs?: number) =>
+    createPrivacyTransformer({
+      plan,
+      schemas,
+      secret: "s3cret",
+      ...(timeShiftMs !== undefined && { timeShiftMs }),
+    }).transform(TARGET, { _id: USER_ID, at: "2026-03-10T09:00:00.000Z" }).doc
+      .at;
+  const shift = defaultTimeShiftMs("s3cret");
+  assert(shift <= -30 * 86_400_000 && shift > -366 * 86_400_000);
+  assertEquals(shift, defaultTimeShiftMs("s3cret"));
+  assertEquals(
+    shifted(),
+    new Date(Date.parse("2026-03-10T09:00:00.000Z") + shift).toISOString(),
+  );
+  assertEquals(shifted(0), "2026-03-10T09:00:00.000Z");
+});
+
+test("walk: rest keys and tuple rest items are walked under the * path the plan uses", () => {
+  const { doc, notes } = transformOne(
+    {
+      extra: v.objectWithRest({ kind: v.picklist(["a", "b"]) }, v.string()),
+      pair: v.tupleWithRest([v.number()], v.string()),
+    },
+    { extra: { kind: "a", city: "Ornans" }, pair: [1, "Ornans", "Loue"] },
+  );
+  assertEquals(
+    notes.filter((n) => n.kind === "unclassified").length,
+    0,
+    JSON.stringify(notes),
+  );
+  assert(!JSON.stringify(doc).includes("Ornans"));
 });

@@ -34,6 +34,7 @@ export {
   type PrivacyPerson,
   type PrivacyPlan,
   type PrivacyPlanOptions,
+  type PrivacyPosture,
   type PrivacyRelation,
   type PrivacyTarget,
   type PrivacyTier,

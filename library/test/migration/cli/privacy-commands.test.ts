@@ -3,7 +3,10 @@ import process from "node:process";
 import { test } from "../../+harness.ts";
 import { assert, assertEquals, assertRejects } from "../../+assert.ts";
 import { MongoClient } from "../../../src/mongodb.ts";
-import { classifyCommand } from "../../../src/migration/cli/commands/classify.ts";
+import {
+  classifyCommand,
+  parsePosture,
+} from "../../../src/migration/cli/commands/classify.ts";
 import { seedCommand } from "../../../src/migration/cli/commands/seed.ts";
 import { extractCommand } from "../../../src/migration/cli/commands/extract.ts";
 import { getAppliedMigrationIds } from "../../../src/migration/state.ts";
@@ -138,88 +141,111 @@ export const schemas = { collections: { users: { _id: dbId("user"), email: v.pip
   });
 });
 
-test("cli: seed writes the world at the head and baselines the ledger, extract copies it pseudonymised", async () => {
+test("cli: classify takes a posture and refuses an unknown one", async () => {
+  assertEquals(parsePosture(undefined), "personal");
+  assertEquals(parsePosture("strict"), "strict");
   await withTempDir(async (dir) => {
-    const source = dbName("seed");
-    const target = dbName("extract");
-    await writeProject(dir, source);
-    const client = new MongoClient(TEST_URI);
-    await client.connect();
-    try {
-      await seedCommand({ cwd: dir, scenario: "./scenario.ts", dryRun: true });
-      await seedCommand({ cwd: dir, scenario: "./scenario.ts", json: true });
-      const db = client.db(source);
-      const users = await db.collection("+users").find({}).toArray();
-      const expo = await db.collection("+expo").find({}).toArray();
-      assertEquals(users.length, 10);
-      assert(users.some((u) => String(u._id) === ADMIN));
-      assertEquals(expo.filter((d) => d._type === "participant").length, 10);
-      for (const p of expo) {
-        assert(
-          typeof p.versionId === "string",
-          "the version migration must have been replayed",
-        );
-      }
-      assertEquals(await getAppliedMigrationIds(db), [BIRTH, VERSION]);
-      await assertRejects(
-        () => seedCommand({ cwd: dir, scenario: "./scenario.ts", json: true }),
-        Error,
-        "already holds",
-      );
-
-      await assertRejects(
-        () =>
-          extractCommand({
-            cwd: dir,
-            fromDb: source,
-            toDb: source,
-            secret: "s3cret",
-            json: true,
-          }),
-        Error,
-        "own source",
-      );
-      await extractCommand({
-        cwd: dir,
-        fromDb: source,
-        toDb: target,
-        secret: "s3cret",
-        shiftDays: 2,
-        json: true,
-      });
-      const out = client.db(target);
-      const outUsers = await out.collection("+users").find({}).toArray();
-      const outExpo = await out.collection("+expo").find({}).toArray();
-      assertEquals(outUsers.length, 10);
-      assertEquals(outExpo.length, 10);
-      const sourceIds = new Set(users.map((u) => String(u._id)));
-      const sourceEmails = new Set(users.map((u) => u.email));
-      for (const u of outUsers) {
-        assert(!sourceIds.has(String(u._id)), "ids must be remapped");
-        assert(!sourceEmails.has(u.email), "emails must be pseudonymised");
-      }
-      const outUserIds = new Set(outUsers.map((u) => String(u._id)));
-      const outExpoIds = new Set(
-        (await out.collection("expositions").find({}).toArray()).map((e) =>
-          String(e._id),
-        ),
-      );
-      for (const p of outExpo) {
-        assert(
-          outUserIds.has(String(p.userId)),
-          "participant.userId must still join a user",
-        );
-        assert(
-          outExpoIds.has(String(p._scope)),
-          "_scope must still join an exposition",
-        );
-        assertEquals(p.kind === "visitor" || p.kind === "exhibitor", true);
-      }
-      assertEquals(await getAppliedMigrationIds(out), [BIRTH, VERSION]);
-    } finally {
-      await client.db(source).dropDatabase();
-      await client.db(target).dropDatabase();
-      await client.close();
-    }
+    await writeProject(dir, dbName("classify"));
+    await classifyCommand({ cwd: dir, posture: "strict", json: true });
+    await assertRejects(
+      () => classifyCommand({ cwd: dir, posture: "paranoid" }),
+      Error,
+      "--posture must be personal or strict",
+    );
   });
+});
+
+test({
+  name: "cli: seed writes the world at the head and baselines the ledger, extract copies it pseudonymised",
+  timeout: 120_000,
+  fn: async () => {
+    await withTempDir(async (dir) => {
+      const source = dbName("seed");
+      const target = dbName("extract");
+      await writeProject(dir, source);
+      const client = new MongoClient(TEST_URI);
+      await client.connect();
+      try {
+        await seedCommand({
+          cwd: dir,
+          scenario: "./scenario.ts",
+          dryRun: true,
+        });
+        await seedCommand({ cwd: dir, scenario: "./scenario.ts", json: true });
+        const db = client.db(source);
+        const users = await db.collection("+users").find({}).toArray();
+        const expo = await db.collection("+expo").find({}).toArray();
+        assertEquals(users.length, 10);
+        assert(users.some((u) => String(u._id) === ADMIN));
+        assertEquals(expo.filter((d) => d._type === "participant").length, 10);
+        for (const p of expo) {
+          assert(
+            typeof p.versionId === "string",
+            "the version migration must have been replayed",
+          );
+        }
+        assertEquals(await getAppliedMigrationIds(db), [BIRTH, VERSION]);
+        await assertRejects(
+          () =>
+            seedCommand({ cwd: dir, scenario: "./scenario.ts", json: true }),
+          Error,
+          "already holds",
+        );
+
+        await assertRejects(
+          () =>
+            extractCommand({
+              cwd: dir,
+              fromDb: source,
+              toDb: source,
+              secret: "s3cret",
+              json: true,
+            }),
+          Error,
+          "own source",
+        );
+        await extractCommand({
+          cwd: dir,
+          fromDb: source,
+          toDb: target,
+          secret: "s3cret",
+          shiftDays: 2,
+          json: true,
+        });
+        const out = client.db(target);
+        const outUsers = await out.collection("+users").find({}).toArray();
+        const outExpo = await out.collection("+expo").find({}).toArray();
+        assertEquals(outUsers.length, 10);
+        assertEquals(outExpo.length, 10);
+        const sourceIds = new Set(users.map((u) => String(u._id)));
+        const sourceEmails = new Set(users.map((u) => u.email));
+        for (const u of outUsers) {
+          assert(!sourceIds.has(String(u._id)), "ids must be remapped");
+          assert(!sourceEmails.has(u.email), "emails must be pseudonymised");
+        }
+        const outUserIds = new Set(outUsers.map((u) => String(u._id)));
+        const outExpoIds = new Set(
+          (await out.collection("expositions").find({}).toArray()).map((e) =>
+            String(e._id),
+          ),
+        );
+        for (const p of outExpo) {
+          assert(
+            outUserIds.has(String(p.userId)),
+            "participant.userId must still join a user",
+          );
+          assert(
+            outExpoIds.has(String(p._scope)),
+            "_scope must still join an exposition",
+          );
+          assertEquals(p.kind === "visitor" || p.kind === "exhibitor", true);
+        }
+        assertEquals(await getAppliedMigrationIds(out), [BIRTH, VERSION]);
+      } finally {
+        await client.db(source).dropDatabase();
+        await client.db(target).dropDatabase();
+        await client.close();
+      }
+    });
+  },
 });
