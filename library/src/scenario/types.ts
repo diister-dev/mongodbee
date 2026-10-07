@@ -105,6 +105,8 @@ export type ScenarioViolationKind =
   | "duplicate_id"
   | "dangling_reference"
   | "owner_unresolved"
+  | "unique_index"
+  | "mirror_mismatch"
   | "invalid_document"
   | "invariant";
 

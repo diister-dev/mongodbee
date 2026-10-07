@@ -50,11 +50,12 @@ export function createDeterministicTransformContext(
 export function createLiveTransformContext(
   migrationId: string,
 ): MigrationTransformContext {
+  let startedAt: number | undefined;
   return {
     migrationId,
     siblings: {},
     newId: () => ulid().toLowerCase(),
-    now: () => new Date(),
+    now: () => new Date((startedAt ??= Date.now())),
   };
 }
 

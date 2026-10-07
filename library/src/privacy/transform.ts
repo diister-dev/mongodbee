@@ -392,7 +392,7 @@ export function createPrivacyTransformer(
             }),
             ...(override.space !== undefined && { space: override.space }),
             treatment: {
-              ...defaultTreatments(override.role ?? found.role),
+              ...defaultTreatments(override.role ?? found.role, plan.posture),
               ...override.treatment,
             },
           }
