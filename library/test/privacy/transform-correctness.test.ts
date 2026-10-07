@@ -1,13 +1,14 @@
 import { test } from "../+harness.ts";
 import { assert, assertEquals, assertNotEquals } from "../+assert.ts";
 import * as v from "../../src/schema.ts";
-import { refId } from "../../src/ids.ts";
+import { dbId, refId } from "../../src/ids.ts";
 import {
   buildPrivacyPlan,
   createPrivacyTransformer,
   dynamic,
   type DynamicResolution,
   isUlid,
+  mirrorOf,
   personal,
   personId,
   remapId,
@@ -173,4 +174,105 @@ test("ids: the same ulid written in upper or lower case maps to the same id", ()
     upper,
     lower.replace(/:(.*)$/, (_, uid) => `:${uid.toUpperCase()}`),
   );
+});
+
+const MIRROR_SCHEMAS = {
+  collections: {
+    "+users": {
+      _id: personId("user"),
+      email: personal(v.pipe(v.string(), v.email()), { role: "direct" }),
+    },
+  },
+  scopedMultiCollections: {
+    "+expositions": {
+      scope: refId("exposition"),
+      types: {
+        participant: {
+          _id: personId("participant", { of: ["user"] }),
+          userId: refId("user"),
+          emailCopy: mirrorOf(v.string(), "user.email"),
+        },
+      },
+    },
+  },
+} as never;
+
+test("mirror: a copy in a scoped document equals the pseudonym of its unscoped source under the default policy", () => {
+  const plan = buildPrivacyPlan({ schemas: MIRROR_SCHEMAS });
+  const transformer = createPrivacyTransformer({
+    plan,
+    schemas: MIRROR_SCHEMAS,
+    secret: "s3cret",
+  });
+  const source = transformer.transform(TARGET, {
+    _id: USER_ID,
+    email: "alice@corp.fr",
+  });
+  for (const exposition of [
+    "exposition:01j5zk3v8n2q4x6y8z0b1c3d5f",
+    "exposition:01j5zk3v8n2q4x6y8z0b1c3d60",
+  ]) {
+    const copy = transformer.transform(
+      "scopedMultiCollections/+expositions/participant",
+      {
+        _id: "participant:01j5zk3v8n2q4x6y8z0b1c3d5e",
+        _scope: exposition,
+        userId: USER_ID,
+        emailCopy: "alice@corp.fr",
+      },
+    );
+    assertEquals(copy.doc.emailCopy, source.doc.email);
+  }
+});
+
+test("mirror: a copy next to a scoped source follows the scope of its own document", () => {
+  const schemas = {
+    scopedMultiCollections: {
+      "+expositions": {
+        scope: refId("exposition"),
+        types: {
+          participant: {
+            _id: personId("participant"),
+            email: personal(v.pipe(v.string(), v.email()), { role: "direct" }),
+          },
+          badge: {
+            _id: personal(dbId("badge"), { of: "participant" }),
+            participantId: refId("participant"),
+            emailCopy: mirrorOf(v.string(), "participant.email"),
+          },
+        },
+      },
+    },
+  } as never;
+  const plan = buildPrivacyPlan({ schemas });
+  const transformer = createPrivacyTransformer({
+    plan,
+    schemas,
+    secret: "s3cret",
+  });
+  const fakeEmails = [
+    "exposition:01j5zk3v8n2q4x6y8z0b1c3d5f",
+    "exposition:01j5zk3v8n2q4x6y8z0b1c3d60",
+  ].map((_scope) => {
+    const source = transformer.transform(
+      "scopedMultiCollections/+expositions/participant",
+      {
+        _id: "participant:01j5zk3v8n2q4x6y8z0b1c3d5e",
+        _scope,
+        email: "alice@corp.fr",
+      },
+    );
+    const copy = transformer.transform(
+      "scopedMultiCollections/+expositions/badge",
+      {
+        _id: "badge:01j5zk3v8n2q4x6y8z0b1c3d5e",
+        _scope,
+        participantId: "participant:01j5zk3v8n2q4x6y8z0b1c3d5e",
+        emailCopy: "alice@corp.fr",
+      },
+    );
+    assertEquals(copy.doc.emailCopy, source.doc.email);
+    return source.doc.email;
+  });
+  assertNotEquals(fakeEmails[0], fakeEmails[1]);
 });

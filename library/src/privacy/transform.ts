@@ -229,7 +229,9 @@ export function createPrivacyTransformer(
 
   const findSource = (
     mirror: string,
-  ): { cls: PrivacyPath; schema: unknown; path: string } | undefined => {
+  ):
+    | { cls: PrivacyPath; schema: unknown; path: string; scoped: boolean }
+    | undefined => {
     const [space, ...rest] = mirror.split(".");
     const path = rest.join(".");
     const candidates = [...plan.targets.values()].filter(
@@ -240,7 +242,12 @@ export function createPrivacyTransformer(
       const cls = target.paths.find((p) => p.path === path);
       const fields = fieldsOf(schemas, target);
       if (cls && fields) {
-        return { cls, schema: schemaAtPath(fields, path), path };
+        return {
+          cls,
+          schema: schemaAtPath(fields, path),
+          path,
+          scoped: target.bucket === "scopedMultiCollections",
+        };
       }
     }
     return undefined;
@@ -277,17 +284,26 @@ export function createPrivacyTransformer(
       context.scope ?? (typeof doc._scope === "string" ? doc._scope : "");
     const docId = typeof doc._id === "string" ? doc._id : "";
 
-    const scopePart = (cls: PrivacyPath, path: string): string => {
+    const scopePart = (
+      cls: PrivacyPath,
+      path: string,
+      sourceScope: string = scope,
+    ): string => {
       const policy = cls.consistent ?? consistency;
       if (policy === "person") return "";
-      if (policy === "relationship") return scope;
+      if (policy === "relationship") return sourceScope;
       return `${docId}|${path}`;
     };
     const spaceOf = (cls: PrivacyPath): string => cls.space ?? cls.role;
-    const seedFor = (cls: PrivacyPath, path: string, value: unknown): number =>
+    const seedFor = (
+      cls: PrivacyPath,
+      path: string,
+      value: unknown,
+      sourceScope?: string,
+    ): number =>
       hmacSeed(
         secret,
-        `value|${spaceOf(cls)}|${scopePart(cls, path)}|${canonical(value)}`,
+        `value|${spaceOf(cls)}|${scopePart(cls, path, sourceScope)}|${canonical(value)}`,
       );
     const fakeSeed = (path: string): number =>
       hmacSeed(secret, `fake|${targetKey}|${docId}|${path}`);
@@ -410,7 +426,12 @@ export function createPrivacyTransformer(
         }
         const generated = generate(
           source.schema,
-          seedFor(source.cls, source.path, leaf.value),
+          seedFor(
+            source.cls,
+            source.path,
+            leaf.value,
+            source.scoped ? scope : "",
+          ),
           leaf.path,
           source.path.split(".").pop(),
         );
