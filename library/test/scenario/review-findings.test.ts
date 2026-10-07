@@ -1,12 +1,12 @@
-import { test } from "../+harness.ts";
-import { assert } from "../+assert.ts";
-import * as v from "../../src/schema.ts";
 import { refId } from "../../src/ids.ts";
 import { unique, withIndex } from "../../src/indexes.ts";
-import { defineType } from "../../src/type-definition.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import { personal, personId } from "../../src/privacy/mod.ts";
 import { runScenario } from "../../src/scenario/mod.ts";
+import * as v from "../../src/schema.ts";
+import { defineType } from "../../src/type-definition.ts";
+import { assert } from "../+assert.ts";
+import { test } from "../+harness.ts";
 
 const Membership = defineType({
   schema: v.object({

@@ -1,11 +1,11 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import process from "node:process";
-import { assert, assertEquals } from "../../+assert.ts";
-import { test } from "../../+harness.ts";
 import { newId } from "../../../src/ids.ts";
 import { extractCommand } from "../../../src/migration/cli/commands/extract.ts";
 import { markMigrationAsAdopted } from "../../../src/migration/state.ts";
 import { MongoClient } from "../../../src/mongodb.ts";
+import { assert, assertEquals } from "../../+assert.ts";
+import { test } from "../../+harness.ts";
 import { withTempDir } from "./shared.ts";
 
 const TEST_URI =

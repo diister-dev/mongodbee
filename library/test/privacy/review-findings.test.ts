@@ -1,19 +1,19 @@
-import { test } from "../+harness.ts";
-import { assert, assertEquals, assertNotEquals } from "../+assert.ts";
-import * as v from "../../src/schema.ts";
-import { unique, withIndex } from "../../src/indexes.ts";
 import { dbId, refId } from "../../src/ids.ts";
-import { defineType } from "../../src/type-definition.ts";
+import { unique, withIndex } from "../../src/indexes.ts";
 import {
   buildPrivacyPlan,
   createPrivacyTransformer,
   mirrorOf,
   notPersonal,
+  type PrivacyPosture,
   personal,
   personId,
   remapId,
-  type PrivacyPosture,
 } from "../../src/privacy/mod.ts";
+import * as v from "../../src/schema.ts";
+import { defineType } from "../../src/type-definition.ts";
+import { assert, assertEquals, assertNotEquals } from "../+assert.ts";
+import { test } from "../+harness.ts";
 
 const USER_ID = "user:01j5zk3v8n2q4x6y8z0b1c3d5e";
 const ORG_ID = "org:01j5zk3v8n2q4x6y8z0b1c3d5f";
@@ -418,5 +418,39 @@ test({
       () => KEEP,
     );
     assertEquals(out.doc.u, true);
+  },
+});
+
+test({
+  // TODO(privacy): R18, unique collision retries are first-come; readStateFromDatabase reads in natural order, so a value's pseudonym depends on document order; sort reads by _id (and/or derive retries from the value set, not arrival order)
+  ignore: true,
+  name: "R18 unique: a value's pseudonym does not depend on the order documents are transformed in",
+  fn: () => {
+    const schemas = {
+      collections: {
+        "+users": {
+          _id: personId("user"),
+          code: withIndex(
+            personal(v.pipe(v.string(), v.regex(/^[a-d]$/)), {
+              role: "direct",
+            }),
+            { unique: true },
+          ),
+        },
+      },
+    };
+    const values = ["v1", "v2", "v3", "v4"];
+    const run = (order: string[]) => {
+      const { transformer } = transformerFor(schemas);
+      const out: Record<string, unknown> = {};
+      for (const value of order) {
+        out[value] = transformer.transform(USERS, {
+          _id: USER_ID,
+          code: value,
+        }).doc.code;
+      }
+      return out;
+    };
+    assertEquals(run(values), run([...values].reverse()));
   },
 });
