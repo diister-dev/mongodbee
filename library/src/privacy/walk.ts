@@ -30,8 +30,15 @@ export interface WalkResult {
   readonly notes: readonly WalkNote[];
 }
 
+export interface WalkKey {
+  readonly path: string;
+  readonly key: string;
+  readonly schema: unknown;
+}
+
 export interface WalkOptions {
   readonly passthrough?: readonly string[];
+  readonly mapKey?: (key: WalkKey) => string;
 }
 
 const WRAPPER_TYPES: ReadonlySet<string> = new Set([
@@ -139,6 +146,15 @@ export function walkDocument(
     options.passthrough ?? ["_id", "_scope", "_type"],
   );
 
+  const mapKey = (
+    path: readonly string[],
+    key: string,
+    schema: unknown,
+  ): string =>
+    options.mapKey
+      ? options.mapKey({ path: path.join("."), key, schema })
+      : key;
+
   const visit = (
     rawSchema: unknown,
     value: unknown,
@@ -182,14 +198,26 @@ export function walkDocument(
       const entries = schema.entries as Record<string, unknown>;
       const out: Record<string, unknown> = {};
       for (const [k, entry] of Object.entries(value)) {
-        const entrySchema =
-          entries[k] ?? (type === "object_with_rest" ? schema.rest : undefined);
+        const declared = Object.hasOwn(entries, k);
+        const entrySchema = declared
+          ? entries[k]
+          : type === "object_with_rest"
+            ? schema.rest
+            : undefined;
         if (entrySchema === undefined) {
-          notes.push({ path: [...path, k].join("."), kind: "unknown_key" });
+          notes.push({ path: [...path, "*"].join("."), kind: "unknown_key" });
           continue;
         }
-        const r = visit(entrySchema, entry, [...path, k], [...keys, k], k);
-        if (r !== DROP && r !== undefined) out[k] = r;
+        const r = visit(
+          entrySchema,
+          entry,
+          [...path, declared ? k : "*"],
+          [...keys, k],
+          k,
+        );
+        if (r !== DROP && r !== undefined) {
+          out[declared ? k : mapKey(path, k, undefined)] = r;
+        }
       }
       return out;
     }
@@ -235,7 +263,9 @@ export function walkDocument(
       const out: Record<string, unknown> = {};
       for (const [k, entry] of Object.entries(value)) {
         const r = visit(schema.value, entry, [...path, "*"], [...keys, k], k);
-        if (r !== DROP && r !== undefined) out[k] = r;
+        if (r !== DROP && r !== undefined) {
+          out[mapKey(path, k, schema.key)] = r;
+        }
       }
       return out;
     }
@@ -281,12 +311,12 @@ export function walkDocument(
 
   const out: Record<string, unknown> = {};
   for (const [k, value] of Object.entries(doc)) {
-    const fieldSchema = fields[k];
+    const fieldSchema = Object.hasOwn(fields, k) ? fields[k] : undefined;
     if (fieldSchema === undefined) {
       if (passthrough.has(k)) {
         out[k] = value;
       } else {
-        notes.push({ path: k, kind: "unknown_key" });
+        notes.push({ path: "*", kind: "unknown_key" });
       }
       continue;
     }

@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { ObjectId } from "mongodb";
 import { decodeTime } from "../utils/ulid.ts";
 import {
   encodeUlidRandom,
@@ -74,4 +75,33 @@ export function looksLikeId(
   return (
     spaces === undefined || spaces.length === 0 || spaces.includes(match[1])
   );
+}
+
+const MAX_OBJECT_ID_SECONDS = 2 ** 32 - 1;
+
+export function isObjectId(value: unknown): value is ObjectId {
+  return value instanceof ObjectId;
+}
+
+export function remapObjectId(
+  secret: PrivacySecret,
+  id: ObjectId,
+  timeShiftMs = 0,
+): ObjectId {
+  const digest = hmacBytes(secret, `oid|${id.toHexString()}`);
+  const seconds = Math.min(
+    MAX_OBJECT_ID_SECONDS,
+    Math.max(0, Math.round(id.getTimestamp().getTime() + timeShiftMs) / 1000),
+  );
+  const bytes = new Uint8Array(12);
+  new DataView(bytes.buffer).setUint32(0, Math.floor(seconds));
+  bytes.set(digest.subarray(0, 8), 4);
+  return new ObjectId(bytes);
+}
+
+export function defaultTimeShiftMs(secret: PrivacySecret): number {
+  const digest = hmacBytes(secret, "shift");
+  const view = new DataView(digest.buffer, digest.byteOffset);
+  const days = 30 + (view.getUint32(0) % 336);
+  return -(days * 86_400_000 + (view.getUint32(4) % 86_400_000));
 }

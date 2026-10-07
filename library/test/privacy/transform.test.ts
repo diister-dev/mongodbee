@@ -247,7 +247,7 @@ test("fail-closed: unknown keys and unknown-tier values never reach the output",
     user({ legacyOwner: "user:01j5zk3v8n2q4x6y8z0b1c3d5e" }),
   );
   assertEquals(doc.legacyOwner, undefined);
-  assertEquals(kinds(notes, "unknown_key"), ["legacyOwner"]);
+  assertEquals(kinds(notes, "unknown_key"), ["*"]);
   assertEquals(doc.statusReason, undefined);
   assert(kinds(notes, "dropped").includes("statusReason"));
   assertEquals(kinds(notes, "invalid"), []);

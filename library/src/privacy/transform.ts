@@ -1,6 +1,7 @@
 import * as v from "../schema.ts";
 import { createMockGenerator, SKIP } from "@diister/valibot-mock";
 import { INDEX_SYMBOL } from "../indexes.ts";
+import { extractIdPrefix } from "../migration/utils/seed-id.ts";
 import type {
   SchemaContent,
   SchemasDefinition,
@@ -22,14 +23,18 @@ import {
 } from "./metadata.ts";
 import {
   canonical,
+  defaultTimeShiftMs,
   hmacSeed,
+  isObjectId,
   looksLikeId,
   type PrivacySecret,
   remapId,
+  remapObjectId,
 } from "./pseudonym.ts";
 import {
   DROP,
   walkDocument,
+  type WalkKey,
   type WalkLeaf,
   type WalkNoteKind,
 } from "./walk.ts";
@@ -94,7 +99,8 @@ export type TransformNoteKind =
   | "unresolved"
   | "input_invalid"
   | "invalid"
-  | "collision";
+  | "collision"
+  | "mismatch";
 
 export interface TransformNote {
   readonly path: string;
@@ -119,12 +125,37 @@ export interface PrivacyTransformer {
   ): TransformResult;
 }
 
-const ISO_PATTERN =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
-
 const MAX_COLLISION_ATTEMPTS = 32;
 
-const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const TEMPORAL_PATTERN =
+  /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2})(?::(\d{2})(?:\.(\d+))?)?)?(Z|[+-]\d{2}:\d{2})?$/;
+
+const KEY_VOCABULARY_TYPES: ReadonlySet<string> = new Set([
+  "picklist",
+  "literal",
+  "enum",
+]);
+
+function mapTemporal(
+  value: string,
+  map: (wallClock: number) => number,
+): string | undefined {
+  const match = TEMPORAL_PATTERN.exec(value);
+  if (!match) return undefined;
+  const [, date, time, seconds, fraction, zone] = match;
+  const wall = Date.parse(`${date}T${time ?? "00:00"}:${seconds ?? "00"}Z`);
+  if (Number.isNaN(wall)) return undefined;
+  const iso = new Date(map(wall)).toISOString();
+  let out = iso.slice(0, 10);
+  if (time !== undefined) {
+    out += `T${iso.slice(11, 16)}`;
+    if (seconds !== undefined) out += iso.slice(16, 19);
+    if (fraction !== undefined) {
+      out += `.${iso.slice(20, 23).padEnd(fraction.length, "0").slice(0, fraction.length)}`;
+    }
+  }
+  return out + (zone ?? "");
+}
 
 const WRAPPER_TYPES: ReadonlySet<string> = new Set([
   "optional",
@@ -260,6 +291,31 @@ function seededGenerator(schema: unknown, key: string): SeededGenerator {
   return cached;
 }
 
+function issuePath(fields: SchemaContent, issue: v.BaseIssue<unknown>): string {
+  const parts: string[] = [];
+  for (const item of issue.path ?? []) {
+    const parent =
+      parts.length === 0
+        ? undefined
+        : unwrapSchema(rawSchemaAtPath(fields, parts.join(".")));
+    const key = String(item.key);
+    if (parts.length === 0) {
+      parts.push(key);
+    } else if (parent?.type === "array" || parent?.type === "tuple") {
+      parts.push("*");
+    } else if (parent !== undefined && (parent.entries as object | undefined)) {
+      parts.push(Object.hasOwn(parent.entries as object, key) ? key : "*");
+    } else {
+      parts.push("*");
+    }
+  }
+  return parts.join(".");
+}
+
+function issueMessage(issue: v.BaseIssue<unknown>): string {
+  return `${issue.kind} ${issue.type} expected ${issue.expected ?? "-"}`;
+}
+
 function getAt(doc: Record<string, unknown>, keys: readonly string[]): unknown {
   let current: unknown = doc;
   for (const key of keys) {
@@ -282,7 +338,11 @@ export function createPrivacyTransformer(
 ): PrivacyTransformer {
   const { plan, schemas, secret } = options;
   const consistency = options.consistency ?? "relationship";
-  const shift = options.timeShiftMs ?? 0;
+  const strict =
+    (plan as PrivacyPlan & { posture?: string }).posture === "strict";
+  const shift = Math.round(
+    options.timeShiftMs ?? (strict ? defaultTimeShiftMs(secret) : 0),
+  );
   const validate = options.validate ?? true;
 
   interface MirrorSource {
@@ -361,21 +421,16 @@ export function createPrivacyTransformer(
   const shiftDate = (value: unknown): unknown => {
     if (shift === 0) return value;
     if (value instanceof Date) return new Date(value.getTime() + shift);
-    if (typeof value === "string" && ISO_PATTERN.test(value)) {
-      const t = Date.parse(value);
-      if (!Number.isNaN(t)) return new Date(t + shift).toISOString();
-    }
-    if (typeof value === "string" && DATE_ONLY_PATTERN.test(value)) {
-      const t = Date.parse(value);
-      if (!Number.isNaN(t)) {
-        return new Date(t + shift).toISOString().slice(0, 10);
-      }
+    if (typeof value === "string") {
+      return mapTemporal(value, (wall) => wall + shift) ?? value;
     }
     return value;
   };
 
-  const monthStart = (d: Date): Date =>
-    new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+  const monthStart = (ms: number): number => {
+    const d = new Date(ms);
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+  };
 
   function transform(
     targetKey: string,
@@ -393,7 +448,11 @@ export function createPrivacyTransformer(
     const notes: TransformNote[] = [];
     const scope =
       context.scope ?? (typeof doc._scope === "string" ? doc._scope : "");
-    const docId = typeof doc._id === "string" ? doc._id : "";
+    const docId = isObjectId(doc._id)
+      ? doc._id.toHexString()
+      : typeof doc._id === "string"
+        ? doc._id
+        : "";
 
     const scopePart = (
       cls: PrivacyPath,
@@ -482,7 +541,7 @@ export function createPrivacyTransformer(
 
     const dropOrGenerate = (
       leaf: WalkLeaf,
-      kind: "dropped" | "opaque" | "recompute_missing",
+      kind: "dropped" | "opaque" | "recompute_missing" | "mismatch",
     ): unknown => {
       notes.push({ path: leaf.path, kind });
       if (leaf.optional) return DROP;
@@ -492,18 +551,20 @@ export function createPrivacyTransformer(
     };
 
     const generalise = (leaf: WalkLeaf): unknown => {
-      const shifted = shiftDate(leaf.value);
-      if (shifted instanceof Date) return monthStart(shifted);
-      if (typeof shifted === "string" && ISO_PATTERN.test(shifted)) {
-        return monthStart(new Date(Date.parse(shifted))).toISOString();
+      const { value } = leaf;
+      if (value instanceof Date) {
+        return new Date(monthStart(value.getTime() + shift));
       }
-      if (typeof shifted === "string" && DATE_ONLY_PATTERN.test(shifted)) {
-        return `${shifted.slice(0, 7)}-01`;
+      if (typeof value === "string") {
+        const collapsed = mapTemporal(value, (wall) =>
+          monthStart(wall + shift),
+        );
+        if (collapsed !== undefined) return collapsed;
       }
-      if (typeof shifted === "number") {
-        if (shifted === 0) return 0;
-        const magnitude = 10 ** Math.floor(Math.log10(Math.abs(shifted)));
-        return Math.round(shifted / magnitude) * magnitude;
+      if (typeof value === "number") {
+        if (value === 0) return 0;
+        const magnitude = 10 ** Math.floor(Math.log10(Math.abs(value)));
+        return Math.round(value / magnitude) * magnitude;
       }
       return dropOrGenerate(leaf, "dropped");
     };
@@ -596,12 +657,28 @@ export function createPrivacyTransformer(
       }
       switch (cls.treatment.extract) {
         case "keep":
-        case "include":
-          return shiftDate(leaf.value);
-        case "remap":
-          return looksLikeId(leaf.value)
-            ? remapId(secret, leaf.value, shift)
-            : shiftDate(leaf.value);
+        case "include": {
+          const kept = shiftDate(leaf.value);
+          return v.is(schema as v.GenericSchema, kept)
+            ? kept
+            : dropOrGenerate(leaf, "mismatch");
+        }
+        case "remap": {
+          if (looksLikeId(leaf.value)) {
+            return remapId(secret, leaf.value, shift);
+          }
+          if (isObjectId(leaf.value)) {
+            return remapObjectId(secret, leaf.value, shift);
+          }
+          notes.push({ path: leaf.path, kind: "mismatch" });
+          return produce(
+            spaceOf(cls),
+            valueMessage(cls, leaf.path, leaf.value),
+            false,
+            schema,
+            leaf.path,
+          );
+        }
         case "pseudonym":
           return produce(
             spaceOf(cls),
@@ -639,27 +716,80 @@ export function createPrivacyTransformer(
       const parsed = v.safeParse(v.object(fields as v.ObjectEntries), doc);
       if (!parsed.success) {
         for (const issue of parsed.issues) {
-          const path = issue.path?.map((p) => String(p.key)).join(".") ?? "";
-          notes.push({ path, kind: "input_invalid", message: issue.message });
+          notes.push({
+            path: issuePath(fields, issue),
+            kind: "input_invalid",
+            message: issueMessage(issue),
+          });
         }
       }
     }
-    const walked = walkDocument(fields, rest, handler);
+    const keyIsVocabulary = (schema: unknown): boolean =>
+      collectActions(schema).some(
+        (a) =>
+          (a as { kind?: string }).kind === "schema" &&
+          KEY_VOCABULARY_TYPES.has((a as { type: string }).type),
+      );
+
+    const mapKey = ({ path, key, schema }: WalkKey): string => {
+      if (dynamicRoots.some((r) => path === r || path.startsWith(`${r}.`))) {
+        return key;
+      }
+      if (schema !== undefined && keyIsVocabulary(schema)) return key;
+      if (
+        schema !== undefined &&
+        extractIdPrefix(schema) !== "" &&
+        looksLikeId(key)
+      ) {
+        return remapId(secret, key, shift);
+      }
+      const mapped = produce(
+        `key|${targetKey}|${path}`,
+        `key|${targetKey}|${path}|${key}`,
+        true,
+        schema ?? v.string(),
+        path,
+        "key",
+      );
+      return typeof mapped === "string"
+        ? mapped
+        : hmacSeed(secret, `key|${targetKey}|${path}|${key}`).toString(36);
+    };
+
+    const walked = walkDocument(fields, rest, handler, { mapKey });
     notes.push(...walked.notes);
 
     const out: Record<string, unknown> = { ...walked.doc };
-    if (typeof _id === "string") out._id = remapId(secret, _id, shift);
-    else if (_id !== undefined) out._id = _id;
-    if (typeof _scope === "string") out._scope = remapId(secret, _scope, shift);
-    else if (_scope !== undefined) out._scope = _scope;
+    const identifier = (value: unknown, path: string): unknown => {
+      if (typeof value === "string") return remapId(secret, value, shift);
+      if (isObjectId(value)) return remapObjectId(secret, value, shift);
+      if (
+        value === undefined ||
+        value === null ||
+        typeof value === "number" ||
+        typeof value === "bigint" ||
+        typeof value === "boolean"
+      ) {
+        return value;
+      }
+      notes.push({ path, kind: "dropped" });
+      return undefined;
+    };
+    const mappedId = identifier(_id, "_id");
+    if (mappedId !== undefined) out._id = mappedId;
+    const mappedScope = identifier(_scope, "_scope");
+    if (mappedScope !== undefined) out._scope = mappedScope;
     if (_type !== undefined) out._type = _type;
 
     if (validate) {
       const parsed = v.safeParse(v.object(fields as v.ObjectEntries), out);
       if (!parsed.success) {
         for (const issue of parsed.issues) {
-          const path = issue.path?.map((p) => String(p.key)).join(".") ?? "";
-          notes.push({ path, kind: "invalid", message: issue.message });
+          notes.push({
+            path: issuePath(fields, issue),
+            kind: "invalid",
+            message: issueMessage(issue),
+          });
         }
       }
     }
