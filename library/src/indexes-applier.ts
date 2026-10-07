@@ -458,6 +458,29 @@ function partialFilterPinsType(pfe: unknown, typeName: string): boolean {
 }
 
 /**
+ * The type a mongodbee per-type index is pinned to by its partial filter
+ * (`{ _type: t }`, `{ _type: { $eq: t } }`, or either inside `$and`).
+ */
+function pinnedTypeOf(pfe: unknown): string | undefined {
+  if (!pfe || typeof pfe !== "object") return undefined;
+  const obj = pfe as Record<string, unknown>;
+  const value = obj["_type"];
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object") {
+    const eq = (value as Record<string, unknown>)["$eq"];
+    if (typeof eq === "string") return eq;
+  }
+  const and = obj["$and"];
+  if (Array.isArray(and)) {
+    for (const clause of and) {
+      const found = pinnedTypeOf(clause);
+      if (found !== undefined) return found;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Apply indexes for a scoped multi-collection.
  *
  * Index strategy :
@@ -807,7 +830,23 @@ export async function applyMultiCollectionIndexes(
       indexName.startsWith(`${type}_`),
     );
 
-    if (hasTypePrefix && !expectedIndexNames.has(indexName)) {
+    // An index of a type the schema no longer declares (a rollback removing
+    // the type, a type dropped by a migration): no declared prefix matches
+    // it, so it used to survive forever. It is recognised by mongodbee's own
+    // signature instead: its name starts with the type it is pinned to by
+    // its `_type` partial filter. A user index without that filter is spared.
+    const pinned = pinnedTypeOf(
+      (existingIndex as Record<string, unknown>).partialFilterExpression,
+    );
+    const ofRemovedType =
+      pinned !== undefined &&
+      !(pinned in schemasPerType) &&
+      indexName.startsWith(`${pinned}_`);
+
+    if (
+      (hasTypePrefix || ofRemovedType) &&
+      !expectedIndexNames.has(indexName)
+    ) {
       // This is an orphaned mongodbee index that should be removed
       indexesToDrop.push(indexName);
     }

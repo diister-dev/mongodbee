@@ -9,7 +9,10 @@
 import { test } from "../../+harness.ts";
 import { assertEquals } from "../../+assert.ts";
 import { PassThrough } from "node:stream";
-import { confirm } from "../../../src/migration/cli/utils/confirm.ts";
+import {
+  ConfirmationRequiredError,
+  confirm,
+} from "../../../src/migration/cli/utils/confirm.ts";
 
 function streams() {
   const input = new PassThrough();
@@ -64,4 +67,27 @@ test("confirm - two prompts in a row each get their own answer", async () => {
   const p2 = confirm("Second?", second);
   second.input.write("no\n");
   assertEquals(await p2, false);
+});
+
+test("confirm - without a terminal it fails at once, naming --force", async () => {
+  let error: unknown;
+  try {
+    await confirm("Proceed?", { interactive: false });
+  } catch (e) {
+    error = e;
+  }
+  assertEquals(error instanceof ConfirmationRequiredError, true);
+  const message = (error as Error).message;
+  assertEquals(message.includes("--force"), true, message);
+  assertEquals(message.includes("not a terminal"), true, message);
+});
+
+test("confirm - the skip flag named in the error is configurable", async () => {
+  let error: unknown;
+  try {
+    await confirm("Catch up?", { interactive: false, skipFlag: "--auto-sync" });
+  } catch (e) {
+    error = e;
+  }
+  assertEquals((error as Error).message.includes("--auto-sync"), true);
 });

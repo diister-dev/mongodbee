@@ -30,6 +30,10 @@ import { getAllOperations } from "../../history.ts";
 import { validateMigrationChainWithProjectSchema } from "../../schema-validation.ts";
 import { migrationBuilder } from "../../builder.ts";
 import { detectInstancesNeedingCatchUp } from "../../catch-up.ts";
+import {
+  describeValidatorSuspension,
+  getValidatorSuspension,
+} from "../../validator-guard.ts";
 import { validateMigrationsWithSimulation } from "../utils/validate-migrations.ts";
 import type { SimulationPowerLevel } from "../../validators/simulation.ts";
 
@@ -102,6 +106,17 @@ export async function statusCommand(
     await client.connect();
 
     const db = client.db(dbName);
+
+    // Read-only: report validators an interrupted run left off; `migrate`,
+    // `rollback` and `sync` repair them.
+    const suspension = await getValidatorSuspension(db);
+    if (suspension) {
+      console.log(red(`⚠ ${describeValidatorSuspension(suspension)}`));
+      console.log(
+        yellow("  Run `mongodbee sync` (or `migrate`) to restore them."),
+      );
+      console.log();
+    }
 
     // Load migrations from filesystem
     const migrationsWithFiles = await loadAllMigrations(migrationsDir);

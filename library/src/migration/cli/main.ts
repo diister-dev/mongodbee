@@ -24,6 +24,7 @@ import { studioEntry } from "./commands/studio-entry.ts";
 
 import { VERSION } from "../../version.ts";
 import { isMainModule } from "../utils/platform.ts";
+import { armExitGuard } from "./utils/exit-guard.ts";
 
 const commands = [
   {
@@ -136,7 +137,10 @@ ${yellow("MIGRATE OPTIONS:")}
   --verbose         Show detailed migration information
   --progress        Force the live progress line (auto-detected on a TTY; use --no-progress to disable)
   -m, --mode        Simulation mode: quick, normal, hard (default: normal)
-  -l, --last        Only validate the last N migrations
+  -l, --last        Also re-validate applied migrations: simulate at least
+                    the last N (only the pending ones are simulated by default)
+  --docs            Mock documents per collection, 1 to 5000 (as for check)
+  --retention       Share of documents carried between migrations, 0 to 1
   --target          Stop after this migration (id, name, or unambiguous
                     substring); the later ones stay pending
   --skip-privilege-check
@@ -273,6 +277,7 @@ async function main(): Promise<void> {
 if (isMainModule(import.meta)) {
   try {
     await main();
+    armExitGuard(process.argv.slice(2));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(red(bold("Error:")), message);

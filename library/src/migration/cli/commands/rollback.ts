@@ -26,6 +26,7 @@ import {
   migrationBuilder,
 } from "../../builder.ts";
 import { confirm } from "../utils/confirm.ts";
+import { repairSuspendedValidators } from "../utils/validator-repair.ts";
 import { ensureMigrationPrivileges } from "../utils/privileges.ts";
 
 export interface RollbackCommandOptions {
@@ -88,6 +89,13 @@ export async function rollbackCommand(
     });
     console.log();
 
+    // Load migrations to find the one to rollback
+    const migrationsWithFiles = await loadAllMigrations(migrationsDir);
+    const allMigrations = buildMigrationChain(migrationsWithFiles);
+
+    // Validators an interrupted run left off are restored first, loudly.
+    await repairSuspendedValidators(db, allMigrations);
+
     // Get last applied migration
     const lastApplied = await getLastAppliedMigration(db);
 
@@ -95,10 +103,6 @@ export async function rollbackCommand(
       console.log(yellow("No migrations to rollback."));
       return;
     }
-
-    // Load migrations to find the one to rollback
-    const migrationsWithFiles = await loadAllMigrations(migrationsDir);
-    const allMigrations = buildMigrationChain(migrationsWithFiles);
 
     const migrationToRollback = allMigrations.find(
       (m) => m.id === lastApplied.id,

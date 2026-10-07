@@ -29,6 +29,8 @@ import { validateMigrationsWithSimulation } from "../utils/validate-migrations.t
 import type { SimulationPowerLevel } from "../../validators/simulation.ts";
 import { migrationBuilder } from "../../builder.ts";
 import { confirm } from "../utils/confirm.ts";
+import { repairSuspendedValidators } from "../utils/validator-repair.ts";
+import { parseDocsPerCollection, parseRetention } from "./check.ts";
 import { ensureMigrationPrivileges } from "../utils/privileges.ts";
 import { resolveMigrationRef } from "../utils/resolve-ref.ts";
 import { createProgressReporter } from "../utils/progress.ts";
@@ -49,6 +51,8 @@ interface CliArgs {
   last?: number;
   target?: string;
   "skip-privilege-check"?: boolean;
+  docs?: unknown;
+  retention?: unknown;
   [key: string]: unknown;
 }
 
@@ -87,6 +91,16 @@ export interface MigrateCommandOptions {
    * needs — typically `collMod`, granted by `dbAdmin` but not by `readWrite`.
    */
   skipPrivilegeCheck?: boolean;
+  /**
+   * Mock documents per collection during the simulation, 1 to 5000,
+   * overriding the mode's preset. Same rules as `check --docs`.
+   */
+  docs?: number;
+  /**
+   * Share of each migration's documents carried into the next one during the
+   * simulation, 0 to 1. Same rules as `check --retention`.
+   */
+  retention?: number;
 }
 
 /**
@@ -133,6 +147,11 @@ export async function migrateCommand(
       skipPrivilegeCheck:
         options.skipPrivilegeCheck || cliArgs["skip-privilege-check"],
     };
+
+    // Parsed before anything connects: a bad value fails at once, not after
+    // the pre-flight work.
+    const docsPerCollection = parseDocsPerCollection(cliArgs.docs);
+    const stateRetentionRatio = parseRetention(cliArgs.retention);
 
     // Load configuration
     const cwd = opts.cwd || process.cwd();
@@ -208,6 +227,12 @@ export async function migrateCommand(
 
     console.log(green("  ✓ Schema consistency validated"));
     console.log();
+
+    // A previous run that died with validators off is repaired first, and
+    // said out loud, before anything else touches the database.
+    if (!opts.dryRun) {
+      await repairSuspendedValidators(db, allMigrations);
+    }
 
     // Get applied migrations
     const appliedIds = await getAppliedMigrationIds(db);
@@ -469,6 +494,7 @@ export async function migrateCommand(
       if (!opts.autoSync && !opts.force) {
         const confirmed = await confirm(
           "Do you want to catch up these instances before applying new migrations?",
+          { skipFlag: "--auto-sync (or --force)" },
         );
 
         if (!confirmed) {
@@ -743,27 +769,31 @@ export async function migrateCommand(
     const powerLevel = parseSimulationMode(opts.mode);
     const requestedLastN = opts.last && opts.last > 0 ? opts.last : undefined;
 
-    // `--last N` narrows what gets validated, never what gets applied: STEP 4
-    // below applies every pending migration regardless. So the window is
-    // widened to cover them — nothing is ever applied to a real database
-    // without having been simulated first. Above that floor the flag still
-    // does its job: the migrations already in history stay out of the run,
-    // which is the whole point of asking for a window while iterating on a
-    // chantier migration.
+    // Only the pending migrations are simulated: the applied ones already
+    // passed this same validation when they were applied, and re-simulating
+    // the whole chain to apply its head cost minutes (25 migrations: 135 s
+    // for one pending). The window is seeded from the parent schemas of the
+    // first pending migration (`validateMigrationsWithSimulation`'s windowed
+    // path), and the schema consistency of the chain's LAST migration was
+    // checked above, unconditionally.
+    //
     // Measured from the EARLIEST pending migration, not from their count:
     // `getPendingMigrations` filters rather than slices, so a hole in the
     // history (a migration applied out of order) would leave a pending
-    // migration outside a count-sized window.
+    // migration outside a count-sized window. Deferred migrations (`--target`)
+    // stay inside it: they are pending, and they are still simulated before
+    // anything is written.
+    //
+    // `--last N` can only WIDEN the window (to re-validate applied ones too),
+    // never shrink it below what is about to be applied.
     const pendingIds = new Set(pendingMigrations.map((m) => m.id));
     const firstPendingIndex = allMigrations.findIndex((m) =>
       pendingIds.has(m.id),
     );
-    const lastN =
-      requestedLastN !== undefined
-        ? Math.max(requestedLastN, allMigrations.length - firstPendingIndex)
-        : undefined;
+    const pendingSpan = allMigrations.length - firstPendingIndex;
+    const lastN = Math.max(requestedLastN ?? 0, pendingSpan);
 
-    if (lastN !== undefined && lastN !== requestedLastN) {
+    if (requestedLastN !== undefined && lastN !== requestedLastN) {
       console.log(
         dim(
           `  --last ${requestedLastN} widened to ${lastN}: every pending migration is validated before it is applied`,
@@ -775,6 +805,8 @@ export async function migrateCommand(
       verbose: opts.verbose,
       powerLevel,
       lastN,
+      docsPerCollection,
+      stateRetentionRatio,
     });
 
     // STEP 2: Check for irreversible or lossy migrations

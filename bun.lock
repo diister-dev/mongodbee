@@ -7,12 +7,12 @@
     },
     "library": {
       "name": "@diister/mongodbee",
-      "version": "0.23.0-beta.35",
+      "version": "0.23.0-beta.39",
       "bin": {
         "mongodbee": "dist/src/migration/cli/bin.js",
       },
       "dependencies": {
-        "@diister/valibot-mock": "0.1.9",
+        "@diister/valibot-mock": "0.1.10",
         "@opentelemetry/api": "1.9.1",
         "mongodb": "7.7.0",
         "valibot": "1.5.0",
@@ -26,7 +26,7 @@
         "typescript": "6.0.3",
       },
       "peerDependencies": {
-        "@diister/mongodbee-studio": "0.23.0-beta.35",
+        "@diister/mongodbee-studio": "0.23.0-beta.39",
       },
       "optionalPeers": [
         "@diister/mongodbee-studio",
@@ -34,7 +34,7 @@
     },
     "studio": {
       "name": "@diister/mongodbee-studio",
-      "version": "0.23.0-beta.35",
+      "version": "0.23.0-beta.39",
       "dependencies": {
         "@diister/mongodbee": "0.23.0-beta.35",
         "mongodb": "7.7.0",
@@ -75,7 +75,7 @@
 
     "@diister/mongodbee-studio": ["@diister/mongodbee-studio@workspace:studio"],
 
-    "@diister/valibot-mock": ["@diister/valibot-mock@0.1.9", "", { "dependencies": { "@eslint-community/regexpp": "^4.12.2", "@faker-js/faker": "^10.0.0", "randexp": "^0.5.3" }, "peerDependencies": { "valibot": "^1.1.0" } }, "sha512-+edGX30mL85AKrropHRcOf+ip4FEgpNj7G+wEoai+ipGfWyJ0nhSGLqPa1nDDtU16q71Tm/mZfD0XDiUnep3Ow=="],
+    "@diister/valibot-mock": ["@diister/valibot-mock@0.1.10", "", { "dependencies": { "@eslint-community/regexpp": "^4.12.2", "@faker-js/faker": "^10.0.0", "randexp": "^0.5.3" }, "peerDependencies": { "valibot": "^1.1.0" } }, "sha512-sQtyqSOKTBNh9QfVChCYyEeC1+CgKt2f3GVoAydYMRFh/xYfmaFL1lwltM4J2QfEU66SQyvglyDkqU2dGFI9fw=="],
 
     "@eslint-community/regexpp": ["@eslint-community/regexpp@4.12.2", "", {}, "sha512-EriSTlt5OC9/7SXkRSCAhfSxxoSUgBm33OH+IkwbdpgoqsSsUg7y3uh+IICI/Qg4BBWr3U2i39RpmycbxMq4ew=="],
 

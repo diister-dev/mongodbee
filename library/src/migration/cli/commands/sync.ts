@@ -16,6 +16,7 @@ import * as path from "node:path";
 import { loadConfig } from "../../config/loader.ts";
 import { buildMigrationChain, loadAllMigrations } from "../../discovery.ts";
 import { getAppliedMigrationIds } from "../../state.ts";
+import { repairSuspendedValidators } from "../utils/validator-repair.ts";
 import { createMongodbApplier } from "../../appliers/mongodb.ts";
 import { ensureMigrationPrivileges } from "../utils/privileges.ts";
 
@@ -84,6 +85,9 @@ export async function syncCommand(
 
     const allMigrations = buildMigrationChain(migrationsWithFiles);
     console.log(dim(`Found ${allMigrations.length} migration(s)`));
+
+    // Validators an interrupted run left off are restored first, loudly.
+    await repairSuspendedValidators(db, allMigrations);
 
     // Get applied migrations
     const appliedIds = await getAppliedMigrationIds(db);

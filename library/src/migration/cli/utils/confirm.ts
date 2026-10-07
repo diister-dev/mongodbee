@@ -15,6 +15,29 @@ import { dim, yellow } from "../../../utils/colors.ts";
 export interface ConfirmOptions {
   input?: readline.ReadLineOptions["input"];
   output?: readline.ReadLineOptions["output"];
+  /**
+   * Whether someone can answer. Defaults to `true` for injected streams and
+   * to `process.stdin.isTTY` otherwise.
+   */
+  interactive?: boolean;
+  /** The flag that skips this prompt, named in the error (default `--force`). */
+  skipFlag?: string;
+}
+
+/**
+ * Thrown when a confirmation is needed but stdin is not a terminal.
+ *
+ * Without a terminal (an agent, CI, a pipe left open) nobody can type the
+ * answer: the prompt used to wait on stdin forever, and the process with it.
+ */
+export class ConfirmationRequiredError extends Error {
+  constructor(message: string, skipFlag: string) {
+    super(
+      `Confirmation required but stdin is not a terminal: "${message}". ` +
+        `Re-run with ${skipFlag} to proceed without it.`,
+    );
+    this.name = "ConfirmationRequiredError";
+  }
 }
 
 /**
@@ -24,6 +47,9 @@ export interface ConfirmOptions {
  * whitespace ignored). Any other line, or the input closing without a line
  * (Ctrl-D, an empty pipe), resolves `false`.
  *
+ * Without a terminal it rejects at once with {@link ConfirmationRequiredError}
+ * instead of reading stdin.
+ *
  * @param message - The confirmation message to display
  * @param options - Streams to read the answer from / echo to
  * @returns Promise resolving to true if user confirmed, false otherwise
@@ -32,6 +58,13 @@ export async function confirm(
   message: string,
   options: ConfirmOptions = {},
 ): Promise<boolean> {
+  const interactive =
+    options.interactive ??
+    (options.input !== undefined || process.stdin.isTTY === true);
+  if (!interactive) {
+    throw new ConfirmationRequiredError(message, options.skipFlag ?? "--force");
+  }
+
   console.log(yellow(message));
   console.log(dim("Type 'yes' to confirm: "));
 

@@ -415,6 +415,36 @@ deno task mongodbee rollback
 deno task mongodbee status
 ```
 
+### What `migrate` simulates
+
+`migrate` simulates only the migrations it is about to apply: the pending
+ones (all of them, `--target` included), seeded from the parent schemas of
+the first one. The schema consistency of the chain's last migration against
+`schemas.ts` is always checked. With nothing pending, nothing is simulated.
+`--last N` can only widen the window (to re-validate applied migrations too),
+never shrink it below the pending ones. `--docs` and `--retention` tune the
+simulation exactly as they do for `check`.
+
+### Without a terminal (CI, agents)
+
+When stdin is not a terminal, a command that needs a confirmation (an
+irreversible migration, a lossy rollback, `baseline`, a multi-model catch-up)
+fails at once with a message naming the flag that skips it (`--force`, or
+`--auto-sync` for the catch-up), instead of waiting on stdin. No
+`< /dev/null` is needed. Every command closes its connection and the process
+ends on its own; a stray handle cannot keep it alive more than a few seconds.
+
+### Validators left disabled
+
+A migration switches off the validators of the collections it touches, runs,
+then restores them. Each collection is restored on its own, so one failure (a
+unique index the data violates) no longer leaves the others without
+validation. Before switching anything off, the applier records it in
+`__dbee_validator_guard__`, and clears the record only once everything is
+back. If a run dies in between, `migrate`, `rollback` and `sync` find the
+record and restore the validators of the applied head, saying so; `status`
+reports it.
+
 ### Required Database Privileges
 
 A migration run is not just reads and writes. Around every migration the applier issues DDL commands: `collMod` to disable and restore validators, `create` for new collections, `createIndexes` / `dropIndexes` to synchronize indexes, `drop` and `renameCollection` for the operations that need them.

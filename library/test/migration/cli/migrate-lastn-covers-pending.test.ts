@@ -197,3 +197,111 @@ test("migrate --last N: the window widens to cover every pending migration", asy
     }
   }
 });
+
+const NEXT_ID = "2025_01_02_0000_DDDDDDDDDDDDDDDDDDDDDDDDDD@next";
+
+// A valid child of `root`: the one pending migration of the test below.
+const nextFile = `
+import { migrationDefinition } from "${DEFINITION}";
+import * as v from "${SCHEMA}";
+import root from "./${ROOT_ID}.ts";
+export default migrationDefinition("${NEXT_ID}", "next", {
+  parent: root,
+  schemas: {
+    collections: { users: { _id: v.string() }, tags: { _id: v.string() } },
+    multiModels: {},
+  },
+  migrate(m) {
+    m.createCollection("tags");
+    return m.compile();
+  },
+});
+`;
+
+/** Runs `work` with console.log and stdout captured; returns the output. */
+async function captureLog(work: () => Promise<void>): Promise<string> {
+  const original = console.log;
+  const originalWrite = process.stdout.write;
+  const lines: string[] = [];
+  console.log = (...args: unknown[]) => lines.push(args.join(" "));
+  process.stdout.write = ((chunk: unknown) => {
+    lines.push(String(chunk));
+    return true;
+  }) as typeof process.stdout.write;
+  try {
+    await work();
+  } finally {
+    console.log = original;
+    process.stdout.write = originalWrite;
+  }
+  return lines.join("\n");
+}
+
+test("migrate: only the pending migrations are simulated, with --docs and --retention", async () => {
+  const dbName = `mongodbee_test_pending_${crypto
+    .randomUUID()
+    .replace(/-/g, "")
+    .substring(0, 8)}`;
+  const client = new MongoClient(TEST_MONGODB_URI);
+  await client.connect();
+  const db = client.db(dbName);
+  await db.dropDatabase();
+
+  const appliedDir = await writeProject(
+    { [ROOT_ID]: rootFile },
+    rootSchemas,
+    dbName,
+  );
+  const nextDir = await writeProject(
+    { [ROOT_ID]: rootFile, [NEXT_ID]: nextFile },
+    leafSchemas,
+    dbName,
+  );
+
+  try {
+    await migrateCommand({ cwd: appliedDir, force: true });
+
+    // Out-of-range values fail before anything is simulated or written.
+    await assertRejects(
+      () => migrateCommand({ cwd: nextDir, force: true, docs: 0 }),
+      Error,
+      "--docs",
+    );
+    await assertRejects(
+      () => migrateCommand({ cwd: nextDir, force: true, retention: 2 }),
+      Error,
+      "--retention",
+    );
+    assertEquals((await getAppliedMigrationIds(db)).length, 1);
+
+    const output = await captureLog(() =>
+      migrateCommand({ cwd: nextDir, force: true, docs: 3, retention: 0 }),
+    );
+    // `root` is history: only `next` goes through the simulation.
+    assert(output.includes("[1/1]"), output);
+    assert(!output.includes("[1/2]"), output);
+    assert(output.includes("3 docs, 0% kept"), output);
+    assertEquals((await getAppliedMigrationIds(db)).length, 2);
+
+    // Nothing pending: no simulation at all.
+    const idle = await captureLog(() =>
+      migrateCommand({ cwd: nextDir, force: true }),
+    );
+    assert(idle.includes("No pending migrations"), idle);
+    assert(!idle.includes("Validating migrations with simulation"), idle);
+  } finally {
+    try {
+      await db.dropDatabase();
+    } catch {
+      // Ignore cleanup errors
+    }
+    await client.close();
+    for (const dir of [appliedDir, nextDir]) {
+      try {
+        await rm(dir, { recursive: true, force: true });
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+  }
+});
