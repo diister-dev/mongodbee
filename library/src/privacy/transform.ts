@@ -24,6 +24,7 @@ import {
 import {
   canonical,
   defaultTimeShiftMs,
+  hmacBytes,
   hmacSeed,
   isObjectId,
   looksLikeId,
@@ -100,7 +101,8 @@ export type TransformNoteKind =
   | "input_invalid"
   | "invalid"
   | "collision"
-  | "mismatch";
+  | "mismatch"
+  | "numeric_id";
 
 export interface TransformNote {
   readonly path: string;
@@ -118,6 +120,8 @@ export interface TransformContext {
 }
 
 export interface PrivacyTransformer {
+  readonly timeShiftMs: number;
+  remapId(id: string): string;
   transform(
     targetKey: string,
     doc: Record<string, unknown>,
@@ -126,6 +130,10 @@ export interface PrivacyTransformer {
 }
 
 const MAX_COLLISION_ATTEMPTS = 32;
+
+const MAX_SAFE_DIGITS = 15;
+
+const DYNAMIC_KEY = "$key";
 
 const TEMPORAL_PATTERN =
   /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2})(?::(\d{2})(?:\.(\d+))?)?)?(Z|[+-]\d{2}:\d{2})?$/;
@@ -666,7 +674,7 @@ export function createPrivacyTransformer(
             : dropOrGenerate(leaf, "mismatch");
         }
         case "remap": {
-          if (looksLikeId(leaf.value)) {
+          if (looksLikeId(leaf.value, cls.spaces)) {
             return remapId(secret, leaf.value, shift);
           }
           if (isObjectId(leaf.value)) {
@@ -738,12 +746,21 @@ export function createPrivacyTransformer(
           KEY_VOCABULARY_TYPES.has((a as { type: string }).type),
       );
 
-    const mapKey = ({ path, key, schema }: WalkKey): string => {
-      if (dynamicRoots.some((r) => path === r || path.startsWith(`${r}.`))) {
+    const mapKey = ({ path, keys, key, schema }: WalkKey): string => {
+      const dynamicRoot = dynamicRoots.some(
+        (r) => path === r || path.startsWith(`${r}.`),
+      );
+      if (dynamicRoot) {
+        if (looksLikeId(key)) return remapId(secret, key, shift);
+        const resolution = resolutions.get([...keys, key].join("."));
+        const kept =
+          resolution !== undefined &&
+          resolution !== SKIP_DYNAMIC &&
+          resolution[DYNAMIC_KEY]?.treatment?.extract === "keep";
+        if (kept) return key;
+      } else if (schema !== undefined && keyIsVocabulary(schema)) {
         return key;
-      }
-      if (schema !== undefined && keyIsVocabulary(schema)) return key;
-      if (
+      } else if (
         schema !== undefined &&
         extractIdPrefix(schema) !== "" &&
         looksLikeId(key)
@@ -767,9 +784,47 @@ export function createPrivacyTransformer(
     notes.push(...walked.notes);
 
     const out: Record<string, unknown> = { ...walked.doc };
+    const numericId = (value: number, path: string): number | undefined => {
+      if (!Number.isSafeInteger(value)) {
+        notes.push({ path, kind: "dropped" });
+        return undefined;
+      }
+      notes.push({ path, kind: "numeric_id" });
+      const message = `numid|${targetKey}|${value}`;
+      const known = assigned.get(message);
+      if (typeof known === "number") return known;
+      const digits = Math.min(MAX_SAFE_DIGITS, String(Math.abs(value)).length);
+      const low = digits === 1 ? 0 : 10 ** (digits - 1);
+      const span = BigInt(10 ** digits - low);
+      const sign = value < 0 ? -1 : 1;
+      let taken = owners.get(`numid|${targetKey}`);
+      if (!taken) {
+        taken = new Map();
+        owners.set(`numid|${targetKey}`, taken);
+      }
+      let produced = value;
+      for (let attempt = 0; attempt < MAX_COLLISION_ATTEMPTS; attempt++) {
+        const bytes = hmacBytes(secret, `${message}|${attempt}`);
+        let n = 0n;
+        for (const byte of bytes.subarray(0, 8)) n = (n << 8n) | BigInt(byte);
+        produced = sign * (low + Number(n % span));
+        const holder = taken.get(String(produced));
+        if (holder === undefined || holder === message) {
+          taken.set(String(produced), message);
+          assigned.set(message, produced);
+          return produced;
+        }
+      }
+      notes.push({ path, kind: "collision" });
+      return produced;
+    };
+
     const identifier = (value: unknown, path: string): unknown => {
       if (typeof value === "string") return remapId(secret, value, shift);
       if (isObjectId(value)) return remapObjectId(secret, value, shift);
+      if (typeof value === "number" && plan.posture === "strict") {
+        return numericId(value, path);
+      }
       if (
         value === undefined ||
         value === null ||
@@ -804,5 +859,9 @@ export function createPrivacyTransformer(
     return { doc: out, notes };
   }
 
-  return { transform };
+  return {
+    timeShiftMs: shift,
+    remapId: (id) => remapId(secret, id, shift),
+    transform,
+  };
 }

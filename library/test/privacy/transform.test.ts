@@ -262,8 +262,10 @@ test("fail-closed: a required unknown value is replaced by a valid generated one
     fields: { company: { t: "text", v: "Corp" } },
     birthday: new Date("1990-06-17T00:00:00.000Z"),
   });
-  const company = (doc.fields as Record<string, Record<string, unknown>>)
-    .company;
+  const [company] = Object.values(
+    doc.fields as Record<string, Record<string, unknown>>,
+  );
+  assertEquals(Object.keys(doc.fields as object).includes("company"), false);
   assertNotEquals(company.t, "text");
   assert(kinds(notes, "generated_required").includes("fields.*.t"));
   assert(kinds(notes, "unresolved").includes("fields.*.t"));
@@ -366,6 +368,7 @@ test("dynamic: the resolver classifies each entry from its data, and joins value
     const t = (unit.value as { t: string }).t;
     if (t === "email") {
       return {
+        $key: { treatment: { extract: "keep" as const } },
         t: { role: "technical" as const },
         v: {
           role: "direct" as const,
@@ -376,6 +379,7 @@ test("dynamic: the resolver classifies each entry from its data, and joins value
     }
     if (t === "text") {
       return {
+        $key: { treatment: { extract: "keep" as const } },
         t: { role: "technical" as const },
         v: { role: "content" as const, schema: v.string() },
       };
@@ -402,7 +406,11 @@ test("dynamic: the resolver classifies each entry from its data, and joins value
   assertEquals(fields.bio.t, "text");
   assertNotEquals(fields.bio.v, "Runs the booth");
   assertEquals(typeof fields.bio.v, "string");
-  assertNotEquals(fields.agree.t, "checkbox");
+  const unresolved = Object.entries(fields).find(
+    ([key]) => key !== "email" && key !== "bio",
+  );
+  assertNotEquals(unresolved?.[0], "agree");
+  assertNotEquals(unresolved?.[1].t, "checkbox");
   assert(kinds(notes, "unresolved").includes("fields.*.t"));
   assertEquals(kinds(notes, "invalid"), []);
 });

@@ -19,7 +19,6 @@ import {
   type PrivacyPlan,
   type PrivacyPosture,
   type RecomputeContext,
-  remapId,
   SKIP_RECOMPUTE,
   type TransformNoteKind,
 } from "../../../privacy/mod.ts";
@@ -318,8 +317,11 @@ export async function extractCommand(
   const toDb = options.toDb || options["to-db"];
   const fromMigration = options.fromMigration || options["from-migration"];
   const shiftDaysRaw = options.shiftDays ?? options["shift-days"];
-  const shiftDays = shiftDaysRaw === undefined ? 0 : Number(shiftDaysRaw);
-  if (Number.isNaN(shiftDays)) throw new Error("--shift-days must be a number");
+  const shiftDays =
+    shiftDaysRaw === undefined ? undefined : Number(shiftDaysRaw);
+  if (shiftDays !== undefined && Number.isNaN(shiftDays)) {
+    throw new Error("--shift-days must be a number");
+  }
 
   const cwd = options.cwd || process.cwd();
   const config = await loadConfig({ configPath: options.configPath, cwd });
@@ -389,6 +391,13 @@ export async function extractCommand(
       ),
     );
   }
+  if (plan.posture === "strict" && shiftDays === 0) {
+    console.error(
+      yellow(
+        "Warning: --shift-days 0 keeps every creation time and date as in the source; omit the option to use the strict default shift",
+      ),
+    );
+  }
   const consistency = parseConsistency(options.consistency);
   if (!options.json) {
     console.log(bold(blue("🐝 Extracting pseudonymised data...")));
@@ -441,18 +450,17 @@ export async function extractCommand(
     );
     const replayed = await applyMigrationsInMemory(state, replay);
 
-    const shiftMs = shiftDays * 86_400_000;
     const transformer = createPrivacyTransformer({
       plan,
       schemas,
       secret,
       consistency,
-      timeShiftMs: shiftMs,
+      ...(shiftDays !== undefined && { timeShiftMs: shiftDays * 86_400_000 }),
       recompute: keepComputedRevision,
     });
     const result = transformState(replayed.state, plan, transformer, {
       schemas,
-      remapInstanceName: (name) => remapId(secret, name, shiftMs),
+      remapInstanceName: transformer.remapId,
     });
     const violations = checkScenarioState({
       state: result.state,

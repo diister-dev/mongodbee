@@ -17,7 +17,7 @@ import {
   discoverMultiCollectionInstances,
   getMultiCollectionMigrations,
 } from "../../../src/migration/multicollection-registry.ts";
-import { remapId } from "../../../src/privacy/pseudonym.ts";
+import { defaultTimeShiftMs, remapId } from "../../../src/privacy/pseudonym.ts";
 import type { SchemasDefinition } from "../../../src/migration/types.ts";
 import { findDanglingReferences } from "./referential-integrity.ts";
 import {
@@ -108,7 +108,7 @@ e2e(
         });
         const out = client.db(target);
         const expectedNames = world.instanceNames.map((n) =>
-          remapId(SECRET, n),
+          remapId(SECRET, n, defaultTimeShiftMs(SECRET)),
         );
         const names = await discoverMultiCollectionInstances(out, "exposition");
         assertEquals(names, [...expectedNames].sort());
