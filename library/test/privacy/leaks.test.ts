@@ -105,7 +105,7 @@ function extract(
     consistency?: PrivacyConsistency;
   } = {},
 ) {
-  const plan = buildPrivacyPlan({ schemas });
+  const plan = buildPrivacyPlan({ schemas, posture: "strict" });
   const transformer = createPrivacyTransformer({
     plan,
     schemas,
@@ -136,10 +136,8 @@ const USERS = {
   firstname: personal(v.string(), { role: "direct" }),
 };
 
-// TODO(privacy): L1, unblocked by the anonymise-everything posture (unowned strings faked)
 test({
   name: "leak L1: an unowned document keeps every unclassified string in clear",
-  ignore: true,
   fn: () => {
     const schemas: SchemasDefinition = {
       collections: {
@@ -204,10 +202,8 @@ test({
   },
 });
 
-// TODO(privacy): L2, unblocked by contact defaulting to pseudonym, or the anonymise-everything posture
 test({
   name: "leak L2: role contact keeps the phone and the address of a person",
-  ignore: true,
   fn: () => {
     const schemas: SchemasDefinition = {
       collections: {
@@ -302,10 +298,8 @@ test({
   },
 });
 
-// TODO(privacy): L5, unblocked by plan.ts reading the ISO action per union option, not per path
 test({
   name: "leak L5: a union with one ISO option makes every string of the path technical, bypassing the unknown gate",
-  ignore: true,
   fn: () => {
     const schemas: SchemasDefinition = {
       collections: {
@@ -490,10 +484,8 @@ test({
   },
 });
 
-// TODO(privacy): L10, unblocked by plan.ts keeping a dynamic subtree dynamic in an unowned document
 test({
   name: "leak L10: a dynamic subtree of an unowned document is kept in clear when the resolver skips it",
-  ignore: true,
   fn: () => {
     const schemas: SchemasDefinition = {
       collections: {
@@ -526,10 +518,8 @@ test({
   },
 });
 
-// TODO(privacy): L11, unblocked by the anonymise-everything posture (document-level exemption no longer keeps strings)
 test({
   name: "leak L11: an exempt document keeps its free text, which can quote a person",
-  ignore: true,
   fn: () => {
     const schemas: SchemasDefinition = {
       collections: {
@@ -592,10 +582,8 @@ test({
   },
 });
 
-// TODO(privacy): L13, unblocked by contact defaulting to pseudonym, or the anonymise-everything posture
 test({
   name: "leak L13: a resolver can classify a dynamic value as contact and keep it",
-  ignore: true,
   fn: () => {
     const schemas: SchemasDefinition = {
       collections: {
@@ -875,10 +863,8 @@ function teamExtract() {
   );
 }
 
-// TODO(privacy): L16, unblocked by extract dropping _computed and recomputing it from the transformed sources
 test({
   name: "leak L16: a computed copy of a dropped person field is kept in clear by its unowned subject",
-  ignore: true,
   fn: () => {
     const result = teamExtract();
     assertNoLeak(result.state.collections["+users"].content, [REAL.lastname]);

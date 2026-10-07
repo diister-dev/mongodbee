@@ -3,7 +3,10 @@ import process from "node:process";
 import { test } from "../../+harness.ts";
 import { assert, assertEquals, assertRejects } from "../../+assert.ts";
 import { MongoClient } from "../../../src/mongodb.ts";
-import { classifyCommand } from "../../../src/migration/cli/commands/classify.ts";
+import {
+  classifyCommand,
+  parsePosture,
+} from "../../../src/migration/cli/commands/classify.ts";
 import { seedCommand } from "../../../src/migration/cli/commands/seed.ts";
 import { extractCommand } from "../../../src/migration/cli/commands/extract.ts";
 import { getAppliedMigrationIds } from "../../../src/migration/state.ts";
@@ -134,6 +137,20 @@ export const schemas = { collections: { users: { _id: dbId("user"), email: v.pip
       () => classifyCommand({ cwd: dir, json: true }),
       Error,
       "classification has 1 error",
+    );
+  });
+});
+
+test("cli: classify takes a posture and refuses an unknown one", async () => {
+  assertEquals(parsePosture(undefined), "personal");
+  assertEquals(parsePosture("strict"), "strict");
+  await withTempDir(async (dir) => {
+    await writeProject(dir, dbName("classify"));
+    await classifyCommand({ cwd: dir, posture: "strict", json: true });
+    await assertRejects(
+      () => classifyCommand({ cwd: dir, posture: "paranoid" }),
+      Error,
+      "--posture must be personal or strict",
     );
   });
 });
