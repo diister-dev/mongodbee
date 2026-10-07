@@ -1,5 +1,7 @@
 import * as v from "../schema.ts";
-import { createMockGenerator } from "@diister/valibot-mock";
+import { createMockGenerator, SKIP } from "@diister/valibot-mock";
+import { INDEX_SYMBOL } from "../indexes.ts";
+import { extractIdPrefix } from "../migration/utils/seed-id.ts";
 import type {
   SchemaContent,
   SchemasDefinition,
@@ -12,22 +14,27 @@ import {
   type PrivacyPlan,
   type PrivacyTarget,
 } from "./plan.ts";
-import type {
-  PrivacyConsistency,
-  PrivacyNormalize,
-  PrivacyRole,
-  PrivacyTreatments,
+import {
+  collectActions,
+  type PrivacyConsistency,
+  type PrivacyNormalize,
+  type PrivacyRole,
+  type PrivacyTreatments,
 } from "./metadata.ts";
 import {
   canonical,
+  defaultTimeShiftMs,
   hmacSeed,
+  isObjectId,
   looksLikeId,
   type PrivacySecret,
   remapId,
+  remapObjectId,
 } from "./pseudonym.ts";
 import {
   DROP,
   walkDocument,
+  type WalkKey,
   type WalkLeaf,
   type WalkNoteKind,
 } from "./walk.ts";
@@ -91,7 +98,9 @@ export type TransformNoteKind =
   | "unclassified"
   | "unresolved"
   | "input_invalid"
-  | "invalid";
+  | "invalid"
+  | "collision"
+  | "mismatch";
 
 export interface TransformNote {
   readonly path: string;
@@ -116,8 +125,40 @@ export interface PrivacyTransformer {
   ): TransformResult;
 }
 
-const ISO_PATTERN =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+const MAX_COLLISION_ATTEMPTS = 32;
+
+const TEMPORAL_PATTERN =
+  /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2})(?::(\d{2})(?:\.(\d+))?)?)?(Z|[+-]\d{2}:\d{2})?$/;
+
+const KEY_VOCABULARY_TYPES: ReadonlySet<string> = new Set([
+  "picklist",
+  "literal",
+  "enum",
+]);
+
+function mapTemporal(
+  value: string,
+  map: (wallClock: number) => number,
+): string | undefined {
+  const match = TEMPORAL_PATTERN.exec(value);
+  if (!match) return undefined;
+  const [, date, time, seconds, fraction, zone] = match;
+  const millis = (fraction ?? "0").padEnd(3, "0").slice(0, 3);
+  const wall = Date.parse(
+    `${date}T${time ?? "00:00"}:${seconds ?? "00"}.${millis}Z`,
+  );
+  if (Number.isNaN(wall)) return undefined;
+  const iso = new Date(map(wall)).toISOString();
+  let out = iso.slice(0, 10);
+  if (time !== undefined) {
+    out += `T${iso.slice(11, 16)}`;
+    if (seconds !== undefined) out += iso.slice(16, 19);
+    if (fraction !== undefined) {
+      out += `.${iso.slice(20, 23).padEnd(fraction.length, "0").slice(0, fraction.length)}`;
+    }
+  }
+  return out + (zone ?? "");
+}
 
 const WRAPPER_TYPES: ReadonlySet<string> = new Set([
   "optional",
@@ -164,7 +205,7 @@ function unwrapSchema(schema: unknown): Record<string, unknown> | undefined {
   return current;
 }
 
-export function schemaAtPath(fields: SchemaContent, path: string): unknown {
+function rawSchemaAtPath(fields: SchemaContent, path: string): unknown {
   const segments = path.split(".");
   let current: unknown = fields[segments[0]];
   for (const segment of segments.slice(1)) {
@@ -191,7 +232,9 @@ export function schemaAtPath(fields: SchemaContent, path: string): unknown {
         );
       });
       current = option
-        ? (unwrapSchema(option)!.entries as Record<string, unknown>)[segment]
+        ? (
+            unwrapSchema(option)?.entries as Record<string, unknown> | undefined
+          )?.[segment]
         : undefined;
       continue;
     }
@@ -199,7 +242,81 @@ export function schemaAtPath(fields: SchemaContent, path: string): unknown {
       segment
     ];
   }
-  return unwrapSchema(current);
+  return current;
+}
+
+export function schemaAtPath(fields: SchemaContent, path: string): unknown {
+  return unwrapSchema(rawSchemaAtPath(fields, path));
+}
+
+function hasUniqueIndex(schema: unknown): boolean {
+  return collectActions(schema).some((action) => {
+    const metadata = (action as { metadata?: Record<PropertyKey, unknown> })
+      .metadata;
+    const index = metadata?.[INDEX_SYMBOL] as { unique?: boolean } | undefined;
+    return index?.unique === true;
+  });
+}
+
+type SeededGenerator = (seed: number) => unknown;
+
+const generatorCache = new WeakMap<object, Map<string, SeededGenerator>>();
+
+function seededGenerator(schema: unknown, key: string): SeededGenerator {
+  const owner = schema as object;
+  let byKey = generatorCache.get(owner);
+  if (!byKey) {
+    byKey = new Map();
+    generatorCache.set(owner, byKey);
+  }
+  let cached = byKey.get(key);
+  if (!cached) {
+    let pendingSeed: number | undefined;
+    // valibot-mock has no reseed API; its resolve hook is the only way to reach the Faker
+    const generator = createMockGenerator(
+      v.object({ [key]: schema as v.GenericSchema }),
+      {
+        resolve: ({ faker }) => {
+          if (pendingSeed !== undefined) {
+            faker.seed(pendingSeed);
+            pendingSeed = undefined;
+          }
+          return SKIP;
+        },
+      },
+    );
+    cached = (seed) => {
+      pendingSeed = seed;
+      return (generator.generate() as Record<string, unknown>)[key];
+    };
+    byKey.set(key, cached);
+  }
+  return cached;
+}
+
+function issuePath(fields: SchemaContent, issue: v.BaseIssue<unknown>): string {
+  const parts: string[] = [];
+  for (const item of issue.path ?? []) {
+    const parent =
+      parts.length === 0
+        ? undefined
+        : unwrapSchema(rawSchemaAtPath(fields, parts.join(".")));
+    const key = String(item.key);
+    if (parts.length === 0) {
+      parts.push(key);
+    } else if (parent?.type === "array" || parent?.type === "tuple") {
+      parts.push("*");
+    } else if (parent !== undefined && (parent.entries as object | undefined)) {
+      parts.push(Object.hasOwn(parent.entries as object, key) ? key : "*");
+    } else {
+      parts.push("*");
+    }
+  }
+  return parts.join(".");
+}
+
+function issueMessage(issue: v.BaseIssue<unknown>): string {
+  return `${issue.kind} ${issue.type} expected ${issue.expected ?? "-"}`;
 }
 
 function getAt(doc: Record<string, unknown>, keys: readonly string[]): unknown {
@@ -224,40 +341,98 @@ export function createPrivacyTransformer(
 ): PrivacyTransformer {
   const { plan, schemas, secret } = options;
   const consistency = options.consistency ?? "relationship";
-  const shift = options.timeShiftMs ?? 0;
+  const shift = Math.round(
+    options.timeShiftMs ??
+      (plan.posture === "strict" ? defaultTimeShiftMs(secret) : 0),
+  );
   const validate = options.validate ?? true;
 
-  const findSource = (
-    mirror: string,
-  ): { cls: PrivacyPath; schema: unknown; path: string } | undefined => {
+  interface MirrorSource {
+    readonly cls: PrivacyPath;
+    readonly schema: unknown;
+    readonly path: string;
+    readonly scoped: boolean;
+    readonly unique: boolean;
+  }
+
+  const sources = new Map<string, MirrorSource | undefined>();
+
+  const findSource = (mirror: string): MirrorSource | undefined => {
+    if (sources.has(mirror)) return sources.get(mirror);
     const [space, ...rest] = mirror.split(".");
     const path = rest.join(".");
     const candidates = [...plan.targets.values()].filter(
       (t) => t.space === space,
     );
     candidates.sort((a, b) => Number(b.person) - Number(a.person));
+    let found: MirrorSource | undefined;
     for (const target of candidates) {
       const cls = target.paths.find((p) => p.path === path);
       const fields = fieldsOf(schemas, target);
       if (cls && fields) {
-        return { cls, schema: schemaAtPath(fields, path), path };
+        const raw = rawSchemaAtPath(fields, path);
+        found = {
+          cls,
+          schema: unwrapSchema(raw),
+          path,
+          scoped: target.bucket === "scopedMultiCollections",
+          unique: hasUniqueIndex(raw),
+        };
+        break;
       }
     }
-    return undefined;
+    sources.set(mirror, found);
+    return found;
+  };
+
+  const uniquePaths = new Map<string, boolean>();
+
+  const isUnique = (
+    targetKey: string,
+    fields: SchemaContent,
+    path: string,
+  ): boolean => {
+    const id = `${targetKey}|${path}`;
+    let unique = uniquePaths.get(id);
+    if (unique === undefined) {
+      unique = hasUniqueIndex(rawSchemaAtPath(fields, path));
+      uniquePaths.set(id, unique);
+    }
+    return unique;
+  };
+
+  const assigned = new Map<string, unknown>();
+  const owners = new Map<string, Map<string, string>>();
+
+  const foldFake = (value: unknown): string =>
+    typeof value === "string"
+      ? value.toLowerCase()
+      : (JSON.stringify(value) ?? String(value));
+
+  const pathIndexes = new Map<string, Map<string, PrivacyPath>>();
+
+  const pathsOf = (target: PrivacyTarget): Map<string, PrivacyPath> => {
+    let index = pathIndexes.get(target.key);
+    if (!index) {
+      index = new Map(target.paths.map((p) => [p.path, p]));
+      pathIndexes.set(target.key, index);
+    }
+    return index;
   };
 
   const shiftDate = (value: unknown): unknown => {
     if (shift === 0) return value;
     if (value instanceof Date) return new Date(value.getTime() + shift);
-    if (typeof value === "string" && ISO_PATTERN.test(value)) {
-      const t = Date.parse(value);
-      if (!Number.isNaN(t)) return new Date(t + shift).toISOString();
+    if (typeof value === "string") {
+      return mapTemporal(value, (wall) => wall + shift) ?? value;
     }
     return value;
   };
 
-  const monthStart = (d: Date): Date =>
-    new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+  const monthStart = (ms: number): number => {
+    const d = new Date(ms);
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+  };
 
   function transform(
     targetKey: string,
@@ -271,26 +446,34 @@ export function createPrivacyTransformer(
       throw new Error(`privacy: no schema for target "${targetKey}"`);
     }
 
-    const byPath = new Map(target.paths.map((p) => [p.path, p]));
+    const byPath = pathsOf(target);
     const notes: TransformNote[] = [];
     const scope =
       context.scope ?? (typeof doc._scope === "string" ? doc._scope : "");
-    const docId = typeof doc._id === "string" ? doc._id : "";
+    const docId = isObjectId(doc._id)
+      ? doc._id.toHexString()
+      : typeof doc._id === "string"
+        ? doc._id
+        : "";
 
-    const scopePart = (cls: PrivacyPath, path: string): string => {
+    const scopePart = (
+      cls: PrivacyPath,
+      path: string,
+      sourceScope: string = scope,
+    ): string => {
       const policy = cls.consistent ?? consistency;
       if (policy === "person") return "";
-      if (policy === "relationship") return scope;
+      if (policy === "relationship") return sourceScope;
       return `${docId}|${path}`;
     };
     const spaceOf = (cls: PrivacyPath): string => cls.space ?? cls.role;
-    const seedFor = (cls: PrivacyPath, path: string, value: unknown): number =>
-      hmacSeed(
-        secret,
-        `value|${spaceOf(cls)}|${scopePart(cls, path)}|${canonical(value)}`,
-      );
-    const fakeSeed = (path: string): number =>
-      hmacSeed(secret, `fake|${targetKey}|${docId}|${path}`);
+    const valueMessage = (
+      cls: PrivacyPath,
+      path: string,
+      value: unknown,
+      sourceScope?: string,
+    ): string =>
+      `value|${spaceOf(cls)}|${scopePart(cls, path, sourceScope)}|${canonical(value)}`;
 
     const generate = (
       schema: unknown,
@@ -299,11 +482,7 @@ export function createPrivacyTransformer(
       key = path.split(".").pop() ?? path,
     ): unknown => {
       try {
-        const wrapped = v.object({ [key]: schema as v.GenericSchema });
-        const produced = createMockGenerator(wrapped, {
-          faker: { seed },
-        }).generate() as Record<string, unknown>;
-        return produced[key];
+        return seededGenerator(schema, key)(seed);
       } catch (error) {
         notes.push({
           path,
@@ -314,26 +493,80 @@ export function createPrivacyTransformer(
       }
     };
 
+    const produce = (
+      ownerSpace: string,
+      message: string,
+      unique: boolean,
+      schema: unknown,
+      path: string,
+      key?: string,
+    ): unknown => {
+      const known = assigned.get(message);
+      if (known !== undefined) return known;
+      if (!unique)
+        return generate(schema, hmacSeed(secret, message), path, key);
+      let taken = owners.get(ownerSpace);
+      if (!taken) {
+        taken = new Map();
+        owners.set(ownerSpace, taken);
+      }
+      let produced: unknown = DROP;
+      for (let attempt = 0; attempt < MAX_COLLISION_ATTEMPTS; attempt++) {
+        const seed = hmacSeed(
+          secret,
+          attempt === 0 ? message : `${message}|retry|${attempt}`,
+        );
+        produced = generate(schema, seed, path, key);
+        if (produced === DROP) return DROP;
+        const holder = taken.get(foldFake(produced));
+        if (holder === undefined || holder === message) {
+          taken.set(foldFake(produced), message);
+          assigned.set(message, produced);
+          return produced;
+        }
+      }
+      notes.push({ path, kind: "collision" });
+      return produced;
+    };
+
+    const fakeMessage = (path: string): string =>
+      `fake|${targetKey}|${docId}|${path}`;
+
+    const fakeValue = (leaf: WalkLeaf, schema: unknown = leaf.schema) =>
+      produce(
+        `fake|${targetKey}|${leaf.path}`,
+        fakeMessage(leaf.path),
+        isUnique(targetKey, fields, leaf.path),
+        schema,
+        leaf.path,
+      );
+
     const dropOrGenerate = (
       leaf: WalkLeaf,
-      kind: "dropped" | "opaque" | "recompute_missing",
+      kind: "dropped" | "opaque" | "recompute_missing" | "mismatch",
     ): unknown => {
       notes.push({ path: leaf.path, kind });
       if (leaf.optional) return DROP;
+      if (leaf.nullable) return null;
       notes.push({ path: leaf.path, kind: "generated_required" });
-      return generate(leaf.schema, fakeSeed(leaf.path), leaf.path);
+      return fakeValue(leaf);
     };
 
     const generalise = (leaf: WalkLeaf): unknown => {
-      const shifted = shiftDate(leaf.value);
-      if (shifted instanceof Date) return monthStart(shifted);
-      if (typeof shifted === "string" && ISO_PATTERN.test(shifted)) {
-        return monthStart(new Date(Date.parse(shifted))).toISOString();
+      const { value } = leaf;
+      if (value instanceof Date) {
+        return new Date(monthStart(value.getTime() + shift));
       }
-      if (typeof shifted === "number") {
-        if (shifted === 0) return 0;
-        const magnitude = 10 ** Math.floor(Math.log10(Math.abs(shifted)));
-        return Math.round(shifted / magnitude) * magnitude;
+      if (typeof value === "string") {
+        const collapsed = mapTemporal(value, (wall) =>
+          monthStart(wall + shift),
+        );
+        if (collapsed !== undefined) return collapsed;
+      }
+      if (typeof value === "number") {
+        if (value === 0) return 0;
+        const magnitude = 10 ** Math.floor(Math.log10(Math.abs(value)));
+        return Math.round(value / magnitude) * magnitude;
       }
       return dropOrGenerate(leaf, "dropped");
     };
@@ -407,9 +640,16 @@ export function createPrivacyTransformer(
         if (!source || source.schema === undefined) {
           return dropOrGenerate(leaf, "dropped");
         }
-        const generated = generate(
+        const generated = produce(
+          spaceOf(source.cls),
+          valueMessage(
+            source.cls,
+            source.path,
+            leaf.value,
+            source.scoped ? scope : "",
+          ),
+          source.unique,
           source.schema,
-          seedFor(source.cls, source.path, leaf.value),
           leaf.path,
           source.path.split(".").pop(),
         );
@@ -419,20 +659,43 @@ export function createPrivacyTransformer(
       }
       switch (cls.treatment.extract) {
         case "keep":
-        case "include":
-          return shiftDate(leaf.value);
-        case "remap":
-          return looksLikeId(leaf.value)
-            ? remapId(secret, leaf.value, shift)
-            : shiftDate(leaf.value);
-        case "pseudonym":
-          return generate(
+        case "include": {
+          const kept = shiftDate(leaf.value);
+          return v.is(schema as v.GenericSchema, kept)
+            ? kept
+            : dropOrGenerate(leaf, "mismatch");
+        }
+        case "remap": {
+          if (looksLikeId(leaf.value)) {
+            return remapId(secret, leaf.value, shift);
+          }
+          if (isObjectId(leaf.value)) {
+            return remapObjectId(secret, leaf.value, shift);
+          }
+          const expectsId = extractIdPrefix(schema) !== "";
+          if (expectsId) notes.push({ path: leaf.path, kind: "mismatch" });
+          return produce(
+            expectsId ? spaceOf(cls) : "direct",
+            valueMessage(
+              expectsId ? cls : { ...cls, space: "direct" },
+              leaf.path,
+              leaf.value,
+            ),
+            false,
             schema,
-            seedFor(cls, leaf.path, leaf.value),
+            leaf.path,
+          );
+        }
+        case "pseudonym":
+          return produce(
+            spaceOf(cls),
+            valueMessage(cls, leaf.path, leaf.value),
+            !override && isUnique(targetKey, fields, leaf.path),
+            schema,
             leaf.path,
           );
         case "fake":
-          return generate(schema, fakeSeed(leaf.path), leaf.path);
+          return fakeValue(leaf, schema);
         case "generalise":
           return generalise(leaf);
         case "recompute": {
@@ -460,27 +723,80 @@ export function createPrivacyTransformer(
       const parsed = v.safeParse(v.object(fields as v.ObjectEntries), doc);
       if (!parsed.success) {
         for (const issue of parsed.issues) {
-          const path = issue.path?.map((p) => String(p.key)).join(".") ?? "";
-          notes.push({ path, kind: "input_invalid", message: issue.message });
+          notes.push({
+            path: issuePath(fields, issue),
+            kind: "input_invalid",
+            message: issueMessage(issue),
+          });
         }
       }
     }
-    const walked = walkDocument(fields, rest, handler);
+    const keyIsVocabulary = (schema: unknown): boolean =>
+      collectActions(schema).some(
+        (a) =>
+          (a as { kind?: string }).kind === "schema" &&
+          KEY_VOCABULARY_TYPES.has((a as { type: string }).type),
+      );
+
+    const mapKey = ({ path, key, schema }: WalkKey): string => {
+      if (dynamicRoots.some((r) => path === r || path.startsWith(`${r}.`))) {
+        return key;
+      }
+      if (schema !== undefined && keyIsVocabulary(schema)) return key;
+      if (
+        schema !== undefined &&
+        extractIdPrefix(schema) !== "" &&
+        looksLikeId(key)
+      ) {
+        return remapId(secret, key, shift);
+      }
+      const mapped = produce(
+        `key|${targetKey}|${path}`,
+        `key|${targetKey}|${path}|${key}`,
+        true,
+        schema ?? v.string(),
+        path,
+        "key",
+      );
+      return typeof mapped === "string"
+        ? mapped
+        : hmacSeed(secret, `key|${targetKey}|${path}|${key}`).toString(36);
+    };
+
+    const walked = walkDocument(fields, rest, handler, { mapKey });
     notes.push(...walked.notes);
 
     const out: Record<string, unknown> = { ...walked.doc };
-    if (typeof _id === "string") out._id = remapId(secret, _id, shift);
-    else if (_id !== undefined) out._id = _id;
-    if (typeof _scope === "string") out._scope = remapId(secret, _scope, shift);
-    else if (_scope !== undefined) out._scope = _scope;
+    const identifier = (value: unknown, path: string): unknown => {
+      if (typeof value === "string") return remapId(secret, value, shift);
+      if (isObjectId(value)) return remapObjectId(secret, value, shift);
+      if (
+        value === undefined ||
+        value === null ||
+        typeof value === "number" ||
+        typeof value === "bigint" ||
+        typeof value === "boolean"
+      ) {
+        return value;
+      }
+      notes.push({ path, kind: "dropped" });
+      return undefined;
+    };
+    const mappedId = identifier(_id, "_id");
+    if (mappedId !== undefined) out._id = mappedId;
+    const mappedScope = identifier(_scope, "_scope");
+    if (mappedScope !== undefined) out._scope = mappedScope;
     if (_type !== undefined) out._type = _type;
 
     if (validate) {
       const parsed = v.safeParse(v.object(fields as v.ObjectEntries), out);
       if (!parsed.success) {
         for (const issue of parsed.issues) {
-          const path = issue.path?.map((p) => String(p.key)).join(".") ?? "";
-          notes.push({ path, kind: "invalid", message: issue.message });
+          notes.push({
+            path: issuePath(fields, issue),
+            kind: "invalid",
+            message: issueMessage(issue),
+          });
         }
       }
     }

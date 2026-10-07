@@ -44,12 +44,15 @@ export { renderPrivacyReport } from "./report.ts";
 
 export {
   canonical,
+  defaultTimeShiftMs,
   hmacBytes,
   hmacSeed,
+  isObjectId,
   isUlid,
   looksLikeId,
   type PrivacySecret,
   remapId,
+  remapObjectId,
   remapUid,
 } from "./pseudonym.ts";
 
@@ -58,6 +61,7 @@ export {
   KEEP,
   walkDocument,
   type WalkHandler,
+  type WalkKey,
   type WalkLeaf,
   type WalkNote,
   type WalkNoteKind,

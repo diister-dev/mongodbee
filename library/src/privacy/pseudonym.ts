@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { ObjectId } from "mongodb";
 import { decodeTime } from "../utils/ulid.ts";
 import {
   encodeUlidRandom,
@@ -26,6 +27,8 @@ export function canonical(value: unknown): string {
   return JSON.stringify(value) ?? String(value);
 }
 
+const MAX_ULID_TIME = 2 ** 48 - 1;
+
 const ID_PATTERN = /^([a-zA-Z0-9_-]+):(.+)$/;
 
 function base36(bytes: Uint8Array, length: number): string {
@@ -39,9 +42,13 @@ export function remapUid(
   uid: string,
   timeShiftMs = 0,
 ): string {
-  const digest = hmacBytes(secret, `uid|${uid}`);
-  if (isUlid(uid)) {
-    const time = decodeTime(uid.toUpperCase()) + timeShiftMs;
+  const ulid = isUlid(uid);
+  const digest = hmacBytes(secret, `uid|${ulid ? uid.toLowerCase() : uid}`);
+  if (ulid) {
+    const time = Math.min(
+      MAX_ULID_TIME,
+      Math.max(0, Math.round(decodeTime(uid.toUpperCase()) + timeShiftMs)),
+    );
     const out = encodeUlidTime(time) + encodeUlidRandom(digest);
     return uid === uid.toLowerCase() ? out.toLowerCase() : out;
   }
@@ -68,4 +75,33 @@ export function looksLikeId(
   return (
     spaces === undefined || spaces.length === 0 || spaces.includes(match[1])
   );
+}
+
+const MAX_OBJECT_ID_SECONDS = 2 ** 32 - 1;
+
+export function isObjectId(value: unknown): value is ObjectId {
+  return value instanceof ObjectId;
+}
+
+export function remapObjectId(
+  secret: PrivacySecret,
+  id: ObjectId,
+  timeShiftMs = 0,
+): ObjectId {
+  const digest = hmacBytes(secret, `oid|${id.toHexString()}`);
+  const seconds = Math.min(
+    MAX_OBJECT_ID_SECONDS,
+    Math.max(0, Math.round(id.getTimestamp().getTime() + timeShiftMs) / 1000),
+  );
+  const bytes = new Uint8Array(12);
+  new DataView(bytes.buffer).setUint32(0, Math.floor(seconds));
+  bytes.set(digest.subarray(0, 8), 4);
+  return new ObjectId(bytes);
+}
+
+export function defaultTimeShiftMs(secret: PrivacySecret): number {
+  const digest = hmacBytes(secret, "shift");
+  const view = new DataView(digest.buffer, digest.byteOffset);
+  const days = 30 + (view.getUint32(0) % 336);
+  return -(days * 86_400_000 + (view.getUint32(4) % 86_400_000));
 }

@@ -241,10 +241,8 @@ test({
   },
 });
 
-// TODO(privacy): L3, unblocked by the anonymise-everything posture (forced shift, person-owned numbers faked)
 test({
   name: "leak L3: numbers and dates of a person are inferred technical and kept exactly",
-  ignore: true,
   fn: () => {
     const schemas: SchemasDefinition = {
       collections: {
@@ -276,10 +274,8 @@ test({
   },
 });
 
-// TODO(privacy): L4, unblocked by shiftDate covering iso_date and zone-less iso_date_time strings
 test({
   name: "leak L4: an ISO date string is technical and never shifted, even with a time shift",
-  ignore: true,
   fn: () => {
     const schemas: SchemasDefinition = {
       collections: {
@@ -336,10 +332,8 @@ test({
   },
 });
 
-// TODO(privacy): L6, unblocked by record keys being classified (remapped when ids, faked otherwise)
 test({
   name: "leak L6: record keys are never transformed",
-  ignore: true,
   fn: () => {
     const schemas: SchemasDefinition = {
       collections: {
@@ -366,10 +360,8 @@ test({
   },
 });
 
-// TODO(privacy): L6, unblocked by record keys being classified (remapped when ids, faked otherwise)
 test({
   name: "leak L6: a record keyed by a reference keeps the source id, and no longer joins",
-  ignore: true,
   fn: () => {
     const schemas: SchemasDefinition = {
       collections: {
@@ -397,10 +389,8 @@ test({
   },
 });
 
-// TODO(privacy): L7, unblocked by keep and remap checking the value against the leaf schema
 test({
   name: "leak L7: a value that does not match its technical or reference schema is written verbatim",
-  ignore: true,
   fn: () => {
     const schemas: SchemasDefinition = {
       collections: {
@@ -431,10 +421,8 @@ test({
   },
 });
 
-// TODO(privacy): L8, unblocked by notes carrying issue kind and expected only, never the received value
 test({
   name: "leak L8: validation notes quote the received value",
-  ignore: true,
   fn: () => {
     const schemas: SchemasDefinition = {
       collections: { "+users": USERS },
@@ -459,10 +447,8 @@ test({
   },
 });
 
-// TODO(privacy): L9, unblocked by refusing or remapping a non-string _id
 test({
   name: "leak L9: a non-string _id is copied as is, whatever it holds",
-  ignore: true,
   fn: () => {
     const schemas: SchemasDefinition = {
       collections: {
@@ -563,10 +549,8 @@ test({
   },
 });
 
-// TODO(privacy): L12, unblocked by the anonymise-everything posture (forced random time shift)
 test({
   name: "leak L12: without a time shift every ULID keeps its exact creation millisecond",
-  ignore: true,
   fn: () => {
     const schemas: SchemasDefinition = { collections: { "+users": USERS } };
     const result = extract(
@@ -755,10 +739,8 @@ test("guard: a hostile document never reaches the output, and no note message qu
   );
 });
 
-// TODO(privacy): L14, unblocked by unknown_key notes naming the parent path, not the dropped key
 test({
   name: "leak L14: the path of an unknown_key note is the dropped key itself",
-  ignore: true,
   fn: () => {
     const schemas: SchemasDefinition = { collections: { "+users": USERS } };
     const plan = buildPrivacyPlan({ schemas });
@@ -1014,10 +996,8 @@ test({
   },
 });
 
-// TODO(privacy): L18, unblocked by remap faking a value that is not an id, and plan.ts classifying union options apart
 test({
   name: "leak L18: a reference-or-email union keeps the email, with no note at all",
-  ignore: true,
   fn: () => {
     const schemas: SchemasDefinition = {
       collections: {
