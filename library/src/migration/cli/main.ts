@@ -205,15 +205,22 @@ ${yellow("SEED OPTIONS:")}
   --json            Print the report as JSON
 
 ${yellow("EXTRACT OPTIONS:")}
-  --from, --from-db Source database (default: the configured one)
-  --to, --to-db     Target database; must be empty and differ from the source
+  --from, --from-db Source connection URI and database name (default: the configured ones)
+  --to, --to-db     Target connection URI and database name; must be empty
+                    unless --force, and never the source itself
   --from-migration  Migration the source is at; later ones are replayed in memory first
-  --secret          Pseudonymisation secret, or env:NAME (default: random, discarded)
+  --secret          Pseudonymisation secret: env:NAME is read from the environment
+                    (recommended); a literal value is visible in ps and shell
+                    history. Default: random, discarded
   --consistency     person | relationship | transaction (default: relationship)
-  --posture         personal | strict: strict fakes every undeclared string (classify)
+  --posture         strict | personal (default: strict): strict fakes every value
+                    the schemas do not declare, personal keeps what is not personal
   --shift-days      Shift every date and ulid timestamp by N days
-  --scope           Only extract this scope of the scoped collections
+  --scope           Only extract this scope of the scoped collections; unscoped
+                    collections are still copied whole (listed in the summary)
   --allow-unknown   Proceed with UNKNOWN paths (they are dropped)
+  --force           Write into a non-empty target database (existing data is kept;
+                    colliding documents fail the extract)
   --dry-run         Read and transform without writing
   --json            Print the summary as JSON
 

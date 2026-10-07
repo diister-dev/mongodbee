@@ -26,6 +26,7 @@ export {
   type GenerateScenarioResult,
   generateScenarioState,
 } from "./generate.ts";
+export { recomputeComputedFields } from "./computed.ts";
 export { type CheckScenarioOptions, checkScenarioState } from "./oracle.ts";
 export {
   applyMigrationsInMemory,

@@ -7,6 +7,9 @@ import { loadConfig } from "../../config/loader.ts";
 import { buildMigrationChain, loadAllMigrations } from "../../discovery.ts";
 import { loadProjectSchema } from "../../schema-validation.ts";
 import { resolveMigrationRef } from "../utils/resolve-ref.ts";
+import { parsePosture } from "./classify.ts";
+import { COMPUTED_REVISION, COMPUTED_ROOT } from "../../../computed-guard.ts";
+import { isRecord } from "../../../utils/guards.ts";
 import { migrationDefinition } from "../../definition.ts";
 import { getAppliedMigrationIds, markMigrationAsAdopted } from "../../state.ts";
 import {
@@ -14,13 +17,17 @@ import {
   createPrivacyTransformer,
   type PrivacyConsistency,
   type PrivacyPlan,
+  type PrivacyPosture,
+  type RecomputeContext,
   remapId,
+  SKIP_RECOMPUTE,
   type TransformNoteKind,
 } from "../../../privacy/mod.ts";
 import {
   applyMigrationsInMemory,
   checkScenarioState,
   countDocuments,
+  recomputeComputedFields,
   docsOf,
   populateDatabase,
   readStateFromDatabase,
@@ -44,6 +51,7 @@ export interface ExtractCommandOptions {
   toDb?: string;
   secret?: string;
   consistency?: string;
+  posture?: string;
   "shift-days"?: string | number;
   shiftDays?: number;
   scope?: string;
@@ -65,10 +73,31 @@ export interface ExtractSummary {
       readonly notes: Partial<Record<TransformNoteKind, number>>;
     }
   >;
+  readonly posture: PrivacyPosture;
+  readonly scope?: {
+    readonly scope: string;
+    readonly copiedWhole: readonly string[];
+  };
   readonly skipped: Record<string, Record<string, number>>;
   readonly violations: readonly ScenarioViolation[];
   readonly secretDiscarded: boolean;
   readonly applied: readonly string[];
+}
+
+export interface TransformStateOptions {
+  readonly schemas: SchemasDefinition;
+  readonly remapInstanceName: (name: string) => string;
+}
+
+export function keepComputedRevision({
+  path,
+  original,
+}: RecomputeContext): unknown {
+  if (path !== COMPUTED_ROOT) return SKIP_RECOMPUTE;
+  const revision = isRecord(original) ? original[COMPUTED_REVISION] : undefined;
+  return typeof revision === "number"
+    ? { [COMPUTED_REVISION]: revision }
+    : SKIP_RECOMPUTE;
 }
 
 export interface TransformStateResult {
@@ -86,6 +115,7 @@ const REPORTED_VIOLATIONS: ReadonlySet<ScenarioViolation["kind"]> = new Set([
 function resolveSecret(raw: string | undefined): {
   secret: string;
   discarded: boolean;
+  literal: boolean;
 } {
   if (raw === undefined || raw === "") {
     const bytes = crypto.getRandomValues(new Uint8Array(32));
@@ -94,6 +124,7 @@ function resolveSecret(raw: string | undefined): {
         "",
       ),
       discarded: true,
+      literal: false,
     };
   }
   if (raw.startsWith("env:")) {
@@ -101,9 +132,9 @@ function resolveSecret(raw: string | undefined): {
     if (!value) {
       throw new Error(`Environment variable ${raw.slice(4)} is empty`);
     }
-    return { secret: value, discarded: false };
+    return { secret: value, discarded: false, literal: false };
   }
-  return { secret: raw, discarded: false };
+  return { secret: raw, discarded: false, literal: true };
 }
 
 function parseConsistency(raw: string | undefined): PrivacyConsistency {
@@ -147,7 +178,7 @@ export function transformState(
   state: DatabaseState,
   plan: PrivacyPlan,
   transformer: ReturnType<typeof createPrivacyTransformer>,
-  remapInstanceName: (name: string) => string = (name) => name,
+  options: TransformStateOptions,
 ): TransformStateResult {
   const out = createEmptyDatabaseState();
   const summary: ExtractSummary["targets"] = {};
@@ -268,11 +299,12 @@ export function transformState(
         ),
       );
     }
-    out.multiModels[remapInstanceName(name)] = {
+    out.multiModels[options.remapInstanceName(name)] = {
       modelType: instance.modelType,
       content,
     };
   }
+  recomputeComputedFields(out, options.schemas);
   return { state: out, summary, skipped };
 }
 
@@ -333,7 +365,10 @@ export async function extractCommand(
     );
   }
 
-  const plan = buildPrivacyPlan({ schemas });
+  const plan = buildPrivacyPlan({
+    schemas,
+    posture: parsePosture(options.posture ?? "strict"),
+  });
   const errors = plan.findings.filter((f) => f.level === "error");
   if (errors.length > 0) {
     throw new Error(
@@ -346,7 +381,14 @@ export async function extractCommand(
     );
   }
 
-  const { secret, discarded } = resolveSecret(options.secret);
+  const { secret, discarded, literal } = resolveSecret(options.secret);
+  if (literal) {
+    console.error(
+      yellow(
+        "Warning: --secret was given as a literal, visible in process lists and shell history; prefer --secret env:NAME",
+      ),
+    );
+  }
   const consistency = parseConsistency(options.consistency);
   if (!options.json) {
     console.log(bold(blue("🐝 Extracting pseudonymised data...")));
@@ -406,10 +448,12 @@ export async function extractCommand(
       secret,
       consistency,
       timeShiftMs: shiftMs,
+      recompute: keepComputedRevision,
     });
-    const result = transformState(replayed.state, plan, transformer, (name) =>
-      remapId(secret, name, shiftMs),
-    );
+    const result = transformState(replayed.state, plan, transformer, {
+      schemas,
+      remapInstanceName: (name) => remapId(secret, name, shiftMs),
+    });
     const violations = checkScenarioState({
       state: result.state,
       schemas,
@@ -417,6 +461,22 @@ export async function extractCommand(
     }).filter((violation) => REPORTED_VIOLATIONS.has(violation.kind));
     const summary: ExtractSummary = {
       targets: result.summary,
+      posture: plan.posture,
+      ...(options.scope !== undefined && {
+        scope: {
+          scope: options.scope,
+          copiedWhole: [
+            ...Object.keys(replayed.state.collections),
+            ...Object.keys(replayed.state.multiCollections),
+          ].filter(
+            (name) =>
+              [
+                ...(replayed.state.collections[name]?.content ?? []),
+                ...(replayed.state.multiCollections[name]?.content ?? []),
+              ].length > 0,
+          ),
+        },
+      }),
       skipped: result.skipped,
       violations,
       secretDiscarded: discarded,
@@ -437,6 +497,13 @@ export async function extractCommand(
         );
       }
       console.log();
+      if (summary.scope) {
+        console.log(
+          yellow(
+            `  ! --scope only filters scoped collections; copied whole: ${summary.scope.copiedWhole.join(", ") || "none"}`,
+          ),
+        );
+      }
       for (const [collection, types] of Object.entries(result.skipped)) {
         const detail = Object.entries(types)
           .map(([type, n]) => `${type} ${n}`)

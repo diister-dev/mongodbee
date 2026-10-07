@@ -6,6 +6,7 @@ import {
   assertRejects,
   assertStringIncludes,
 } from "../../+assert.ts";
+import process from "node:process";
 import { MongoClient } from "../../../src/mongodb.ts";
 import { extractCommand } from "../../../src/migration/cli/commands/extract.ts";
 import { getAppliedMigrationIds } from "../../../src/migration/state.ts";
@@ -35,20 +36,31 @@ const SECRET = "test-secret";
 const e2e = (name: string, fn: () => Promise<void>) =>
   test({ name, fn, timeout: 60_000 });
 
-async function captureOutput<T>(
-  work: () => Promise<T>,
-): Promise<{ result?: T; error?: unknown; output: string }> {
-  const lines: string[] = [];
+async function captureOutput<T>(work: () => Promise<T>): Promise<{
+  result?: T;
+  error?: unknown;
+  output: string;
+  stderr: string;
+  combined: string;
+}> {
+  const out: string[] = [];
+  const err: string[] = [];
   const originals = { log: console.log, error: console.error };
-  const sink = (...args: unknown[]) => {
-    lines.push(args.map(String).join(" "));
+  console.log = (...args: unknown[]) => {
+    out.push(args.map(String).join(" "));
   };
-  console.log = sink;
-  console.error = sink;
+  console.error = (...args: unknown[]) => {
+    err.push(args.map(String).join(" "));
+  };
+  const report = () => ({
+    output: out.join("\n"),
+    stderr: err.join("\n"),
+    combined: [...out, ...err].join("\n"),
+  });
   try {
-    return { result: await work(), output: lines.join("\n") };
+    return { result: await work(), ...report() };
   } catch (error) {
-    return { error, output: lines.join("\n") };
+    return { error, ...report() };
   } finally {
     console.log = originals.log;
     console.error = originals.error;
@@ -238,7 +250,7 @@ e2e(
           firstname: "Alicetwin",
           role: "member",
         });
-        const { error, output } = await captureOutput(() =>
+        const { error, combined: output } = await captureOutput(() =>
           extractCommand({
             cwd: dir,
             fromDb: source,
@@ -409,7 +421,7 @@ e2e(
           json: true,
         },
       ]) {
-        const { output, error } = await captureOutput(() =>
+        const { combined: output, error } = await captureOutput(() =>
           extractCommand({
             cwd: dir,
             fromDb: source,
@@ -423,6 +435,86 @@ e2e(
           assert(!output.includes(value), `output leaks ${value}`);
         }
         assert(!output.includes(SECRET), "output leaks the secret");
+      }
+    });
+  },
+);
+
+e2e(
+  "extract: the strict posture is the default and fakes values the schemas do not declare",
+  async () => {
+    await withSourceAndTarget(async ({ dir, client, source, target }) => {
+      const names = (database: string) =>
+        rawCollection(client.db(database), "expositions")
+          .find({})
+          .toArray()
+          .then((docs) => docs.map((d) => String(d.name)));
+      await captureOutput(() =>
+        extractCommand({
+          cwd: dir,
+          fromDb: source,
+          toDb: target,
+          secret: SECRET,
+          json: true,
+        }),
+      );
+      for (const name of await names(target)) {
+        assert(
+          !(REAL.expositionNames as readonly string[]).includes(name),
+          "an undeclared string must not survive the default posture",
+        );
+      }
+      const personalTarget = `${target}_personal`;
+      await captureOutput(() =>
+        extractCommand({
+          cwd: dir,
+          fromDb: source,
+          toDb: personalTarget,
+          secret: SECRET,
+          posture: "personal",
+          json: true,
+        }),
+      );
+      assertEquals(
+        (await names(personalTarget)).sort(),
+        [...REAL.expositionNames].sort(),
+      );
+      await client.db(personalTarget).dropDatabase();
+    });
+  },
+);
+
+e2e(
+  "extract: a literal --secret is warned about, an env: secret is not, and neither is ever printed",
+  async () => {
+    await withSourceAndTarget(async ({ dir, source, target }) => {
+      const literal = await captureOutput(() =>
+        extractCommand({
+          cwd: dir,
+          fromDb: source,
+          dryRun: true,
+          secret: SECRET,
+          json: true,
+        }),
+      );
+      assertStringIncludes(literal.output, "env:NAME");
+      assert(!literal.output.includes(SECRET));
+
+      process.env.EXTRACT_TEST_SECRET = "from-the-environment";
+      try {
+        const fromEnv = await captureOutput(() =>
+          extractCommand({
+            cwd: dir,
+            fromDb: source,
+            toDb: target,
+            secret: "env:EXTRACT_TEST_SECRET",
+          }),
+        );
+        assertEquals(fromEnv.error, undefined);
+        assert(!fromEnv.output.includes("env:NAME"));
+        assert(!fromEnv.output.includes("from-the-environment"));
+      } finally {
+        delete process.env.EXTRACT_TEST_SECRET;
       }
     });
   },

@@ -6,7 +6,7 @@ import { decodeTime } from "../../src/utils/ulid.ts";
 import * as v from "../../src/schema.ts";
 import { dbId, refId } from "../../src/ids.ts";
 import { withIndex } from "../../src/indexes.ts";
-import { defineType, fieldsOf } from "../../src/type-definition.ts";
+import { defineType } from "../../src/type-definition.ts";
 import { from } from "../../src/computed.ts";
 import {
   buildPrivacyPlan,
@@ -18,6 +18,7 @@ import {
   personId,
   type PrivacyConsistency,
   type PrivacyTransformerOptions,
+  remapId,
   type TransformNote,
 } from "../../src/privacy/mod.ts";
 import {
@@ -112,7 +113,15 @@ function extract(
     secret: SECRET,
     ...options,
   });
-  return { plan, transformer, ...transformState(state, plan, transformer) };
+  return {
+    plan,
+    transformer,
+    ...transformState(state, plan, transformer, {
+      schemas,
+      remapInstanceName: (name) =>
+        remapId(SECRET, name, options.timeShiftMs ?? 0),
+    }),
+  };
 }
 
 function stateWith(
@@ -772,10 +781,8 @@ test({
   },
 });
 
-// TODO(privacy): L15, unblocked by transformState remapping and filling multi-model instances
 test({
   name: "leak L15: a multi-model instance name keeps the source id",
-  ignore: true,
   fn: () => {
     const schemas: SchemasDefinition = {
       collections: { "+users": USERS },
@@ -815,7 +822,7 @@ const MemberType = defineType({
     _id: personId("user"),
     email: EmailSchema,
     nickname: v.optional(v.string()),
-    teamId: refId("team"),
+    teamId: withIndex(refId("team")),
   }),
 });
 
@@ -824,10 +831,12 @@ const TeamType = defineType({
   computed: {
     memberEmails: from("+users", MemberType)
       .by((u) => u.teamId)
-      .collect((u) => u.email),
+      .collect((u) => u.email)
+      .maxEntries(10),
     memberNicknames: from("+users", MemberType)
       .by((u) => u.teamId)
-      .collect((u) => u.nickname),
+      .collect((u) => u.nickname)
+      .maxEntries(10),
   },
 });
 
@@ -835,7 +844,7 @@ const TEAM_ID = "team:01j5zk3v8n2q4x6y8z0b1c3d5h";
 
 function teamExtract() {
   const schemas: SchemasDefinition = {
-    collections: { "+users": fieldsOf(MemberType), teams: fieldsOf(TeamType) },
+    collections: { "+users": MemberType, teams: TeamType },
   };
   return extract(
     schemas,
@@ -872,10 +881,8 @@ test({
   },
 });
 
-// TODO(privacy): L17, unblocked by extract dropping _computed and recomputing it from the transformed sources
 test({
   name: "leak L17: a computed collection is transformed on its own instead of recomputed from the transformed sources",
-  ignore: true,
   fn: () => {
     const result = teamExtract();
     const user = result.state.collections["+users"].content[0];
@@ -992,10 +999,8 @@ test({
   },
 });
 
-// TODO(privacy): L1, unblocked by the anonymise-everything posture (unowned strings faked)
 test({
   name: "leak L1 (cli): an unowned collection reaches the target database in clear",
-  ignore: true,
   timeout: 60_000,
   fn: async () => {
     const { written } = await runCliExtract({ json: true });
