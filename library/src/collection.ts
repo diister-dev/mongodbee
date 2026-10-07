@@ -777,7 +777,10 @@ export async function collection<
   async function insertManyStored(
     docs: readonly unknown[],
     options?: m.BulkWriteOptions,
-  ): Promise<{ result: m.InsertManyResult<TInput>; stored: Record<string, unknown>[] }> {
+  ): Promise<{
+    result: m.InsertManyResult<TInput>;
+    stored: Record<string, unknown>[];
+  }> {
     const validatedDocs = docs.map((doc) => v.parse(schema, doc));
 
     // Apply sanitization based on configuration
@@ -1013,10 +1016,13 @@ export async function collection<
     async insertOneReturning(doc, options?) {
       const run = async () => {
         const { id, stored } = await insertStored(doc, options);
-        const [returned] = await returnInserted(returningPlan("insertOneReturning"), {
-          ids: [id],
-          stored: [stored],
-        });
+        const [returned] = await returnInserted(
+          returningPlan("insertOneReturning"),
+          {
+            ids: [id],
+            stored: [stored],
+          },
+        );
         return returned;
       };
       return traced(tele, "insertOne", undefined, run, () => ({
@@ -1040,7 +1046,10 @@ export async function collection<
           .map(Number)
           .sort((a, b) => a - b)
           .map((index) => result.insertedIds[index]);
-        return await returnInserted(returningPlan("insertManyReturning"), { ids, stored });
+        return await returnInserted(returningPlan("insertManyReturning"), {
+          ids,
+          stored,
+        });
       };
       return traced(
         tele,

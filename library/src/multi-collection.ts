@@ -1062,7 +1062,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     };
   }
 
-  function returningPlan(key: keyof T, operation: string): ReturningPlan<never> {
+  function returningPlan(
+    key: keyof T,
+    operation: string,
+  ): ReturningPlan<never> {
     return {
       label: `${operation}(${key as string}) in "${collectionName}"`,
       computed: COMPUTED_ROOT in collectionSchema[key],

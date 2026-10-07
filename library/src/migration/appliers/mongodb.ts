@@ -50,6 +50,10 @@ import { getSessionContext } from "../../session.ts";
 import { PRIMARY, primaryCollection } from "../../read-preference.ts";
 import { createLogger } from "../../utils/logger.ts";
 import { applyComputed } from "../../computed-apply.ts";
+import {
+  clearValidatorSuspension,
+  recordValidatorSuspension,
+} from "../validator-guard.ts";
 import { computedTopology } from "../../computed-topology.ts";
 import {
   computedUnsetPath,
@@ -379,27 +383,48 @@ export function createMongodbApplier(
   async function synchronizeValidatorsAndIndexes(
     schemas: SchemasDefinition,
   ): Promise<void> {
+    // Each collection is restored on its own: one failure (a unique index
+    // that existing documents violate, a transient error) used to abort the
+    // whole pass and leave every LATER collection without its validator,
+    // silently. Now every collection is attempted and the failures are
+    // thrown together at the end.
+    const failures: string[] = [];
+    const attempt = async (
+      name: string,
+      work: () => Promise<void>,
+    ): Promise<void> => {
+      try {
+        await work();
+      } catch (error) {
+        failures.push(
+          `${name}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    };
+
     // Synchronize simple collections
     if (schemas.collections) {
       for (const [collectionName, schema] of Object.entries(
         schemas.collections,
       )) {
-        if (await collectionExists(collectionName)) {
-          // Update validator
-          const collectionSchema = v.object(fieldsOf(schema));
-          const validator = toMongoValidator(collectionSchema);
-          await db.command({
-            collMod: collectionName,
-            validator,
-            validationLevel: "strict",
-          });
+        await attempt(collectionName, async () => {
+          if (await collectionExists(collectionName)) {
+            // Update validator
+            const collectionSchema = v.object(fieldsOf(schema));
+            const validator = toMongoValidator(collectionSchema);
+            await db.command({
+              collMod: collectionName,
+              validator,
+              validationLevel: "strict",
+            });
 
-          // Synchronize indexes using shared applier
-          const collection = primaryCollection(db, collectionName);
-          await applyCollectionIndexes(collection, collectionSchema, {
-            composites: indexesOf(schema),
-          });
-        }
+            // Synchronize indexes using shared applier
+            const collection = primaryCollection(db, collectionName);
+            await applyCollectionIndexes(collection, collectionSchema, {
+              composites: indexesOf(schema),
+            });
+          }
+        });
       }
     }
 
@@ -408,52 +433,54 @@ export function createMongodbApplier(
       for (const [collectionName, multiSchema] of Object.entries(
         schemas.multiCollections,
       )) {
-        if (await collectionExists(collectionName)) {
-          // Build union validator with metadata schemas
-          const typeSchemas = Object.entries(multiSchema).map(
-            ([typeName, typeSchema]) =>
-              v.object({
-                _type: v.literal(typeName),
-                ...fieldsOf(typeSchema),
-              }),
-          );
+        await attempt(collectionName, async () => {
+          if (await collectionExists(collectionName)) {
+            // Build union validator with metadata schemas
+            const typeSchemas = Object.entries(multiSchema).map(
+              ([typeName, typeSchema]) =>
+                v.object({
+                  _type: v.literal(typeName),
+                  ...fieldsOf(typeSchema),
+                }),
+            );
 
-          // Include metadata schemas so _information and _migrations documents can be inserted
-          const allSchemas = [...typeSchemas, ...createMetadataSchemas()];
+            // Include metadata schemas so _information and _migrations documents can be inserted
+            const allSchemas = [...typeSchemas, ...createMetadataSchemas()];
 
-          const unionSchema =
-            allSchemas.length > 0
-              ? v.union(allSchemas as any)
-              : v.object({ _type: v.string() });
+            const unionSchema =
+              allSchemas.length > 0
+                ? v.union(allSchemas as any)
+                : v.object({ _type: v.string() });
 
-          const validator = toMongoValidator(unionSchema);
-          await db.command({
-            collMod: collectionName,
-            validator,
-            validationLevel: "strict",
-          });
+            const validator = toMongoValidator(unionSchema);
+            await db.command({
+              collMod: collectionName,
+              validator,
+              validationLevel: "strict",
+            });
 
-          // Synchronize indexes using shared applier
-          const collection = primaryCollection(db, collectionName);
-          const schemasPerType = Object.entries(multiSchema).reduce<
-            Record<
-              string,
-              v.ObjectSchema<
-                Record<
-                  string,
-                  v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
-                >,
-                undefined
+            // Synchronize indexes using shared applier
+            const collection = primaryCollection(db, collectionName);
+            const schemasPerType = Object.entries(multiSchema).reduce<
+              Record<
+                string,
+                v.ObjectSchema<
+                  Record<
+                    string,
+                    v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
+                  >,
+                  undefined
+                >
               >
-            >
-          >((acc, [typeName, typeSchema]) => {
-            acc[typeName] = v.object(fieldsOf(typeSchema));
-            return acc;
-          }, {});
-          await applyMultiCollectionIndexes(collection, schemasPerType, {
-            composites: normalizeTypes(multiSchema).indexes,
-          });
-        }
+            >((acc, [typeName, typeSchema]) => {
+              acc[typeName] = v.object(fieldsOf(typeSchema));
+              return acc;
+            }, {});
+            await applyMultiCollectionIndexes(collection, schemasPerType, {
+              composites: normalizeTypes(multiSchema).indexes,
+            });
+          }
+        });
       }
     }
 
@@ -509,19 +536,21 @@ export function createMongodbApplier(
           modelType,
           instances.length,
         );
-        await forEachInstance(instances, async (instanceName) => {
-          await db.command({
-            collMod: instanceName,
-            validator,
-            validationLevel: "strict",
-          });
-          await applyMultiCollectionIndexes(
-            primaryCollection(db, instanceName),
-            schemasPerType,
-            { composites: modelComposites },
-          );
-          syncReporter.add(1);
-        });
+        await forEachInstance(instances, (instanceName) =>
+          attempt(instanceName, async () => {
+            await db.command({
+              collMod: instanceName,
+              validator,
+              validationLevel: "strict",
+            });
+            await applyMultiCollectionIndexes(
+              primaryCollection(db, instanceName),
+              schemasPerType,
+              { composites: modelComposites },
+            );
+            syncReporter.add(1);
+          }),
+        );
         syncReporter.done();
       }
     }
@@ -533,16 +562,38 @@ export function createMongodbApplier(
       for (const [collectionName, scopedSchema] of Object.entries(
         schemas.scopedMultiCollections,
       )) {
-        if (await collectionExists(collectionName)) {
-          await scopedMultiCollection(db, collectionName, {
-            scope: scopedSchema.scope,
-            types: scopedSchema.types as any,
-            schemaManagement: "auto",
-          });
-        }
+        await attempt(collectionName, async () => {
+          if (await collectionExists(collectionName)) {
+            // This run switched the validator off itself. Put the level back
+            // first (the rules follow, from `ensureValidator`), so that
+            // `ensureValidator` does not report its own planned restore as
+            // "validation was off": that warning fired for every scoped
+            // collection of every migration, and drowned the one case it
+            // exists for, a validator something ELSE left off.
+            await db.command({
+              collMod: collectionName,
+              validationLevel: "strict",
+              validationAction: "error",
+            });
+            await scopedMultiCollection(db, collectionName, {
+              scope: scopedSchema.scope,
+              types: scopedSchema.types as any,
+              schemaManagement: "auto",
+            });
+          }
+        });
       }
     }
+
+    if (failures.length > 0) {
+      throw new Error(
+        `Could not restore validators/indexes of ${failures.length} collection(s): ${failures.join("; ")}`,
+      );
+    }
   }
+
+  /** Collections the current `applyMigration` switched off. */
+  let suspended: string[] = [];
 
   /**
    * Disables all validators for collections in the target schemas
@@ -550,39 +601,28 @@ export function createMongodbApplier(
    */
   async function disableAllValidators(
     schemas: SchemasDefinition,
+    direction: "up" | "down",
   ): Promise<void> {
-    // Disable validators for simple collections
-    if (schemas.collections) {
-      for (const collectionName of Object.keys(schemas.collections)) {
-        await disableValidator(collectionName);
-      }
+    const names = [
+      ...Object.keys(schemas.collections ?? {}),
+      ...Object.keys(schemas.multiCollections ?? {}),
+      ...Object.keys(schemas.scopedMultiCollections ?? {}),
+    ];
+    for (const modelType of Object.keys(schemas.multiModels ?? {})) {
+      names.push(...(await discoverMultiCollectionInstances(db, modelType)));
     }
 
-    // Disable validators for multi-collections
-    if (schemas.multiCollections) {
-      for (const collectionName of Object.keys(schemas.multiCollections)) {
-        await disableValidator(collectionName);
-      }
-    }
+    // Recorded BEFORE anything is switched off: if the process dies between
+    // here and the restore, the next command finds the record and repairs
+    // (see validator-guard.ts). Only a full restore clears it.
+    await recordValidatorSuspension(db, {
+      migrationId: migration.id,
+      direction,
+      collections: names,
+    });
 
-    // Disable validators for multi-models
-    if (schemas.multiModels) {
-      for (const modelType of Object.keys(schemas.multiModels)) {
-        const instances = await discoverMultiCollectionInstances(db, modelType);
-        await forEachInstance(instances, (instanceName) =>
-          disableValidator(instanceName),
-        );
-      }
-    }
-
-    // Disable validators for scoped multi-collections
-    if (schemas.scopedMultiCollections) {
-      for (const collectionName of Object.keys(
-        schemas.scopedMultiCollections,
-      )) {
-        await disableValidator(collectionName);
-      }
-    }
+    suspended = names;
+    await forEachInstance(names, (name) => disableValidator(name));
   }
 
   /**
@@ -2725,7 +2765,7 @@ export function createMongodbApplier(
     // This is critical for both up and down migrations because:
     // - Up: old validators would reject documents transformed to new schema
     // - Down: new validators would reject documents transformed back to old schema
-    await disableAllValidators(targetSchemas);
+    await disableAllValidators(targetSchemas, direction);
 
     // STEP 2: Apply all operations without validation interference.
     // Rollback undoes operations in LIFO order — reverse the list for 'down'
@@ -2755,6 +2795,8 @@ export function createMongodbApplier(
       // mask the original error.
       try {
         await synchronizeValidatorsAndIndexes(targetSchemas);
+        // Every validator is back: the run can no longer leave one off.
+        await clearValidatorSuspension(db, suspended);
       } catch (syncErr) {
         log.error(
           "CRITICAL: failed to re-enable validators after migration. " +
