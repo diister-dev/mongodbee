@@ -1022,3 +1022,33 @@ test({
     ]);
   },
 });
+
+// TODO(privacy): L18, unblocked by remap faking a value that is not an id, and plan.ts classifying union options apart
+test({
+  name: "leak L18: a reference-or-email union keeps the email, with no note at all",
+  ignore: true,
+  fn: () => {
+    const schemas: SchemasDefinition = {
+      collections: {
+        "+users": {
+          ...USERS,
+          assignee: v.union([refId("user"), v.pipe(v.string(), v.email())]),
+        },
+      },
+    };
+    const plan = buildPrivacyPlan({ schemas });
+    const transformer = createPrivacyTransformer({
+      plan,
+      schemas,
+      secret: SECRET,
+    });
+    const { doc, notes } = transformer.transform("collections/+users/", {
+      _id: USER_ID,
+      email: REAL.email,
+      firstname: REAL.firstname,
+      assignee: `external.${REAL.email}`,
+    });
+    assertEquals(notes, []);
+    assertNoLeak(doc, [REAL.email]);
+  },
+});
