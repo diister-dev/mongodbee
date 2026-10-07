@@ -1373,7 +1373,10 @@ test("guard: record keys are faked distinctly and consistently, never the origin
     collections: {
       "+users": {
         ...USERS,
-        scoreByContact: v.record(v.string(), v.number()),
+        scoreByContact: v.record(
+          personal(v.string(), { role: "direct" }),
+          v.number(),
+        ),
       },
     },
   };

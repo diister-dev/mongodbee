@@ -65,8 +65,6 @@ function mirrorPair(
 }
 
 test({
-  // TODO(privacy): C1, mirror must replay the source's treatment (keep/remap/generalise), not always produce a pseudonym
-  ignore: true,
   name: "C1 mirror: a copy of a kept (contact, personal posture) source keeps the same value as its source",
   fn: () => {
     const schemas = mirrorSchemas(
@@ -79,8 +77,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C1, mirror must replay the source's treatment (keep/remap/generalise), not always produce a pseudonym
-  ignore: true,
   name: "C1 mirror: a copy of a notPersonal source keeps the source value",
   fn: () => {
     const schemas = mirrorSchemas(
@@ -94,8 +90,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C1, mirror must replay the source's treatment (keep/remap/generalise), not always produce a pseudonym
-  ignore: true,
   name: "C1 mirror: a copy of a reference source joins on the remapped id",
   fn: () => {
     const schemas = mirrorSchemas(
@@ -109,8 +103,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C2, canonical() folds case/space before hashing; a case-sensitive unique index needs the raw value in the message (or a collision retry per distinct raw value)
-  ignore: true,
   name: "C2 unique: values differing only by case stay distinct on a case-sensitive unique pseudonym field",
   fn: () => {
     const schemas = {
@@ -194,8 +186,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C5, transform scopes mirrors only for scopedMultiCollections while extract passes the instance name as scope for multiModels; treat multiModels as scoped in findSource
-  ignore: true,
   name: "C5 mirror: a copy inside a multi-model instance equals its source in the same instance",
   fn: () => {
     const schemas = {
@@ -239,8 +229,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C6, plan.ts warns record keys are "copied verbatim" but transform mapKey fakes every non-vocabulary key regardless of posture/classification
-  ignore: true,
   name: "C6 record keys: a technical record in personal posture keeps its keys",
   fn: () => {
     const schemas = {
@@ -287,8 +275,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C10, fakeMessage keys on leaf.path ("notes.*"), so every item of an array gets the same fake; key on leaf.keys instead
-  ignore: true,
   name: "C10 fake: items of a faked array stay distinct",
   fn: () => {
     const schemas = {
@@ -310,8 +296,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C11, identifier() remaps every string _id; an _id the schema pins (literal/picklist, singleton docs) must be kept
-  ignore: true,
   name: "C11 ids: a literal singleton _id is kept and the document stays valid",
   fn: () => {
     const schemas = {
@@ -337,8 +321,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C13, transformState's remapInstanceName cannot see the transformer's effective shift; expose it (transformer.remapId) and use it in transformState
-  ignore: true,
   name: "C13 api: under the strict default shift, a multi-model instance name and the references to it remap alike",
   fn: async () => {
     const { transformState } = await import(
@@ -372,7 +354,7 @@ test({
     state.multiModels[EXPO] = { modelType: "exposition", content: [] };
     const out = transformState(state, plan, transformer, {
       schemas: schemas as never,
-      remapInstanceName: (name) => remapId("s3cret", name),
+      remapInstanceName: transformer.remapId,
     });
     const ref = out.state.collections["+users"].content[0].expositionId;
     assertEquals(Object.keys(out.state.multiModels), [ref]);

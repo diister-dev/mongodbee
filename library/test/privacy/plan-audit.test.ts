@@ -244,7 +244,7 @@ test("reference beats exempt: notPersonal on a refId stays remapped and stops co
   assertEquals(p.targets.get("collections/articles/")!.owner.kind, "none");
 });
 
-test("record keys that carry personal data are reported, since keys are copied verbatim", () => {
+test("record keys that carry personal data are reported, since they are pseudonymised", () => {
   const p = plan({
     registry: {
       _id: personal(dbId("registry"), { of: "user" }),
@@ -253,7 +253,7 @@ test("record keys that carry personal data are reported, since keys are copied v
       byId: v.record(v.string(), v.number()),
     },
   });
-  const findings = p.findings.filter((f) => f.level === "warning");
+  const findings = p.findings.filter((f) => f.message.includes("record keys"));
   assertEquals(
     findings.map((f) => f.path),
     ["byEmail"],

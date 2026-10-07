@@ -607,3 +607,61 @@ test("ids: a numeric _id is remapped injectively under the strict posture and no
   assert(!mapped.includes(33612345678));
   assert(ids.every((r) => r.notes.some((n) => n.kind === "numeric_id")));
 });
+
+test("record keys: a plain key is kept, and under strict only an email- or phone-looking one is pseudonymised", () => {
+  const schemas = {
+    collections: {
+      "+users": {
+        _id: personId("user"),
+        counters: v.record(v.string(), v.number()),
+      },
+    },
+  } as never;
+  const counters = { fr: 1, "a@b.fr": 2, "+33 6 12 34 56 78": 3 };
+  const run = (posture: "personal" | "strict") =>
+    Object.keys(
+      createPrivacyTransformer({
+        plan: buildPrivacyPlan({ schemas, posture }),
+        schemas,
+        secret: "s3cret",
+      }).transform(TARGET, { _id: USER_ID, counters }).doc.counters as object,
+    );
+  assertEquals(run("personal"), Object.keys(counters));
+  const strict = run("strict");
+  assertEquals(strict.length, 3);
+  assertEquals(strict.includes("fr"), true);
+  assertEquals(strict.includes("a@b.fr"), false);
+  assertEquals(strict.includes("+33 6 12 34 56 78"), false);
+});
+
+test("collisions: values differing only by case get distinct fakes under a case-sensitive unique index, and one fake when the index folds case", () => {
+  const login = (insensitive: boolean) => ({
+    collections: {
+      "+users": {
+        _id: personId("user"),
+        login: withIndex(personal(v.string(), { role: "direct" }), {
+          unique: true,
+          insensitive,
+        }),
+      },
+    },
+  });
+  for (const insensitive of [false, true]) {
+    const schemas = login(insensitive) as never;
+    const transformer = createPrivacyTransformer({
+      plan: buildPrivacyPlan({ schemas }),
+      schemas,
+      secret: "s3cret",
+    });
+    const fakes = ["Bob", "bob"].map(
+      (value) =>
+        transformer.transform(TARGET, { _id: USER_ID, login: value }).doc
+          .login as string,
+    );
+    assertEquals(
+      new Set(fakes.map((f) => f.toLowerCase())).size,
+      insensitive ? 1 : 2,
+      `insensitive=${insensitive}`,
+    );
+  }
+});

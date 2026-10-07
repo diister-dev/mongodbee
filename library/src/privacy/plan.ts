@@ -994,10 +994,10 @@ export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
 
     for (const root of target.personalKeys) {
       findings.push({
-        level: "warning",
+        level: "info",
         target: target.key,
         path: root,
-        message: `record keys of "${root}" carry personal data and are copied verbatim`,
+        message: `record keys of "${root}" carry personal data and are pseudonymised`,
       });
     }
 
