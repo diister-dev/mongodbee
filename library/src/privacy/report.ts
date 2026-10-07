@@ -1,3 +1,4 @@
+import type { PrivacyTreatment } from "./metadata.ts";
 import type {
   PrivacyFinding,
   PrivacyPath,
@@ -59,8 +60,43 @@ function findingLine(f: PrivacyFinding): string {
   return `  ${pad(f.level, 8)} ${where}\n           ${f.message}`;
 }
 
+const CLEAR_TREATMENTS: ReadonlySet<PrivacyTreatment> = new Set([
+  "keep",
+  "include",
+]);
+
+function clearLine(p: PrivacyPath): string {
+  const why =
+    p.role === "none"
+      ? (p.note ?? "no personal signal")
+      : `${p.role}${p.note ? ` · ${p.note}` : ""}`;
+  return `  ${pad(p.path, 34)} ${pad(p.tier, 9)} ${why}`;
+}
+
+function keptInClear(plan: PrivacyPlan): string[] {
+  const lines: string[] = ["kept in clear on extract"];
+  let count = 0;
+  for (const target of plan.targets.values()) {
+    const kept = target.paths.filter(
+      (p) =>
+        p.role !== "reference" && CLEAR_TREATMENTS.has(p.treatment.extract),
+    );
+    if (kept.length === 0) continue;
+    count += kept.length;
+    lines.push(`  ${target.key}`);
+    for (const p of kept) lines.push(`  ${clearLine(p)}`);
+  }
+  if (count === 0) {
+    lines.push("  nothing: every value is remapped, replaced or dropped");
+  }
+  return lines;
+}
+
 export function renderPrivacyReport(plan: PrivacyPlan): string {
   const lines: string[] = [];
+  if (plan.posture === "strict") {
+    lines.push("posture     strict: undeclared values are faked, not kept", "");
+  }
 
   lines.push("persons");
   if (plan.persons.size === 0) {
@@ -100,6 +136,8 @@ export function renderPrivacyReport(plan: PrivacyPlan): string {
     }
     lines.push("");
   }
+
+  lines.push(...keptInClear(plan), "");
 
   const s = plan.summary;
   lines.push(

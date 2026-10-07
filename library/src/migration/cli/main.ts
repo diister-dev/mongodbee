@@ -210,6 +210,7 @@ ${yellow("EXTRACT OPTIONS:")}
   --from-migration  Migration the source is at; later ones are replayed in memory first
   --secret          Pseudonymisation secret, or env:NAME (default: random, discarded)
   --consistency     person | relationship | transaction (default: relationship)
+  --posture         personal | strict: strict fakes every undeclared string (classify)
   --shift-days      Shift every date and ulid timestamp by N days
   --scope           Only extract this scope of the scoped collections
   --allow-unknown   Proceed with UNKNOWN paths (they are dropped)
@@ -272,6 +273,7 @@ async function main(): Promise<void> {
       "to-db",
       "secret",
       "consistency",
+      "posture",
       "shift-days",
       "scope",
       "from-migration",

@@ -1,5 +1,6 @@
 import * as v from "../schema.ts";
 import type { SchemaContent } from "../migration/types.ts";
+import { COMPUTED_ROOT } from "../computed-guard.ts";
 import { readPrivacyMetadata } from "./metadata.ts";
 
 export const KEEP: unique symbol = Symbol("mongodbee.privacy.keep");
@@ -114,7 +115,11 @@ export function walkDocument(
     }
     const type = schema.type as string;
 
-    if (readPrivacyMetadata(rawSchema).some((m) => m.kind !== "dynamic")) {
+    const computedRoot = path.length === 1 && path[0] === COMPUTED_ROOT;
+    if (
+      computedRoot ||
+      readPrivacyMetadata(rawSchema).some((m) => m.kind !== "dynamic")
+    ) {
       const r = handler({
         path: path.join("."),
         keys,

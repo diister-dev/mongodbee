@@ -9,6 +9,7 @@ import { resolveMigrationRef } from "../utils/resolve-ref.ts";
 import {
   buildPrivacyPlan,
   type PrivacyPlan,
+  type PrivacyPosture,
   renderPrivacyReport,
 } from "../../../privacy/mod.ts";
 import type { SchemasDefinition } from "../../types.ts";
@@ -18,12 +19,21 @@ export interface ClassifyCommandOptions {
   cwd?: string;
   at?: string;
   json?: boolean;
+  posture?: string;
+}
+
+export function parsePosture(raw: string | undefined): PrivacyPosture {
+  if (raw === undefined || raw === "personal" || raw === "strict") {
+    return raw ?? "personal";
+  }
+  throw new Error(`--posture must be personal or strict, got "${raw}"`);
 }
 
 export function serializePrivacyPlan(
   plan: PrivacyPlan,
 ): Record<string, unknown> {
   return {
+    posture: plan.posture,
     persons: [...plan.persons.values()],
     targets: [...plan.targets.values()],
     findings: plan.findings,
@@ -58,7 +68,10 @@ export async function classifyCommand(
   const cwd = options.cwd || process.cwd();
   const config = await loadConfig({ configPath: options.configPath, cwd });
   const { schemas, label } = await loadSchemasAt(cwd, config, options.at);
-  const plan = buildPrivacyPlan({ schemas });
+  const plan = buildPrivacyPlan({
+    schemas,
+    posture: parsePosture(options.posture),
+  });
 
   if (options.json) {
     console.log(JSON.stringify(serializePrivacyPlan(plan), null, 2));

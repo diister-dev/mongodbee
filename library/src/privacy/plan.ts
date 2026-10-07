@@ -4,10 +4,10 @@ import type {
   TypeSource,
   SchemasDefinition,
 } from "../migration/types.ts";
-import { fieldsOf as fieldsOfSource } from "../type-definition.ts";
+import { COMPUTED_ROOT } from "../computed-guard.ts";
+import { fieldsOf as fieldsOfSource, indexesOf } from "../type-definition.ts";
 import { extractIdPrefix } from "../migration/utils/seed-id.ts";
 import { INDEX_SYMBOL } from "../indexes.ts";
-import { createSimpleVisitor, SchemaNavigator } from "../schema-navigator.ts";
 import {
   collectActions,
   PRIVACY_SYMBOL,
@@ -18,7 +18,6 @@ import {
   type PrivacyRole,
   type PrivacyTreatment,
   type PrivacyTreatments,
-  readPrivacyMetadata,
 } from "./metadata.ts";
 
 export type PrivacyTier =
@@ -95,12 +94,16 @@ export interface PrivacyPerson {
 export interface PrivacyPlan {
   readonly persons: ReadonlyMap<string, PrivacyPerson>;
   readonly targets: ReadonlyMap<string, PrivacyTarget>;
+  readonly posture: PrivacyPosture;
   readonly findings: readonly PrivacyFinding[];
   readonly summary: Readonly<Record<PrivacyTier, number>>;
 }
 
+export type PrivacyPosture = "personal" | "strict";
+
 export interface PrivacyPlanOptions {
   readonly schemas: SchemasDefinition;
+  readonly posture?: PrivacyPosture;
 }
 
 const BUCKET_ORDER: Record<keyof DatabaseState, number> = {
@@ -121,21 +124,28 @@ const WRAPPER_TYPES: ReadonlySet<string> = new Set([
   "exact_optional",
 ]);
 
-const CONTAINER_TYPES: ReadonlySet<string> = new Set([
+const OBJECT_TYPES: ReadonlySet<string> = new Set([
   "object",
   "loose_object",
   "strict_object",
   "object_with_rest",
-  "array",
+]);
+
+const TUPLE_TYPES: ReadonlySet<string> = new Set([
   "tuple",
   "loose_tuple",
   "strict_tuple",
   "tuple_with_rest",
+]);
+
+const UNION_TYPES: ReadonlySet<string> = new Set(["union", "variant"]);
+
+const CONTAINER_TYPES: ReadonlySet<string> = new Set([
+  ...OBJECT_TYPES,
+  ...TUPLE_TYPES,
+  ...UNION_TYPES,
+  "array",
   "record",
-  "map",
-  "set",
-  "union",
-  "variant",
   "intersect",
 ]);
 
@@ -197,83 +207,101 @@ function targetKey(
   return `${bucket}/${collection}/${type ?? ""}`;
 }
 
-function normalisePath(raw: readonly (string | number)[]): string | null {
-  const parts: string[] = [];
-  for (const element of raw) {
-    const s = String(element);
-    if (s === "$key") return null;
-    if (s === "$[]" || s === "$value") {
-      parts.push("*");
-      continue;
-    }
-    if (s.startsWith("$")) continue;
-    parts.push(s);
-  }
-  return parts.join(".");
-}
-
 interface Leaf {
   readonly path: string;
-  readonly actions: unknown[];
+  readonly variants: readonly (readonly unknown[])[];
+  readonly computed?: true;
 }
 
 interface Leaves {
   readonly leaves: Leaf[];
   readonly dynamicRoots: string[];
+  readonly personalKeys: string[];
 }
 
 function collectLeaves(fields: SchemaContent): Leaves {
-  const byPath = new Map<string, Leaf>();
+  const byPath = new Map<string, Map<string, unknown[]>>();
   const dynamicRoots: string[] = [];
-  const carried = new Map<string, unknown[]>();
-  const navigator = new SchemaNavigator();
+  const personalKeys: string[] = [];
 
-  const push = (path: string, actions: unknown[]) => {
-    const inherited = carried.get(path) ?? [];
-    carried.delete(path);
-    const existing = byPath.get(path);
-    if (existing) {
-      existing.actions.push(...inherited, ...actions);
+  const push = (path: string, branch: string, actions: readonly unknown[]) => {
+    const branches = byPath.get(path) ?? new Map<string, unknown[]>();
+    byPath.set(path, branches);
+    branches.set(branch, [...(branches.get(branch) ?? []), ...actions]);
+  };
+
+  const visit = (
+    schema: unknown,
+    path: readonly string[],
+    outer: readonly unknown[],
+    branch: string,
+  ): void => {
+    const node = schema as Record<string, unknown> | undefined;
+    if (node?.kind !== "schema") return;
+    const type = node.type as string;
+    if (WRAPPER_TYPES.has(type)) {
+      const inner = collectActions(node.wrapped);
+      const own = collectActions(node).filter((a) => !inner.includes(a));
+      visit(node.wrapped, path, [...outer, ...own], branch);
+      return;
+    }
+    const joined = path.join(".");
+    const actions = [...collectActions(node), ...outer];
+    if (!CONTAINER_TYPES.has(type)) {
+      push(joined, branch, actions);
+      return;
+    }
+    const metadata = readSignals(actions).metadata;
+    if (metadata.some((m) => m.kind === "dynamic")) {
+      dynamicRoots.push(joined);
+      push(joined, branch, actions);
+    } else if (metadata.length > 0) {
+      push(joined, branch, actions);
+      return;
+    }
+    if (OBJECT_TYPES.has(type)) {
+      for (const [key, entry] of Object.entries(
+        node.entries as Record<string, unknown>,
+      )) {
+        visit(entry, [...path, key], [], branch);
+      }
+      if (node.rest !== undefined) visit(node.rest, [...path, "*"], [], branch);
+    } else if (type === "array") {
+      visit(node.item, [...path, "*"], [], branch);
+    } else if (TUPLE_TYPES.has(type)) {
+      for (const [i, item] of (node.items as unknown[]).entries()) {
+        visit(item, [...path, String(i)], [], branch);
+      }
+      if (node.rest !== undefined) visit(node.rest, [...path, "*"], [], branch);
+    } else if (type === "record") {
+      const key = readSignals(collectActions(node.key));
+      if (key.email || key.metadata.length > 0) personalKeys.push(joined);
+      visit(node.value, [...path, "*"], [], branch);
+    } else if (UNION_TYPES.has(type)) {
+      for (const [i, option] of (node.options as unknown[]).entries()) {
+        visit(option, path, [], `${branch}${joined}#${i}/`);
+      }
     } else {
-      byPath.set(path, { path, actions: [...inherited, ...actions] });
+      for (const option of node.options as unknown[]) {
+        visit(option, path, [], branch);
+      }
     }
   };
 
-  const visitor = createSimpleVisitor({
-    onNode: (node) => {
-      const schema = node.schema as unknown as Record<string, unknown>;
-      if (schema.kind !== "schema") return false;
-      const path = normalisePath(node.path);
-      if (path === null) return false;
-      const type = schema.type as string;
-      if (WRAPPER_TYPES.has(type)) {
-        const own = collectActions(schema).filter((a) => a !== schema.wrapped);
-        carried.set(path, [...(carried.get(path) ?? []), ...own]);
-        return true;
-      }
-      if (CONTAINER_TYPES.has(type)) {
-        const metas = readPrivacyMetadata(schema);
-        if (metas.some((m) => m.kind === "dynamic")) {
-          dynamicRoots.push(path);
-          push(path, collectActions(schema));
-          return true;
-        }
-        if (metas.length > 0) {
-          push(path, collectActions(schema));
-          return false;
-        }
-        return true;
-      }
-      push(path, collectActions(schema));
-      return false;
-    },
-  });
-
   for (const [key, schema] of Object.entries(fields)) {
     if (key === "_id") continue;
-    navigator.navigate(schema as never, visitor, { path: [key], depth: 1 });
+    if (key === COMPUTED_ROOT) {
+      push(key, "", []);
+      continue;
+    }
+    visit(schema, [key], [], "");
   }
-  return { leaves: [...byPath.values()], dynamicRoots };
+  const leaves = [...byPath].map(([path, branches]) => ({
+    path,
+    variants: [...branches.values()],
+    ...(path === COMPUTED_ROOT && { computed: true as const }),
+  }));
+  return { leaves, dynamicRoots, personalKeys };
 }
 
 interface Signals {
@@ -339,14 +367,21 @@ interface Draft {
   mirrorOf?: string;
   dynamicRoot?: string;
   uniqueOnly?: boolean;
+  computed?: boolean;
+  unresolvable?: boolean;
   normalize?: PrivacyNormalize;
   overrides?: PrivacyTreatments;
   values?: readonly string[];
   note?: string;
 }
 
-function classifyLeaf(leaf: Leaf): Draft {
-  const s = readSignals(leaf.actions);
+function classifyActions(
+  path: string,
+  actions: readonly unknown[],
+  compositeUnique: boolean,
+): Draft {
+  const s = readSignals(actions);
+  const unique = s.unique || compositeUnique;
   const last = <K extends PrivacyMetadata["kind"]>(kind: K) => {
     const found = s.metadata.filter(
       (m): m is Extract<PrivacyMetadata, { kind: K }> => m.kind === kind,
@@ -354,34 +389,34 @@ function classifyLeaf(leaf: Leaf): Draft {
     return found.length > 0 ? found[found.length - 1] : undefined;
   };
   if (last("dynamic")) {
-    return { path: leaf.path, tier: "declared", role: "dynamic", spaces: [] };
+    return { path, tier: "declared", role: "dynamic", spaces: [] };
   }
   const exempt = last("exempt");
+  const field = last("field");
+  if (s.spaces.length > 0) {
+    return {
+      path,
+      tier: "certain",
+      role: "reference",
+      spaces: s.spaces,
+      overrides: field?.treatment,
+      declaredMention: field?.relation === "mention" || exempt !== undefined,
+      note: s.spaces.length > 1 ? "polymorphic reference" : undefined,
+    };
+  }
   if (exempt) {
     return {
-      path: leaf.path,
+      path,
       tier: "declared",
       role: "none",
       spaces: [],
       note: exempt.reason,
     };
   }
-  const field = last("field");
-  if (s.spaces.length > 0) {
-    return {
-      path: leaf.path,
-      tier: "certain",
-      role: "reference",
-      spaces: s.spaces,
-      overrides: field?.treatment,
-      declaredMention: field?.relation === "mention",
-      note: s.spaces.length > 1 ? "polymorphic reference" : undefined,
-    };
-  }
   const mirror = last("mirror");
   if (mirror) {
     return {
-      path: leaf.path,
+      path,
       tier: "declared",
       role: "derived",
       spaces: [],
@@ -391,7 +426,7 @@ function classifyLeaf(leaf: Leaf): Draft {
   }
   if (field) {
     return {
-      path: leaf.path,
+      path,
       tier: "declared",
       role: field.role,
       spaces: [],
@@ -400,14 +435,14 @@ function classifyLeaf(leaf: Leaf): Draft {
       overrides: field.treatment,
     };
   }
-  if (s.email || s.unique) {
+  if (s.email || unique) {
     return {
-      path: leaf.path,
+      path,
       tier: "certain",
       role: "direct",
       spaces: [],
       uniqueOnly: !s.email,
-      note: [s.email ? "v.email" : null, s.unique ? "unique index" : null]
+      note: [s.email ? "v.email" : null, unique ? "unique index" : null]
         .filter(Boolean)
         .join(", "),
     };
@@ -419,7 +454,7 @@ function classifyLeaf(leaf: Leaf): Draft {
     );
   if (allTechnical) {
     return {
-      path: leaf.path,
+      path,
       tier: "inferred",
       role: "technical",
       spaces: [],
@@ -428,12 +463,85 @@ function classifyLeaf(leaf: Leaf): Draft {
     };
   }
   return {
-    path: leaf.path,
+    path,
     tier: "unknown",
     role: "none",
     spaces: [],
     note: [...s.types].join("|") || undefined,
   };
+}
+
+const PROTECTION: Record<PrivacyTreatment, number> = {
+  drop: 5,
+  opaque: 5,
+  recompute: 4,
+  pseudonym: 3,
+  fake: 3,
+  generalise: 2,
+  remap: 1,
+  keep: 0,
+  include: 0,
+  exclude: 0,
+};
+
+function protection(draft: Draft): number {
+  return PROTECTION[
+    treatments(draft.role, draft.tier, draft.overrides).extract
+  ];
+}
+
+function mergeVariants(path: string, drafts: readonly Draft[]): Draft {
+  if (drafts.length === 1) return drafts[0];
+  const dynamic = drafts.find((d) => d.role === "dynamic");
+  if (dynamic) return dynamic;
+  const references = drafts.filter((d) => d.role === "reference");
+  const others = drafts.filter((d) => d.role !== "reference");
+  if (references.length === 0) {
+    return others.reduce((best, d) =>
+      protection(d) > protection(best) ? d : best,
+    );
+  }
+  if (others.some((d) => protection(d) > 0)) {
+    return {
+      path,
+      tier: "unknown",
+      role: "none",
+      spaces: [],
+      unresolvable: true,
+      note: "union of a reference and a non-reference value",
+    };
+  }
+  const spaces = [...new Set(references.flatMap((d) => d.spaces))];
+  return {
+    ...references[0],
+    spaces,
+    declaredMention: references.some((d) => d.declaredMention),
+    note: spaces.length > 1 ? "polymorphic reference" : undefined,
+  };
+}
+
+function classifyLeaf(leaf: Leaf, uniqueKeys: ReadonlySet<string>): Draft {
+  if (leaf.computed) {
+    return {
+      path: leaf.path,
+      tier: "declared",
+      role: "derived",
+      spaces: [],
+      computed: true,
+      note: "computed field, recomputed from its source",
+    };
+  }
+  const key = leaf.path
+    .split(".")
+    .filter((segment) => segment !== "*")
+    .join(".");
+  const compositeUnique = uniqueKeys.has(key);
+  return mergeVariants(
+    leaf.path,
+    leaf.variants.map((actions) =>
+      classifyActions(leaf.path, actions, compositeUnique),
+    ),
+  );
 }
 
 export function defaultTreatments(
@@ -472,9 +580,12 @@ function finalise(draft: Draft): PrivacyPath {
   };
 }
 
-function classifyLeaves(collected: Leaves): Draft[] {
+function classifyLeaves(
+  collected: Leaves,
+  uniqueKeys: ReadonlySet<string>,
+): Draft[] {
   return collected.leaves.map((leaf) => {
-    const draft = classifyLeaf(leaf);
+    const draft = classifyLeaf(leaf, uniqueKeys);
     const root = collected.dynamicRoots.find((r) =>
       draft.path.startsWith(`${r}.`),
     );
@@ -493,6 +604,7 @@ interface RawTarget {
   readonly space: string;
   readonly idMetadata: readonly PrivacyMetadata[];
   readonly drafts: Draft[];
+  readonly personalKeys: readonly string[];
 }
 
 function targetIdSpace(idSchema: unknown, autoKey: string | null): string {
@@ -510,6 +622,12 @@ function enumerateTargets(schemas: SchemasDefinition): RawTarget[] {
     autoKey: string | null,
   ) => {
     const fields = fieldsOfSource(source);
+    const collected = collectLeaves(fields);
+    const uniqueKeys = new Set(
+      indexesOf(source).flatMap((index) =>
+        index.unique ? Object.keys(index.key) : [],
+      ),
+    );
     out.push({
       key: targetKey(bucket, collection, type),
       bucket,
@@ -520,7 +638,8 @@ function enumerateTargets(schemas: SchemasDefinition): RawTarget[] {
         fields._id === undefined
           ? []
           : readSignals(collectActions(fields._id)).metadata,
-      drafts: classifyLeaves(collectLeaves(fields)),
+      drafts: classifyLeaves(collected, uniqueKeys),
+      personalKeys: collected.personalKeys,
     });
   };
   for (const [name, fields] of Object.entries(schemas.collections ?? {})) {
@@ -553,6 +672,7 @@ function enumerateTargets(schemas: SchemasDefinition): RawTarget[] {
 export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
   const raw = enumerateTargets(options.schemas);
   const findings: PrivacyFinding[] = [];
+  const strict = options.posture === "strict";
 
   const persons = new Map<string, PrivacyPerson>();
   const personMeta = new Map<
@@ -564,7 +684,7 @@ export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
     if (!person || person.kind !== "person") continue;
     if (persons.has(target.space)) {
       findings.push({
-        level: "info",
+        level: "warning",
         target: target.key,
         message: `person space "${target.space}" is also declared by ${
           persons.get(target.space)!.target
@@ -608,7 +728,6 @@ export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
   }
 
   const owners = new Map<string, PrivacyOwner>();
-  const byKey = new Map(raw.map((t) => [t.key, t]));
 
   const resolveOwner = (target: RawTarget): PrivacyOwner => {
     const person = persons.get(target.space);
@@ -783,27 +902,33 @@ export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
         } else {
           d.relation = "relation";
         }
-      } else if (owner.kind === "exempt") {
+      } else if (!d.computed && owner.kind === "exempt") {
         d.tier = "none";
         d.role = "none";
-      } else if (owner.kind === "none") {
-        if (d.uniqueOnly) {
+      } else if (!d.computed && owner.kind === "none" && d.uniqueOnly) {
+        if (strict) {
+          d.tier = "inferred";
+          d.note = "unique index, strict posture";
+        } else {
           d.tier = "none";
           d.role = "none";
-        } else if (
+        }
+      } else if (!d.computed && owner.kind === "none" && !strict) {
+        if (
           PERSONAL_ROLES.has(d.role) &&
           (d.tier === "certain" || d.tier === "declared")
         ) {
           d.tier = "unknown";
           d.note = `${d.role} signal in a document without owner`;
-        } else if (
-          d.tier === "unknown" ||
-          d.tier === "inferred" ||
-          d.tier === "dynamic"
-        ) {
+        } else if (d.tier === "unknown" || d.tier === "inferred") {
           d.tier = "none";
           d.role = "none";
         }
+      }
+      if (strict && d.tier === "unknown" && !d.unresolvable) {
+        d.tier = "inferred";
+        d.role = "content";
+        d.note = `strict posture: ${d.note ?? "untyped"}`;
       }
       const done = finalise(d);
       summary[done.tier] += 1;
@@ -822,6 +947,15 @@ export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
             .join(", ")}); declare an owner or notPersonal(_id, reason)`,
         });
       }
+    }
+
+    for (const root of target.personalKeys) {
+      findings.push({
+        level: "warning",
+        target: target.key,
+        path: root,
+        message: `record keys of "${root}" carry personal data and are copied verbatim`,
+      });
     }
 
     for (const p of paths) {
@@ -850,6 +984,11 @@ export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
     });
   }
 
-  void byKey;
-  return { persons, targets, findings, summary };
+  return {
+    persons,
+    targets,
+    posture: strict ? "strict" : "personal",
+    findings,
+    summary,
+  };
 }
