@@ -519,6 +519,15 @@ export async function extractCommand(
       }
       console.log();
     }
+    const collisions = Object.values(result.summary).reduce(
+      (total, entry) => total + (entry.notes.collision ?? 0),
+      0,
+    );
+    if (collisions > 0) {
+      throw new Error(
+        `${collisions} unique value(s) could not be made distinct by the pseudonymisation; nothing was written`,
+      );
+    }
     if (!targetClient) {
       if (!options.json) console.log(yellow("Dry run: nothing written"));
       return;

@@ -182,6 +182,26 @@ e2e(
           plan,
         );
         assertEquals(dangling, []);
+
+        const [user] = await client
+          .db(target)
+          .collection("users")
+          .find({})
+          .toArray();
+        await client
+          .db(target)
+          .collection("users")
+          .deleteOne({ _id: user._id });
+        const broken = await findDanglingReferences(
+          client.db(target),
+          schemas,
+          plan,
+        );
+        assert(
+          broken.length > 0 &&
+            broken.every((d) => d.value === String(user._id)),
+          "the helper must see the references of a deleted user",
+        );
       },
     );
   },
@@ -497,8 +517,8 @@ e2e(
           json: true,
         }),
       );
-      assertStringIncludes(literal.output, "env:NAME");
-      assert(!literal.output.includes(SECRET));
+      assertStringIncludes(literal.stderr, "env:NAME");
+      assert(!literal.combined.includes(SECRET));
 
       process.env.EXTRACT_TEST_SECRET = "from-the-environment";
       try {
@@ -511,8 +531,8 @@ e2e(
           }),
         );
         assertEquals(fromEnv.error, undefined);
-        assert(!fromEnv.output.includes("env:NAME"));
-        assert(!fromEnv.output.includes("from-the-environment"));
+        assert(!fromEnv.stderr.includes("env:NAME"));
+        assert(!fromEnv.combined.includes("from-the-environment"));
       } finally {
         delete process.env.EXTRACT_TEST_SECRET;
       }
