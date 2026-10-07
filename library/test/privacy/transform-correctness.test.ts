@@ -1,6 +1,7 @@
 import { test } from "../+harness.ts";
 import { assert, assertEquals, assertNotEquals } from "../+assert.ts";
 import * as v from "../../src/schema.ts";
+import { withIndex } from "../../src/indexes.ts";
 import { dbId, refId } from "../../src/ids.ts";
 import {
   buildPrivacyPlan,
@@ -292,4 +293,86 @@ test("dates: date-only strings follow the time shift and collapse to the first o
     notes.filter((n) => n.kind === "invalid" || n.kind === "dropped"),
     [],
   );
+});
+
+const CODE = v.pipe(v.string(), v.regex(/^[a-z]{2}$/));
+const REAL_CODES = Array.from(
+  { length: 200 },
+  (_, i) =>
+    `${String.fromCharCode(97 + (i % 26))}${String.fromCharCode(97 + Math.floor(i / 26))}`,
+);
+
+function codeSchemas(unique: boolean) {
+  const field = personal(CODE, { role: "direct" });
+  return {
+    collections: {
+      "+users": {
+        _id: personId("user"),
+        code: unique ? withIndex(field, { unique: true }) : field,
+        codeCopy: mirrorOf(v.string(), "user.code"),
+      },
+    },
+  } as never;
+}
+
+function pseudonymiseCodes(unique: boolean) {
+  const schemas = codeSchemas(unique);
+  const transformer = createPrivacyTransformer({
+    plan: buildPrivacyPlan({ schemas }),
+    schemas,
+    secret: "s3cret",
+  });
+  return REAL_CODES.map((code, i) => {
+    const { doc } = transformer.transform(TARGET, {
+      _id: `user:01j5zk3v8n2q4x6y8z0b1c3d${String(i).padStart(2, "0")}`,
+      code,
+      codeCopy: code,
+    });
+    return doc as { code: string; codeCopy: string };
+  });
+}
+
+test("collisions: distinct real values stay distinct on a unique-indexed pseudonym field", () => {
+  const withoutIndex = pseudonymiseCodes(false).map((d) => d.code);
+  assert(
+    new Set(withoutIndex).size < REAL_CODES.length,
+    "control must collide",
+  );
+
+  const docs = pseudonymiseCodes(true);
+  const fakes = docs.map((d) => d.code);
+  assertEquals(new Set(fakes).size, REAL_CODES.length);
+  assert(fakes.every((code) => v.is(CODE, code)));
+  assertEquals(
+    docs.map((d) => d.codeCopy),
+    fakes,
+  );
+  assertEquals(
+    pseudonymiseCodes(true).map((d) => d.code),
+    fakes,
+  );
+});
+
+test("collisions: an exhausted output space is reported instead of looping", () => {
+  const schemas = {
+    collections: {
+      "+users": {
+        _id: personId("user"),
+        tier: withIndex(personal(v.picklist(["a", "b"]), { role: "direct" }), {
+          unique: true,
+        }),
+      },
+    },
+  } as never;
+  const transformer = createPrivacyTransformer({
+    plan: buildPrivacyPlan({ schemas }),
+    schemas,
+    secret: "s3cret",
+  });
+  const kinds = ["x", "y", "z"].flatMap((tier) =>
+    transformer
+      .transform(TARGET, { _id: USER_ID, tier })
+      .notes.map((n) => n.kind),
+  );
+  assert(kinds.includes("collision"));
 });
