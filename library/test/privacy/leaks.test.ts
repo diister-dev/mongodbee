@@ -1,4 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import { ObjectId } from "mongodb";
 import process from "node:process";
 import { test } from "../+harness.ts";
 import { assert, assertEquals } from "../+assert.ts";
@@ -1326,5 +1327,184 @@ test({
   fn: async () => {
     const run = await strictCli();
     assertNoLeak(run.collections.companies, [PHONE_NUMBER]);
+  },
+});
+
+// TODO(privacy): R2, unblocked by remapping or refusing a numeric _id
+test({
+  name: "leak R2: a numeric _id is copied as is",
+  ignore: true,
+  fn: () => {
+    const schemas: SchemasDefinition = {
+      collections: {
+        "+users": USERS,
+        cards: { _id: v.number(), holderId: refId("user") },
+      },
+    };
+    const result = extract(
+      schemas,
+      stateWith({
+        "+users": [
+          { _id: USER_ID, email: REAL.email, firstname: REAL.firstname },
+        ],
+        cards: [{ _id: PHONE_NUMBER, holderId: USER_ID }],
+      }),
+    );
+    assertNoLeak(result.state.collections.cards, [PHONE_NUMBER]);
+  },
+});
+
+test("guard: an ObjectId _id is remapped, keeps its shape and no longer carries the source time", () => {
+  const source = new ObjectId("5f1d7c2a9b1e8a3c4d5e6f70");
+  const schemas: SchemasDefinition = {
+    collections: {
+      "+users": USERS,
+      sessions: { holderId: refId("user") },
+    },
+  };
+  const result = extract(
+    schemas,
+    stateWith({
+      "+users": [
+        { _id: USER_ID, email: REAL.email, firstname: REAL.firstname },
+      ],
+      sessions: [{ _id: source, holderId: USER_ID }],
+    }),
+  );
+  const [session] = result.state.collections.sessions.content;
+  assert(session._id instanceof ObjectId);
+  assert(!session._id.equals(source));
+  assert(
+    session._id.getTimestamp().getTime() !== source.getTimestamp().getTime(),
+  );
+  assertNoLeak(session, [source.toHexString().slice(8)]);
+});
+
+test("guard: record keys are faked distinctly and consistently, never the original key", () => {
+  const schemas: SchemasDefinition = {
+    collections: {
+      "+users": {
+        ...USERS,
+        scoreByContact: v.record(v.string(), v.number()),
+      },
+    },
+  };
+  const keys = [REAL.email, REAL.phone, REAL.company];
+  const result = extract(
+    schemas,
+    stateWith({
+      "+users": [
+        {
+          _id: USER_ID,
+          email: REAL.email,
+          firstname: REAL.firstname,
+          scoreByContact: Object.fromEntries(keys.map((k, i) => [k, i])),
+        },
+        {
+          _id: "user:01j5zk3v8n2q4x6y8z0b1c3d5f",
+          email: "other@acme-reelle.fr",
+          firstname: REAL.lastname,
+          scoreByContact: { [REAL.email]: 9 },
+        },
+      ],
+    }),
+  );
+  const [first, second] = result.state.collections["+users"].content;
+  const firstKeys = Object.keys(first.scoreByContact as object);
+  assertEquals(new Set(firstKeys).size, keys.length);
+  assertEquals(
+    Object.keys(second.scoreByContact as object),
+    [firstKeys[0]],
+    "the same source key maps to the same fake key at the same path",
+  );
+  assertNoLeak(result.state, [
+    REAL.email,
+    REAL.phone,
+    REAL.company,
+    "acme-reelle",
+  ]);
+});
+
+test("guard: a unique field that cannot be made distinct reports a collision without quoting a value", () => {
+  const schemas: SchemasDefinition = {
+    collections: {
+      "+users": {
+        ...USERS,
+        initial: withIndex(v.pipe(v.string(), v.regex(/^[ab]$/)), {
+          unique: true,
+        }),
+      },
+    },
+  };
+  const result = extract(
+    schemas,
+    stateWith({
+      "+users": ["a", "b", "a-prime"].map((initial, i) => ({
+        _id: `user:01j5zk3v8n2q4x6y8z0b1c3d6${i}`,
+        email: `zebulon${i}@acme-reelle.fr`,
+        firstname: REAL.firstname,
+        initial,
+      })),
+    }),
+  );
+  const notes = Object.values(result.summary).flatMap((entry) =>
+    Object.keys(entry.notes),
+  );
+  assert(notes.includes("collision"), "the third value must collide");
+  const plan = result.plan;
+  const transformer = createPrivacyTransformer({
+    plan,
+    schemas,
+    secret: SECRET,
+  });
+  const all = ["a", "b", "a-prime"].flatMap(
+    (initial, i) =>
+      transformer.transform("collections/+users/", {
+        _id: `user:01j5zk3v8n2q4x6y8z0b1c3d6${i}`,
+        email: `zebulon${i}@acme-reelle.fr`,
+        firstname: REAL.firstname,
+        initial,
+      }).notes,
+  );
+  assertNoLeak(
+    all.map((n) => `${n.path} ${n.message ?? ""}`),
+    ["a-prime", "acme-reelle", REAL.firstname],
+  );
+});
+
+// TODO(privacy): R8, unblocked by the summary echoing the remapped scope, not the source one
+test({
+  name: "leak R8 (strict cli): the --json summary echoes the source scope id",
+  ignore: true,
+  timeout: 60_000,
+  fn: async () => {
+    const tag = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
+    const source = `mongodbee_test_leaks_scope_${tag}`;
+    const client = new MongoClient(TEST_URI);
+    await client.connect();
+    const lines: string[] = [];
+    const original = { log: console.log, error: console.error };
+    try {
+      await seedStrictSource(client, source);
+      console.log = (...args: unknown[]) =>
+        lines.push(args.map(String).join(" "));
+      console.error = console.log;
+      await withTempDir(async (dir) => {
+        await writeStrictProject(dir);
+        await extractCommand({
+          cwd: dir,
+          fromDb: source,
+          dryRun: true,
+          scope: EXPOSITION_ID,
+          json: true,
+        });
+      });
+    } finally {
+      console.log = original.log;
+      console.error = original.error;
+      await client.db(source).dropDatabase();
+      await client.close();
+    }
+    assertNoLeak(lines.join("\n"), [EXPOSITION_ID.split(":")[1]]);
   },
 });
