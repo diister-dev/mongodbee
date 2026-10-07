@@ -1023,3 +1023,308 @@ test({
     assertNoLeak(doc, [REAL.email]);
   },
 });
+
+const INSTANCE_CREATED_AT = new Date("2019-11-23T08:15:42.777Z");
+const MIGRATION_APPLIED_AT = new Date("2021-07-09T17:03:11.321Z");
+const USER_CREATED_AT = new Date(REAL.lastSeenAt);
+const PHONE_NUMBER = 33612345678;
+const LEGACY_REFERENCE = "quixotique:42";
+
+async function writeStrictProject(dir: string): Promise<void> {
+  await mkdir(`${dir}/migrations`, { recursive: true });
+  await writeFile(
+    `${dir}/mongodbee.config.ts`,
+    `export default { database: { connection: { uri: ${JSON.stringify(
+      TEST_URI,
+    )} } }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
+  );
+  await writeFile(
+    `${dir}/schemas.ts`,
+    `
+import * as v from "${SRC}schema.ts";
+import { dbId, refId } from "${SRC}ids.ts";
+import { withIndex } from "${SRC}indexes.ts";
+import { dynamic, personal, personId } from "${SRC}privacy/mod.ts";
+export const schemas = {
+  collections: {
+    "+users": {
+      _id: personId("user"),
+      email: personal(v.pipe(v.string(), v.email()), { role: "direct" }),
+      firstname: personal(v.string(), { role: "direct" }),
+      createdAt: v.date(),
+      answers: dynamic(v.record(v.string(), v.string())),
+      managerId: v.optional(refId("user")),
+    },
+    companies: {
+      _id: dbId("company"),
+      name: v.string(),
+      phone: v.number(),
+      foundedAt: v.date(),
+      slug: withIndex(v.string(), { unique: true }),
+    },
+  },
+  multiCollections: {
+    catalog: { product: { _id: dbId("product"), label: v.string() } },
+  },
+  multiModels: {
+    exposition: {
+      badge: { _id: personId("badge", { of: ["user"] }), userId: refId("user") },
+    },
+  },
+};
+`,
+  );
+}
+
+interface StrictRun {
+  readonly text: string;
+  readonly json: string;
+  readonly collections: Record<string, Record<string, unknown>[]>;
+  readonly definitions: unknown;
+}
+
+async function seedStrictSource(client: MongoClient, source: string) {
+  const db = client.db(source);
+  await db.collection("+users").insertOne({
+    _id: USER_ID,
+    email: REAL.email,
+    firstname: REAL.firstname,
+    createdAt: USER_CREATED_AT,
+    answers: { [REAL.email]: "yes" },
+    managerId: LEGACY_REFERENCE,
+  } as never);
+  await db.collection("companies").insertOne({
+    _id: "company:01j5zk3v8n2q4x6y8z0b1c3d5h",
+    name: REAL.company,
+    phone: PHONE_NUMBER,
+    foundedAt: BIRTH_DATE,
+    slug: "ornithorynque-industries",
+  } as never);
+  await db.collection("catalog").insertMany([
+    {
+      _id: "product:01j5zk3v8n2q4x6y8z0b1c3d5j",
+      _type: "product",
+      label: REAL.city,
+    },
+    { _id: "draft:1", _type: "_draft", note: REAL.freeText },
+  ] as never);
+  await db.collection(EXPOSITION_ID).insertMany([
+    {
+      _id: "_information",
+      _type: "_information",
+      collectionType: "exposition",
+      createdAt: INSTANCE_CREATED_AT,
+    },
+    {
+      _id: "_migrations",
+      _type: "_migrations",
+      fromMigrationId: "extract",
+      mongodbeeVersion: "0.23.0",
+      appliedMigrations: [
+        {
+          id: "extract",
+          operation: "applied",
+          appliedAt: MIGRATION_APPLIED_AT,
+        },
+      ],
+    },
+    {
+      _id: "badge:01j5zk3v8n2q4x6y8z0b1c3d5k",
+      _type: "badge",
+      userId: USER_ID,
+    },
+  ] as never);
+}
+
+async function runStrictCli(json: boolean, target: string, source: string) {
+  const lines: string[] = [];
+  const original = { log: console.log, error: console.error };
+  console.log = (...args: unknown[]) => lines.push(args.map(String).join(" "));
+  console.error = console.log;
+  try {
+    await withTempDir(async (dir) => {
+      await writeStrictProject(dir);
+      await extractCommand({
+        cwd: dir,
+        fromDb: source,
+        ...(json ? { dryRun: true } : { toDb: target }),
+        secret: CLI_SECRET,
+        json,
+      });
+    });
+  } finally {
+    console.log = original.log;
+    console.error = original.error;
+  }
+  return lines.join("\n");
+}
+
+let strictRun: Promise<StrictRun> | undefined;
+
+function strictCli(): Promise<StrictRun> {
+  strictRun ??= (async () => {
+    const tag = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
+    const source = `mongodbee_test_leaks_strict_src_${tag}`;
+    const target = `mongodbee_test_leaks_strict_out_${tag}`;
+    const client = new MongoClient(TEST_URI);
+    await client.connect();
+    try {
+      await seedStrictSource(client, source);
+      const text = await runStrictCli(false, target, source);
+      const json = await runStrictCli(true, target, source);
+      const out = client.db(target);
+      const infos = await out.listCollections().toArray();
+      const collections: Record<string, Record<string, unknown>[]> = {};
+      const indexes: unknown[] = [];
+      for (const info of infos) {
+        collections[info.name] = (await out
+          .collection(info.name)
+          .find({})
+          .toArray()) as Record<string, unknown>[];
+        indexes.push(await out.collection(info.name).indexes());
+      }
+      return { text, json, collections, definitions: [infos, indexes] };
+    } finally {
+      await client.db(source).dropDatabase();
+      await client.db(target).dropDatabase();
+      await client.close();
+    }
+  })();
+  return strictRun;
+}
+
+function instanceOf(run: StrictRun): Record<string, unknown>[] {
+  const name = Object.keys(run.collections).find((n) =>
+    n.startsWith("exposition:"),
+  );
+  assert(name !== undefined, "the multi-model instance was written");
+  return run.collections[name];
+}
+
+test({
+  name: "guard (strict cli): text and json output print no source value, id or secret",
+  timeout: 60_000,
+  fn: async () => {
+    const run = await strictCli();
+    assertNoLeak(
+      [run.text, run.json],
+      [
+        CLI_SECRET,
+        REAL.email,
+        REAL.firstname,
+        REAL.company,
+        REAL.freeText,
+        USER_ULID,
+        EXPOSITION_ID.split(":")[1],
+      ],
+    );
+  },
+});
+
+test({
+  name: "guard (strict cli): collection names, validators and indexes of the target carry no source value",
+  timeout: 60_000,
+  fn: async () => {
+    const run = await strictCli();
+    assertNoLeak(
+      [Object.keys(run.collections), run.definitions],
+      [
+        REAL.email,
+        REAL.company,
+        REAL.city,
+        USER_ULID,
+        EXPOSITION_ID.split(":")[1],
+      ],
+    );
+  },
+});
+
+test({
+  name: "guard (strict cli): unowned strings, unique slugs and multi-model content are faked or remapped",
+  timeout: 60_000,
+  fn: async () => {
+    const run = await strictCli();
+    assertNoLeak(
+      [run.collections.companies, run.collections["+users"][0].firstname],
+      [REAL.company, "ornithorynque", REAL.firstname],
+    );
+    const badge = instanceOf(run).find((d) => d._type === "badge");
+    assertEquals(badge?.userId, run.collections["+users"][0]._id);
+  },
+});
+
+// TODO(privacy): R1, unblocked by extract passing timeShiftMs only when --shift-days is given
+test({
+  name: "leak R1 (strict cli): without --shift-days the CLI passes a zero shift, so ids and dates keep their real time",
+  ignore: true,
+  timeout: 60_000,
+  fn: async () => {
+    const run = await strictCli();
+    const [user] = run.collections["+users"];
+    const remapped = String(user._id).split(":")[1];
+    assert(
+      decodeTime(remapped.toUpperCase()) !==
+        decodeTime(USER_ULID.toUpperCase()),
+      "the remapped ULID keeps the source creation millisecond",
+    );
+    assertNoLeak(
+      [user.createdAt, run.collections.companies[0].foundedAt],
+      [USER_CREATED_AT, BIRTH_DATE],
+    );
+  },
+});
+
+// TODO(privacy): R3, unblocked by remap checking the id prefix against the declared spaces
+test({
+  name: "leak R3 (strict cli): a reference holding a foreign prefix keeps that prefix in clear",
+  ignore: true,
+  timeout: 60_000,
+  fn: async () => {
+    const run = await strictCli();
+    assertNoLeak(run.collections["+users"], ["quixotique"]);
+  },
+});
+
+// TODO(privacy): R4, unblocked by copying only the known _information and _migrations metadata documents
+test({
+  name: "leak R4 (strict cli): any document whose _type starts with an underscore is copied verbatim",
+  ignore: true,
+  timeout: 60_000,
+  fn: async () => {
+    const run = await strictCli();
+    assertNoLeak(run.collections.catalog, [REAL.freeText]);
+  },
+});
+
+// TODO(privacy): R5, unblocked by shifting the dates of copied metadata documents
+test({
+  name: "leak R5 (strict cli): multi-model metadata keeps the real instance creation and migration times",
+  ignore: true,
+  timeout: 60_000,
+  fn: async () => {
+    const run = await strictCli();
+    assertNoLeak(instanceOf(run), [INSTANCE_CREATED_AT, MIGRATION_APPLIED_AT]);
+  },
+});
+
+// TODO(privacy): R6 (T12), unblocked by mapping dynamic keys once the resolver has read them
+test({
+  name: "leak R6 (strict cli): the keys of a dynamic record stay in clear",
+  ignore: true,
+  timeout: 60_000,
+  fn: async () => {
+    const run = await strictCli();
+    assertNoLeak(run.collections["+users"], [REAL.email]);
+  },
+});
+
+// TODO(privacy): R7, unblocked by a decision on numbers in unowned documents under the strict posture
+test({
+  name: "leak R7 (strict cli): a number in an unowned document is kept exactly, even when it is a phone",
+  ignore: true,
+  timeout: 60_000,
+  fn: async () => {
+    const run = await strictCli();
+    assertNoLeak(run.collections.companies, [PHONE_NUMBER]);
+  },
+});
