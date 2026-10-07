@@ -1,7 +1,7 @@
 import * as v from "../schema.ts";
 import { dbId } from "../ids.ts";
 
-export const PRIVACY_SYMBOL: unique symbol = Symbol("mongodbee.privacy");
+export const PRIVACY_SYMBOL: unique symbol = Symbol.for("mongodbee.privacy");
 
 export type PrivacyRole =
   | "direct"
