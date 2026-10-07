@@ -56,6 +56,7 @@ export interface GenerateScenarioOptions {
   readonly scenario: SeedScenario;
   readonly defaultCount?: number;
   readonly defaultScopes?: number;
+  readonly initial?: DatabaseState;
 }
 
 export interface GenerateScenarioResult {
@@ -125,7 +126,7 @@ export function generateScenarioState(
   const defaultCount = options.defaultCount ?? 10;
   const defaultScopes = options.defaultScopes ?? 3;
   const plan = buildPrivacyPlan({ schemas });
-  const state = createEmptyDatabaseState();
+  const state = options.initial ?? createEmptyDatabaseState();
   injectAnchors(state, scenario.anchors);
   const lookup = createDocLookup(state, plan);
 

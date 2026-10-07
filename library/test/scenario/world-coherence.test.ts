@@ -304,3 +304,47 @@ test("scenario oracle: a replayed migration that breaks uniqueness or an owner r
   const kinds = report.violations.map((x) => x.kind).sort();
   assertEquals(kinds, ["owner_unresolved", "unique_index"]);
 });
+
+const ROLES = {
+  collections: {
+    "+roles": { _id: dbId("role"), name: v.string() },
+    members: { _id: dbId("member"), roleId: refId("role") },
+  },
+};
+const ROLES_M0 = migrationDefinition("2026_01_01_0900_ROLES01@roles", "roles", {
+  parent: null,
+  schemas: ROLES,
+  migrate: (b) =>
+    b
+      .createCollection("+roles")
+      .seed([{ _id: "role:admin", name: "Admin" }])
+      .end()
+      .createCollection("members")
+      .end()
+      .compile(),
+});
+const ROLES_M1 = migrationDefinition("2026_02_01_0900_BORN001@born", "born", {
+  parent: ROLES_M0,
+  schemas: ROLES,
+  migrate: (b) => b.compile(),
+});
+
+test("scenario world: a world born at a later migration keeps what the earlier migrations seeded", async () => {
+  const { state, report } = await runScenario({
+    migrations: [ROLES_M0, ROLES_M1],
+    scenario: {
+      name: "lineage",
+      birth: ROLES_M1.id,
+      shape: { "+roles": 2, members: 30 },
+    },
+  });
+  assertEquals(report.violations, []);
+  const roles = state.collections["+roles"].content;
+  assertEquals(roles.length, 3);
+  assert(roles.some((r) => r._id === "role:admin" && r.name === "Admin"));
+  const used = new Set(state.collections.members.content.map((m) => m.roleId));
+  assert(
+    used.has("role:admin"),
+    "generated members may reference a seeded role",
+  );
+});

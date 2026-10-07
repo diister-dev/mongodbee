@@ -1,4 +1,8 @@
-import type { DatabaseState, MigrationDefinition } from "../migration/types.ts";
+import {
+  createEmptyDatabaseState,
+  type DatabaseState,
+  type MigrationDefinition,
+} from "../migration/types.ts";
 import { migrationBuilder } from "../migration/builder.ts";
 import { createMemoryApplier } from "../migration/appliers/memory.ts";
 import { buildPrivacyPlan } from "../privacy/plan.ts";
@@ -81,9 +85,14 @@ export async function runScenario(
   }
 
   const birth = migrations[birthIndex];
+  const lineage = await applyMigrationsInMemory(
+    createEmptyDatabaseState(),
+    migrations.slice(0, birthIndex + 1),
+  );
   const generation = generateScenarioState({
     schemas: birth.schemas,
     scenario,
+    initial: lineage.state,
     ...(options.defaultCount !== undefined && {
       defaultCount: options.defaultCount,
     }),
