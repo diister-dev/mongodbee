@@ -12,6 +12,8 @@
     "./type-definition": "./src/type-definition.ts",
     "./computed": "./src/computed.ts",
     "./schema-navigator": "./src/schema-navigator.ts",
+    "./privacy": "./src/privacy/mod.ts",
+    "./scenario": "./src/scenario/mod.ts",
     "./types": "./src/types.ts",
     "./migration": "./src/migration/mod.ts",
     "./migration/cli": "./src/migration/cli/mod.ts",
