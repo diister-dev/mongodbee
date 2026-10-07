@@ -26,6 +26,8 @@ export function canonical(value: unknown): string {
   return JSON.stringify(value) ?? String(value);
 }
 
+const MAX_ULID_TIME = 2 ** 48 - 1;
+
 const ID_PATTERN = /^([a-zA-Z0-9_-]+):(.+)$/;
 
 function base36(bytes: Uint8Array, length: number): string {
@@ -39,9 +41,13 @@ export function remapUid(
   uid: string,
   timeShiftMs = 0,
 ): string {
-  const digest = hmacBytes(secret, `uid|${uid}`);
-  if (isUlid(uid)) {
-    const time = decodeTime(uid.toUpperCase()) + timeShiftMs;
+  const ulid = isUlid(uid);
+  const digest = hmacBytes(secret, `uid|${ulid ? uid.toLowerCase() : uid}`);
+  if (ulid) {
+    const time = Math.min(
+      MAX_ULID_TIME,
+      Math.max(0, Math.round(decodeTime(uid.toUpperCase()) + timeShiftMs)),
+    );
     const out = encodeUlidTime(time) + encodeUlidRandom(digest);
     return uid === uid.toLowerCase() ? out.toLowerCase() : out;
   }

@@ -7,8 +7,10 @@ import {
   createPrivacyTransformer,
   dynamic,
   type DynamicResolution,
+  isUlid,
   personal,
   personId,
+  remapId,
   walkDocument,
 } from "../../src/privacy/mod.ts";
 
@@ -149,4 +151,26 @@ test("walk: a reference inside an intersect is remapped", () => {
   );
   const link = doc.link as { owner: string };
   assertEquals(link.owner, doc._id);
+});
+
+const ULID_ID = "user:01j5zk3v8n2q4x6y8z0b1c3d5e";
+
+test("ids: a fractional or oversized time shift still yields a well-formed ulid", () => {
+  for (const shift of [0.7 * 86_400_000, -1e15, 1e15]) {
+    const mapped = remapId("s3cret", ULID_ID, shift).split(":")[1];
+    assert(isUlid(mapped), `shift ${shift} gave "${mapped}"`);
+    assertEquals(mapped.length, 26);
+  }
+});
+
+test("ids: the same ulid written in upper or lower case maps to the same id", () => {
+  const lower = remapId("s3cret", ULID_ID);
+  const upper = remapId(
+    "s3cret",
+    ULID_ID.toUpperCase().replace("USER", "user"),
+  );
+  assertEquals(
+    upper,
+    lower.replace(/:(.*)$/, (_, uid) => `:${uid.toUpperCase()}`),
+  );
 });
