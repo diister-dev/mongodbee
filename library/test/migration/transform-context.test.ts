@@ -4,6 +4,9 @@ import { decodeTime } from "../../src/utils/ulid.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import { migrationBuilder } from "../../src/migration/builder.ts";
 import { createMemoryApplier } from "../../src/migration/appliers/memory.ts";
+import { createMongodbApplier } from "../../src/migration/appliers/mongodb.ts";
+import { withDatabase } from "../+shared.ts";
+import { refId } from "../../src/ids.ts";
 import { createEmptyDatabaseState } from "../../src/migration/types.ts";
 import {
   createLiveTransformContext,
@@ -123,4 +126,98 @@ test("transform context: the live context mints fresh ulids and reads the wall c
   assertNotEquals(a, b);
   assert(Math.abs(ctx.now().getTime() - Date.now()) < 1000);
   assertEquals(migrationTime("no-date-here"), Date.UTC(2000, 0, 1));
+});
+
+type StringIdDoc = { _id: string; [field: string]: unknown };
+
+const MONGO_SCHEMAS = {
+  collections: {
+    things: {
+      _id: v.string(),
+      versionId: v.optional(v.string()),
+      stampedAt: v.optional(v.date()),
+    },
+  },
+  scopedMultiCollections: {
+    "+expo": {
+      scope: refId("exposition"),
+      types: {
+        participant: {
+          label: v.string(),
+          versionId: v.optional(v.string()),
+          stampedAt: v.optional(v.date()),
+        },
+      },
+    },
+  },
+};
+
+test({
+  name: "transform context: on MongoDB every document gets its own id and the whole run shares one clock reading",
+  timeout: 30_000,
+  fn: async () => {
+    await withDatabase("transform_context", async (db) => {
+      const m = migrationDefinition("2026_08_04_1536_STAMP02@stamp", "stamp", {
+        parent: null,
+        schemas: MONGO_SCHEMAS,
+        migrate: (b) =>
+          b
+            .collection("things")
+            .transform({
+              up: (doc, ctx) => ({
+                ...doc,
+                versionId: ctx.newId(),
+                stampedAt: ctx.now(),
+              }),
+              down: (doc) => doc,
+            })
+            .end()
+            .scopedMultiCollection("+expo")
+            .type("participant")
+            .transform({
+              up: (doc, ctx) => ({
+                ...doc,
+                versionId: ctx.newId(),
+                stampedAt: ctx.now(),
+              }),
+              down: (doc) => doc,
+            })
+            .end()
+            .end()
+            .compile(),
+      });
+      await db
+        .collection<StringIdDoc>("things")
+        .insertMany(["a", "b", "c"].map((_id) => ({ _id })));
+      await db.collection<StringIdDoc>("+expo").insertMany(
+        [1, 2, 3].map((n) => ({
+          _id: `participant:${n}`,
+          _type: "participant",
+          _scope: "exposition:x",
+          label: `p${n}`,
+        })),
+      );
+      const applier = createMongodbApplier(db, m, { currentMigrationId: m.id });
+      const ops = m.migrate(
+        migrationBuilder({ schemas: m.schemas }),
+      ).operations;
+      await applier.applyMigration(ops, "up");
+
+      const docs = [
+        ...(await db.collection("things").find({}).toArray()),
+        ...(await db.collection("+expo").find({}).toArray()),
+      ];
+      assertEquals(docs.length, 6);
+      const ids = docs.map((d) => String(d.versionId));
+      assertEquals(new Set(ids).size, 6);
+      for (const id of ids) {
+        assert(isUlid(id), id);
+        assertEquals(id, id.toLowerCase());
+      }
+      assertEquals(
+        new Set(docs.map((d) => (d.stampedAt as Date).getTime())).size,
+        1,
+      );
+    });
+  },
 });
