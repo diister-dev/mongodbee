@@ -261,8 +261,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C7, walk picks the first union option that safeParses; v.object strips unknown keys so a wider later option is never chosen and its fields are dropped
-  ignore: true,
   name: "C7 walk: a union of objects keeps the fields of the option that actually matches",
   fn: () => {
     const schemas = {
@@ -382,8 +380,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C14, walk removes a DROPped tuple item instead of leaving a hole (undefined/null), so later items shift position
-  ignore: true,
   name: "C14 walk: dropping a tuple item keeps the positions of the items after it",
   fn: () => {
     const schemas = {
@@ -407,8 +403,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C15, walk returns the raw handler result on the no-variant and schema-less branches; map KEEP to the value there too
-  ignore: true,
   name: "C15 walk: KEEP on a value matching no union option keeps the value, not the symbol",
   fn: async () => {
     const { walkDocument, KEEP } = await import("../../src/privacy/walk.ts");
