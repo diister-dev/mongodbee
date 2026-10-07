@@ -95,7 +95,10 @@ function keptInClear(plan: PrivacyPlan): string[] {
 export function renderPrivacyReport(plan: PrivacyPlan): string {
   const lines: string[] = [];
   if (plan.posture === "strict") {
-    lines.push("posture     strict: undeclared values are faked, not kept", "");
+    lines.push(
+      "posture     strict: undeclared values are faked, not kept or dropped",
+      "",
+    );
   }
 
   lines.push("persons");
@@ -141,7 +144,7 @@ export function renderPrivacyReport(plan: PrivacyPlan): string {
 
   const s = plan.summary;
   lines.push(
-    `summary     ${s.certain} certain · ${s.inferred} inferred · ${s.declared} declared · ${s.dynamic} dynamic · ${s.unknown} UNKNOWN · ${s.none} none`,
+    `summary     ${s.certain} certain · ${s.inferred} inferred · ${s.declared} declared · ${s.dynamic} dynamic · ${s.unknown} UNKNOWN · ${s.none} none${plan.posture === "strict" ? ` · ${s.faked} replaced by the strict posture` : ""}`,
   );
   return lines.join("\n");
 }

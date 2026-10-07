@@ -15,6 +15,7 @@ import {
   createPrivacyTransformer,
   dynamic,
   mention,
+  mirrorOf,
   notPersonal,
   personal,
   personId,
@@ -202,17 +203,21 @@ test("union: options that disagree at the same path keep the most protective cla
   assertEquals([who.role, who.treatment.extract], ["direct", "pseudonym"]);
 });
 
-test("union: a reference that can also be free text is unknown, a nullable reference stays a reference", () => {
+test("union: a reference that can also hold another value is a polymorphic reference naming it", () => {
   const p = plan({
     notes: {
       _id: dbId("note"),
       author: v.union([refId("user"), v.string()]),
+      contact: v.union([refId("user"), Email]),
       reviewer: v.union([refId("user"), v.null()]),
       editor: v.union([refId("user"), refId("note")]),
     },
   });
   const author = pathOf(p, "collections/notes/", "author");
-  assertEquals([author.tier, author.treatment.extract], ["unknown", "drop"]);
+  assertEquals([author.role, author.treatment.extract], ["reference", "remap"]);
+  assertEquals(author.note, "polymorphic: reference|none");
+  const contact = pathOf(p, "collections/notes/", "contact");
+  assertEquals(contact.note, "polymorphic: reference|direct");
   const reviewer = pathOf(p, "collections/notes/", "reviewer");
   assertEquals(
     [reviewer.role, reviewer.treatment.extract],
@@ -350,6 +355,12 @@ const STRICT_SCHEMAS = {
       email: Email,
       nickname: v.string(),
       plan: v.picklist(["free", "pro"]),
+      age: v.number(),
+      phone: personal(v.string(), { role: "contact" }),
+      locale: personal(v.picklist(["fr", "en"]), {
+        role: "contact",
+        treatment: { extract: "keep" },
+      }),
     },
     companies: {
       _id: dbId("company"),
@@ -365,13 +376,13 @@ const STRICT_SCHEMAS = {
         treatment: { extract: "keep" },
       }),
       ownerId: mention(refId("user")),
-      mixed: v.union([refId("user"), v.string()]),
       notes: v.array(v.object({ text: v.string(), at: v.date() })),
       anything: v.unknown(),
     },
     legal: {
       _id: notPersonal(dbId("legal"), "legal person"),
       denomination: v.string(),
+      capital: v.number(),
     },
   },
 } as unknown as SchemasDefinition;
@@ -380,101 +391,134 @@ function strictPlan() {
   return buildPrivacyPlan({ schemas: STRICT_SCHEMAS, posture: "strict" });
 }
 
+function extractOf(p: PrivacyPlan, key: string, path: string) {
+  return pathOf(p, key, path).treatment.extract;
+}
+
 test("strict posture: the default posture is unchanged", () => {
   const implicit = buildPrivacyPlan({ schemas: STRICT_SCHEMAS });
-  const personal = buildPrivacyPlan({
+  const explicit = buildPrivacyPlan({
     schemas: STRICT_SCHEMAS,
     posture: "personal",
   });
   assertEquals(implicit.posture, "personal");
-  assertEquals(renderPrivacyReport(implicit), renderPrivacyReport(personal));
-  assertEquals(
-    pathOf(implicit, "collections/companies/", "name").treatment.extract,
-    "keep",
-  );
+  assertEquals(renderPrivacyReport(implicit), renderPrivacyReport(explicit));
+  assertEquals(extractOf(implicit, "collections/companies/", "name"), "keep");
+  assertEquals(extractOf(implicit, "collections/users/", "age"), "keep");
+  assertEquals(implicit.summary.faked, 0);
 });
 
-test("strict posture: undeclared strings are faked in documents with and without owner, honestly tiered", () => {
+test("strict posture: undeclared and unknown-typed leaves are faked in every kind of document, honestly tiered", () => {
   const p = strictPlan();
   for (const [key, path] of [
     ["collections/users/", "nickname"],
     ["collections/companies/", "name"],
     ["collections/companies/", "notes.*.text"],
     ["collections/companies/", "anything"],
+    ["collections/legal/", "denomination"],
   ] as const) {
     const found = pathOf(p, key, path);
     assertEquals(
-      [found.tier, found.treatment.extract],
-      ["inferred", "fake"],
+      [found.tier, found.treatment.extract, found.byPosture],
+      ["inferred", "fake", true],
       `${key}${path}`,
     );
     assert(found.note?.startsWith("strict posture"));
   }
 });
 
-test("strict posture: a unique index is pseudonymised so equal values stay equal and distinct ones stay distinct", () => {
-  const siret = pathOf(strictPlan(), "collections/companies/", "siret");
+test("strict posture: a unique index is pseudonymised, a personal signal is treated without an owner, contact becomes pseudonym", () => {
+  const p = strictPlan();
+  const siret = pathOf(p, "collections/companies/", "siret");
+  assertEquals([siret.role, siret.treatment.extract], ["direct", "pseudonym"]);
   assertEquals(
-    [siret.tier, siret.role, siret.treatment.extract],
-    ["inferred", "direct", "pseudonym"],
+    extractOf(p, "collections/companies/", "contactEmail"),
+    "pseudonym",
   );
+  assertEquals(extractOf(p, "collections/users/", "phone"), "pseudonym");
 });
 
-test("strict posture: a personal signal in a document without owner is treated, not parked as unknown", () => {
-  const email = pathOf(strictPlan(), "collections/companies/", "contactEmail");
-  assertEquals(
-    [email.tier, email.treatment.extract],
-    ["declared", "pseudonym"],
-  );
-});
-
-test("strict posture: numbers, booleans, dates, picklists and references are not touched", () => {
+test("strict posture: booleans, dates, picklists and references are not touched, numbers only in person-owned documents", () => {
   const p = strictPlan();
   for (const [key, path] of [
     ["collections/companies/", "employees"],
     ["collections/companies/", "active"],
     ["collections/companies/", "since"],
     ["collections/companies/", "notes.*.at"],
+    ["collections/legal/", "capital"],
     ["collections/users/", "plan"],
   ] as const) {
-    assertEquals(pathOf(p, key, path).treatment.extract, "keep", path);
+    assertEquals(extractOf(p, key, path), "keep", `${key}${path}`);
   }
+  assertEquals(extractOf(p, "collections/users/", "age"), "fake");
   const owner = pathOf(p, "collections/companies/", "ownerId");
   assertEquals([owner.role, owner.treatment.extract], ["reference", "remap"]);
 });
 
-test("strict posture: explicit notPersonal, declared keep and exempt documents are honoured", () => {
+test("strict posture: an explicit extract treatment, field-level notPersonal and a mirror are honoured", () => {
   const p = strictPlan();
-  assertEquals(
-    pathOf(p, "collections/companies/", "slug").treatment.extract,
-    "keep",
+  assertEquals(extractOf(p, "collections/companies/", "slug"), "keep");
+  assertEquals(extractOf(p, "collections/companies/", "brand"), "keep");
+  assertEquals(extractOf(p, "collections/users/", "locale"), "keep");
+  const mirrored = plan(
+    {
+      logins: {
+        _id: personal(dbId("login"), { of: "user" }),
+        userId: refId("user"),
+        emailLower: mirrorOf(v.string(), "user.email"),
+      },
+    },
+    "strict",
   );
   assertEquals(
-    pathOf(p, "collections/companies/", "brand").treatment.extract,
-    "keep",
-  );
-  assertEquals(
-    pathOf(p, "collections/legal/", "denomination").treatment.extract,
-    "keep",
+    pathOf(mirrored, "collections/logins/", "emailLower").role,
+    "derived",
   );
 });
 
-test("strict posture: a reference that may be free text stays unknown for the user to settle", () => {
-  const mixed = pathOf(strictPlan(), "collections/companies/", "mixed");
-  assertEquals([mixed.tier, mixed.treatment.extract], ["unknown", "drop"]);
+test("strict posture: a polymorphic reference stays a remap", () => {
+  const p = plan(
+    {
+      notes: {
+        _id: dbId("note"),
+        author: v.union([refId("user"), v.string()]),
+      },
+    },
+    "strict",
+  );
+  assertEquals(extractOf(p, "collections/notes/", "author"), "remap");
 });
 
-test("strict posture: the unknown gate only holds what a human must settle", () => {
-  assertEquals(strictPlan().summary.unknown, 1);
-  assertEquals(
-    buildPrivacyPlan({ schemas: STRICT_SCHEMAS }).summary.unknown,
-    3,
+test("strict posture: unresolved dynamic leaves are faked, a resolver can still classify them", () => {
+  const p = plan(
+    {
+      forms: {
+        _id: dbId("form"),
+        answers: dynamic(
+          v.record(v.string(), v.object({ value: v.unknown() })),
+        ),
+      },
+    },
+    "strict",
   );
+  const value = pathOf(p, "collections/forms/", "answers.*.value");
+  assertEquals(
+    [value.treatment.extract, value.dynamicRoot],
+    ["fake", "answers"],
+  );
+});
+
+test("strict posture: unknown no longer blocks, and the lost realism is counted", () => {
+  const strict = strictPlan();
+  assertEquals(strict.summary.unknown, 0);
+  assertEquals(strict.summary.faked, 7);
+  assert(buildPrivacyPlan({ schemas: STRICT_SCHEMAS }).summary.none > 0);
 });
 
 test("strict posture: the report announces itself and its kept-in-clear section shrinks to what was declared", () => {
   const report = renderPrivacyReport(strictPlan());
   assert(report.startsWith("posture     strict"));
+  assert(report.includes("replaced by the strict posture"));
   const section = report.slice(report.indexOf("kept in clear on extract"));
   assert(!/\n {4}name\s/.test(section));
   assert(/\n {4}slug\s/.test(section));
@@ -498,7 +542,6 @@ test("strict posture: a transformed ownerless document keeps its shape and relat
     slug: "acme",
     brand: "Acme",
     ownerId: "user:01j5zk3v8n2q4x6y8z0b1c3d5f",
-    mixed: "user:01j5zk3v8n2q4x6y8z0b1c3d5f",
     notes: [
       { text: "call back Bob on 0612345678", at: new Date("2021-02-03") },
     ],

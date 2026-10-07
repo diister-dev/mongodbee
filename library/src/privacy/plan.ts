@@ -42,6 +42,7 @@ export interface PrivacyPath {
   readonly consistent?: PrivacyConsistency;
   readonly mirrorOf?: string;
   readonly dynamicRoot?: string;
+  readonly byPosture?: true;
   readonly normalize?: PrivacyNormalize;
   readonly treatment: Readonly<Record<PrivacyDirection, PrivacyTreatment>>;
   readonly values?: readonly string[];
@@ -91,12 +92,16 @@ export interface PrivacyPerson {
   readonly delegatesTo: readonly string[];
 }
 
+export type PrivacySummary = Readonly<Record<PrivacyTier, number>> & {
+  readonly faked: number;
+};
+
 export interface PrivacyPlan {
   readonly persons: ReadonlyMap<string, PrivacyPerson>;
   readonly targets: ReadonlyMap<string, PrivacyTarget>;
   readonly posture: PrivacyPosture;
   readonly findings: readonly PrivacyFinding[];
-  readonly summary: Readonly<Record<PrivacyTier, number>>;
+  readonly summary: PrivacySummary;
 }
 
 export type PrivacyPosture = "personal" | "strict";
@@ -368,7 +373,8 @@ interface Draft {
   dynamicRoot?: string;
   uniqueOnly?: boolean;
   computed?: boolean;
-  unresolvable?: boolean;
+  numeric?: boolean;
+  byPosture?: boolean;
   normalize?: PrivacyNormalize;
   overrides?: PrivacyTreatments;
   values?: readonly string[];
@@ -459,6 +465,7 @@ function classifyActions(
       role: "technical",
       spaces: [],
       values: s.picklist ?? undefined,
+      numeric: s.types.has("number") || s.types.has("bigint"),
       note: [...s.types].join("|"),
     };
   }
@@ -490,33 +497,35 @@ function protection(draft: Draft): number {
   ];
 }
 
-function mergeVariants(path: string, drafts: readonly Draft[]): Draft {
+function mergeVariants(drafts: readonly Draft[]): Draft {
   if (drafts.length === 1) return drafts[0];
   const dynamic = drafts.find((d) => d.role === "dynamic");
   if (dynamic) return dynamic;
   const references = drafts.filter((d) => d.role === "reference");
   const others = drafts.filter((d) => d.role !== "reference");
   if (references.length === 0) {
-    return others.reduce((best, d) =>
-      protection(d) > protection(best) ? d : best,
+    const best = others.reduce((chosen, d) =>
+      protection(d) > protection(chosen) ? d : chosen,
     );
-  }
-  if (others.some((d) => protection(d) > 0)) {
-    return {
-      path,
-      tier: "unknown",
-      role: "none",
-      spaces: [],
-      unresolvable: true,
-      note: "union of a reference and a non-reference value",
-    };
+    return best.role === "technical" && others.some((d) => d.numeric)
+      ? { ...best, numeric: true }
+      : best;
   }
   const spaces = [...new Set(references.flatMap((d) => d.spaces))];
+  const alsoRoles = [
+    ...new Set(others.filter((d) => protection(d) > 0).map((d) => d.role)),
+  ];
+  const note =
+    alsoRoles.length > 0
+      ? `polymorphic: reference|${alsoRoles.join("|")}`
+      : spaces.length > 1
+        ? "polymorphic reference"
+        : undefined;
   return {
     ...references[0],
     spaces,
     declaredMention: references.some((d) => d.declaredMention),
-    note: spaces.length > 1 ? "polymorphic reference" : undefined,
+    note,
   };
 }
 
@@ -537,7 +546,6 @@ function classifyLeaf(leaf: Leaf, uniqueKeys: ReadonlySet<string>): Draft {
     .join(".");
   const compositeUnique = uniqueKeys.has(key);
   return mergeVariants(
-    leaf.path,
     leaf.variants.map((actions) =>
       classifyActions(leaf.path, actions, compositeUnique),
     ),
@@ -546,8 +554,11 @@ function classifyLeaf(leaf: Leaf, uniqueKeys: ReadonlySet<string>): Draft {
 
 export function defaultTreatments(
   role: PrivacyPathRole,
+  posture: PrivacyPosture = "personal",
 ): Readonly<Record<PrivacyDirection, PrivacyTreatment>> {
-  return DEFAULT_TREATMENTS[role];
+  return posture === "strict" && role === "contact"
+    ? { ...DEFAULT_TREATMENTS.contact, extract: "pseudonym" }
+    : DEFAULT_TREATMENTS[role];
 }
 
 function treatments(
@@ -562,6 +573,67 @@ function treatments(
   return { ...base, ...overrides };
 }
 
+const OWNED_KINDS: ReadonlySet<PrivacyOwnerKind> = new Set([
+  "self",
+  "declared",
+  "inferred",
+  "ambiguous",
+]);
+
+function fakedByPosture(draft: Draft, why: string): void {
+  draft.tier = "inferred";
+  draft.role = "content";
+  draft.byPosture = true;
+  draft.note = `strict posture: ${why}`;
+}
+
+function strictify(draft: Draft, owned: boolean): void {
+  if (draft.overrides?.extract !== undefined) return;
+  if (draft.mirrorOf !== undefined || draft.role === "dynamic") return;
+  if (draft.tier === "declared" && draft.role === "none") return;
+  if (draft.tier === "inferred" && draft.role === "technical") {
+    if (owned && draft.numeric) {
+      fakedByPosture(draft, "number in a person-owned document");
+    }
+    return;
+  }
+  if (draft.role === "contact") {
+    draft.overrides = { ...draft.overrides, extract: "pseudonym" };
+    draft.byPosture = true;
+    return;
+  }
+  if (draft.tier === "unknown" || draft.tier === "dynamic") {
+    fakedByPosture(draft, draft.note ?? "untyped");
+  }
+}
+
+function adjustForOwner(
+  d: Draft,
+  ownerKind: PrivacyOwnerKind,
+  strict: boolean,
+): void {
+  if (strict) {
+    strictify(d, OWNED_KINDS.has(ownerKind));
+  } else if (ownerKind === "exempt") {
+    d.tier = "none";
+    d.role = "none";
+  } else if (ownerKind === "none" && d.uniqueOnly) {
+    d.tier = "none";
+    d.role = "none";
+  } else if (ownerKind === "none") {
+    if (
+      PERSONAL_ROLES.has(d.role) &&
+      (d.tier === "certain" || d.tier === "declared")
+    ) {
+      d.tier = "unknown";
+      d.note = `${d.role} signal in a document without owner`;
+    } else if (d.tier === "unknown" || d.tier === "inferred") {
+      d.tier = "none";
+      d.role = "none";
+    }
+  }
+}
+
 function finalise(draft: Draft): PrivacyPath {
   return {
     path: draft.path,
@@ -573,6 +645,7 @@ function finalise(draft: Draft): PrivacyPath {
     ...(draft.consistent !== undefined && { consistent: draft.consistent }),
     ...(draft.mirrorOf !== undefined && { mirrorOf: draft.mirrorOf }),
     ...(draft.dynamicRoot !== undefined && { dynamicRoot: draft.dynamicRoot }),
+    ...(draft.byPosture && { byPosture: true as const }),
     ...(draft.normalize !== undefined && { normalize: draft.normalize }),
     treatment: treatments(draft.role, draft.tier, draft.overrides),
     ...(draft.values !== undefined && { values: draft.values }),
@@ -861,6 +934,7 @@ export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
   };
 
   const targets = new Map<string, PrivacyTarget>();
+  let faked = 0;
   const summary: Record<PrivacyTier, number> = {
     certain: 0,
     inferred: 0,
@@ -902,36 +976,12 @@ export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
         } else {
           d.relation = "relation";
         }
-      } else if (!d.computed && owner.kind === "exempt") {
-        d.tier = "none";
-        d.role = "none";
-      } else if (!d.computed && owner.kind === "none" && d.uniqueOnly) {
-        if (strict) {
-          d.tier = "inferred";
-          d.note = "unique index, strict posture";
-        } else {
-          d.tier = "none";
-          d.role = "none";
-        }
-      } else if (!d.computed && owner.kind === "none" && !strict) {
-        if (
-          PERSONAL_ROLES.has(d.role) &&
-          (d.tier === "certain" || d.tier === "declared")
-        ) {
-          d.tier = "unknown";
-          d.note = `${d.role} signal in a document without owner`;
-        } else if (d.tier === "unknown" || d.tier === "inferred") {
-          d.tier = "none";
-          d.role = "none";
-        }
-      }
-      if (strict && d.tier === "unknown" && !d.unresolvable) {
-        d.tier = "inferred";
-        d.role = "content";
-        d.note = `strict posture: ${d.note ?? "untyped"}`;
+      } else if (!d.computed) {
+        adjustForOwner(d, owner.kind, strict);
       }
       const done = finalise(d);
       summary[done.tier] += 1;
+      if (done.byPosture) faked += 1;
       paths.push(done);
     }
     paths.sort((a, b) => a.path.localeCompare(b.path));
@@ -989,6 +1039,6 @@ export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
     targets,
     posture: strict ? "strict" : "personal",
     findings,
-    summary,
+    summary: { ...summary, faked },
   };
 }
