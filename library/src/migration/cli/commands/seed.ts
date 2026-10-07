@@ -13,7 +13,7 @@ import {
   renderScenarioReport,
   runScenario,
   type SeedScenario,
-  writeStateToDatabase,
+  populateDatabase,
 } from "../../../scenario/mod.ts";
 
 export interface SeedCommandOptions {
@@ -110,8 +110,10 @@ export async function seedCommand(
         `Database "${dbName}" already holds ${existing} document(s); seed only writes into an empty database (or pass --force)`,
       );
     }
-    const written = await writeStateToDatabase(db, run.state);
     const atIndex = chain.findIndex((m) => m.id === at);
+    const written = await populateDatabase(db, run.state, {
+      migration: chain[atIndex],
+    });
     for (const migration of chain.slice(0, atIndex + 1)) {
       await markMigrationAsAdopted(db, migration.id, migration.name);
     }

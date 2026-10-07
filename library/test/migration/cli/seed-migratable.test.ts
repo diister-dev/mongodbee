@@ -85,7 +85,6 @@ export const schemas = { collections: { items: ${ITEMS}, archive_v2: ${ARCHIVE} 
 test({
   name: "seed: a seeded database carries its indexes and empty collections, so the next migrations run on it",
   timeout: 60_000,
-  ignore: true,
   fn: async () => {
     await withTempDir(async (dir) => {
       const name = `mongodbee_test_seedmig_${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
