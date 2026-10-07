@@ -1,5 +1,6 @@
-import { assert, assertEquals, assertNotEquals } from "@std/assert";
-import { decodeTime } from "@std/ulid";
+import { test } from "../+harness.ts";
+import { assert, assertEquals, assertNotEquals } from "../+assert.ts";
+import { decodeTime } from "../../src/utils/ulid.ts";
 import * as v from "../../src/schema.ts";
 import { dbId, refId } from "../../src/ids.ts";
 import {
@@ -138,7 +139,7 @@ function kinds(
   return notes.filter((n) => n.kind === kind).map((n) => n.path);
 }
 
-Deno.test("pseudonym: the same value gives the same fake value across collections, and never the original", () => {
+test("pseudonym: the same value gives the same fake value across collections, and never the original", () => {
   const t = transformer();
   const a = t.transform(USERS, user()).doc;
   const b = t.transform(ACCOUNTLESS, {
@@ -153,14 +154,14 @@ Deno.test("pseudonym: the same value gives the same fake value across collection
   assertNotEquals(other.email, a.email);
 });
 
-Deno.test("pseudonym: deterministic across runs", () => {
+test("pseudonym: deterministic across runs", () => {
   const first = transformer().transform(USERS, user());
   const second = transformer().transform(USERS, user());
   assertEquals(first.doc, second.doc);
   assertEquals(first.notes, second.notes);
 });
 
-Deno.test("consistency: relationship separates scopes, person joins them, and a space can pin its own policy", () => {
+test("consistency: relationship separates scopes, person joins them, and a space can pin its own policy", () => {
   const doc = (scope: string) => ({
     _id: "accountless_identity:01j5zk5a1b2c3d4e5f6g7h8j9k",
     _scope: scope,
@@ -179,7 +180,7 @@ Deno.test("consistency: relationship separates scopes, person joins them, and a 
   );
 });
 
-Deno.test("ids: prefix kept, ulid shape kept, order and intervals kept, absolute time shifted", () => {
+test("ids: prefix kept, ulid shape kept, order and intervals kept, absolute time shifted", () => {
   const shift = 7 * 24 * 3600 * 1000;
   const a = remapId("s3cret", USER_ID, shift);
   const b = remapId("s3cret", USER_ID_LATER, shift);
@@ -205,7 +206,7 @@ Deno.test("ids: prefix kept, ulid shape kept, order and intervals kept, absolute
   );
 });
 
-Deno.test("references: a remapped reference equals the remapped _id it points to", () => {
+test("references: a remapped reference equals the remapped _id it points to", () => {
   const t = transformer();
   const userOut = t.transform(USERS, user()).doc;
   const participantOut = t.transform(PARTICIPANT, {
@@ -237,7 +238,7 @@ Deno.test("references: a remapped reference equals the remapped _id it points to
   assertEquals(scanOut.label, "business");
 });
 
-Deno.test("fail-closed: unknown keys and unknown-tier values never reach the output", () => {
+test("fail-closed: unknown keys and unknown-tier values never reach the output", () => {
   const t = transformer();
   const { doc, notes } = t.transform(
     USERS,
@@ -250,7 +251,7 @@ Deno.test("fail-closed: unknown keys and unknown-tier values never reach the out
   assertEquals(kinds(notes, "invalid"), []);
 });
 
-Deno.test("fail-closed: a required unknown value is replaced by a valid generated one, and said so", () => {
+test("fail-closed: a required unknown value is replaced by a valid generated one, and said so", () => {
   const t = transformer();
   const { doc, notes } = t.transform(PARTICIPANT, {
     _id: PARTICIPANT_ID,
@@ -267,12 +268,12 @@ Deno.test("fail-closed: a required unknown value is replaced by a valid generate
   assertEquals(kinds(notes, "invalid"), []);
 });
 
-Deno.test("mirror: the lowercased copy equals the lowercased pseudonym of its source", () => {
+test("mirror: the lowercased copy equals the lowercased pseudonym of its source", () => {
   const { doc } = transformer().transform(USERS, user());
   assertEquals(doc.emailLower, String(doc.email).toLowerCase());
 });
 
-Deno.test("opaque: removed when optional, regenerated when required", () => {
+test("opaque: removed when optional, regenerated when required", () => {
   const { doc, notes } = transformer().transform(
     USERS,
     user({ recoveryHint: "sha256:abc" }),
@@ -283,7 +284,7 @@ Deno.test("opaque: removed when optional, regenerated when required", () => {
   assertEquals(kinds(notes, "opaque").sort(), ["passwordHash", "recoveryHint"]);
 });
 
-Deno.test("derived: recomputed by the consumer hook, dropped and reported without one", () => {
+test("derived: recomputed by the consumer hook, dropped and reported without one", () => {
   const withHook = transformer({
     recompute: (ctx: { path: string; doc: Record<string, unknown> }) =>
       ctx.path === "searchTokens" ? ["recomputed"] : SKIP_RECOMPUTE,
@@ -297,7 +298,7 @@ Deno.test("derived: recomputed by the consumer hook, dropped and reported withou
   );
 });
 
-Deno.test("keep, exempt, content and dates", () => {
+test("keep, exempt, content and dates", () => {
   const shift = 3 * 24 * 3600 * 1000;
   const { doc, notes } = transformer({ timeShiftMs: shift }).transform(
     USERS,
@@ -314,7 +315,7 @@ Deno.test("keep, exempt, content and dates", () => {
   assertEquals(kinds(notes, "invalid"), []);
 });
 
-Deno.test("generalise: a quasi-identifying date collapses to its month after the shift", () => {
+test("generalise: a quasi-identifying date collapses to its month after the shift", () => {
   const shift = 40 * 24 * 3600 * 1000;
   const { doc } = transformer({ timeShiftMs: shift }).transform(PARTICIPANT, {
     _id: PARTICIPANT_ID,
@@ -329,7 +330,7 @@ Deno.test("generalise: a quasi-identifying date collapses to its month after the
   assertEquals(doc.birthday, "1990-07-01T00:00:00.000Z");
 });
 
-Deno.test("validation: every transformed document still satisfies its schema", () => {
+test("validation: every transformed document still satisfies its schema", () => {
   const t = transformer({ timeShiftMs: 1000 });
   const results = [
     t.transform(USERS, user()),
@@ -350,7 +351,7 @@ Deno.test("validation: every transformed document still satisfies its schema", (
   for (const r of results) assertEquals(kinds(r.notes, "invalid"), []);
 });
 
-Deno.test("input: a document that violates its own schema is reported before anything is transformed", () => {
+test("input: a document that violates its own schema is reported before anything is transformed", () => {
   const { notes } = transformer().transform(
     USERS,
     user({ status: "unknown-status" }),
@@ -358,7 +359,7 @@ Deno.test("input: a document that violates its own schema is reported before any
   assert(kinds(notes, "input_invalid").includes("status"));
 });
 
-Deno.test("dynamic: the resolver classifies each entry from its data, and joins values across collections", () => {
+test("dynamic: the resolver classifies each entry from its data, and joins values across collections", () => {
   const resolveDynamic = (unit: { value: unknown }) => {
     const t = (unit.value as { t: string }).t;
     if (t === "email") {
@@ -404,7 +405,7 @@ Deno.test("dynamic: the resolver classifies each entry from its data, and joins 
   assertEquals(kinds(notes, "invalid"), []);
 });
 
-Deno.test("pseudonym: a field keeps the realism its key gives to generation", () => {
+test("pseudonym: a field keeps the realism its key gives to generation", () => {
   const { doc } = transformer().transform(USERS, user({ firstname: "Alice" }));
   assert(/^[A-Za-z'. -]+$/.test(String(doc.firstname)), String(doc.firstname));
   assertNotEquals(doc.firstname, "Alice");

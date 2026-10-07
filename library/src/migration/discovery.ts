@@ -8,7 +8,7 @@
  */
 
 import * as fs from "node:fs/promises";
-import * as path from "@std/path";
+import * as path from "node:path";
 import type { MigrationDefinition } from "./types.ts";
 import { pathToFileUrl } from "./utils/platform.ts";
 
@@ -67,7 +67,8 @@ export async function loadMigrationFile(
 
     // Validate migration structure
     if (
-      !migration.id || !migration.name ||
+      !migration.id ||
+      !migration.name ||
       typeof migration.migrate !== "function"
     ) {
       throw new Error(

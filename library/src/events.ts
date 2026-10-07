@@ -39,7 +39,7 @@ export function EventEmitter<
   };
 } {
   const events: {
-    [key in keyof T]?: (T[key])[];
+    [key in keyof T]?: T[key][];
   } = {};
 
   function on<E extends keyof T>(event: E, callback: T[E]) {

@@ -1,4 +1,5 @@
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals, assertRejects } from "../+assert.ts";
 import * as v from "../../src/schema.ts";
 import { dbId, refId } from "../../src/ids.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
@@ -155,7 +156,7 @@ const SALON_SCENARIO: SeedScenario = {
   ],
 };
 
-Deno.test("scenario: the world at birth has the requested shape, the anchors, and no orphan", async () => {
+test("scenario: the world at birth has the requested shape, the anchors, and no orphan", async () => {
   const { state, report } = await runScenario({
     migrations: CHAIN,
     scenario: SALON_SCENARIO,
@@ -205,7 +206,7 @@ Deno.test("scenario: the world at birth has the requested shape, the anchors, an
   );
 });
 
-Deno.test("scenario: seeding at a later step replays the migrations on the same world, deterministically", async () => {
+test("scenario: seeding at a later step replays the migrations on the same world, deterministically", async () => {
   const first = await runScenario({
     migrations: CHAIN,
     scenario: SALON_SCENARIO,
@@ -239,7 +240,7 @@ Deno.test("scenario: seeding at a later step replays the migrations on the same 
   );
 });
 
-Deno.test("scenario: an intermediate step is reachable, and a step before birth is not", async () => {
+test("scenario: an intermediate step is reachable, and a step before birth is not", async () => {
   const mid = await runScenario({
     migrations: CHAIN,
     scenario: SALON_SCENARIO,
@@ -264,7 +265,7 @@ Deno.test("scenario: an intermediate step is reachable, and a step before birth 
   );
 });
 
-Deno.test("scenario: the oracle reports orphan owners and failed invariants", async () => {
+test("scenario: the oracle reports orphan owners and failed invariants", async () => {
   const broken: SeedScenario = {
     ...SALON_SCENARIO,
     name: "broken",
@@ -298,7 +299,7 @@ Deno.test("scenario: the oracle reports orphan owners and failed invariants", as
   assert(report.violations.some((x) => x.kind === "invariant"));
 });
 
-Deno.test("scenario: types without an _id in their schema still get one minted id per document", async () => {
+test("scenario: types without an _id in their schema still get one minted id per document", async () => {
   const schemas = {
     collections: { "+users": USERS },
     multiCollections: {
@@ -333,7 +334,7 @@ Deno.test("scenario: types without an _id in their schema still get one minted i
   }
 });
 
-Deno.test("scenario: a global document can reference a space that only exists inside scopes", async () => {
+test("scenario: a global document can reference a space that only exists inside scopes", async () => {
   const schemas = {
     collections: {
       "+users": USERS,
@@ -388,7 +389,7 @@ Deno.test("scenario: a global document can reference a space that only exists in
   }
 });
 
-Deno.test("scenario: finalize sees the whole document, after sees the whole world, indexes are positional", async () => {
+test("scenario: finalize sees the whole document, after sees the whole world, indexes are positional", async () => {
   const schemas = {
     collections: {
       "+users": USERS,
@@ -456,7 +457,7 @@ Deno.test("scenario: finalize sees the whole document, after sees the whole worl
   assertEquals(state.collections.counters.content[0].tickets, 12);
 });
 
-Deno.test("scenario: scopes realized by the singleton are ulids too", async () => {
+test("scenario: scopes realized by the singleton are ulids too", async () => {
   const schemas = {
     scopedMultiCollections: {
       "+expo": {
@@ -487,7 +488,7 @@ Deno.test("scenario: scopes realized by the singleton are ulids too", async () =
   }
 });
 
-Deno.test("scenario: ordinal counts across batches, singletons come first, undefined never survives finalize", async () => {
+test("scenario: ordinal counts across batches, singletons come first, undefined never survives finalize", async () => {
   const schemas = {
     scopedMultiCollections: {
       "+expo": {

@@ -58,10 +58,20 @@ import {
 } from "./validators/simulation.ts";
 import { getAppliedMigrationIds, getLastAppliedMigration } from "./state.ts";
 import { loadConfig } from "./config/loader.ts";
-import * as path from "@std/path";
+import * as path from "node:path";
 import { extractIndexes, keyEqual, normalizeIndexOptions } from "../indexes.ts";
+import {
+  COMPOSITE_INDEX_MARKER,
+  projectComposites,
+} from "../indexes-applier.ts";
+import {
+  indexesOf,
+  isTypeDefinition,
+  type TypeInput,
+} from "../type-definition.ts";
 import { sanitizePathName } from "../schema-navigator.ts";
 import * as v from "../schema.ts";
+import { primaryCollection } from "../read-preference.ts";
 
 /**
  * Options for checking migration status
@@ -319,20 +329,29 @@ async function validateCollectionIndexes(
   const issues: IndexIssue[] = [];
 
   try {
-    const collection = db.collection(collectionName);
+    const collection = primaryCollection(db, collectionName);
     const currentIndexes = await collection.indexes();
 
     // If schema is not an ObjectSchema, wrap it
-    const objectSchema = (schema as any).type === "object"
-      ? schema as v.ObjectSchema<any, any>
-      : v.object(schema as any);
+    const objectSchema = isTypeDefinition(schema)
+      ? (schema.schema as v.ObjectSchema<any, any>)
+      : (schema as any).type === "object"
+        ? (schema as v.ObjectSchema<any, any>)
+        : v.object(schema as any);
 
     const expectedIndexes = extractIndexes(objectSchema);
+    const expectedComposites = projectComposites(
+      indexesOf(schema as TypeInput),
+      "collection",
+    );
 
     // Build a set of expected index names
     const expectedIndexNames = new Set<string>();
     for (const index of expectedIndexes) {
       expectedIndexNames.add(sanitizePathName(index.path));
+    }
+    for (const composite of expectedComposites) {
+      expectedIndexNames.add(composite.name);
     }
 
     // Get all possible field paths from schema to detect mongodbee indexes
@@ -370,8 +389,12 @@ async function validateCollectionIndexes(
       if (!indexName || indexName === "_id_") continue;
 
       const isSchemaField = allSchemaPaths.has(indexName);
+      const isComposite = indexName.startsWith(COMPOSITE_INDEX_MARKER);
 
-      if (isSchemaField && !expectedIndexNames.has(indexName)) {
+      if (
+        (isSchemaField || isComposite) &&
+        !expectedIndexNames.has(indexName)
+      ) {
         issues.push({
           collection: collectionName,
           path: indexName,
@@ -381,8 +404,7 @@ async function validateCollectionIndexes(
             collation: existingIndex.collation,
             partialFilterExpression: existingIndex.partialFilterExpression,
           },
-          description:
-            `Index "${indexName}" exists in database but is not defined in current schema`,
+          description: `Index "${indexName}" exists in database but is not defined in current schema`,
         });
       }
     }
@@ -393,7 +415,8 @@ async function validateCollectionIndexes(
       const indexPath = sanitizePathName(expectedIndex.path);
 
       // Find existing index by name or key
-      const existingIndex = currentIndexes.find((i) => i.name === indexPath) ||
+      const existingIndex =
+        currentIndexes.find((i) => i.name === indexPath) ||
         currentIndexes.find((i) => keyEqual(i.key || {}, keySpec));
 
       const desiredOptions = {
@@ -408,8 +431,7 @@ async function validateCollectionIndexes(
           path: expectedIndex.path,
           type: "missing",
           expected: desiredOptions,
-          description:
-            `Index "${expectedIndex.path}" is defined in schema but missing in database`,
+          description: `Index "${expectedIndex.path}" is defined in schema but missing in database`,
         });
       } else {
         // Check if index configuration matches
@@ -432,10 +454,55 @@ async function validateCollectionIndexes(
               collation: existingIndex.collation,
               partialFilterExpression: existingIndex.partialFilterExpression,
             },
-            description:
-              `Index "${expectedIndex.path}" exists but has different configuration than schema`,
+            description: `Index "${expectedIndex.path}" exists but has different configuration than schema`,
           });
         }
+      }
+    }
+
+    for (const composite of expectedComposites) {
+      const existingIndex = currentIndexes.find(
+        (i) => i.name === composite.name,
+      );
+      const label = composite.name.slice(COMPOSITE_INDEX_MARKER.length);
+      const desiredOptions = {
+        unique: composite.options.unique,
+        collation: composite.options.collation,
+        partialFilterExpression: composite.options.partialFilterExpression,
+      };
+
+      if (!existingIndex) {
+        issues.push({
+          collection: collectionName,
+          path: label,
+          type: "missing",
+          expected: desiredOptions,
+          description: `Index "${label}" is declared on the type but missing in database`,
+        });
+        continue;
+      }
+
+      const existingNorm = normalizeIndexOptions(existingIndex);
+      const desiredNorm = normalizeIndexOptions(desiredOptions);
+      if (
+        existingNorm.unique !== desiredNorm.unique ||
+        existingNorm.collation !== desiredNorm.collation ||
+        existingNorm.partialFilterExpression !==
+          desiredNorm.partialFilterExpression ||
+        !keyEqual(existingIndex.key || {}, composite.key)
+      ) {
+        issues.push({
+          collection: collectionName,
+          path: label,
+          type: "outdated",
+          expected: desiredOptions,
+          current: {
+            unique: existingIndex.unique,
+            collation: existingIndex.collation,
+            partialFilterExpression: existingIndex.partialFilterExpression,
+          },
+          description: `Index "${label}" exists but has different configuration than the type declares`,
+        });
       }
     }
   } catch (error) {
@@ -444,8 +511,7 @@ async function validateCollectionIndexes(
       collection: collectionName,
       path: "_error",
       type: "missing",
-      description:
-        `Failed to validate indexes for collection "${collectionName}": ${message}`,
+      description: `Failed to validate indexes for collection "${collectionName}": ${message}`,
     });
   }
 
@@ -471,10 +537,15 @@ async function validateAllIndexes(
     allIssues.push(...issues);
 
     // Count valid indexes (expected indexes minus issues for this collection)
-    const objectSchema = (schema as any).type === "object"
-      ? schema as v.ObjectSchema<any, any>
-      : v.object(schema as any);
-    const expectedIndexes = extractIndexes(objectSchema);
+    const objectSchema = isTypeDefinition(schema)
+      ? (schema.schema as v.ObjectSchema<any, any>)
+      : (schema as any).type === "object"
+        ? (schema as v.ObjectSchema<any, any>)
+        : v.object(schema as any);
+    const expectedIndexes = [
+      ...extractIndexes(objectSchema),
+      ...indexesOf(schema as TypeInput),
+    ];
     const collectionIssues = issues.filter(
       (i) =>
         i.collection === collectionName &&
@@ -649,9 +720,10 @@ export async function checkMigrationStatus(
         : allMigrations;
 
     // If using lastN, we need to fast-forward state to the start of validated migrations
-    const skippedMigrations = lastN && lastN > 0 && lastN < allMigrations.length
-      ? allMigrations.slice(0, -lastN)
-      : [];
+    const skippedMigrations =
+      lastN && lastN > 0 && lastN < allMigrations.length
+        ? allMigrations.slice(0, -lastN)
+        : [];
 
     // Fast-forward through skipped migrations. The full simulation still runs
     // (needed to propagate state), so its verdict is authoritative: a broken
@@ -682,9 +754,9 @@ export async function checkMigrationStatus(
         } else {
           allValid = false;
           errors.push(
-            `Migration "${migration.name}" (${migration.id}) validation failed (in skipped --last N range): ${
-              validationResult.errors.join(", ")
-            }`,
+            `Migration "${migration.name}" (${migration.id}) validation failed (in skipped --last N range): ${validationResult.errors.join(
+              ", ",
+            )}`,
           );
           migrationsInfo.push({
             id: migration.id,
@@ -736,9 +808,9 @@ export async function checkMigrationStatus(
         if (!validationResult.success) {
           allValid = false;
           errors.push(
-            `Migration "${migration.name}" (${migration.id}) validation failed: ${
-              validationResult.errors.join(", ")
-            }`,
+            `Migration "${migration.name}" (${migration.id}) validation failed: ${validationResult.errors.join(
+              ", ",
+            )}`,
           );
         } else {
           // Update state for next migration: apply retention ratio (keep 50%, generate fresh 50%)
@@ -753,9 +825,9 @@ export async function checkMigrationStatus(
 
         if (validationResult.warnings.length > 0) {
           warnings.push(
-            `Migration "${migration.name}" (${migration.id}): ${
-              validationResult.warnings.join(", ")
-            }`,
+            `Migration "${migration.name}" (${migration.id}): ${validationResult.warnings.join(
+              ", ",
+            )}`,
           );
         }
       } catch (error) {
@@ -828,14 +900,14 @@ export async function checkMigrationStatus(
 
         // Add errors and warnings based on index validation
         if (!indexValidation.areIndexesValid) {
-          const missingCount = indexValidation.issues.filter((i) =>
-            i.type === "missing"
+          const missingCount = indexValidation.issues.filter(
+            (i) => i.type === "missing",
           ).length;
-          const outdatedCount = indexValidation.issues.filter((i) =>
-            i.type === "outdated"
+          const outdatedCount = indexValidation.issues.filter(
+            (i) => i.type === "outdated",
           ).length;
-          const orphanedCount = indexValidation.issues.filter((i) =>
-            i.type === "orphaned"
+          const orphanedCount = indexValidation.issues.filter(
+            (i) => i.type === "orphaned",
           ).length;
 
           const indexIssues = [];
@@ -871,11 +943,12 @@ export async function checkMigrationStatus(
     ? indexValidation.areIndexesValid
     : true;
 
-  const ok = errors.length === 0 &&
+  const ok =
+    errors.length === 0 &&
     isSchemaConsistent &&
     areMigrationsValid &&
     areIndexesValid &&
-    (db ? (isDatabaseUpToDate === true) : true);
+    (db ? isDatabaseUpToDate === true : true);
 
   // Generate summary message
   let message = "";
@@ -885,18 +958,15 @@ export async function checkMigrationStatus(
       if (totalMigrations === 0) {
         message = "No migrations found. Migration system is ready.";
       } else if (isDatabaseUpToDate) {
-        message =
-          `All ${totalMigrations} migration(s) are valid and applied. Database is up to date.`;
+        message = `All ${totalMigrations} migration(s) are valid and applied. Database is up to date.`;
       } else {
-        message =
-          `Migration system is healthy, but ${pendingMigrations.length} migration(s) are pending.`;
+        message = `Migration system is healthy, but ${pendingMigrations.length} migration(s) are pending.`;
       }
     } else {
       if (totalMigrations === 0) {
         message = "No migrations found. Schema validation not applicable.";
       } else {
-        message =
-          `All ${totalMigrations} migration(s) are valid and consistent with project schema.`;
+        message = `All ${totalMigrations} migration(s) are valid and consistent with project schema.`;
       }
     }
   } else {
@@ -985,17 +1055,19 @@ export async function assertMigrationSystemHealthy(
   const status = await checkMigrationStatus(options);
 
   if (!status.ok) {
-    const errorDetails = status.validation.errors.length > 0
-      ? `\n\nErrors:\n${
-        status.validation.errors.map((e) => `  - ${e}`).join("\n")
-      }`
-      : "";
+    const errorDetails =
+      status.validation.errors.length > 0
+        ? `\n\nErrors:\n${status.validation.errors
+            .map((e) => `  - ${e}`)
+            .join("\n")}`
+        : "";
 
-    const warningDetails = status.validation.warnings.length > 0
-      ? `\n\nWarnings:\n${
-        status.validation.warnings.map((w) => `  - ${w}`).join("\n")
-      }`
-      : "";
+    const warningDetails =
+      status.validation.warnings.length > 0
+        ? `\n\nWarnings:\n${status.validation.warnings
+            .map((w) => `  - ${w}`)
+            .join("\n")}`
+        : "";
 
     throw new Error(
       `Migration system is not healthy: ${status.message}${errorDetails}${warningDetails}`,

@@ -2,6 +2,11 @@
  * Error detection utilities for MongoDB write conflicts
  */
 
+import { insideTransaction } from "../transaction-scope.ts";
+import { createLogger } from "./logger.ts";
+
+const log = createLogger("retry");
+
 /**
  * Checks if an error is a MongoDB write conflict error
  *
@@ -30,11 +35,41 @@ export function isWriteConflictError(error: unknown): boolean {
     (message.includes("plan execution") &&
       message.includes("write conflict")) ||
     message.includes("writeconflict") ||
-    message.includes("transaction") && message.includes("aborted") ||
+    (message.includes("transaction") && message.includes("aborted")) ||
     // MongoDB error code for write conflicts
     (error as any).code === 112
   );
 }
+
+const NO_SUCH_TRANSACTION = 251;
+
+export function isTransactionScopedError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as {
+    code?: unknown;
+    message?: unknown;
+    hasErrorLabel?: (label: string) => boolean;
+  };
+  if (
+    typeof candidate.hasErrorLabel === "function" &&
+    candidate.hasErrorLabel("TransientTransactionError")
+  )
+    return true;
+  if (candidate.code === NO_SUCH_TRANSACTION) return true;
+  return (
+    typeof candidate.message === "string" &&
+    /transaction .* has been aborted/i.test(candidate.message)
+  );
+}
+
+export function isRetryableTransactionFailure(error: unknown): boolean {
+  return isWriteConflictError(error) || isTransactionScopedError(error);
+}
+
+export const TRANSACTION_REPLAY: Readonly<RetryOptions> = Object.freeze({
+  maxRetries: 8,
+  shouldRetry: isRetryableTransactionFailure,
+});
 
 /**
  * Options for retry behavior
@@ -65,10 +100,12 @@ export interface RetryOptions {
   exponentialBackoff?: boolean;
 
   /**
-   * Add random jitter to delays to prevent thundering herd
+   * Add random jitter to delays to prevent thundering herd. `true` adds up to
+   * 20% on top of the delay; `"full"` draws the whole delay uniformly between
+   * zero and the backoff cap, which spreads contenders that collided together.
    * @default true
    */
-  jitter?: boolean;
+  jitter?: boolean | "full";
 
   /**
    * Custom function to determine if an error should trigger a retry
@@ -131,7 +168,10 @@ export async function retryOnWriteConflict<T>(
       // Check if we should retry this error — only log/announce a retry once
       // we've actually decided to retry (avoids noisy "Retry attempt" lines
       // for application errors that are immediately rethrown).
-      if (!shouldRetry(error)) {
+      if (
+        (insideTransaction() && isTransactionScopedError(error)) ||
+        !shouldRetry(error)
+      ) {
         throw error;
       }
 
@@ -140,12 +180,7 @@ export async function retryOnWriteConflict<T>(
         throw error;
       }
 
-      console.error(
-        "Retry attempt",
-        attempt + 1,
-        "due to write conflict:",
-        error,
-      );
+      log.debug("retry attempt", attempt + 1, "after a write conflict:", error);
 
       // Calculate delay for next retry
       let delayMs = initialDelay;
@@ -156,7 +191,9 @@ export async function retryOnWriteConflict<T>(
       }
 
       // Add jitter to prevent thundering herd problem
-      if (jitter) {
+      if (jitter === "full") {
+        delayMs = delayMs * Math.random();
+      } else if (jitter) {
         // Add random jitter up to 20% of the delay
         const jitterAmount = delayMs * 0.2 * Math.random();
         delayMs = delayMs + jitterAmount;

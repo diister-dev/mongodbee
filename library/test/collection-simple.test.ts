@@ -1,4 +1,5 @@
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals, assertRejects } from "./+assert.ts";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
 import * as v from "../src/schema.ts";
@@ -12,7 +13,7 @@ const userSchema = {
   status: v.null(),
 } as const;
 
-Deno.test("Collection: Basic operations coverage", async (t) => {
+test("Collection: Basic operations coverage", async (t) => {
   await withDatabase(t.name, async (db) => {
     const users = await collection(db, "users", userSchema);
 
@@ -66,11 +67,14 @@ Deno.test("Collection: Basic operations coverage", async (t) => {
     assertEquals(results.length, 1);
 
     // Test replaceOne
-    await users.replaceOne({ name: "Alice" }, {
-      name: "Alice",
-      age: 26,
-      status: null,
-    });
+    await users.replaceOne(
+      { name: "Alice" },
+      {
+        name: "Alice",
+        age: 26,
+        status: null,
+      },
+    );
     const replaced = await users.findOne({ name: "Alice" });
     assertEquals(replaced?.age, 26);
 
@@ -88,14 +92,17 @@ Deno.test("Collection: Basic operations coverage", async (t) => {
   });
 });
 
-Deno.test("Collection: Error handling coverage", async (t) => {
+test("Collection: Error handling coverage", async (t) => {
   await withDatabase(t.name, async (db) => {
     const users = await collection(db, "users", userSchema);
 
     // Test updateOne with non-existent document
-    const updateResult = await users.updateOne({ name: "NonExistent" }, {
-      $set: { age: 40 },
-    });
+    const updateResult = await users.updateOne(
+      { name: "NonExistent" },
+      {
+        $set: { age: 40 },
+      },
+    );
     assertEquals(updateResult.modifiedCount, 0);
 
     // Test deleteOne with non-existent document
@@ -103,11 +110,14 @@ Deno.test("Collection: Error handling coverage", async (t) => {
     assertEquals(deleteResult.deletedCount, 0);
 
     // Test replaceOne with non-existent document
-    const replaceResult = await users.replaceOne({ name: "NonExistent" }, {
-      name: "New",
-      age: 20,
-      status: null,
-    });
+    const replaceResult = await users.replaceOne(
+      { name: "NonExistent" },
+      {
+        name: "New",
+        age: 20,
+        status: null,
+      },
+    );
     assertEquals(replaceResult.modifiedCount, 0);
 
     // Test count with empty collection
@@ -116,7 +126,7 @@ Deno.test("Collection: Error handling coverage", async (t) => {
   });
 });
 
-Deno.test("Collection: getById functionality", async (t) => {
+test("Collection: getById functionality", async (t) => {
   await withDatabase(t.name, async (db) => {
     const users = await collection(db, "users", userSchema);
 

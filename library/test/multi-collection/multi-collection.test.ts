@@ -1,5 +1,6 @@
+import { test } from "../+harness.ts";
 import * as v from "../../src/schema.ts";
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "../+assert.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import { defineModel } from "../../src/multi-collection-model.ts";
@@ -19,7 +20,7 @@ const userGroupModel = defineModel("test", {
   schema: multiSchema,
 });
 
-Deno.test("Basic test", async (t) => {
+test("Basic test", async (t) => {
   await withDatabase(t.name, async (db) => {
     const collection = await multiCollection(db, "test", userGroupModel);
 
@@ -57,25 +58,31 @@ Deno.test("Basic test", async (t) => {
   });
 });
 
-Deno.test("FindOne: Ensure find correct type", async (t) => {
+test("FindOne: Ensure find correct type", async (t) => {
   await withDatabase(t.name, async (db) => {
     const collection = await multiCollection(db, "test", userGroupModel);
 
-    const usersId = await collection.insertMany("user", [{
-      name: "John",
-      mail: "john@doe.d",
-    }, {
-      name: "Jane",
-      mail: "jane@doe.d",
-    }]);
+    const usersId = await collection.insertMany("user", [
+      {
+        name: "John",
+        mail: "john@doe.d",
+      },
+      {
+        name: "Jane",
+        mail: "jane@doe.d",
+      },
+    ]);
 
-    const groupsId = await collection.insertMany("group", [{
-      name: "John",
-      members: [usersId[0]],
-    }, {
-      name: "Jane",
-      members: [usersId[1]],
-    }]);
+    const groupsId = await collection.insertMany("group", [
+      {
+        name: "John",
+        members: [usersId[0]],
+      },
+      {
+        name: "Jane",
+        members: [usersId[1]],
+      },
+    ]);
 
     const notFoundUser = await collection.findOne("user", { _id: groupsId[0] });
     assert(notFoundUser === null);
@@ -108,25 +115,31 @@ Deno.test("FindOne: Ensure find correct type", async (t) => {
   });
 });
 
-Deno.test("find: Ensure find correct type", async (t) => {
+test("find: Ensure find correct type", async (t) => {
   await withDatabase(t.name, async (db) => {
     const collection = await multiCollection(db, "test", userGroupModel);
 
-    const usersId = await collection.insertMany("user", [{
-      name: "John",
-      mail: "john@doe.d",
-    }, {
-      name: "Jane",
-      mail: "jane@doe.d",
-    }]);
+    const usersId = await collection.insertMany("user", [
+      {
+        name: "John",
+        mail: "john@doe.d",
+      },
+      {
+        name: "Jane",
+        mail: "jane@doe.d",
+      },
+    ]);
 
-    const groupsId = await collection.insertMany("group", [{
-      name: "John",
-      members: [usersId[0]],
-    }, {
-      name: "Jane",
-      members: [usersId[1]],
-    }]);
+    const groupsId = await collection.insertMany("group", [
+      {
+        name: "John",
+        members: [usersId[0]],
+      },
+      {
+        name: "Jane",
+        members: [usersId[1]],
+      },
+    ]);
 
     {
       const count = await collection.find("user", { _id: groupsId[0] });
@@ -161,25 +174,31 @@ Deno.test("find: Ensure find correct type", async (t) => {
   });
 });
 
-Deno.test("DeleteId: Ensure delete correct type", async (t) => {
+test("DeleteId: Ensure delete correct type", async (t) => {
   await withDatabase(t.name, async (db) => {
     const collection = await multiCollection(db, "test", userGroupModel);
 
-    const usersId = await collection.insertMany("user", [{
-      name: "John",
-      mail: "john@doe.d",
-    }, {
-      name: "Jane",
-      mail: "jane@doe.d",
-    }]);
+    const usersId = await collection.insertMany("user", [
+      {
+        name: "John",
+        mail: "john@doe.d",
+      },
+      {
+        name: "Jane",
+        mail: "jane@doe.d",
+      },
+    ]);
 
-    const groupsId = await collection.insertMany("group", [{
-      name: "John",
-      members: [usersId[0]],
-    }, {
-      name: "Jane",
-      members: [usersId[1]],
-    }]);
+    const groupsId = await collection.insertMany("group", [
+      {
+        name: "John",
+        members: [usersId[0]],
+      },
+      {
+        name: "Jane",
+        members: [usersId[1]],
+      },
+    ]);
 
     await assertRejects(async () => {
       await collection.deleteId("user", groupsId[0]);
@@ -201,25 +220,31 @@ Deno.test("DeleteId: Ensure delete correct type", async (t) => {
   });
 });
 
-Deno.test("DeleteIds: Ensure delete correct type", async (t) => {
+test("DeleteIds: Ensure delete correct type", async (t) => {
   await withDatabase(t.name, async (db) => {
     const collection = await multiCollection(db, "test", userGroupModel);
 
-    const usersId = await collection.insertMany("user", [{
-      name: "John",
-      mail: "john@doe.d",
-    }, {
-      name: "Jane",
-      mail: "jane@doe.d",
-    }]);
+    const usersId = await collection.insertMany("user", [
+      {
+        name: "John",
+        mail: "john@doe.d",
+      },
+      {
+        name: "Jane",
+        mail: "jane@doe.d",
+      },
+    ]);
 
-    const groupsId = await collection.insertMany("group", [{
-      name: "John",
-      members: [usersId[0]],
-    }, {
-      name: "Jane",
-      members: [usersId[1]],
-    }]);
+    const groupsId = await collection.insertMany("group", [
+      {
+        name: "John",
+        members: [usersId[0]],
+      },
+      {
+        name: "Jane",
+        members: [usersId[1]],
+      },
+    ]);
 
     await assertRejects(async () => {
       await collection.deleteIds("user", groupsId);
@@ -245,7 +270,7 @@ Deno.test("DeleteIds: Ensure delete correct type", async (t) => {
   });
 });
 
-Deno.test("Aggregate: lookup with string 'as' parameter", async (t) => {
+test("Aggregate: lookup with string 'as' parameter", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {
@@ -262,18 +287,23 @@ Deno.test("Aggregate: lookup with string 'as' parameter", async (t) => {
 
     const collection = await multiCollection(db, "test", model);
 
-    const usersId = await collection.insertMany("user", [{
-      name: "Alice",
-      age: 25,
-    }, {
-      name: "Bob",
-      age: 30,
-    }]);
+    const usersId = await collection.insertMany("user", [
+      {
+        name: "Alice",
+        age: 25,
+      },
+      {
+        name: "Bob",
+        age: 30,
+      },
+    ]);
 
-    await collection.insertMany("group", [{
-      name: "Team A",
-      members: [usersId[0], usersId[1]],
-    }]);
+    await collection.insertMany("group", [
+      {
+        name: "Team A",
+        members: [usersId[0], usersId[1]],
+      },
+    ]);
 
     const results = await collection.aggregate((stage) => [
       stage.match("group", {}),
@@ -286,7 +316,7 @@ Deno.test("Aggregate: lookup with string 'as' parameter", async (t) => {
   });
 });
 
-Deno.test("Aggregate: lookup with pipeline for filtering", async (t) => {
+test("Aggregate: lookup with pipeline for filtering", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {
@@ -341,9 +371,7 @@ Deno.test("Aggregate: lookup with pipeline for filtering", async (t) => {
       // Lookup visitors with pipeline filter
       stage.lookup("visitor", "_id", "invitationId", {
         as: "visitors",
-        pipeline: (stage) => [
-          stage.match("visitor", { status: "accepted" }),
-        ],
+        pipeline: (stage) => [stage.match("visitor", { status: "accepted" })],
       }),
       // Add visitor count
       stage.addFields({
@@ -372,7 +400,7 @@ Deno.test("Aggregate: lookup with pipeline for filtering", async (t) => {
   });
 });
 
-Deno.test("Date fields: Insert and query with dates", async (t) => {
+test("Date fields: Insert and query with dates", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {
@@ -429,7 +457,7 @@ Deno.test("Date fields: Insert and query with dates", async (t) => {
   });
 });
 
-Deno.test("Date fields: Date comparisons and sorting", async (t) => {
+test("Date fields: Date comparisons and sorting", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {
@@ -489,7 +517,7 @@ Deno.test("Date fields: Date comparisons and sorting", async (t) => {
   });
 });
 
-Deno.test("Date fields: Current date and date updates", async (t) => {
+test("Date fields: Current date and date updates", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {
@@ -532,7 +560,7 @@ Deno.test("Date fields: Current date and date updates", async (t) => {
   });
 });
 
-Deno.test("Date fields: Date edge cases", async (t) => {
+test("Date fields: Date edge cases", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {
@@ -583,7 +611,7 @@ Deno.test("Date fields: Date edge cases", async (t) => {
   });
 });
 
-Deno.test("Literal id must have valid type", async (t) => {
+test("Literal id must have valid type", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {
@@ -612,7 +640,7 @@ Deno.test("Literal id must have valid type", async (t) => {
   });
 });
 
-Deno.test("getById: retrieve by id and error cases", async (t) => {
+test("getById: retrieve by id and error cases", async (t) => {
   await withDatabase(t.name, async (db) => {
     const collection = await multiCollection(db, "test", userGroupModel);
 

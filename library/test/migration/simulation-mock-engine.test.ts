@@ -20,7 +20,8 @@
  * a warning, or as a blocking ERROR when the target ended up empty while
  * its schema declares documents.
  */
-import { assert, assertEquals, assertThrows } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals, assertThrows } from "../+assert.ts";
 import * as v from "../../src/schema.ts";
 import {
   createEmptyDatabaseState,
@@ -59,7 +60,7 @@ function quickCtx(): MockPopulateContext {
 // D1 — explicit emptiness policy
 // ============================================================================
 
-Deno.test("D1: policy 'always' supplements a non-empty collection (hybrid seeds + mocks)", () => {
+test("D1: policy 'always' supplements a non-empty collection (hybrid seeds + mocks)", () => {
   const state = createEmptyDatabaseState();
   state.collections["relics"] = {
     content: [{ _id: "relic:seed", name: "seed" }],
@@ -74,7 +75,7 @@ Deno.test("D1: policy 'always' supplements a non-empty collection (hybrid seeds 
   assertEquals(ctx.failures, []);
 });
 
-Deno.test("D1: policy 'ifEmpty' fills empty collections and leaves non-empty ones untouched", () => {
+test("D1: policy 'ifEmpty' fills empty collections and leaves non-empty ones untouched", () => {
   const state = createEmptyDatabaseState();
   state.collections["seeded"] = {
     content: [{ _id: "relic:seed", name: "seed" }],
@@ -88,7 +89,7 @@ Deno.test("D1: policy 'ifEmpty' fills empty collections and leaves non-empty one
   assertEquals(ctx.failures, []);
 });
 
-Deno.test("D1: policy 'ifSparse' tops up instances below one full batch and skips covered ones", () => {
+test("D1: policy 'ifSparse' tops up instances below one full batch and skips covered ones", () => {
   const state = createEmptyDatabaseState();
   state.multiModels["m:covered"] = {
     modelType: "m",
@@ -116,7 +117,7 @@ Deno.test("D1: policy 'ifSparse' tops up instances below one full batch and skip
 // D2 — volume arithmetic: populate (batches × types) vs refresh (exact size)
 // ============================================================================
 
-Deno.test("D2: populate generates docCount batches with every type represented equally", () => {
+test("D2: populate generates docCount batches with every type represented equally", () => {
   const state = createEmptyDatabaseState();
   const ctx = quickCtx();
 
@@ -134,7 +135,7 @@ Deno.test("D2: populate generates docCount batches with every type represented e
   assertEquals(ctx.failures, []);
 });
 
-Deno.test("D2: refresh restores exactly the pre-retention size, even with multiple types", () => {
+test("D2: refresh restores exactly the pre-retention size, even with multiple types", () => {
   const validator = createSimulationValidator({
     powerLevel: "quick",
     stateRetentionRatio: 0.5,
@@ -166,7 +167,7 @@ Deno.test("D2: refresh restores exactly the pre-retention size, even with multip
 // D3 — generation failures are recorded, never swallowed
 // ============================================================================
 
-Deno.test("D3: a generation failure is recorded and the target aborted, not thrown or swallowed", () => {
+test("D3: a generation failure is recorded and the target aborted, not thrown or swallowed", () => {
   const state = createEmptyDatabaseState();
   const ctx = quickCtx();
 
@@ -178,7 +179,7 @@ Deno.test("D3: a generation failure is recorded and the target aborted, not thro
   assertEquals(ctx.failures[0].collection, "relics");
 });
 
-Deno.test("D3: a failing type aborts the whole target after recording one failure", () => {
+test("D3: a failing type aborts the whole target after recording one failure", () => {
   const state = createEmptyDatabaseState();
   const ctx = quickCtx();
 
@@ -203,7 +204,7 @@ Deno.test("D3: a failing type aborts the whole target after recording one failur
 // D4 — multi-model population is per MODEL, not per bucket
 // ============================================================================
 
-Deno.test("D4: 'ifEmpty' populates a model without instances even when the bucket is non-empty", () => {
+test("D4: 'ifEmpty' populates a model without instances even when the bucket is non-empty", () => {
   const state = createEmptyDatabaseState();
   state.multiModels["a:real1"] = {
     modelType: "a",
@@ -242,7 +243,7 @@ Deno.test("D4: 'ifEmpty' populates a model without instances even when the bucke
 // D5 — existing entries are preserved, never reassigned
 // ============================================================================
 
-Deno.test("D5: an existing instance is never reassigned — coverage adds siblings only for uncovered entities", () => {
+test("D5: an existing instance is never reassigned — coverage adds siblings only for uncovered entities", () => {
   // Full coverage (the instance IS the pool's only entity): nothing to add,
   // the real instance survives byte-identical — no phantom sibling whose
   // entity no root ever minted.
@@ -273,7 +274,10 @@ Deno.test("D5: an existing instance is never reassigned — coverage adds siblin
   // realized names exclude taken ones, so the real instance is never reused.
   const seeded = createEmptyDatabaseState();
   seeded.collections["+ms"] = {
-    content: [{ _id: "m:real1", name: "a" }, { _id: "m:other", name: "b" }],
+    content: [
+      { _id: "m:real1", name: "a" },
+      { _id: "m:other", name: "b" },
+    ],
   };
   seeded.multiModels["m:real1"] = {
     modelType: "m",
@@ -309,7 +313,7 @@ Deno.test("D5: an existing instance is never reassigned — coverage adds siblin
   );
 });
 
-Deno.test("D5: 'ifSparse' has no defined meaning for synthetic instances and fails loud", () => {
+test("D5: 'ifSparse' has no defined meaning for synthetic instances and fails loud", () => {
   const state = createEmptyDatabaseState();
   assertThrows(
     () =>
@@ -328,7 +332,7 @@ Deno.test("D5: 'ifSparse' has no defined meaning for synthetic instances and fai
 // D6 — canonical bucket order
 // ============================================================================
 
-Deno.test("D6: buckets are processed in the DatabaseState declaration order", () => {
+test("D6: buckets are processed in the DatabaseState declaration order", () => {
   const state = createEmptyDatabaseState();
   const ctx = quickCtx();
 
@@ -347,19 +351,22 @@ Deno.test("D6: buckets are processed in the DatabaseState declaration order", ()
     ctx,
   );
 
-  assertEquals(ctx.failures.map((f) => f.bucket), [
-    "collections",
-    "multiCollections",
-    "multiModels",
-    "scopedMultiCollections",
-  ]);
+  assertEquals(
+    ctx.failures.map((f) => f.bucket),
+    [
+      "collections",
+      "multiCollections",
+      "multiModels",
+      "scopedMultiCollections",
+    ],
+  );
 });
 
 // ============================================================================
 // Severity rule — empty target = error, surviving documents = warning
 // ============================================================================
 
-Deno.test("gate: a generation failure leaving a declared collection empty FAILS the validation", async () => {
+test("gate: a generation failure leaving a declared collection empty FAILS the validation", async () => {
   const schemas = { collections: { relics: BROKEN } };
   const parent = migrationDefinition("001", "baseline", {
     parent: null,
@@ -375,21 +382,22 @@ Deno.test("gate: a generation failure leaving a declared collection empty FAILS 
   // Standalone path: the initial mock state is built from the parent schemas,
   // generation fails, "relics" stays empty — the loops validating documents
   // would iterate nothing. Pre-refactor this returned a green result.
-  const result = await createSimulationValidator({ powerLevel: "quick" })
-    .validateMigration(child);
+  const result = await createSimulationValidator({
+    powerLevel: "quick",
+  }).validateMigration(child);
 
   assertEquals(result.success, false);
   assert(
     result.errors.some((e) =>
-      e.includes('Mock data generation failed for collection "relics"')
+      e.includes('Mock data generation failed for collection "relics"'),
     ),
-    `expected a generation-failure error naming "relics", got: ${
-      result.errors.join(" | ")
-    }`,
+    `expected a generation-failure error naming "relics", got: ${result.errors.join(
+      " | ",
+    )}`,
   );
 });
 
-Deno.test("gate: preparation failures ride the state and block the next validation when the target is empty", async () => {
+test("gate: preparation failures ride the state and block the next validation when the target is empty", async () => {
   const schemas = { collections: { relics: BROKEN } };
   const validator = createSimulationValidator({ powerLevel: "quick" });
 
@@ -422,21 +430,24 @@ Deno.test("gate: preparation failures ride the state and block the next validati
   assertEquals(result.success, false);
   assert(
     result.errors.some((e) =>
-      e.includes('Mock data generation failed for collection "relics"')
+      e.includes('Mock data generation failed for collection "relics"'),
     ),
-    `expected the inherited failure to surface as an error, got: ${
-      result.errors.join(" | ")
-    }`,
+    `expected the inherited failure to surface as an error, got: ${result.errors.join(
+      " | ",
+    )}`,
   );
 });
 
-Deno.test("gate: a generation failure with surviving documents degrades to a warning, not an error", async () => {
+test("gate: a generation failure with surviving documents degrades to a warning, not an error", async () => {
   // Generation fails (the generator cannot guess the checked token) but the
   // schema VALIDATES fine — so retained documents keep the validation
   // meaningful and the failure must not block.
   const picky = {
     _id: v.string(),
-    magic: v.pipe(v.string(), v.check((s: string) => s === "token-42")),
+    magic: v.pipe(
+      v.string(),
+      v.check((s: string) => s === "token-42"),
+    ),
   };
   const schemas = { collections: { relics: picky } };
 
@@ -482,10 +493,10 @@ Deno.test("gate: a generation failure with surviving documents degrades to a war
   assertEquals(result.success, true);
   assert(
     result.warnings.some((e) =>
-      e.includes('Mock data generation failed for collection "relics"')
+      e.includes('Mock data generation failed for collection "relics"'),
     ),
-    `expected a generation-failure warning, got: ${
-      result.warnings.join(" | ")
-    }`,
+    `expected a generation-failure warning, got: ${result.warnings.join(
+      " | ",
+    )}`,
   );
 });

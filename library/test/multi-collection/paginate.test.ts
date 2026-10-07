@@ -1,10 +1,11 @@
+import { test } from "../+harness.ts";
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertExists } from "@std/assert";
+import { assertEquals, assertExists } from "../+assert.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import { defineModel } from "../../src/multi-collection-model.ts";
 
-Deno.test("Multi-collection paginate basic functionality", async (t) => {
+test("Multi-collection paginate basic functionality", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
@@ -50,9 +51,13 @@ Deno.test("Multi-collection paginate basic functionality", async (t) => {
     );
 
     // Test basic pagination for products
-    const firstPageProducts = await catalog.paginate("product", {}, {
-      limit: 5,
-    });
+    const firstPageProducts = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 5,
+      },
+    );
     assertEquals(firstPageProducts.data.length, 5);
 
     // Verify all results are products
@@ -64,9 +69,13 @@ Deno.test("Multi-collection paginate basic functionality", async (t) => {
     }
 
     // Test basic pagination for categories
-    const firstPageCategories = await catalog.paginate("category", {}, {
-      limit: 3,
-    });
+    const firstPageCategories = await catalog.paginate(
+      "category",
+      {},
+      {
+        limit: 3,
+      },
+    );
     assertEquals(firstPageCategories.data.length, 3);
 
     // Verify all results are categories
@@ -78,7 +87,7 @@ Deno.test("Multi-collection paginate basic functionality", async (t) => {
   });
 });
 
-Deno.test("Multi-collection paginate with afterId", async (t) => {
+test("Multi-collection paginate with afterId", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
@@ -116,17 +125,25 @@ Deno.test("Multi-collection paginate with afterId", async (t) => {
     }
 
     // Test pagination with afterId for products
-    const firstPageProducts = await catalog.paginate("product", {}, {
-      limit: 5,
-      sort: { _id: 1 },
-    });
+    const firstPageProducts = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 5,
+        sort: { _id: 1 },
+      },
+    );
     assertEquals(firstPageProducts.data.length, 5);
 
-    const secondPageProducts = await catalog.paginate("product", {}, {
-      limit: 5,
-      afterId: firstPageProducts.data[firstPageProducts.data.length - 1]._id,
-      sort: { _id: 1 },
-    });
+    const secondPageProducts = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 5,
+        afterId: firstPageProducts.data[firstPageProducts.data.length - 1]._id,
+        sort: { _id: 1 },
+      },
+    );
     assertEquals(secondPageProducts.data.length, 5);
 
     // Verify no overlap between pages
@@ -138,17 +155,25 @@ Deno.test("Multi-collection paginate with afterId", async (t) => {
     }
 
     // Test pagination with afterId for users
-    const firstPageUsers = await catalog.paginate("user", {}, {
-      limit: 3,
-      sort: { _id: 1 },
-    });
+    const firstPageUsers = await catalog.paginate(
+      "user",
+      {},
+      {
+        limit: 3,
+        sort: { _id: 1 },
+      },
+    );
     assertEquals(firstPageUsers.data.length, 3);
 
-    const secondPageUsers = await catalog.paginate("user", {}, {
-      limit: 3,
-      afterId: firstPageUsers.data[firstPageUsers.data.length - 1]._id,
-      sort: { _id: 1 },
-    });
+    const secondPageUsers = await catalog.paginate(
+      "user",
+      {},
+      {
+        limit: 3,
+        afterId: firstPageUsers.data[firstPageUsers.data.length - 1]._id,
+        sort: { _id: 1 },
+      },
+    );
     assertEquals(secondPageUsers.data.length, 3);
 
     // Verify all are users
@@ -158,7 +183,7 @@ Deno.test("Multi-collection paginate with afterId", async (t) => {
   });
 });
 
-Deno.test("Multi-collection paginate with beforeId", async (t) => {
+test("Multi-collection paginate with beforeId", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
@@ -183,11 +208,15 @@ Deno.test("Multi-collection paginate with beforeId", async (t) => {
     const allProducts = await catalog.find("product", {}, { sort: { _id: 1 } });
 
     // Get products before the 7th product
-    const beforePage = await catalog.paginate("product", {}, {
-      limit: 3,
-      beforeId: allProducts[6]._id,
-      sort: { _id: -1 },
-    });
+    const beforePage = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 3,
+        beforeId: allProducts[6]._id,
+        sort: { _id: -1 },
+      },
+    );
 
     assertEquals(beforePage.data.length, 3);
 
@@ -202,7 +231,7 @@ Deno.test("Multi-collection paginate with beforeId", async (t) => {
   });
 });
 
-Deno.test("Multi-collection paginate with filter", async (t) => {
+test("Multi-collection paginate with filter", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
@@ -226,9 +255,13 @@ Deno.test("Multi-collection paginate with filter", async (t) => {
     }
 
     // Paginate with MongoDB filter (only electronics)
-    const electronicsProducts = await catalog.paginate("product", {
-      category: "electronics",
-    }, { limit: 10 });
+    const electronicsProducts = await catalog.paginate(
+      "product",
+      {
+        category: "electronics",
+      },
+      { limit: 10 },
+    );
 
     assertEquals(electronicsProducts.data.length, 10);
 
@@ -239,12 +272,16 @@ Deno.test("Multi-collection paginate with filter", async (t) => {
     }
 
     // Paginate with custom filter (expensive electronics - price > 100)
-    const expensiveElectronics = await catalog.paginate("product", {
-      category: "electronics",
-    }, {
-      limit: 10,
-      filter: (doc) => doc.price > 100,
-    });
+    const expensiveElectronics = await catalog.paginate(
+      "product",
+      {
+        category: "electronics",
+      },
+      {
+        limit: 10,
+        filter: (doc) => doc.price > 100,
+      },
+    );
 
     // Should get products with price 110, 130, 150, 170, 190
     assertEquals(expensiveElectronics.data.length, 5);
@@ -256,7 +293,7 @@ Deno.test("Multi-collection paginate with filter", async (t) => {
   });
 });
 
-Deno.test("Multi-collection paginate with sorting", async (t) => {
+test("Multi-collection paginate with sorting", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
@@ -283,10 +320,14 @@ Deno.test("Multi-collection paginate with sorting", async (t) => {
     );
 
     // Paginate with sorting by price ascending
-    const sortedByPrice = await catalog.paginate("product", {}, {
-      limit: 10,
-      sort: { price: 1 },
-    });
+    const sortedByPrice = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 10,
+        sort: { price: 1 },
+      },
+    );
 
     assertEquals(sortedByPrice.data.length, 5);
 
@@ -307,7 +348,7 @@ Deno.test("Multi-collection paginate with sorting", async (t) => {
   });
 });
 
-Deno.test("Multi-collection paginate with invalid ID format", async (t) => {
+test("Multi-collection paginate with invalid ID format", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
@@ -355,7 +396,7 @@ Deno.test("Multi-collection paginate with invalid ID format", async (t) => {
   });
 });
 
-Deno.test("Multi-collection paginate with empty results", async (t) => {
+test("Multi-collection paginate with empty results", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
@@ -386,9 +427,13 @@ Deno.test("Multi-collection paginate with empty results", async (t) => {
       email: "user2@test.com",
     });
 
-    const stillEmptyProducts = await catalog.paginate("product", {}, {
-      limit: 10,
-    });
+    const stillEmptyProducts = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 10,
+      },
+    );
     assertEquals(stillEmptyProducts.data.length, 0);
 
     // But users should exist
@@ -397,7 +442,7 @@ Deno.test("Multi-collection paginate with empty results", async (t) => {
   });
 });
 
-Deno.test("Multi-collection paginate with limit boundary conditions", async (t) => {
+test("Multi-collection paginate with limit boundary conditions", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
@@ -419,9 +464,13 @@ Deno.test("Multi-collection paginate with limit boundary conditions", async (t) 
     }
 
     // Test with limit larger than available data
-    const largeLimitPage = await catalog.paginate("product", {}, {
-      limit: 100,
-    });
+    const largeLimitPage = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 100,
+      },
+    );
     assertEquals(largeLimitPage.data.length, 5);
 
     // Test with limit of 1
@@ -434,7 +483,7 @@ Deno.test("Multi-collection paginate with limit boundary conditions", async (t) 
   });
 });
 
-Deno.test("Multi-collection paginate with custom sort and afterId", async (t) => {
+test("Multi-collection paginate with custom sort and afterId", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
@@ -464,10 +513,14 @@ Deno.test("Multi-collection paginate with custom sort and afterId", async (t) =>
     }
 
     // Test 1: Paginate with custom sort (createdAt descending) - first page
-    const firstPage = await catalog.paginate("product", {}, {
-      limit: 3,
-      sort: { createdAt: -1 },
-    });
+    const firstPage = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 3,
+        sort: { createdAt: -1 },
+      },
+    );
 
     assertEquals(firstPage.data.length, 3);
     assertEquals(firstPage.total, 6);
@@ -478,11 +531,15 @@ Deno.test("Multi-collection paginate with custom sort and afterId", async (t) =>
     assertEquals(firstPage.data[2].createdAt, 400); // Product D
 
     // Test 2: Get second page using afterId with custom sort
-    const secondPage = await catalog.paginate("product", {}, {
-      limit: 3,
-      sort: { createdAt: -1 },
-      afterId: firstPage.data[firstPage.data.length - 1]._id,
-    });
+    const secondPage = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 3,
+        sort: { createdAt: -1 },
+        afterId: firstPage.data[firstPage.data.length - 1]._id,
+      },
+    );
 
     assertEquals(secondPage.data.length, 3);
 
@@ -503,7 +560,7 @@ Deno.test("Multi-collection paginate with custom sort and afterId", async (t) =>
   });
 });
 
-Deno.test("Multi-collection paginate with custom sort and beforeId", async (t) => {
+test("Multi-collection paginate with custom sort and beforeId", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
@@ -532,10 +589,14 @@ Deno.test("Multi-collection paginate with custom sort and beforeId", async (t) =
     }
 
     // Get all items sorted by score descending
-    const allItems = await catalog.paginate("product", {}, {
-      limit: 6,
-      sort: { score: -1 },
-    });
+    const allItems = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 6,
+        sort: { score: -1 },
+      },
+    );
 
     // allItems should be: VeryHigh(100), High(90), MediumHigh(70), Medium(50), Low(10), VeryLow(5)
     assertEquals(allItems.data[0].score, 100);
@@ -543,11 +604,15 @@ Deno.test("Multi-collection paginate with custom sort and beforeId", async (t) =
     assertEquals(allItems.data[2].score, 70);
 
     // Use beforeId with the 4th item (Medium, score=50) as anchor
-    const beforePage = await catalog.paginate("product", {}, {
-      limit: 3,
-      sort: { score: -1 },
-      beforeId: allItems.data[3]._id,
-    });
+    const beforePage = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 3,
+        sort: { score: -1 },
+        beforeId: allItems.data[3]._id,
+      },
+    );
 
     assertEquals(beforePage.data.length, 3);
 
@@ -558,7 +623,7 @@ Deno.test("Multi-collection paginate with custom sort and beforeId", async (t) =
   });
 });
 
-Deno.test("Multi-collection paginate with multi-field custom sort and afterId", async (t) => {
+test("Multi-collection paginate with multi-field custom sort and afterId", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
@@ -590,10 +655,14 @@ Deno.test("Multi-collection paginate with multi-field custom sort and afterId", 
     // Expected order with { category: 1, value: -1 }:
     // A-High(A,100), A-Mid(A,50), A-Low(A,10), B-High(B,90), B-Low(B,20), C-Only(C,60)
 
-    const firstPage = await catalog.paginate("product", {}, {
-      limit: 3,
-      sort: { category: 1, value: -1 },
-    });
+    const firstPage = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 3,
+        sort: { category: 1, value: -1 },
+      },
+    );
 
     assertEquals(firstPage.data.length, 3);
     assertEquals(firstPage.data[0].name, "A-High");
@@ -601,11 +670,15 @@ Deno.test("Multi-collection paginate with multi-field custom sort and afterId", 
     assertEquals(firstPage.data[2].name, "A-Low");
 
     // Get second page
-    const secondPage = await catalog.paginate("product", {}, {
-      limit: 3,
-      sort: { category: 1, value: -1 },
-      afterId: firstPage.data[firstPage.data.length - 1]._id,
-    });
+    const secondPage = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 3,
+        sort: { category: 1, value: -1 },
+        afterId: firstPage.data[firstPage.data.length - 1]._id,
+      },
+    );
 
     assertEquals(secondPage.data.length, 3);
     assertEquals(secondPage.data[0].name, "B-High");
@@ -614,7 +687,7 @@ Deno.test("Multi-collection paginate with multi-field custom sort and afterId", 
   });
 });
 
-Deno.test("Multi-collection paginate with _id descending sort", async (t) => {
+test("Multi-collection paginate with _id descending sort", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
@@ -637,10 +710,14 @@ Deno.test("Multi-collection paginate with _id descending sort", async (t) => {
     }
 
     // First page with _id descending (newest first)
-    const firstPage = await catalog.paginate("product", {}, {
-      limit: 4,
-      sort: { _id: -1 },
-    });
+    const firstPage = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 4,
+        sort: { _id: -1 },
+      },
+    );
 
     assertEquals(firstPage.data.length, 4);
     assertEquals(firstPage.total, 10);
@@ -655,11 +732,15 @@ Deno.test("Multi-collection paginate with _id descending sort", async (t) => {
     const firstPageIds = new Set(firstPage.data.map((item) => item._id));
 
     // Second page
-    const secondPage = await catalog.paginate("product", {}, {
-      limit: 4,
-      sort: { _id: -1 },
-      afterId: firstPage.data[firstPage.data.length - 1]._id,
-    });
+    const secondPage = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 4,
+        sort: { _id: -1 },
+        afterId: firstPage.data[firstPage.data.length - 1]._id,
+      },
+    );
 
     assertEquals(secondPage.data.length, 4);
 
@@ -679,11 +760,15 @@ Deno.test("Multi-collection paginate with _id descending sort", async (t) => {
     }
 
     // Third page
-    const thirdPage = await catalog.paginate("product", {}, {
-      limit: 4,
-      sort: { _id: -1 },
-      afterId: secondPage.data[secondPage.data.length - 1]._id,
-    });
+    const thirdPage = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 4,
+        sort: { _id: -1 },
+        afterId: secondPage.data[secondPage.data.length - 1]._id,
+      },
+    );
 
     assertEquals(thirdPage.data.length, 2); // Only 2 remaining
 
@@ -708,7 +793,7 @@ Deno.test("Multi-collection paginate with _id descending sort", async (t) => {
   });
 });
 
-Deno.test("Multi-collection paginate with duplicate sort values", async (t) => {
+test("Multi-collection paginate with duplicate sort values", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
@@ -731,10 +816,14 @@ Deno.test("Multi-collection paginate with duplicate sort values", async (t) => {
     }
 
     // First page with sort on duplicate field
-    const firstPage = await catalog.paginate("product", {}, {
-      limit: 3,
-      sort: { category: 1 },
-    });
+    const firstPage = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 3,
+        sort: { category: 1 },
+      },
+    );
 
     assertEquals(firstPage.data.length, 3);
     assertEquals(firstPage.total, 6);
@@ -743,11 +832,15 @@ Deno.test("Multi-collection paginate with duplicate sort values", async (t) => {
     const firstPageNames = firstPage.data.map((item) => item.name);
 
     // Second page should get remaining items, no duplicates
-    const secondPage = await catalog.paginate("product", {}, {
-      limit: 3,
-      sort: { category: 1 },
-      afterId: firstPage.data[firstPage.data.length - 1]._id,
-    });
+    const secondPage = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 3,
+        sort: { category: 1 },
+        afterId: firstPage.data[firstPage.data.length - 1]._id,
+      },
+    );
 
     assertEquals(secondPage.data.length, 3);
 
@@ -774,7 +867,7 @@ Deno.test("Multi-collection paginate with duplicate sort values", async (t) => {
   });
 });
 
-Deno.test("Multi-collection paginate with duplicate sort values and beforeId", async (t) => {
+test("Multi-collection paginate with duplicate sort values and beforeId", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
@@ -803,19 +896,27 @@ Deno.test("Multi-collection paginate with duplicate sort values and beforeId", a
     }
 
     // Get all items to find anchor
-    const allItems = await catalog.paginate("product", {}, {
-      limit: 6,
-      sort: { status: 1 },
-    });
+    const allItems = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 6,
+        sort: { status: 1 },
+      },
+    );
 
     assertEquals(allItems.data.length, 6);
 
     // Use beforeId with the 4th item as anchor
-    const beforePage = await catalog.paginate("product", {}, {
-      limit: 3,
-      sort: { status: 1 },
-      beforeId: allItems.data[3]._id,
-    });
+    const beforePage = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 3,
+        sort: { status: 1 },
+        beforeId: allItems.data[3]._id,
+      },
+    );
 
     assertEquals(beforePage.data.length, 3);
 
@@ -835,7 +936,7 @@ Deno.test("Multi-collection paginate with duplicate sort values and beforeId", a
   });
 });
 
-Deno.test("Multi-collection paginate with _id descending sort and beforeId", async (t) => {
+test("Multi-collection paginate with _id descending sort and beforeId", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
@@ -858,20 +959,28 @@ Deno.test("Multi-collection paginate with _id descending sort and beforeId", asy
     }
 
     // Get all items with _id descending to find anchor
-    const allItems = await catalog.paginate("product", {}, {
-      limit: 10,
-      sort: { _id: -1 },
-    });
+    const allItems = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 10,
+        sort: { _id: -1 },
+      },
+    );
 
     // Order: Product 10, 9, 8, 7, 6, 5, 4, 3, 2, 1
 
     // Use beforeId with Product 5 (index 5) as anchor
     // Should return items BEFORE it in the sorted order: Product 10, 9, 8, 7, 6
-    const beforePage = await catalog.paginate("product", {}, {
-      limit: 5,
-      sort: { _id: -1 },
-      beforeId: allItems.data[5]._id, // Product 5
-    });
+    const beforePage = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 5,
+        sort: { _id: -1 },
+        beforeId: allItems.data[5]._id, // Product 5
+      },
+    );
 
     assertEquals(beforePage.data.length, 5);
 
@@ -884,7 +993,7 @@ Deno.test("Multi-collection paginate with _id descending sort and beforeId", asy
   });
 });
 
-Deno.test("Multi-collection paginate accumulation with _id descending - no duplicates across 5+ pages", async (t) => {
+test("Multi-collection paginate accumulation with _id descending - no duplicates across 5+ pages", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
@@ -910,21 +1019,29 @@ Deno.test("Multi-collection paginate accumulation with _id descending - no dupli
     const allCollectedNames: string[] = [];
 
     // Page 1
-    const page1 = await catalog.paginate("product", {}, {
-      limit: 5,
-      sort: { _id: -1 },
-    });
+    const page1 = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 5,
+        sort: { _id: -1 },
+      },
+    );
     for (const item of page1.data) {
       allCollectedIds.push(item._id);
       allCollectedNames.push(item.name);
     }
 
     // Page 2
-    const page2 = await catalog.paginate("product", {}, {
-      limit: 5,
-      sort: { _id: -1 },
-      afterId: page1.data[page1.data.length - 1]._id,
-    });
+    const page2 = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 5,
+        sort: { _id: -1 },
+        afterId: page1.data[page1.data.length - 1]._id,
+      },
+    );
     for (const item of page2.data) {
       if (allCollectedIds.includes(item._id)) {
         throw new Error(`DUPLICATE on page 2: ${item.name} (${item._id})`);
@@ -934,11 +1051,15 @@ Deno.test("Multi-collection paginate accumulation with _id descending - no dupli
     }
 
     // Page 3
-    const page3 = await catalog.paginate("product", {}, {
-      limit: 5,
-      sort: { _id: -1 },
-      afterId: page2.data[page2.data.length - 1]._id,
-    });
+    const page3 = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 5,
+        sort: { _id: -1 },
+        afterId: page2.data[page2.data.length - 1]._id,
+      },
+    );
     for (const item of page3.data) {
       if (allCollectedIds.includes(item._id)) {
         throw new Error(`DUPLICATE on page 3: ${item.name} (${item._id})`);
@@ -948,11 +1069,15 @@ Deno.test("Multi-collection paginate accumulation with _id descending - no dupli
     }
 
     // Page 4
-    const page4 = await catalog.paginate("product", {}, {
-      limit: 5,
-      sort: { _id: -1 },
-      afterId: page3.data[page3.data.length - 1]._id,
-    });
+    const page4 = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 5,
+        sort: { _id: -1 },
+        afterId: page3.data[page3.data.length - 1]._id,
+      },
+    );
     for (const item of page4.data) {
       if (allCollectedIds.includes(item._id)) {
         throw new Error(`DUPLICATE on page 4: ${item.name} (${item._id})`);
@@ -962,11 +1087,15 @@ Deno.test("Multi-collection paginate accumulation with _id descending - no dupli
     }
 
     // Page 5
-    const page5 = await catalog.paginate("product", {}, {
-      limit: 5,
-      sort: { _id: -1 },
-      afterId: page4.data[page4.data.length - 1]._id,
-    });
+    const page5 = await catalog.paginate(
+      "product",
+      {},
+      {
+        limit: 5,
+        sort: { _id: -1 },
+        afterId: page4.data[page4.data.length - 1]._id,
+      },
+    );
     for (const item of page5.data) {
       if (allCollectedIds.includes(item._id)) {
         throw new Error(`DUPLICATE on page 5: ${item.name} (${item._id})`);
@@ -996,7 +1125,7 @@ Deno.test("Multi-collection paginate accumulation with _id descending - no dupli
   });
 });
 
-Deno.test("Multi-collection paginate with nested field sort", async (t) => {
+test("Multi-collection paginate with nested field sort", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
@@ -1027,10 +1156,14 @@ Deno.test("Multi-collection paginate with nested field sort", async (t) => {
     }
 
     // First page sorted by nested field data.email ascending
-    const page1 = await catalog.paginate("exhibitor", {}, {
-      limit: 3,
-      sort: { "data.email": 1 },
-    });
+    const page1 = await catalog.paginate(
+      "exhibitor",
+      {},
+      {
+        limit: 3,
+        sort: { "data.email": 1 },
+      },
+    );
 
     assertEquals(page1.data.length, 3);
     assertEquals(page1.total, 6);
@@ -1041,11 +1174,15 @@ Deno.test("Multi-collection paginate with nested field sort", async (t) => {
     assertEquals(page1.data[2].data.email, "charlie@test.com");
 
     // Second page with afterId
-    const page2 = await catalog.paginate("exhibitor", {}, {
-      limit: 3,
-      sort: { "data.email": 1 },
-      afterId: page1.data[page1.data.length - 1]._id,
-    });
+    const page2 = await catalog.paginate(
+      "exhibitor",
+      {},
+      {
+        limit: 3,
+        sort: { "data.email": 1 },
+        afterId: page1.data[page1.data.length - 1]._id,
+      },
+    );
 
     assertEquals(page2.data.length, 3);
 
@@ -1066,7 +1203,7 @@ Deno.test("Multi-collection paginate with nested field sort", async (t) => {
   });
 });
 
-Deno.test("Multi-collection paginate with nested field sort descending", async (t) => {
+test("Multi-collection paginate with nested field sort descending", async (t) => {
   await withDatabase(t.name, async (db) => {
     const catalogModel = defineModel("catalog", {
       schema: {
@@ -1097,10 +1234,14 @@ Deno.test("Multi-collection paginate with nested field sort descending", async (
     }
 
     // First page sorted by nested field data.email descending
-    const page1 = await catalog.paginate("exhibitor", {}, {
-      limit: 3,
-      sort: { "data.email": -1 },
-    });
+    const page1 = await catalog.paginate(
+      "exhibitor",
+      {},
+      {
+        limit: 3,
+        sort: { "data.email": -1 },
+      },
+    );
 
     assertEquals(page1.data.length, 3);
     assertEquals(page1.total, 6);
@@ -1111,11 +1252,15 @@ Deno.test("Multi-collection paginate with nested field sort descending", async (
     assertEquals(page1.data[2].data.email, "delta@test.com");
 
     // Second page with afterId
-    const page2 = await catalog.paginate("exhibitor", {}, {
-      limit: 3,
-      sort: { "data.email": -1 },
-      afterId: page1.data[page1.data.length - 1]._id,
-    });
+    const page2 = await catalog.paginate(
+      "exhibitor",
+      {},
+      {
+        limit: 3,
+        sort: { "data.email": -1 },
+        afterId: page1.data[page1.data.length - 1]._id,
+      },
+    );
 
     assertEquals(page2.data.length, 3);
 

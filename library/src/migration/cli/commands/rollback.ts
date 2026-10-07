@@ -7,9 +7,10 @@
  */
 
 import process from "node:process";
-import { blue, bold, dim, green, red, yellow } from "@std/fmt/colors";
-import { MongoClient } from "../../../mongodb.ts";
-import * as path from "@std/path";
+import { blue, bold, dim, green, red, yellow } from "../../../utils/colors.ts";
+import type { MongoClient } from "../../../mongodb.ts";
+import { createMigrationClient } from "../utils/client.ts";
+import * as path from "node:path";
 
 import { loadConfig } from "../../config/loader.ts";
 import { buildMigrationChain, loadAllMigrations } from "../../discovery.ts";
@@ -25,6 +26,8 @@ import {
   migrationBuilder,
 } from "../../builder.ts";
 import { confirm } from "../utils/confirm.ts";
+import { repairSuspendedValidators } from "../utils/validator-repair.ts";
+import { ensureMigrationPrivileges } from "../utils/privileges.ts";
 
 export interface RollbackCommandOptions {
   configPath?: string;
@@ -35,6 +38,11 @@ export interface RollbackCommandOptions {
    * tri-state as `migrate`: `--progress` forces it on, `--no-progress` off.
    */
   progress?: boolean;
+  /**
+   * Skip the pre-flight check of the account's privileges (`connectionStatus`).
+   * A rollback needs the same DDL actions as a migration (`collMod`, ...).
+   */
+  skipPrivilegeCheck?: boolean;
 }
 
 /**
@@ -57,8 +65,8 @@ export async function rollbackCommand(
       cwd,
       config.paths?.migrations || "./migrations",
     );
-    const connectionUri = config.database?.connection?.uri ||
-      "mongodb://localhost:27017";
+    const connectionUri =
+      config.database?.connection?.uri || "mongodb://localhost:27017";
     const dbName = config.database?.name || "myapp";
 
     console.log(dim(`Migrations directory: ${migrationsDir}`));
@@ -66,11 +74,27 @@ export async function rollbackCommand(
     console.log();
 
     // Connect to database
-    client = new MongoClient(connectionUri);
+    client = createMigrationClient(connectionUri, config);
     await client.connect();
 
     const db = client.db(dbName);
+
+    // Pre-flight: a rollback disables and restores validators exactly like a
+    // migration does, so refuse it up-front when the account lacks the DDL
+    // actions rather than half-way through.
+    await ensureMigrationPrivileges(db, {
+      skip:
+        options.skipPrivilegeCheck ??
+        (options as Record<string, unknown>)["skip-privilege-check"] === true,
+    });
     console.log();
+
+    // Load migrations to find the one to rollback
+    const migrationsWithFiles = await loadAllMigrations(migrationsDir);
+    const allMigrations = buildMigrationChain(migrationsWithFiles);
+
+    // Validators an interrupted run left off are restored first, loudly.
+    await repairSuspendedValidators(db, allMigrations);
 
     // Get last applied migration
     const lastApplied = await getLastAppliedMigration(db);
@@ -80,12 +104,8 @@ export async function rollbackCommand(
       return;
     }
 
-    // Load migrations to find the one to rollback
-    const migrationsWithFiles = await loadAllMigrations(migrationsDir);
-    const allMigrations = buildMigrationChain(migrationsWithFiles);
-
-    const migrationToRollback = allMigrations.find((m) =>
-      m.id === lastApplied.id
+    const migrationToRollback = allMigrations.find(
+      (m) => m.id === lastApplied.id,
     );
 
     if (!migrationToRollback) {
@@ -106,7 +126,7 @@ export async function rollbackCommand(
     const state = migrationToRollback.migrate(builder);
 
     // Compact "where" label for an operation, for human-readable listings.
-    const opLabel = (op: typeof state.operations[number]): string => {
+    const opLabel = (op: (typeof state.operations)[number]): string => {
       const o = op as Record<string, unknown>;
       const target = (o.collectionName ?? o.modelType ?? "") as string;
       const docType = o.documentType ? `.${o.documentType as string}` : "";

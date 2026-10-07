@@ -11,7 +11,8 @@
  * These lock the folding rules, not the validation: the digest never drops a
  * distinct message and never touches a verdict.
  */
-import { assertEquals } from "@std/assert";
+import { test } from "../../+harness.ts";
+import { assertEquals } from "../../+assert.ts";
 import {
   digestWarnings,
   formatWarningDigest,
@@ -31,16 +32,17 @@ const UNMINTED_NODE =
   'mints it — these references stay uncorrelated random values. Declare "node" ' +
   "in uncorrelatedSpaces to make that assumption explicit.";
 
-const UNMINTED_EDGE = UNMINTED_NODE
-  .replaceAll('"node"', '"edge"')
-  .replace("flowSnapshot.nodes.id", "flowSnapshot.edges.id");
+const UNMINTED_EDGE = UNMINTED_NODE.replaceAll('"node"', '"edge"').replace(
+  "flowSnapshot.nodes.id",
+  "flowSnapshot.edges.id",
+);
 
 const drawMiss = (space: string, collection: string, field: string) =>
   `Mock identity correlation: Correlated draw found no "${space}" id for ` +
   `collections "${collection}" field "${field}" — an uncorrelated value was ` +
   "generated instead.";
 
-Deno.test("warning digest: the same message under 12 migrations folds to one group", () => {
+test("warning digest: the same message under 12 migrations folds to one group", () => {
   const sources = Array.from({ length: 12 }, (_, i) => ({
     migrationId: `m${i}`,
     warnings: [AMBIGUOUS_SPACE, UNMINTED_NODE, UNMINTED_EDGE],
@@ -59,7 +61,7 @@ Deno.test("warning digest: the same message under 12 migrations folds to one gro
   assertEquals(digest.groups[0].migrations.length, 12);
 });
 
-Deno.test("warning digest: near-identical draw misses collapse by space, not by site", () => {
+test("warning digest: near-identical draw misses collapse by space, not by site", () => {
   // Same finding ("no role id available"), different collection/field each
   // time — one group. A different SPACE stays its own group.
   const digest = digestWarnings([
@@ -80,7 +82,7 @@ Deno.test("warning digest: near-identical draw misses collapse by space, not by 
   assertEquals(digest.distinct, 4, "no distinct message is lost");
 });
 
-Deno.test("warning family key: the subject is kept, the site is masked", () => {
+test("warning family key: the subject is kept, the site is masked", () => {
   // Same space + same shape → same key regardless of where it was observed.
   assertEquals(
     warningFamilyKey(drawMiss("role", "+a", "x")),
@@ -97,13 +99,13 @@ Deno.test("warning family key: the subject is kept, the site is masked", () => {
   );
 });
 
-Deno.test("warning digest: nothing to say prints nothing", () => {
+test("warning digest: nothing to say prints nothing", () => {
   const digest = digestWarnings([{ migrationId: "m1", warnings: [] }]);
   assertEquals(digest.groups.length, 0);
   assertEquals(formatWarningDigest(digest, { totalMigrations: 1 }), []);
 });
 
-Deno.test("warning digest formatting: one line per finding, counts attached", () => {
+test("warning digest formatting: one line per finding, counts attached", () => {
   const sources = Array.from({ length: 12 }, (_, i) => ({
     migrationId: `m${i}`,
     warnings: [AMBIGUOUS_SPACE, UNMINTED_NODE],
@@ -122,7 +124,7 @@ Deno.test("warning digest formatting: one line per finding, counts attached", ()
   );
 });
 
-Deno.test("warning digest formatting: --verbose restores every site", () => {
+test("warning digest formatting: --verbose restores every site", () => {
   const digest = digestWarnings([
     {
       migrationId: "m1",
@@ -136,22 +138,27 @@ Deno.test("warning digest formatting: --verbose restores every site", () => {
     false,
     "the second site is summarised, not printed, by default",
   );
-  assertEquals(quiet.some((line) => line.includes("1 other site")), true);
+  assertEquals(
+    quiet.some((line) => line.includes("1 other site")),
+    true,
+  );
 
   const verbose = formatWarningDigest(digest, {
     totalMigrations: 1,
     verbose: true,
   });
-  assertEquals(verbose.some((line) => line.includes("+b")), true);
+  assertEquals(
+    verbose.some((line) => line.includes("+b")),
+    true,
+  );
 });
 
-Deno.test("warning digest formatting: the group cap points at --verbose instead of lying", () => {
+test("warning digest formatting: the group cap points at --verbose instead of lying", () => {
   const digest = digestWarnings([
     {
       migrationId: "m1",
-      warnings: Array.from(
-        { length: 30 },
-        (_, i) => drawMiss(`s${i}`, "+a", "x"),
+      warnings: Array.from({ length: 30 }, (_, i) =>
+        drawMiss(`s${i}`, "+a", "x"),
       ),
     },
   ]);

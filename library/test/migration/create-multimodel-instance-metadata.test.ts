@@ -12,7 +12,8 @@
  * The fix gates metadata creation on REGISTRATION
  * (`multiCollectionInstanceExists`), not on collection-name existence.
  */
-import { assert, assertEquals } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals } from "../+assert.ts";
 import { withDatabase } from "../+shared.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import { migrationBuilder } from "../../src/migration/builder.ts";
@@ -47,7 +48,7 @@ function createInstanceMigration() {
   });
 }
 
-Deno.test("create_multimodel_instance: a pre-existing un-registered collection still gets its metadata", async () => {
+test("create_multimodel_instance: a pre-existing un-registered collection still gets its metadata", async () => {
   await withDatabase("create-mmi-metadata", async (db) => {
     // Simulate the collision / partial-prior-run state: the collection already
     // exists by name but has NO multi-collection bookkeeping.
@@ -60,8 +61,9 @@ Deno.test("create_multimodel_instance: a pre-existing un-registered collection s
 
     const m = createInstanceMigration();
     const ops = m.migrate(migrationBuilder({ schemas: S })).operations;
-    await createMongodbApplier(db, m, { currentMigrationId: m.id })
-      .applyMigration(ops, "up");
+    await createMongodbApplier(db, m, {
+      currentMigrationId: m.id,
+    }).applyMigration(ops, "up");
 
     // The instance must now be registered (the `_information` doc was written).
     assertEquals(
@@ -71,25 +73,28 @@ Deno.test("create_multimodel_instance: a pre-existing un-registered collection s
     );
 
     // And its per-instance migration history must have been recorded.
-    const migrationsDoc = await db.collection(INSTANCE).findOne(
-      { _type: MULTI_COLLECTION_MIGRATIONS_TYPE } as never,
-    ) as { appliedMigrations?: Array<{ id: string }> } | null;
+    const migrationsDoc = (await db
+      .collection(INSTANCE)
+      .findOne({ _type: MULTI_COLLECTION_MIGRATIONS_TYPE } as never)) as {
+      appliedMigrations?: Array<{ id: string }>;
+    } | null;
     assert(migrationsDoc, "_migrations bookkeeping doc should exist");
     assert(
-      (migrationsDoc!.appliedMigrations ?? []).some((x) =>
-        x.id === MIGRATION_ID
+      (migrationsDoc!.appliedMigrations ?? []).some(
+        (x) => x.id === MIGRATION_ID,
       ),
       "the creating migration should be recorded in the instance history",
     );
   });
 });
 
-Deno.test("create_multimodel_instance: fresh creation still registers (no regression)", async () => {
+test("create_multimodel_instance: fresh creation still registers (no regression)", async () => {
   await withDatabase("create-mmi-fresh", async (db) => {
     const m = createInstanceMigration();
     const ops = m.migrate(migrationBuilder({ schemas: S })).operations;
-    await createMongodbApplier(db, m, { currentMigrationId: m.id })
-      .applyMigration(ops, "up");
+    await createMongodbApplier(db, m, {
+      currentMigrationId: m.id,
+    }).applyMigration(ops, "up");
 
     assertEquals(await multiCollectionInstanceExists(db, INSTANCE), true);
   });

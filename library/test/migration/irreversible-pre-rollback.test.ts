@@ -7,7 +7,8 @@
  * irreversible, applyMigration('down') throws up-front and the database is
  * left untouched.
  */
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals, assertRejects } from "../+assert.ts";
 import { withDatabase } from "../+shared.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import { migrationBuilder } from "../../src/migration/builder.ts";
@@ -35,7 +36,8 @@ function buildOps() {
     parent: null,
     schemas: SCHEMAS,
     migrate: (b) =>
-      b.createCollection("users")
+      b
+        .createCollection("users")
         .seed([{ _id: "users:1", name: "Alice" }])
         .transform({
           up: (doc) => ({ ...doc, secret: "hashed" }),
@@ -51,7 +53,7 @@ function buildOps() {
   };
 }
 
-Deno.test("getIrreversibleOperations / getLossyOperations detect flagged ops", () => {
+test("getIrreversibleOperations / getLossyOperations detect flagged ops", () => {
   const { ops } = buildOps();
   assertEquals(getIrreversibleOperations(ops).length, 1);
   // createCollection marks the migration lossy as a property, but the op
@@ -60,7 +62,7 @@ Deno.test("getIrreversibleOperations / getLossyOperations detect flagged ops", (
   assertEquals(getLossyOperations(ops).length, 0);
 });
 
-Deno.test("memory applier: down throws up-front on irreversible, leaves state intact", async () => {
+test("memory applier: down throws up-front on irreversible, leaves state intact", async () => {
   const { m, ops } = buildOps();
   const state = createEmptyDatabaseState();
   const applier = createMemoryApplier(m);
@@ -80,7 +82,7 @@ Deno.test("memory applier: down throws up-front on irreversible, leaves state in
   assertEquals(state.collections.users.content.length, before);
 });
 
-Deno.test("mongodb applier: down throws up-front on irreversible, leaves data intact", async () => {
+test("mongodb applier: down throws up-front on irreversible, leaves data intact", async () => {
   await withDatabase("irreversible-prescan", async (db) => {
     const { m, ops } = buildOps();
     const applier = createMongodbApplier(db, m, { currentMigrationId: m.id });

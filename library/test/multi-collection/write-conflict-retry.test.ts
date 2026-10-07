@@ -1,5 +1,6 @@
+import { test } from "../+harness.ts";
 import * as v from "../../src/schema.ts";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "../+assert.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import { defineModel } from "../../src/multi-collection-model.ts";
@@ -26,7 +27,7 @@ const testModel = defineModel("test", {
   },
 });
 
-Deno.test("Write Conflict Retry: Sequential operations with artificial conflicts", async (t) => {
+test("Write Conflict Retry: Sequential operations with artificial conflicts", async (t) => {
   await withDatabase(t.name, async (db) => {
     const store = await multiCollection(db, "store", testModel);
 
@@ -59,7 +60,7 @@ Deno.test("Write Conflict Retry: Sequential operations with artificial conflicts
   });
 });
 
-Deno.test("Write Conflict Retry: Verify retry happens on actual conflicts", async (t) => {
+test("Write Conflict Retry: Verify retry happens on actual conflicts", async (t) => {
   await withDatabase(t.name, async (db) => {
     const store = await multiCollection(db, "store", testModel);
 
@@ -104,7 +105,7 @@ Deno.test("Write Conflict Retry: Verify retry happens on actual conflicts", asyn
   });
 });
 
-Deno.test("Write Conflict Retry: UpdateMany with retry protection", async (t) => {
+test("Write Conflict Retry: UpdateMany with retry protection", async (t) => {
   await withDatabase(t.name, async (db) => {
     const store = await multiCollection(db, "store", testModel);
 
@@ -133,7 +134,7 @@ Deno.test("Write Conflict Retry: UpdateMany with retry protection", async (t) =>
   });
 });
 
-Deno.test("Write Conflict Retry: Rapid updates with staggered timing", async (t) => {
+test("Write Conflict Retry: Rapid updates with staggered timing", async (t) => {
   await withDatabase(t.name, async (db) => {
     const store = await multiCollection(db, "store", testModel);
 
@@ -152,7 +153,7 @@ Deno.test("Write Conflict Retry: Rapid updates with staggered timing", async (t)
         await store.updateOne("product", productId, {
           stock: newStock,
         });
-      })()
+      })(),
     );
 
     // All updates should complete without throwing errors
@@ -170,7 +171,7 @@ Deno.test("Write Conflict Retry: Rapid updates with staggered timing", async (t)
   });
 });
 
-Deno.test("Write Conflict Retry: Mixed read-write operations", async (t) => {
+test("Write Conflict Retry: Mixed read-write operations", async (t) => {
   await withDatabase(t.name, async (db) => {
     const store = await multiCollection(db, "store", testModel);
 
@@ -217,7 +218,7 @@ Deno.test("Write Conflict Retry: Mixed read-write operations", async (t) => {
   });
 });
 
-Deno.test("Write Conflict Retry: Verify no errors on simple updates", async (t) => {
+test("Write Conflict Retry: Verify no errors on simple updates", async (t) => {
   await withDatabase(t.name, async (db) => {
     const store = await multiCollection(db, "store", testModel);
 

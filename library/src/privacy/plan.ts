@@ -1,8 +1,10 @@
 import type {
   DatabaseState,
   SchemaContent,
+  TypeSource,
   SchemasDefinition,
 } from "../migration/types.ts";
+import { fieldsOf as fieldsOfSource } from "../type-definition.ts";
 import { extractIdPrefix } from "../migration/utils/seed-id.ts";
 import { INDEX_SYMBOL } from "../indexes.ts";
 import { createSimpleVisitor, SchemaNavigator } from "../schema-navigator.ts";
@@ -501,9 +503,10 @@ function enumerateTargets(schemas: SchemasDefinition): RawTarget[] {
     bucket: keyof DatabaseState,
     collection: string,
     type: string | undefined,
-    fields: SchemaContent,
+    source: TypeSource,
     autoKey: string | null,
   ) => {
+    const fields = fieldsOfSource(source);
     out.push({
       key: targetKey(bucket, collection, type),
       bucket,

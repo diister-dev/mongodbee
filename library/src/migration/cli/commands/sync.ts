@@ -8,20 +8,28 @@
  */
 
 import process from "node:process";
-import { blue, bold, dim, green, red, yellow } from "@std/fmt/colors";
-import { MongoClient } from "../../../mongodb.ts";
-import * as path from "@std/path";
+import { blue, bold, dim, green, red, yellow } from "../../../utils/colors.ts";
+import type { MongoClient } from "../../../mongodb.ts";
+import { createMigrationClient } from "../utils/client.ts";
+import * as path from "node:path";
 
 import { loadConfig } from "../../config/loader.ts";
 import { buildMigrationChain, loadAllMigrations } from "../../discovery.ts";
 import { getAppliedMigrationIds } from "../../state.ts";
+import { repairSuspendedValidators } from "../utils/validator-repair.ts";
 import { createMongodbApplier } from "../../appliers/mongodb.ts";
+import { ensureMigrationPrivileges } from "../utils/privileges.ts";
 
 export interface SyncCommandOptions {
   configPath?: string;
   cwd?: string;
   force?: boolean;
   verbose?: boolean;
+  /**
+   * Skip the pre-flight check of the account's privileges (`connectionStatus`).
+   * Sync rewrites validators (`collMod`) and indexes on every collection.
+   */
+  skipPrivilegeCheck?: boolean;
 }
 
 /**
@@ -44,8 +52,8 @@ export async function syncCommand(
       cwd,
       config.paths?.migrations || "./migrations",
     );
-    const connectionUri = config.database?.connection?.uri ||
-      "mongodb://localhost:27017";
+    const connectionUri =
+      config.database?.connection?.uri || "mongodb://localhost:27017";
     const dbName = config.database?.name || "myapp";
 
     console.log(dim(`Migrations directory: ${migrationsDir}`));
@@ -53,10 +61,18 @@ export async function syncCommand(
     console.log();
 
     // Connect to database
-    client = new MongoClient(connectionUri);
+    client = createMigrationClient(connectionUri, config);
     await client.connect();
 
     const db = client.db(dbName);
+
+    // Pre-flight: sync is nothing BUT validator and index DDL, so an account
+    // without `collMod` fails on the first collection. Refuse it up-front.
+    await ensureMigrationPrivileges(db, {
+      skip:
+        options.skipPrivilegeCheck ??
+        (options as Record<string, unknown>)["skip-privilege-check"] === true,
+    });
 
     // Load migrations from filesystem
     const migrationsWithFiles = await loadAllMigrations(migrationsDir);
@@ -69,6 +85,9 @@ export async function syncCommand(
 
     const allMigrations = buildMigrationChain(migrationsWithFiles);
     console.log(dim(`Found ${allMigrations.length} migration(s)`));
+
+    // Validators an interrupted run left off are restored first, loudly.
+    await repairSuspendedValidators(db, allMigrations);
 
     // Get applied migrations
     const appliedIds = await getAppliedMigrationIds(db);
@@ -123,9 +142,9 @@ export async function syncCommand(
 
     console.log(
       bold(
-        `Syncing to latest migration: ${blue(latestMigration.name)} ${
-          dim(`(${latestMigration.id})`)
-        }`,
+        `Syncing to latest migration: ${blue(latestMigration.name)} ${dim(
+          `(${latestMigration.id})`,
+        )}`,
       ),
     );
     console.log();
@@ -135,27 +154,27 @@ export async function syncCommand(
       if (latestMigration.schemas.collections) {
         console.log(
           dim(
-            `  Collections: ${
-              Object.keys(latestMigration.schemas.collections).join(", ")
-            }`,
+            `  Collections: ${Object.keys(
+              latestMigration.schemas.collections,
+            ).join(", ")}`,
           ),
         );
       }
       if (latestMigration.schemas.multiCollections) {
         console.log(
           dim(
-            `  Multi-collections: ${
-              Object.keys(latestMigration.schemas.multiCollections).join(", ")
-            }`,
+            `  Multi-collections: ${Object.keys(
+              latestMigration.schemas.multiCollections,
+            ).join(", ")}`,
           ),
         );
       }
       if (latestMigration.schemas.multiModels) {
         console.log(
           dim(
-            `  Multi-models: ${
-              Object.keys(latestMigration.schemas.multiModels).join(", ")
-            }`,
+            `  Multi-models: ${Object.keys(
+              latestMigration.schemas.multiModels,
+            ).join(", ")}`,
           ),
         );
       }

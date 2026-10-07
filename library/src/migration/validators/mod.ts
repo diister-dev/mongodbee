@@ -8,14 +8,14 @@
  * @example
  * ```typescript
  * // Chain validation
- * import { validateMigrationChain } from "@diister/mongodbee/migration/validators";
+ * import { createChainValidator } from "@diister/mongodbee/migration";
  *
  * const migrations = [
  *   { id: '001', parent: null, name: 'Initial', schemas: {}, migrate: () => ({}) },
  *   { id: '002', parent: migrations[0], name: 'Add users', schemas: {}, migrate: () => ({}) }
  * ];
  *
- * const chainResult = validateMigrationChain(migrations);
+ * const chainResult = createChainValidator().validateChain(migrations);
  * if (!chainResult.isValid) {
  *   console.error('Chain validation failed:', chainResult.errors);
  * }
@@ -23,19 +23,13 @@
  *
  * @example
  * ```typescript
- * // Integrity validation
- * import { validateMigrationState } from "@diister/mongodbee/migration/validators";
+ * // Simulation validation: replays the migration against a mock database,
+ * // which is what `mongodbee check` does before touching a real one.
+ * import { validateMigrationWithSimulation } from "@diister/mongodbee/migration";
  *
- * const migrationState = {
- *   operations: [
- *     { type: 'create_collection', collectionName: 'users' },
- *     { type: 'seed_collection', collectionName: 'users', documents: [] }
- *   ]
- * };
- *
- * const integrityResult = validateMigrationState(migrationState);
- * if (!integrityResult.isValid) {
- *   console.error('Integrity validation failed:', integrityResult.errors);
+ * const result = await validateMigrationWithSimulation(migrationDefinition);
+ * if (!result.isValid) {
+ *   console.error('Simulation failed:', result.errors);
  * }
  * ```
  *

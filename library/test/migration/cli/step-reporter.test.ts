@@ -7,8 +7,9 @@
  * in the in-process test harness that consumes `checkCommand` as a library
  * function, a stray `\r`/`\x1b[K` is garbage that also breaks log matching.
  */
-import { assert, assertEquals } from "@std/assert";
-import { bold, dim, stripAnsiCode } from "@std/fmt/colors";
+import { test } from "../../+harness.ts";
+import { assert, assertEquals } from "../../+assert.ts";
+import { bold, dim, stripAnsiCode } from "../../../src/utils/colors.ts";
 import { createStepReporter } from "../../../src/migration/cli/utils/step-reporter.ts";
 
 function capture(tty: boolean, extra: { minRedrawMs?: number } = {}) {
@@ -22,7 +23,7 @@ function capture(tty: boolean, extra: { minRedrawMs?: number } = {}) {
   return { chunks, steps, output: () => chunks.join("") };
 }
 
-Deno.test("step reporter: non-TTY emits plain lines only", () => {
+test("step reporter: non-TTY emits plain lines only", () => {
   const { steps, output } = capture(false);
 
   steps.start("  … [1/2] alpha");
@@ -38,7 +39,7 @@ Deno.test("step reporter: non-TTY emits plain lines only", () => {
   assertEquals(output().includes("\x1b["), false, "no cursor escapes");
 });
 
-Deno.test("step reporter: TTY overwrites the transient line with the verdict", () => {
+test("step reporter: TTY overwrites the transient line with the verdict", () => {
   const { chunks, steps } = capture(true);
 
   steps.start("  [1/1] alpha", { live: false });
@@ -51,7 +52,7 @@ Deno.test("step reporter: TTY overwrites the transient line with the verdict", (
   assertEquals(chunks[2], "  ✓ [1/1] alpha  1 operation\n");
 });
 
-Deno.test("step reporter: an abandoned transient line is erased by finish()", () => {
+test("step reporter: an abandoned transient line is erased by finish()", () => {
   const { chunks, steps } = capture(true);
 
   steps.start("  [1/1] alpha", { live: false });
@@ -71,7 +72,7 @@ Deno.test("step reporter: an abandoned transient line is erased by finish()", ()
 // 17-second silence on the owner's chain, and both fixes had been "verified"
 // against a demo that awaited a real setTimeout. Progress is now pushed in by
 // the work, so the only thing that can stop the line is the work stopping.
-Deno.test("step reporter: the in-flight line re-renders from progress notes", () => {
+test("step reporter: the in-flight line re-renders from progress notes", () => {
   const { chunks, steps } = capture(true);
 
   steps.start("[1/2] alpha");
@@ -105,17 +106,20 @@ Deno.test("step reporter: the in-flight line re-renders from progress notes", ()
 // interval, however short, fires inside a loop that never yields. Scheduling
 // one here is therefore a design regression, and the parent commit fails this
 // case on its `setInterval` in `start()`.
-Deno.test("step reporter: rendering schedules no timers", () => {
+test("step reporter: rendering schedules no timers", () => {
   const scheduled: string[] = [];
   const realInterval = globalThis.setInterval;
   const realTimeout = globalThis.setTimeout;
-  globalThis.setInterval = ((...args: unknown[]) => {
+  // The handle is a `number` under Deno and a `Timeout` object under Node and
+  // Bun, so the spies forward through the real functions' own types rather than
+  // naming either one.
+  globalThis.setInterval = ((...args: Parameters<typeof setInterval>) => {
     scheduled.push("setInterval");
-    return (realInterval as (...a: unknown[]) => number)(...args);
+    return realInterval(...args);
   }) as typeof globalThis.setInterval;
-  globalThis.setTimeout = ((...args: unknown[]) => {
+  globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
     scheduled.push("setTimeout");
-    return (realTimeout as (...a: unknown[]) => number)(...args);
+    return realTimeout(...args);
   }) as typeof globalThis.setTimeout;
 
   try {
@@ -140,7 +144,7 @@ Deno.test("step reporter: rendering schedules no timers", () => {
 //
 // It is what names the slow migration: without it a ten-second step and a
 // one-second step look the same once they land.
-Deno.test("step reporter: the in-flight line carries an elapsed counter", () => {
+test("step reporter: the in-flight line carries an elapsed counter", () => {
   const chunks: string[] = [];
   let now = 1_000_000;
   const realNow = Date.now;
@@ -171,7 +175,7 @@ Deno.test("step reporter: the in-flight line carries an elapsed counter", () => 
 // already ~130 columns on the owner's chain; appending a progress note pushed
 // them past any terminal width, and a wrapped line leaves its first rows on
 // screen underneath the verdict.
-Deno.test("step reporter: the in-flight line is clamped to the terminal width", () => {
+test("step reporter: the in-flight line is clamped to the terminal width", () => {
   const chunks: string[] = [];
   const steps = createStepReporter({
     tty: true,
@@ -204,7 +208,7 @@ Deno.test("step reporter: the in-flight line is clamped to the terminal width", 
 // real chain — and every redraw is a write syscall. The floor caps that, but
 // the FIRST note after a step opens must always paint: for a step that
 // finishes quickly it is the only note there will ever be.
-Deno.test("step reporter: the redraw floor keeps the first note of a step", () => {
+test("step reporter: the redraw floor keeps the first note of a step", () => {
   const chunks: string[] = [];
   const steps = createStepReporter({
     tty: true,
@@ -230,20 +234,17 @@ Deno.test("step reporter: the redraw floor keeps the first note of a step", () =
 //
 // It is what a step that lands immediately uses; decorating it or letting
 // notes redraw it would turn a one-shot label into a flicker.
-Deno.test("step reporter: a live:false step ignores progress notes", () => {
+test("step reporter: a live:false step ignores progress notes", () => {
   const { chunks, steps } = capture(true);
 
   steps.start("  ⏭  fast-forward [1/3] alpha", { live: false });
   steps.update("mocking collections/a 1/100");
   steps.finish();
 
-  assertEquals(chunks, [
-    "\r\x1b[K  ⏭  fast-forward [1/3] alpha",
-    "\r\x1b[K",
-  ]);
+  assertEquals(chunks, ["\r\x1b[K  ⏭  fast-forward [1/3] alpha", "\r\x1b[K"]);
 });
 
-Deno.test("step reporter: a note outside any step writes nothing", () => {
+test("step reporter: a note outside any step writes nothing", () => {
   const { chunks, steps } = capture(true);
 
   steps.update("mocking collections/a 1/100");
@@ -265,7 +266,7 @@ Deno.test("step reporter: a note outside any step writes nothing", () => {
 // frozen even though work was landing. The frame advances per render, never on
 // a clock: the validator blocks the thread, so a timer-driven frame would sit
 // still exactly when motion matters.
-Deno.test("step reporter: the in-flight marker advances frame on each render", () => {
+test("step reporter: the in-flight marker advances frame on each render", () => {
   const { chunks, steps } = capture(true, { minRedrawMs: 0 });
 
   steps.start("[1/1] alpha");
@@ -280,8 +281,8 @@ Deno.test("step reporter: the in-flight marker advances frame on each render", (
   assert(markers.length >= 5, `expected renders, saw ${markers.length}`);
   assert(
     new Set(markers).size > 1,
-    `the marker never changed (${
-      markers.join("")
-    }) — a static glyph reads as frozen`,
+    `the marker never changed (${markers.join(
+      "",
+    )}) — a static glyph reads as frozen`,
   );
 });

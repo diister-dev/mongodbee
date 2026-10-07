@@ -1,4 +1,5 @@
-import { assert, assertEquals } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals } from "../+assert.ts";
 import * as v from "../../src/schema.ts";
 import { dbId } from "../../src/ids.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
@@ -35,7 +36,7 @@ const DRIFTED = {
   },
 };
 
-Deno.test("retrofit: a project that adds privacy declarations must freeze them in its last migration", () => {
+test("retrofit: a project that adds privacy declarations must freeze them in its last migration", () => {
   const baseline = migrationDefinition("001", "baseline", {
     parent: null,
     schemas: BEFORE,
@@ -55,7 +56,7 @@ Deno.test("retrofit: a project that adds privacy declarations must freeze them i
   );
 });
 
-Deno.test("retrofit: a role change alone is a snapshot difference", () => {
+test("retrofit: a role change alone is a snapshot difference", () => {
   const classified = migrationDefinition("002", "classify", {
     parent: null,
     schemas: AFTER,
@@ -66,7 +67,7 @@ Deno.test("retrofit: a role change alone is a snapshot difference", () => {
   assert(gate.errors.some((e) => e.includes("users")));
 });
 
-Deno.test("retrofit: each migration carries its own plan, older steps simply know less", () => {
+test("retrofit: each migration carries its own plan, older steps simply know less", () => {
   const before = buildPrivacyPlan({ schemas: BEFORE });
   assertEquals(before.persons.size, 0);
   assertEquals(before.targets.get("collections/users/")!.owner.kind, "none");

@@ -1,4 +1,5 @@
-import { assertEquals, assertExists } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assertEquals, assertExists } from "../+assert.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import * as v from "../../src/schema.ts";
@@ -31,7 +32,7 @@ const registrationModel = defineModel("registration", {
   },
 });
 
-Deno.test("Paginate with lookup: Basic lookup to same collection", async (t) => {
+test("Paginate with lookup: Basic lookup to same collection", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "registration", registrationModel);
 
@@ -65,42 +66,45 @@ Deno.test("Paginate with lookup: Basic lookup to same collection", async (t) => 
     });
 
     // Paginate registrations with lookup to get collaborator details
-    const results = await mc.paginate("registration", {}, {
-      limit: 10,
-      pipeline: (stage) => [
-        stage.lookup(
-          "collaborator",
-          "registeredBy",
-          "_id",
-          "collaboratorDetails",
-        ),
-      ],
-      format: (doc) => ({
-        event: doc.eventName,
-        status: doc.status,
-        // deno-lint-ignore no-explicit-any
-        registeredByName: (doc as any).collaboratorDetails?.[0]?.name ||
-          "Unknown",
-      }),
-    });
+    const results = await mc.paginate(
+      "registration",
+      {},
+      {
+        limit: 10,
+        pipeline: (stage) => [
+          stage.lookup(
+            "collaborator",
+            "registeredBy",
+            "_id",
+            "collaboratorDetails",
+          ),
+        ],
+        format: (doc) => ({
+          event: doc.eventName,
+          status: doc.status,
+          registeredByName:
+            (doc as any).collaboratorDetails?.[0]?.name || "Unknown",
+        }),
+      },
+    );
 
     assertEquals(results.data.length, 3);
     assertEquals(results.total, 3);
 
     // Check that lookups worked
-    const aliceEvents = results.data.filter((r) =>
-      r.registeredByName === "Alice Admin"
+    const aliceEvents = results.data.filter(
+      (r) => r.registeredByName === "Alice Admin",
     );
     assertEquals(aliceEvents.length, 2);
 
-    const bobEvents = results.data.filter((r) =>
-      r.registeredByName === "Bob Manager"
+    const bobEvents = results.data.filter(
+      (r) => r.registeredByName === "Bob Manager",
     );
     assertEquals(bobEvents.length, 1);
   });
 });
 
-Deno.test("Paginate with lookup: Polymorphic lookup (collaborator OR visitor)", async (t) => {
+test("Paginate with lookup: Polymorphic lookup (collaborator OR visitor)", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "registration", registrationModel);
 
@@ -131,47 +135,55 @@ Deno.test("Paginate with lookup: Polymorphic lookup (collaborator OR visitor)", 
     });
 
     // Paginate with multiple lookups for polymorphic references
-    const results = await mc.paginate("registration", {}, {
-      limit: 10,
-      pipeline: (stage) => [
-        // Lookup from collaborators
-        stage.lookup("collaborator", "registeredBy", "_id", "collaboratorDocs"),
-        // Lookup from visitors
-        stage.lookup("visitor", "registeredBy", "_id", "visitorDocs"),
-      ],
-      format: (doc) => {
-        // deno-lint-ignore no-explicit-any
-        const anyDoc = doc as any;
-        const collaborator = anyDoc.collaboratorDocs?.[0];
-        const visitor = anyDoc.visitorDocs?.[0];
+    const results = await mc.paginate(
+      "registration",
+      {},
+      {
+        limit: 10,
+        pipeline: (stage) => [
+          // Lookup from collaborators
+          stage.lookup(
+            "collaborator",
+            "registeredBy",
+            "_id",
+            "collaboratorDocs",
+          ),
+          // Lookup from visitors
+          stage.lookup("visitor", "registeredBy", "_id", "visitorDocs"),
+        ],
+        format: (doc) => {
+          const anyDoc = doc as any;
+          const collaborator = anyDoc.collaboratorDocs?.[0];
+          const visitor = anyDoc.visitorDocs?.[0];
 
-        return {
-          event: doc.eventName,
-          status: doc.status,
-          registeredByType: collaborator
-            ? "collaborator"
-            : visitor
-            ? "visitor"
-            : "unknown",
-          registeredByName: collaborator?.name || visitor?.name || "Unknown",
-          registeredByEmail: collaborator?.email || visitor?.email || null,
-        };
+          return {
+            event: doc.eventName,
+            status: doc.status,
+            registeredByType: collaborator
+              ? "collaborator"
+              : visitor
+                ? "visitor"
+                : "unknown",
+            registeredByName: collaborator?.name || visitor?.name || "Unknown",
+            registeredByEmail: collaborator?.email || visitor?.email || null,
+          };
+        },
       },
-    });
+    );
 
     assertEquals(results.data.length, 2);
 
     // Find registration by collaborator
-    const collabReg = results.data.find((r) =>
-      r.registeredByType === "collaborator"
+    const collabReg = results.data.find(
+      (r) => r.registeredByType === "collaborator",
     );
     assertExists(collabReg);
     assertEquals(collabReg.registeredByName, "Alice Admin");
     assertEquals(collabReg.event, "Conference 2024");
 
     // Find registration by visitor
-    const visitorReg = results.data.find((r) =>
-      r.registeredByType === "visitor"
+    const visitorReg = results.data.find(
+      (r) => r.registeredByType === "visitor",
     );
     assertExists(visitorReg);
     assertEquals(visitorReg.registeredByName, "John Guest");
@@ -179,7 +191,7 @@ Deno.test("Paginate with lookup: Polymorphic lookup (collaborator OR visitor)", 
   });
 });
 
-Deno.test("Paginate with anyLookup: Polymorphic lookup without type constraint", async (t) => {
+test("Paginate with anyLookup: Polymorphic lookup without type constraint", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "registration", registrationModel);
 
@@ -210,41 +222,44 @@ Deno.test("Paginate with anyLookup: Polymorphic lookup without type constraint",
     });
 
     // Use anyLookup - single lookup that matches ANY type by ID
-    const results = await mc.paginate("registration", {}, {
-      limit: 10,
-      pipeline: (stage) => [
-        // Single anyLookup that works for both collaborator and visitor IDs
-        stage.anyLookup("registeredBy", "_id", "registrant"),
-      ],
-      format: (doc) => {
-        // deno-lint-ignore no-explicit-any
-        const anyDoc = doc as any;
-        const registrant = anyDoc.registrant?.[0];
+    const results = await mc.paginate(
+      "registration",
+      {},
+      {
+        limit: 10,
+        pipeline: (stage) => [
+          // Single anyLookup that works for both collaborator and visitor IDs
+          stage.anyLookup("registeredBy", "_id", "registrant"),
+        ],
+        format: (doc) => {
+          const anyDoc = doc as any;
+          const registrant = anyDoc.registrant?.[0];
 
-        return {
-          event: doc.eventName,
-          status: doc.status,
-          // The _type field tells us what type was matched
-          registeredByType: registrant?._type || "unknown",
-          registeredByName: registrant?.name || "Unknown",
-          registeredByEmail: registrant?.email || null,
-        };
+          return {
+            event: doc.eventName,
+            status: doc.status,
+            // The _type field tells us what type was matched
+            registeredByType: registrant?._type || "unknown",
+            registeredByName: registrant?.name || "Unknown",
+            registeredByEmail: registrant?.email || null,
+          };
+        },
       },
-    });
+    );
 
     assertEquals(results.data.length, 2);
 
     // Find registration by collaborator
-    const collabReg = results.data.find((r) =>
-      r.registeredByType === "collaborator"
+    const collabReg = results.data.find(
+      (r) => r.registeredByType === "collaborator",
     );
     assertExists(collabReg);
     assertEquals(collabReg.registeredByName, "Alice Admin");
     assertEquals(collabReg.event, "Conference 2024");
 
     // Find registration by visitor
-    const visitorReg = results.data.find((r) =>
-      r.registeredByType === "visitor"
+    const visitorReg = results.data.find(
+      (r) => r.registeredByType === "visitor",
     );
     assertExists(visitorReg);
     assertEquals(visitorReg.registeredByName, "John Guest");
@@ -252,7 +267,7 @@ Deno.test("Paginate with anyLookup: Polymorphic lookup without type constraint",
   });
 });
 
-Deno.test("Paginate with lookup: Using addFields for computed values", async (t) => {
+test("Paginate with lookup: Using addFields for computed values", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "registration", registrationModel);
 
@@ -271,33 +286,41 @@ Deno.test("Paginate with lookup: Using addFields for computed values", async (t)
     ]);
 
     // Use addFields to compute values before lookup
-    const results = await mc.paginate("registration", {}, {
-      limit: 10,
-      pipeline: (stage) => [
-        // Add computed field - check if registeredBy exists and is not null/empty
-        stage.addFields({
-          hasRegistrant: {
-            $and: [
-              { $ne: ["$registeredBy", null] },
-              { $ne: [{ $ifNull: ["$registeredBy", ""] }, ""] },
-            ],
-          },
-          statusUpper: { $toUpper: "$status" },
-        }),
-        // Lookup collaborator
-        stage.lookup("collaborator", "registeredBy", "_id", "collaboratorDocs"),
-      ],
-      format: (doc) => {
-        // deno-lint-ignore no-explicit-any
-        const anyDoc = doc as any;
-        return {
-          event: doc.eventName,
-          status: anyDoc.statusUpper,
-          hasRegistrant: anyDoc.hasRegistrant,
-          registrantName: anyDoc.collaboratorDocs?.[0]?.name || null,
-        };
+    const results = await mc.paginate(
+      "registration",
+      {},
+      {
+        limit: 10,
+        pipeline: (stage) => [
+          // Add computed field - check if registeredBy exists and is not null/empty
+          stage.addFields({
+            hasRegistrant: {
+              $and: [
+                { $ne: ["$registeredBy", null] },
+                { $ne: [{ $ifNull: ["$registeredBy", ""] }, ""] },
+              ],
+            },
+            statusUpper: { $toUpper: "$status" },
+          }),
+          // Lookup collaborator
+          stage.lookup(
+            "collaborator",
+            "registeredBy",
+            "_id",
+            "collaboratorDocs",
+          ),
+        ],
+        format: (doc) => {
+          const anyDoc = doc as any;
+          return {
+            event: doc.eventName,
+            status: anyDoc.statusUpper,
+            hasRegistrant: anyDoc.hasRegistrant,
+            registrantName: anyDoc.collaboratorDocs?.[0]?.name || null,
+          };
+        },
       },
-    });
+    );
 
     assertEquals(results.data.length, 3);
 
@@ -316,7 +339,7 @@ Deno.test("Paginate with lookup: Using addFields for computed values", async (t)
   });
 });
 
-Deno.test("Paginate with lookup: Combined with MongoDB filter", async (t) => {
+test("Paginate with lookup: Combined with MongoDB filter", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "registration", registrationModel);
 
@@ -341,17 +364,25 @@ Deno.test("Paginate with lookup: Combined with MongoDB filter", async (t) => {
     ]);
 
     // Paginate only confirmed registrations with lookup
-    const results = await mc.paginate("registration", { status: "confirmed" }, {
-      limit: 10,
-      pipeline: (stage) => [
-        stage.lookup("collaborator", "registeredBy", "_id", "collaboratorDocs"),
-      ],
-      format: (doc) => ({
-        event: doc.eventName,
-        // deno-lint-ignore no-explicit-any
-        registrantName: (doc as any).collaboratorDocs?.[0]?.name || null,
-      }),
-    });
+    const results = await mc.paginate(
+      "registration",
+      { status: "confirmed" },
+      {
+        limit: 10,
+        pipeline: (stage) => [
+          stage.lookup(
+            "collaborator",
+            "registeredBy",
+            "_id",
+            "collaboratorDocs",
+          ),
+        ],
+        format: (doc) => ({
+          event: doc.eventName,
+          registrantName: (doc as any).collaboratorDocs?.[0]?.name || null,
+        }),
+      },
+    );
 
     assertEquals(results.data.length, 2);
     assertEquals(results.total, 2); // Total should only count confirmed
@@ -362,7 +393,7 @@ Deno.test("Paginate with lookup: Combined with MongoDB filter", async (t) => {
   });
 });
 
-Deno.test("Paginate with lookup: With cursor pagination (afterId)", async (t) => {
+test("Paginate with lookup: With cursor pagination (afterId)", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "registration", registrationModel);
 
@@ -385,37 +416,53 @@ Deno.test("Paginate with lookup: With cursor pagination (afterId)", async (t) =>
     }
 
     // First page with lookup
-    const page1 = await mc.paginate("registration", {}, {
-      limit: 3,
-      pipeline: (stage) => [
-        stage.lookup("collaborator", "registeredBy", "_id", "collaboratorDocs"),
-      ],
-      format: (doc) => ({
-        id: doc._id,
-        event: doc.eventName,
-        // deno-lint-ignore no-explicit-any
-        registrant: (doc as any).collaboratorDocs?.[0]?.name,
-      }),
-    });
+    const page1 = await mc.paginate(
+      "registration",
+      {},
+      {
+        limit: 3,
+        pipeline: (stage) => [
+          stage.lookup(
+            "collaborator",
+            "registeredBy",
+            "_id",
+            "collaboratorDocs",
+          ),
+        ],
+        format: (doc) => ({
+          id: doc._id,
+          event: doc.eventName,
+          registrant: (doc as any).collaboratorDocs?.[0]?.name,
+        }),
+      },
+    );
 
     assertEquals(page1.data.length, 3);
     assertEquals(page1.total, 10);
     assertEquals(page1.position, 0);
 
     // Second page using afterId
-    const page2 = await mc.paginate("registration", {}, {
-      limit: 3,
-      afterId: page1.data[page1.data.length - 1].id,
-      pipeline: (stage) => [
-        stage.lookup("collaborator", "registeredBy", "_id", "collaboratorDocs"),
-      ],
-      format: (doc) => ({
-        id: doc._id,
-        event: doc.eventName,
-        // deno-lint-ignore no-explicit-any
-        registrant: (doc as any).collaboratorDocs?.[0]?.name,
-      }),
-    });
+    const page2 = await mc.paginate(
+      "registration",
+      {},
+      {
+        limit: 3,
+        afterId: page1.data[page1.data.length - 1].id,
+        pipeline: (stage) => [
+          stage.lookup(
+            "collaborator",
+            "registeredBy",
+            "_id",
+            "collaboratorDocs",
+          ),
+        ],
+        format: (doc) => ({
+          id: doc._id,
+          event: doc.eventName,
+          registrant: (doc as any).collaboratorDocs?.[0]?.name,
+        }),
+      },
+    );
 
     assertEquals(page2.data.length, 3);
     assertEquals(page2.total, 10);
@@ -435,7 +482,7 @@ Deno.test("Paginate with lookup: With cursor pagination (afterId)", async (t) =>
   });
 });
 
-Deno.test("Paginate with lookup: Combined with prepare/filter/format pipeline", async (t) => {
+test("Paginate with lookup: Combined with prepare/filter/format pipeline", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "registration", registrationModel);
 
@@ -463,32 +510,40 @@ Deno.test("Paginate with lookup: Combined with prepare/filter/format pipeline", 
     ]);
 
     // Use both pipeline (server-side lookup) AND prepare/filter (client-side processing)
-    const results = await mc.paginate("registration", {}, {
-      limit: 10,
-      // Server-side: MongoDB lookup
-      pipeline: (stage) => [
-        stage.lookup("collaborator", "registeredBy", "_id", "collaboratorDocs"),
-      ],
-      // Client-side: Enrich with computed data
-      prepare: (doc) => {
-        // deno-lint-ignore no-explicit-any
-        const anyDoc = doc as any;
-        const collaborator = anyDoc.collaboratorDocs?.[0];
-        return {
-          ...doc,
-          isAdminRegistration: collaborator?.role === "admin",
-          collaborator,
-        };
+    const results = await mc.paginate(
+      "registration",
+      {},
+      {
+        limit: 10,
+        // Server-side: MongoDB lookup
+        pipeline: (stage) => [
+          stage.lookup(
+            "collaborator",
+            "registeredBy",
+            "_id",
+            "collaboratorDocs",
+          ),
+        ],
+        // Client-side: Enrich with computed data
+        prepare: (doc) => {
+          const anyDoc = doc as any;
+          const collaborator = anyDoc.collaboratorDocs?.[0];
+          return {
+            ...doc,
+            isAdminRegistration: collaborator?.role === "admin",
+            collaborator,
+          };
+        },
+        // Client-side: Filter only admin registrations
+        filter: (enriched) => enriched.isAdminRegistration,
+        // Client-side: Format final output
+        format: (enriched) => ({
+          event: enriched.eventName,
+          registrantName: enriched.collaborator?.name,
+          registrantRole: enriched.collaborator?.role,
+        }),
       },
-      // Client-side: Filter only admin registrations
-      filter: (enriched) => enriched.isAdminRegistration,
-      // Client-side: Format final output
-      format: (enriched) => ({
-        event: enriched.eventName,
-        registrantName: enriched.collaborator?.name,
-        registrantRole: enriched.collaborator?.role,
-      }),
-    });
+    );
 
     // Should only return registrations by admin
     assertEquals(results.data.length, 2);
@@ -500,7 +555,7 @@ Deno.test("Paginate with lookup: Combined with prepare/filter/format pipeline", 
   });
 });
 
-Deno.test("Paginate with lookup: Lookup with nested pipeline filter", async (t) => {
+test("Paginate with lookup: Lookup with nested pipeline filter", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "registration", registrationModel);
 
@@ -523,26 +578,29 @@ Deno.test("Paginate with lookup: Lookup with nested pipeline filter", async (t) 
     ]);
 
     // Use lookup with nested pipeline to filter only admins
-    const results = await mc.paginate("registration", {}, {
-      limit: 10,
-      pipeline: (stage) => [
-        stage.lookup("collaborator", "registeredBy", "_id", {
-          as: "adminCollaborators",
-          pipeline: (nestedStage) => [
-            nestedStage.match("collaborator", { role: "admin" }),
-          ],
-        }),
-      ],
-      format: (doc) => {
-        // deno-lint-ignore no-explicit-any
-        const anyDoc = doc as any;
-        return {
-          event: doc.eventName,
-          adminRegistrant: anyDoc.adminCollaborators?.[0]?.name || null,
-          hasAdminRegistrant: (anyDoc.adminCollaborators?.length || 0) > 0,
-        };
+    const results = await mc.paginate(
+      "registration",
+      {},
+      {
+        limit: 10,
+        pipeline: (stage) => [
+          stage.lookup("collaborator", "registeredBy", "_id", {
+            as: "adminCollaborators",
+            pipeline: (nestedStage) => [
+              nestedStage.match("collaborator", { role: "admin" }),
+            ],
+          }),
+        ],
+        format: (doc) => {
+          const anyDoc = doc as any;
+          return {
+            event: doc.eventName,
+            adminRegistrant: anyDoc.adminCollaborators?.[0]?.name || null,
+            hasAdminRegistrant: (anyDoc.adminCollaborators?.length || 0) > 0,
+          };
+        },
       },
-    });
+    );
 
     assertEquals(results.data.length, 2);
 
@@ -560,7 +618,7 @@ Deno.test("Paginate with lookup: Lookup with nested pipeline filter", async (t) 
   });
 });
 
-Deno.test("Paginate without pipeline: Backwards compatibility", async (t) => {
+test("Paginate without pipeline: Backwards compatibility", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "registration", registrationModel);
 
@@ -571,13 +629,17 @@ Deno.test("Paginate without pipeline: Backwards compatibility", async (t) => {
     ]);
 
     // Standard paginate without pipeline should still work
-    const results = await mc.paginate("registration", { status: "confirmed" }, {
-      limit: 10,
-      format: (doc) => ({
-        event: doc.eventName,
-        status: doc.status,
-      }),
-    });
+    const results = await mc.paginate(
+      "registration",
+      { status: "confirmed" },
+      {
+        limit: 10,
+        format: (doc) => ({
+          event: doc.eventName,
+          status: doc.status,
+        }),
+      },
+    );
 
     assertEquals(results.data.length, 2);
     assertEquals(results.total, 2);
@@ -588,7 +650,7 @@ Deno.test("Paginate without pipeline: Backwards compatibility", async (t) => {
   });
 });
 
-Deno.test("Paginate with lookup: Project to reduce data transfer", async (t) => {
+test("Paginate with lookup: Project to reduce data transfer", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "registration", registrationModel);
 
@@ -605,28 +667,36 @@ Deno.test("Paginate with lookup: Project to reduce data transfer", async (t) => 
     });
 
     // Use project to limit fields returned
-    const results = await mc.paginate("registration", {}, {
-      limit: 10,
-      pipeline: (stage) => [
-        stage.lookup("collaborator", "registeredBy", "_id", "collaboratorDocs"),
-        stage.project({
-          _id: 1,
-          _type: 1,
-          eventName: 1,
-          status: 1,
-          registrantName: { $arrayElemAt: ["$collaboratorDocs.name", 0] },
-          // Don't include collaboratorDocs array
-        }),
-      ],
-      format: (doc) => {
-        // deno-lint-ignore no-explicit-any
-        const anyDoc = doc as any;
-        return {
-          event: doc.eventName,
-          registrant: anyDoc.registrantName,
-        };
+    const results = await mc.paginate(
+      "registration",
+      {},
+      {
+        limit: 10,
+        pipeline: (stage) => [
+          stage.lookup(
+            "collaborator",
+            "registeredBy",
+            "_id",
+            "collaboratorDocs",
+          ),
+          stage.project({
+            _id: 1,
+            _type: 1,
+            eventName: 1,
+            status: 1,
+            registrantName: { $arrayElemAt: ["$collaboratorDocs.name", 0] },
+            // Don't include collaboratorDocs array
+          }),
+        ],
+        format: (doc) => {
+          const anyDoc = doc as any;
+          return {
+            event: doc.eventName,
+            registrant: anyDoc.registrantName,
+          };
+        },
       },
-    });
+    );
 
     assertEquals(results.data.length, 1);
     assertEquals(results.data[0].event, "Event 1");
@@ -634,7 +704,7 @@ Deno.test("Paginate with lookup: Project to reduce data transfer", async (t) => 
   });
 });
 
-Deno.test("Paginate with externalLookup: Join with external collection", async (t) => {
+test("Paginate with externalLookup: Join with external collection", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "registration", registrationModel);
 
@@ -668,29 +738,32 @@ Deno.test("Paginate with externalLookup: Join with external collection", async (
     });
 
     // Use externalLookup to join with external collection
-    const results = await mc.paginate("registration", {}, {
-      limit: 10,
-      pipeline: (stage) => [
-        stage.externalLookup(
-          "external_events",
-          "eventName",
-          "_id",
-          "eventDetails",
-        ),
-      ],
-      format: (doc) => {
-        // deno-lint-ignore no-explicit-any
-        const anyDoc = doc as any;
-        const event = anyDoc.eventDetails?.[0];
-        return {
-          eventId: doc.eventName,
-          status: doc.status,
-          eventTitle: event?.title || "Unknown",
-          eventLocation: event?.location || null,
-          eventCapacity: event?.capacity || 0,
-        };
+    const results = await mc.paginate(
+      "registration",
+      {},
+      {
+        limit: 10,
+        pipeline: (stage) => [
+          stage.externalLookup(
+            "external_events",
+            "eventName",
+            "_id",
+            "eventDetails",
+          ),
+        ],
+        format: (doc) => {
+          const anyDoc = doc as any;
+          const event = anyDoc.eventDetails?.[0];
+          return {
+            eventId: doc.eventName,
+            status: doc.status,
+            eventTitle: event?.title || "Unknown",
+            eventLocation: event?.location || null,
+            eventCapacity: event?.capacity || 0,
+          };
+        },
       },
-    });
+    );
 
     assertEquals(results.data.length, 2);
 
@@ -707,7 +780,7 @@ Deno.test("Paginate with externalLookup: Join with external collection", async (
   });
 });
 
-Deno.test("Paginate with externalLookup: Join with another multi-collection", async (t) => {
+test("Paginate with externalLookup: Join with another multi-collection", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create first multi-collection for registrations
     const registrations = await multiCollection(
@@ -758,25 +831,28 @@ Deno.test("Paginate with externalLookup: Join with another multi-collection", as
     });
 
     // Use externalLookup to join with another multi-collection
-    const results = await registrations.paginate("registration", {}, {
-      limit: 10,
-      pipeline: (stage) => [
-        // Join with the "venues" multi-collection
-        stage.externalLookup("venues", "registeredBy", "_id", "venueDetails"),
-      ],
-      format: (doc) => {
-        // deno-lint-ignore no-explicit-any
-        const anyDoc = doc as any;
-        const venue = anyDoc.venueDetails?.[0];
-        return {
-          event: doc.eventName,
-          status: doc.status,
-          venueName: venue?.name || "Unknown",
-          venueCity: venue?.city || null,
-          venueType: venue?._type || null, // Should be "venue"
-        };
+    const results = await registrations.paginate(
+      "registration",
+      {},
+      {
+        limit: 10,
+        pipeline: (stage) => [
+          // Join with the "venues" multi-collection
+          stage.externalLookup("venues", "registeredBy", "_id", "venueDetails"),
+        ],
+        format: (doc) => {
+          const anyDoc = doc as any;
+          const venue = anyDoc.venueDetails?.[0];
+          return {
+            event: doc.eventName,
+            status: doc.status,
+            venueName: venue?.name || "Unknown",
+            venueCity: venue?.city || null,
+            venueType: venue?._type || null, // Should be "venue"
+          };
+        },
       },
-    });
+    );
 
     assertEquals(results.data.length, 2);
 

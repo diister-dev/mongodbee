@@ -1,6 +1,11 @@
 import * as v from "../schema.ts";
 import { createMockGenerator } from "@diister/valibot-mock";
-import type { SchemaContent, SchemasDefinition } from "../migration/types.ts";
+import type {
+  SchemaContent,
+  SchemasDefinition,
+  TypeSource,
+} from "../migration/types.ts";
+import { fieldsOf as fieldsOfSource } from "../type-definition.ts";
 import {
   defaultTreatments,
   type PrivacyPath,
@@ -125,10 +130,10 @@ const WRAPPER_TYPES: ReadonlySet<string> = new Set([
   "exact_optional",
 ]);
 
-export function fieldsOf(
+function sourceOf(
   schemas: SchemasDefinition,
   target: PrivacyTarget,
-): SchemaContent | undefined {
+): TypeSource | undefined {
   switch (target.bucket) {
     case "collections":
       return schemas.collections?.[target.collection];
@@ -140,6 +145,14 @@ export function fieldsOf(
       return schemas.scopedMultiCollections?.[target.collection]
         ?.types[target.type ?? ""];
   }
+}
+
+export function fieldsOf(
+  schemas: SchemasDefinition,
+  target: PrivacyTarget,
+): SchemaContent | undefined {
+  const source = sourceOf(schemas, target);
+  return source === undefined ? undefined : fieldsOfSource(source);
 }
 
 function unwrapSchema(schema: unknown): Record<string, unknown> | undefined {

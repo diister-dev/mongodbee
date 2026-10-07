@@ -1,9 +1,10 @@
-import { assert } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert } from "./+assert.ts";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
 import * as v from "../src/schema.ts";
 
-Deno.test("nonEmpty validation for strings", async (t) => {
+test("nonEmpty validation for strings", async (t) => {
   await withDatabase(t.name, async (db) => {
     const schema = {
       name: v.pipe(v.string(), v.nonEmpty("Name cannot be empty")),
@@ -37,7 +38,7 @@ Deno.test("nonEmpty validation for strings", async (t) => {
   });
 });
 
-Deno.test("nonEmpty validation for arrays", async (t) => {
+test("nonEmpty validation for arrays", async (t) => {
   await withDatabase(t.name, async (db) => {
     const schema = {
       tags: v.pipe(v.array(v.string()), v.nonEmpty("Tags cannot be empty")),
@@ -72,7 +73,7 @@ Deno.test("nonEmpty validation for arrays", async (t) => {
   });
 });
 
-Deno.test("nonEmpty with other validations", async (t) => {
+test("nonEmpty with other validations", async (t) => {
   await withDatabase(t.name, async (db) => {
     const schema = {
       title: v.pipe(

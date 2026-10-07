@@ -18,6 +18,22 @@ import type {
 
 type MockGenerationBucket = keyof DatabaseState;
 
+/**
+ * Longest generator message carried into a validation line. A generator's
+ * message can quote the value it rejected, and a regex-backed draw can be
+ * kilobytes of random characters: the summary names the field and the
+ * pattern, the value itself is noise.
+ */
+export const MAX_FAILURE_MESSAGE_LENGTH = 300;
+
+/** Cuts a generator message down to {@link MAX_FAILURE_MESSAGE_LENGTH}. */
+export function summarizeFailureMessage(message: string): string {
+  const oneLine = message.replace(/\s+/g, " ").trim();
+  return oneLine.length > MAX_FAILURE_MESSAGE_LENGTH
+    ? `${oneLine.slice(0, MAX_FAILURE_MESSAGE_LENGTH)}… (${oneLine.length - MAX_FAILURE_MESSAGE_LENGTH} more characters)`
+    : oneLine;
+}
+
 /** Human label per bucket, reused by every failure message. */
 const BUCKET_LABELS: Record<MockGenerationBucket, string> = {
   collections: "collection",
@@ -73,7 +89,7 @@ const BUCKET_PROBES: {
       schemas.scopedMultiCollections?.[failure.collection] !== undefined,
     hasDocuments: (state, failure) =>
       (state.scopedMultiCollections[failure.collection]?.content.length ?? 0) >
-        0,
+      0,
   },
 };
 
@@ -108,12 +124,13 @@ export function foldMockGenerationFailures(
     // coincide. They are never blocking — unlike a generation failure,
     // where an empty-but-declared target stays an error.
     if (failure.kind === "correlation") {
-      warnings.push(`Mock identity correlation: ${failure.message}`);
+      warnings.push(
+        `Mock identity correlation: ${summarizeFailureMessage(failure.message)}`,
+      );
       continue;
     }
 
-    const message =
-      `Mock data generation failed for ${label} "${failure.collection}": ${failure.message}`;
+    const message = `Mock data generation failed for ${label} "${failure.collection}": ${summarizeFailureMessage(failure.message)}`;
 
     if (
       probe.isDeclared(schemas, failure) &&

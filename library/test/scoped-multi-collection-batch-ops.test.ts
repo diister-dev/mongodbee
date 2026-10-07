@@ -1,7 +1,8 @@
 // Batch operations on a ScopedView: deleteIds, updateMany across multiple
 // types, and the empty-insertMany edge case.
 
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals, assertRejects } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";
@@ -14,6 +15,7 @@ async function makeCatalog(
   db: Parameters<Parameters<typeof withDatabase>[1]>[0],
 ) {
   return await scopedMultiCollection(db, "catalog", {
+    schemaManagement: "auto",
     scope: refId("exposition"),
     types: {
       artwork: { title: v.string(), year: v.number() },
@@ -24,7 +26,7 @@ async function makeCatalog(
 
 // -------- deleteIds -----------------------------------------------------
 
-Deno.test("deleteIds: batch-deletes several ids within the scope and returns the real deletedCount", async () => {
+test("deleteIds: batch-deletes several ids within the scope and returns the real deletedCount", async () => {
   await withDatabase("smc2-delids-scope", async (db) => {
     const catalog = await makeCatalog(db);
     const expo = catalog.scope(EXPO_A);
@@ -46,7 +48,7 @@ Deno.test("deleteIds: batch-deletes several ids within the scope and returns the
   });
 });
 
-Deno.test("deleteIds: ids from another scope are NOT deleted (returns 0, no throw)", async () => {
+test("deleteIds: ids from another scope are NOT deleted (returns 0, no throw)", async () => {
   await withDatabase("smc2-delids-crossscope", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);
@@ -73,7 +75,7 @@ Deno.test("deleteIds: ids from another scope are NOT deleted (returns 0, no thro
   });
 });
 
-Deno.test("deleteIds: empty id array removes nothing and returns 0", async () => {
+test("deleteIds: empty id array removes nothing and returns 0", async () => {
   await withDatabase("smc2-delids-empty", async (db) => {
     const catalog = await makeCatalog(db);
     const expo = catalog.scope(EXPO_A);
@@ -89,7 +91,7 @@ Deno.test("deleteIds: empty id array removes nothing and returns 0", async () =>
   });
 });
 
-Deno.test("deleteIds: is type-scoped — an id of another type in the batch is ignored", async () => {
+test("deleteIds: is type-scoped — an id of another type in the batch is ignored", async () => {
   await withDatabase("smc2-delids-type", async (db) => {
     const catalog = await makeCatalog(db);
     const expo = catalog.scope(EXPO_A);
@@ -107,7 +109,7 @@ Deno.test("deleteIds: is type-scoped — an id of another type in the batch is i
 
 // -------- updateMany across multiple types ------------------------------
 
-Deno.test("updateMany: applies per-id updates across MULTIPLE types in one ops object", async () => {
+test("updateMany: applies per-id updates across MULTIPLE types in one ops object", async () => {
   await withDatabase("smc2-updmany-multitype", async (db) => {
     const catalog = await makeCatalog(db);
     const expo = catalog.scope(EXPO_A);
@@ -138,7 +140,7 @@ Deno.test("updateMany: applies per-id updates across MULTIPLE types in one ops o
   });
 });
 
-Deno.test("updateMany: ids outside the scope match nothing and are excluded from the count", async () => {
+test("updateMany: ids outside the scope match nothing and are excluded from the count", async () => {
   await withDatabase("smc2-updmany-crossscope", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);
@@ -164,7 +166,7 @@ Deno.test("updateMany: ids outside the scope match nothing and are excluded from
 
 // -------- empty insertMany ----------------------------------------------
 
-Deno.test("insertMany([]) with an empty batch — asserts current driver behavior", async () => {
+test("insertMany([]) with an empty batch — asserts current driver behavior", async () => {
   await withDatabase("smc2-insertmany-empty", async (db) => {
     const catalog = await makeCatalog(db);
     const expo = catalog.scope(EXPO_A);

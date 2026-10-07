@@ -1,5 +1,6 @@
+import { test } from "./+harness.ts";
 import * as v from "../src/schema.ts";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "./+assert.ts";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { withDatabase } from "./+shared.ts";
@@ -42,7 +43,7 @@ const storeModel = defineModel("store", { schema: storeSchema });
  * and handle conflicts correctly.
  */
 
-Deno.test("Session Concurrent: Regular collection operations inside and outside session", async (t) => {
+test("Session Concurrent: Regular collection operations inside and outside session", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create collections with schemas
     const users = await collection(db, "users", userSchema);
@@ -64,10 +65,7 @@ Deno.test("Session Concurrent: Regular collection operations inside and outside 
     // Start a transaction that will modify data
     const sessionUpdatePromise = users.withSession(async () => {
       // Update user in session
-      await users.updateOne(
-        { _id: userId },
-        { $set: { age: 31, version: 2 } },
-      );
+      await users.updateOne({ _id: userId }, { $set: { age: 31, version: 2 } });
 
       // Update product in session
       await products.updateOne(
@@ -105,10 +103,7 @@ Deno.test("Session Concurrent: Regular collection operations inside and outside 
     assertEquals(productOutsideSession.version, 1);
 
     // Make a separate update outside the session
-    await products.updateOne(
-      { _id: productId },
-      { $set: { price: 95 } },
-    );
+    await products.updateOne({ _id: productId }, { $set: { price: 95 } });
 
     // Wait for transaction to complete
     await sessionUpdatePromise;
@@ -125,7 +120,7 @@ Deno.test("Session Concurrent: Regular collection operations inside and outside 
   });
 });
 
-Deno.test("Session Concurrent: MultiCollection operations inside and outside session", async (t) => {
+test("Session Concurrent: MultiCollection operations inside and outside session", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create multi-collection
     const store = await multiCollection(db, "store", storeModel);
@@ -215,7 +210,7 @@ Deno.test("Session Concurrent: MultiCollection operations inside and outside ses
   });
 });
 
-Deno.test("Session Concurrent: Mixed collection types with concurrent operations", async (t) => {
+test("Session Concurrent: Mixed collection types with concurrent operations", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create regular collection and multi-collection
     const users = await collection(db, "users", userSchema);
@@ -237,10 +232,7 @@ Deno.test("Session Concurrent: Mixed collection types with concurrent operations
     // Start a transaction involving both collection types
     const sessionUpdatePromise = users.withSession(async () => {
       // Update user in regular collection
-      await users.updateOne(
-        { _id: userId },
-        { $set: { age: 36, version: 2 } },
-      );
+      await users.updateOne({ _id: userId }, { $set: { age: 36, version: 2 } });
 
       // Update product in multi-collection
       await store.updateOne("product", productId, {
@@ -310,7 +302,7 @@ Deno.test("Session Concurrent: Mixed collection types with concurrent operations
   });
 });
 
-Deno.test("Session Concurrent: Rollback shouldn't affect outside operations", async (t) => {
+test("Session Concurrent: Rollback shouldn't affect outside operations", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create regular collection and multi-collection
     const users = await collection(db, "users", userSchema);

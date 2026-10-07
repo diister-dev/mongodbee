@@ -1,15 +1,55 @@
 import * as v from "./schema.ts";
 import type * as m from "mongodb";
+import {
+  type StoredDocument,
+  toStoredDocument,
+  toStoredFilter,
+  toStringId,
+} from "./stored-document.ts";
+import { type ReturningPlan, returnInserted } from "./insert-returning.ts";
 import { toMongoValidator } from "./validator.ts";
 import { dbId, newId } from "./ids.ts";
-import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
+import { sanitizeForMongoDB } from "./sanitizer.ts";
+import type { OperatorFor } from "./update-operators.ts";
+import {
+  type DistinctField,
+  type DistinctValue,
+  type ProjectedShape,
+  type ProjectionPath,
+  refuseProjection,
+  type ValidatedFindOptions as FindOptions,
+} from "./typed-reads.ts";
 import { createDotNotationSchema } from "./dot-notation.ts";
-import { getSessionContext } from "./session.ts";
+import {
+  type GuardedFindOneAndUpdateOptions,
+  type GuardedUpdateOptions,
+  type TypedUpdateOneOptions,
+  guardedUpdateOps,
+  type GuardedWriteResult,
+  upsertInsertFields,
+} from "./guarded-write.ts";
+import { ambientSessionCollection, getSessionContext } from "./session.ts";
+import { COMPUTED_ROOT } from "./computed-guard.ts";
+import { maintainedCollection } from "./computed-maintenance.ts";
+import {
+  type DriverCollectionOptions,
+  PRIMARY,
+  type ReadOptions,
+  type ReadPreferenceInput,
+  readingCollection,
+  readOpts,
+  type WithReadPreferenceInput,
+} from "./read-preference.ts";
+import {
+  aggregateThrough,
+  findOneThrough,
+  findThrough,
+} from "./request-context.ts";
 import { withIndex } from "./indexes.ts";
 import type { FlatType } from "../types/flat.ts";
 import type { Db } from "./mongodb.ts";
-import { dirtyEquivalent } from "./utils/object.ts";
-import { mongoOperationQueue } from "./operation.ts";
+import { ensureValidator } from "./utils/ensure-validator.ts";
+import { withDatabaseDdlLock } from "./ddl-lock.ts";
 import type { MultiCollectionModel } from "./multi-collection-model.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
 import {
@@ -19,8 +59,15 @@ import {
 } from "./migration/multicollection-registry.ts";
 import { getLastAppliedMigration } from "./migration/state.ts";
 import { applyMultiCollectionIndexes } from "./indexes-applier.ts";
+import {
+  normalizeTypes,
+  type ResolveTypes,
+  type TypeInput,
+} from "./type-definition.ts";
 import { isSchemaManaged } from "./runtime-config.ts";
 import { createLogger } from "./utils/logger.ts";
+import { type Page, warnSkippedInvalid } from "./page.ts";
+import { parseStored } from "./validation-error.ts";
 import {
   assertSortResolvableBeforePipeline,
   buildCursorLadderBranches,
@@ -29,7 +76,9 @@ import {
   buildSortPaginateStages,
   composeCursorQuery,
   composeCursorStageMatch,
+  countingPipeline,
   normalizePaginateSort,
+  pageBatchSize,
   type SortMachinery,
 } from "./paginate-sort.ts";
 import { assertLetDoesNotShadowJoinBinding } from "./stage-builder.ts";
@@ -73,56 +122,77 @@ type CollectionOptions = {
   telemetry?: TelemetryOptions;
 };
 
-// Use _id if the schema is a literal schema, otherwise use dbId
-type DynId<T> = T extends v.LiteralSchema<any, AnyMessage> ? T
+// Mirrors the runtime `{ _id: dbId(key), ...fields }`: an element's own `_id`
+// replaces the default. Intersecting both instead infers `_id: never`.
+type IdSchema<TFields> = "_id" extends keyof TFields
+  ? TFields["_id"]
   : ReturnType<typeof dbId>;
 
-type AnyMessage = any;
-
-type Elements<T extends Record<string, any>> = {
-  [key in keyof T]: {
-    _id: DynId<T[key]["_id"]>;
-    _type: v.LiteralSchema<key, AnyMessage>;
-  } & T[key];
-}[keyof T];
-
-type OutputElementSchema<T extends Record<string, any>, K extends keyof T> =
-  v.ObjectSchema<
-    {
-      _id: DynId<T[K]["_id"]>;
-      _type: v.LiteralSchema<K, AnyMessage>;
-    } & T[K],
-    any
-  >;
-
-type ElementSchema<T extends Record<string, any>, K extends keyof T> =
-  v.ObjectSchema<
-    {
-      _id: DynId<T[K]["_id"]>;
-    } & T[K],
-    any
-  >;
+type LiteralMessage = v.ErrorMessage<v.LiteralIssue> | undefined;
+type ObjectMessage = v.ErrorMessage<v.ObjectIssue> | undefined;
 
 type AnySchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
-type MultiSchema<T extends Record<string, any>> = Elements<T>;
-
 type MultiCollectionSchema = Record<string, Record<string, AnySchema>>;
+
+type Elements<T extends MultiCollectionSchema> = {
+  [key in keyof T]: {
+    _id: IdSchema<T[key]>;
+    _type: v.LiteralSchema<key, LiteralMessage>;
+  } & Omit<T[key], "_id">;
+}[keyof T];
+
+type OutputElementSchema<
+  T extends MultiCollectionSchema,
+  K extends keyof T,
+> = v.ObjectSchema<
+  {
+    _id: IdSchema<T[K]>;
+    _type: v.LiteralSchema<K, LiteralMessage>;
+  } & Omit<T[K], "_id">,
+  ObjectMessage
+>;
+
+type ElementSchema<
+  T extends MultiCollectionSchema,
+  K extends keyof T,
+> = v.ObjectSchema<
+  {
+    _id: IdSchema<T[K]>;
+  } & Omit<T[K], "_id">,
+  ObjectMessage
+>;
+
+/** Insert input: `_id` is minted when omitted. */
+type InsertDoc<T extends MultiCollectionSchema, K extends keyof T> = Omit<
+  v.InferInput<ElementSchema<T, K>>,
+  "_id"
+> & { _id?: string };
+
+type MultiSchema<T extends MultiCollectionSchema> = Elements<T>;
 
 /**
  * Type helper to allow field removal with removeField()
  * Makes all fields accept either their original type or a symbol (for removeField())
  * Recursively applies to nested objects
  */
-type DeepWithRemovable<T> = T extends Record<string, unknown>
-  ? { [K in keyof T]: DeepWithRemovable<T[K]> | symbol }
-  : T;
+type DeepWithRemovable<T> =
+  T extends Record<string, unknown>
+    ? {
+        [K in keyof T]:
+          | DeepWithRemovable<T[K]>
+          | symbol
+          | OperatorFor<NonNullable<T[K]>>;
+      }
+    : T;
 
 type WithRemovable<T> = {
-  [K in keyof T]: DeepWithRemovable<T[K]> | symbol;
+  [K in keyof T]:
+    | DeepWithRemovable<T[K]>
+    | symbol
+    | OperatorFor<NonNullable<T[K]>>;
 };
 
-// Type for aggregation pipeline stages
-type AggregationStage = Record<string, unknown>;
+import type { AggregationStage } from "./types.ts";
 type StageBuilder<T extends MultiCollectionSchema> = {
   match: <E extends keyof T>(
     key: E,
@@ -133,11 +203,13 @@ type StageBuilder<T extends MultiCollectionSchema> = {
     key: E,
     localField: string,
     foreignField: string,
-    asOrOptions?: string | {
-      as?: string;
-      pipeline?: (stage: StageBuilder<T>) => AggregationStage[];
-      let?: Record<string, unknown>;
-    },
+    asOrOptions?:
+      | string
+      | {
+          as?: string;
+          pipeline?: (stage: StageBuilder<T>) => AggregationStage[];
+          let?: Record<string, unknown>;
+        },
   ) => AggregationStage;
   /**
    * Lookup without _type constraint - useful for polymorphic references
@@ -147,11 +219,13 @@ type StageBuilder<T extends MultiCollectionSchema> = {
   anyLookup: (
     localField: string,
     foreignField: string,
-    asOrOptions?: string | {
-      as?: string;
-      pipeline?: (stage: StageBuilder<T>) => AggregationStage[];
-      let?: Record<string, unknown>;
-    },
+    asOrOptions?:
+      | string
+      | {
+          as?: string;
+          pipeline?: (stage: StageBuilder<T>) => AggregationStage[];
+          let?: Record<string, unknown>;
+        },
   ) => AggregationStage;
   /**
    * Lookup into an external collection (outside this multi-collection).
@@ -161,11 +235,13 @@ type StageBuilder<T extends MultiCollectionSchema> = {
     fromCollection: string,
     localField: string,
     foreignField: string,
-    asOrOptions?: string | {
-      as?: string;
-      pipeline?: AggregationStage[];
-      let?: Record<string, unknown>;
-    },
+    asOrOptions?:
+      | string
+      | {
+          as?: string;
+          pipeline?: AggregationStage[];
+          let?: Record<string, unknown>;
+        },
   ) => AggregationStage;
   project: (
     projection: Record<string, 1 | 0 | string | Record<string, unknown>>,
@@ -178,23 +254,16 @@ type StageBuilder<T extends MultiCollectionSchema> = {
 };
 
 /**
- * First `$match` of a `lookup` sub-pipeline. The `_type` constant is emitted
- * as a query operator and only the correlated join key stays in `$expr`: the
- * planner does not accept an `$expr` equality as subsuming a
- * `partialFilterExpression`, so an `$expr`-only match hides the partial
- * indexes `withIndex` creates and the lookup degrades to scanning every doc
- * of the type on every input row.
+ * First `$match` of a `lookup` sub-pipeline: the `_type` constant as a query
+ * operator, nothing else. The join key itself is the lookup's own
+ * `localField` / `foreignField`. Measured on Mongo 8 with 6000 rows against
+ * 20000: two `let` + `$expr` joins on one row, one of them on an absent local
+ * field, ran over 15 s where this form runs in 0.4 s, and this form matches an
+ * array local value element by element where `$expr` matches nothing.
+ * `$$localValue` stays bound for user sub-pipeline stages that read it.
  */
-function lookupBaseMatch(
-  foreignField: string,
-  typeName: string,
-): AggregationStage {
-  return {
-    $match: {
-      _type: typeName,
-      $expr: { $eq: [`$${foreignField}`, "$$localValue"] },
-    },
-  };
+function lookupBaseMatch(typeName: string): AggregationStage {
+  return { $match: { _type: typeName } };
 }
 
 /**
@@ -224,10 +293,10 @@ function createMultiStageBuilder<T extends MultiCollectionSchema>(
         return {
           $lookup: {
             from: collectionName,
+            localField,
+            foreignField,
             let: { localValue: `$${localField}` },
-            pipeline: [
-              lookupBaseMatch(foreignField, lookupKey as string),
-            ],
+            pipeline: [lookupBaseMatch(lookupKey as string)],
             as: asOrOptions,
           },
         };
@@ -242,13 +311,15 @@ function createMultiStageBuilder<T extends MultiCollectionSchema>(
       // is spread LAST so it can never be shadowed.
       const lookupStage: Record<string, unknown> = {
         from: collectionName,
+        localField,
+        foreignField,
         let: { ...(options.let || {}), localValue: `$${localField}` },
         as,
       };
 
       // Build pipeline: start with _type match, then add user pipeline if provided
       const basePipeline: AggregationStage[] = [
-        lookupBaseMatch(foreignField, lookupKey as string),
+        lookupBaseMatch(lookupKey as string),
       ];
 
       // Add user-provided pipeline stages after the base filter
@@ -297,12 +368,7 @@ function createMultiStageBuilder<T extends MultiCollectionSchema>(
 
       return { $lookup: anyLookupStage };
     },
-    externalLookup: (
-      fromCollection,
-      localField,
-      foreignField,
-      asOrOptions,
-    ) => {
+    externalLookup: (fromCollection, localField, foreignField, asOrOptions) => {
       // Simple case: string parameter is the 'as' field name
       if (typeof asOrOptions === "string") {
         return {
@@ -360,18 +426,53 @@ function createMultiStageBuilder<T extends MultiCollectionSchema>(
 }
 
 type Input<T extends MultiCollectionSchema> = v.InferInput<
-  v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>
+  v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, ObjectMessage>], undefined>
 >;
 type Output<T extends MultiCollectionSchema> = v.InferOutput<
-  v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, any>], any>
+  v.UnionSchema<[v.ObjectSchema<MultiSchema<T>, ObjectMessage>], undefined>
 >;
 
 /**
  * Type helper to extract union members that match specific _type values
  * This creates a proper discriminated union based on _type by distributing over K
  */
-type ExtractByType<T extends MultiCollectionSchema, K extends keyof T> =
-  K extends K ? v.InferOutput<OutputElementSchema<T, K>> : never;
+type ExtractByType<
+  T extends MultiCollectionSchema,
+  K extends keyof T,
+> = K extends K ? v.InferOutput<OutputElementSchema<T, K>> : never;
+
+export type MultiPaginateOptions<
+  T extends MultiCollectionSchema,
+  K extends keyof T,
+  EN,
+  R,
+> = {
+  limit?: number;
+  afterId?: string;
+  beforeId?: string;
+  sort?: m.Sort | m.SortDirection;
+  /** Pipeline stages to execute server-side before pagination (lookups, addFields, etc.) */
+  pipeline?: (stage: StageBuilder<T>) => AggregationStage[];
+  /**
+   * Stages that run BEFORE the cursor match and the `$sort`, so `sort`
+   * may reference fields they compute (e.g. sort by a `$lookup`ed
+   * document's field). Unlike `pipeline` (which runs after the sort,
+   * lazily over ~`limit` docs), these stages run over the whole filtered
+   * set: keep them lean (join just what the sort needs). Fields they
+   * add survive into the returned docs. Sort keys must be scalar
+   * (`$first` a lookup result before sorting on it).
+   */
+  sortPipeline?: (stage: StageBuilder<T>) => AggregationStage[];
+  prepare?: (doc: ExtractByType<T, K>) => Promise<EN> | EN;
+  filter?: (doc: EN) => Promise<boolean> | boolean;
+  format?: (doc: EN) => Promise<R> | R;
+  /** Skip the countDocuments call(s); total/position will be undefined. */
+  skipTotal?: boolean;
+  /** Fetch one extra document to set hasMore cheaply; the extra row is dropped. */
+  peek?: boolean;
+  /** Overrides the collection's read preference; ignored inside a transaction. */
+  readPreference?: ReadPreferenceInput;
+};
 
 /**
  * Type representing the enhanced MongoDB collection for storing multiple document types
@@ -379,27 +480,100 @@ type ExtractByType<T extends MultiCollectionSchema, K extends keyof T> =
  */
 type MultiCollectionResult<T extends MultiCollectionSchema> = {
   withSession: Awaited<ReturnType<typeof getSessionContext>>["withSession"];
-  insertOne<E extends keyof T>(
+  /**
+   * The driver collection, for what the typed API does not cover (change
+   * streams, exotic pipelines). It skips validation and the `_type` guard,
+   * but its operations still join the ambient `withSession` transaction;
+   * see {@link ambientSessionCollection}.
+   */
+  readonly collection: m.Collection<StoredDocument>;
+  insertOne<E extends keyof T>(key: E, doc: InsertDoc<T, E>): Promise<string>;
+  /**
+   * Inserts like `insertOne` and returns the document as `getById` would read
+   * it, without the read. A type with computed fields is read back, since its
+   * computed values are filled while it is written.
+   */
+  insertOneReturning<E extends keyof T>(
     key: E,
-    doc: v.InferInput<ElementSchema<T, E>>,
-  ): Promise<string>;
+    doc: InsertDoc<T, E>,
+  ): Promise<v.InferOutput<OutputElementSchema<T, E>>>;
   insertMany<E extends keyof T>(
     key: E,
-    docs: v.InferInput<ElementSchema<T, E>>[],
-  ): Promise<(string)[]>;
+    docs: InsertDoc<T, E>[],
+  ): Promise<string[]>;
+  /**
+   * Inserts like `insertMany` and returns the documents, in input order, as
+   * `getById` would read them: no read, except one `$in` read back for a type
+   * with computed fields.
+   */
+  insertManyReturning<E extends keyof T>(
+    key: E,
+    docs: InsertDoc<T, E>[],
+  ): Promise<v.InferOutput<OutputElementSchema<T, E>>[]>;
   getById<E extends keyof T>(
     key: E,
     id: string,
+    options?: ReadOptions,
   ): Promise<v.InferOutput<OutputElementSchema<T, E>>>;
   findOne<E extends keyof T>(
     key: E,
     filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
+    options?: ReadOptions,
   ): Promise<v.InferOutput<OutputElementSchema<T, E>> | null>;
+  /**
+   * Every `key` document matching `filter`, validated. A `projection` is
+   * refused: a projected document fails validation, so it would be dropped;
+   * use {@link MultiCollectionResult.findProject}.
+   */
   find<E extends keyof T>(
     key: E,
     filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
-    options?: m.FindOptions,
+    options?: FindOptions,
   ): Promise<v.InferOutput<OutputElementSchema<T, E>>[]>;
+  /**
+   * Projected read: only the listed fields or dot paths, plus `_id` and
+   * `_type`, in their nested shape. The documents are partial, so they are
+   * not validated.
+   *
+   * @example
+   * ```typescript
+   * const rows = await catalog.findProject("product", ["name", "meta.color"]);
+   * // rows: { _id, _type, name, meta: { color } }[]
+   * ```
+   */
+  findProject<
+    E extends keyof T,
+    P extends ProjectionPath<v.InferOutput<OutputElementSchema<T, E>>>,
+  >(
+    key: E,
+    fields: readonly P[],
+    filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
+    options?: FindOptions,
+  ): Promise<
+    ProjectedShape<
+      v.InferOutput<OutputElementSchema<T, E>>,
+      P | "_id" | "_type"
+    >[]
+  >;
+  /**
+   * The distinct values of `field` (a dot path) across the `key` documents
+   * matching `filter`; an array field contributes each of its items. The
+   * values are returned as stored, not validated.
+   *
+   * @example
+   * ```typescript
+   * const tags = await catalog.distinct("product", "tags", { active: true });
+   * ```
+   */
+  distinct<
+    E extends keyof T,
+    F extends DistinctField<v.InferOutput<OutputElementSchema<T, E>>>,
+  >(
+    key: E,
+    field: F,
+    filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
+    options?: WithReadPreferenceInput<m.DistinctOptions>,
+  ): Promise<DistinctValue<v.InferOutput<OutputElementSchema<T, E>>, F>[]>;
   /**
    * Find the first document matching a cross-type filter — no `_type`
    * constraint injected. Symmetric to `deleteAny` ; useful when the
@@ -411,6 +585,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
    */
   findOneAny(
     filter: m.Filter<Input<T>>,
+    options?: ReadOptions,
   ): Promise<Output<T> | null>;
   /**
    * Find all documents matching a cross-type filter — no `_type` constraint
@@ -420,48 +595,13 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
    */
   findAny(
     filter: m.Filter<Input<T>>,
-    options?: m.FindOptions,
+    options?: FindOptions,
   ): Promise<Output<T>[]>;
-  paginate<
-    E extends keyof T,
-    EN = v.InferOutput<OutputElementSchema<T, E>>,
-    R = EN,
-  >(
+  paginate<E extends keyof T, EN = ExtractByType<T, E>, R = EN>(
     key: E,
     filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
-    options?: {
-      limit?: number;
-      afterId?: string;
-      beforeId?: string;
-      sort?: m.Sort | m.SortDirection;
-      /** Pipeline stages to execute server-side before pagination (lookups, addFields, etc.) */
-      pipeline?: (stage: StageBuilder<T>) => AggregationStage[];
-      /**
-       * Stages that run BEFORE the cursor match and the `$sort`, so `sort`
-       * may reference fields they compute (e.g. sort by a `$lookup`ed
-       * document's field). Unlike `pipeline` (which runs after the sort,
-       * lazily over ~`limit` docs), these stages run over the whole filtered
-       * set — keep them lean (join just what the sort needs). Fields they
-       * add survive into the returned docs. Sort keys must be scalar
-       * (`$first` a lookup result before sorting on it).
-       */
-      sortPipeline?: (stage: StageBuilder<T>) => AggregationStage[];
-      prepare?: (
-        doc: v.InferOutput<OutputElementSchema<T, E>>,
-      ) => Promise<EN> | EN;
-      filter?: (doc: EN) => Promise<boolean> | boolean;
-      format?: (doc: EN) => Promise<R> | R;
-      /** Skip the countDocuments call(s); total/position will be undefined. */
-      skipTotal?: boolean;
-      /** Fetch one extra document to set hasMore cheaply; the extra row is dropped. */
-      peek?: boolean;
-    },
-  ): Promise<{
-    total?: number;
-    position?: number;
-    data: R[];
-    hasMore?: boolean;
-  }>;
+    options?: MultiPaginateOptions<T, E, EN, R>,
+  ): Promise<Page<R>>;
   /**
    * Cross-pagination: paginate across multiple types simultaneously.
    * Documents from all specified types are merged and sorted together.
@@ -487,41 +627,20 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
   paginate<E extends (keyof T)[], EN = ExtractByType<T, E[number]>, R = EN>(
     keys: E,
     filter?: m.Filter<v.InferInput<OutputElementSchema<T, E[number]>>>,
-    options?: {
-      limit?: number;
-      afterId?: string;
-      beforeId?: string;
-      sort?: m.Sort | m.SortDirection;
+    options?: MultiPaginateOptions<T, E[number], EN, R> & {
       /**
        * When true, sorts by the ULID part of _id (after the type prefix),
        * giving chronological ordering across different types.
        * Only applies when sort includes _id or when using default sort.
+       * Incompatible with `sortPipeline`.
        */
       naturalIdSort?: boolean;
-      /** Pipeline stages to execute server-side before pagination (lookups, addFields, etc.) */
-      pipeline?: (stage: StageBuilder<T>) => AggregationStage[];
-      /** See the single-type overload. Incompatible with `naturalIdSort`. */
-      sortPipeline?: (stage: StageBuilder<T>) => AggregationStage[];
-      prepare?: (
-        doc: ExtractByType<T, E[number]>,
-      ) => Promise<EN> | EN;
-      filter?: (doc: EN) => Promise<boolean> | boolean;
-      format?: (doc: EN) => Promise<R> | R;
-      /** Skip the countDocuments call(s); total/position will be undefined. */
-      skipTotal?: boolean;
-      /** Fetch one extra document to set hasMore cheaply; the extra row is dropped. */
-      peek?: boolean;
     },
-  ): Promise<{
-    total?: number;
-    position?: number;
-    data: R[];
-    hasMore?: boolean;
-  }>;
+  ): Promise<Page<R>>;
   countDocuments<E extends keyof T>(
     key: E,
     filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
-    options?: m.CountDocumentsOptions,
+    options?: WithReadPreferenceInput<m.CountDocumentsOptions>,
   ): Promise<number>;
   deleteId<E extends keyof T>(key: E, id: string): Promise<number>;
   deleteIds<E extends keyof T>(key: E, ids: string[]): Promise<number>;
@@ -537,6 +656,7 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
       WithRemovable<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>>,
       "_id" | "type"
     >,
+    options?: TypedUpdateOneOptions,
   ): Promise<number>;
   updateMany(
     operation: {
@@ -548,9 +668,46 @@ type MultiCollectionResult<T extends MultiCollectionSchema> = {
       };
     },
   ): Promise<number>;
-  aggregate(
+  /**
+   * Guarded single-document update of the first `key` document matching
+   * `filter` — the guard is part of the atomic write. `max` bounds fields that
+   * only move forward; `upsert` inserts when nothing matches, after validating
+   * the document it would create. A miss is `matched: 0`, not an error.
+   * Same contract as the scoped view's `updateWhere`.
+   */
+  updateWhere<E extends keyof T>(
+    key: E,
+    filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
+    doc: Omit<
+      WithRemovable<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>>,
+      "_id" | "type"
+    >,
+    options?: GuardedUpdateOptions<
+      Omit<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>, "_id" | "type">
+    >,
+  ): Promise<GuardedWriteResult>;
+  /**
+   * Atomically update the first `key` document matching `filter` (the first
+   * in `sort` order when given) and return it, before or after (the default)
+   * the write; `null` on a miss. With `upsert`, a miss inserts the document
+   * the filter, `setOnInsert` and `doc` describe, validated first, and
+   * returns it. Same contract as the scoped view's `findOneAndUpdate`.
+   */
+  findOneAndUpdate<E extends keyof T>(
+    key: E,
+    filter: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
+    doc: Omit<
+      WithRemovable<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>>,
+      "_id" | "type"
+    >,
+    options?: GuardedFindOneAndUpdateOptions<
+      Omit<Partial<FlatType<v.InferInput<ElementSchema<T, E>>>>, "_id" | "type">
+    >,
+  ): Promise<v.InferOutput<OutputElementSchema<T, E>> | null>;
+  aggregate<R extends m.Document = m.Document>(
     stageBuilder: (stage: StageBuilder<T>) => AggregationStage[],
-  ): Promise<any[]>;
+    options?: ReadOptions,
+  ): Promise<R[]>;
   drop(options: { force: true }): Promise<boolean>;
 };
 
@@ -588,14 +745,37 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
   db: Db,
   collectionName: string,
   model: T | MultiCollectionModel<T>,
-  options?: m.CollectionOptions & CollectionOptions,
+  options?: DriverCollectionOptions & CollectionOptions,
+): Promise<MultiCollectionResult<T>>;
+export async function multiCollection<
+  const I extends Record<string, TypeInput>,
+>(
+  db: Db,
+  collectionName: string,
+  model: I | MultiCollectionModel<I>,
+  options?: DriverCollectionOptions & CollectionOptions,
+): Promise<MultiCollectionResult<ResolveTypes<I>>>;
+export async function multiCollection<const T extends MultiCollectionSchema>(
+  db: Db,
+  collectionName: string,
+  model:
+    | T
+    | MultiCollectionModel<T>
+    | Record<string, TypeInput>
+    | MultiCollectionModel,
+  options?: DriverCollectionOptions & CollectionOptions,
 ): Promise<MultiCollectionResult<T>> {
-  // Extract schema from model
-  const useModel = model && (model as MultiCollectionModel<T>).schema &&
-    (typeof model.expose === "function");
-  const collectionSchema =
-    (useModel ? (model as MultiCollectionModel<T>).schema : model) as T;
-  type TOutput = Output<T>;
+  const useModel =
+    model &&
+    (model as MultiCollectionModel).schema &&
+    typeof (model as MultiCollectionModel).expose === "function";
+  const normalized = normalizeTypes(
+    useModel
+      ? (model as MultiCollectionModel).schema
+      : (model as Record<string, TypeInput>),
+  );
+  const collectionSchema = normalized.fields as T;
+  const composites = normalized.indexes;
 
   const schemaWithId = Object.entries(collectionSchema).reduce(
     (acc, [key, value]) => {
@@ -618,7 +798,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         [key]: v.object(value),
       };
     },
-    {} as { [key in keyof T]: ElementSchema<T, key> },
+    {} as { [key in keyof T]: OutputElementSchema<T, key> },
   );
 
   const dotSchemaElements = Object.entries(schemaElements).reduce(
@@ -628,14 +808,80 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         [key]: createDotNotationSchema(value),
       };
     },
-    {} as Record<keyof T, v.BaseSchema<any, any, any>>,
+    {} as Record<keyof T, AnySchema>,
   );
 
-  const schema = v.union([
+  const schema: v.GenericSchema<unknown, Output<T>> = v.union([
     ...Object.values(schemaElements),
   ]);
 
-  const opts: m.CollectionOptions & CollectionOptions = {
+  const GUARDED_RESERVED_FIELDS = ["_id", "_type"] as const;
+
+  function multiUpdateOps(
+    operation: string,
+    typeName: string,
+    doc: Record<string, unknown>,
+    max: Record<string, unknown> | undefined,
+    setOnInsert: Record<string, unknown> | undefined,
+    undefinedBehavior?: "remove" | "ignore" | "error",
+  ) {
+    for (const part of [doc, max, setOnInsert]) {
+      if (!part) continue;
+      for (const key of Object.keys(part)) {
+        const root = key.split(".")[0];
+        if ((GUARDED_RESERVED_FIELDS as readonly string[]).includes(root)) {
+          throw new Error(
+            `${operation}: "${root}" cannot be written — it is owned by the multi-collection`,
+          );
+        }
+      }
+    }
+    const dotSchema = dotSchemaElements[typeName as keyof T];
+    if (!dotSchema) throw new Error(`${operation}: unknown type "${typeName}"`);
+    return guardedUpdateOps(
+      operation,
+      { root: schemaElements[typeName as keyof T], dot: dotSchema },
+      doc,
+      max,
+      undefinedBehavior,
+    );
+  }
+
+  /** The update, `_type`-guarded filter and upsert flag of `updateWhere` / `findOneAndUpdate`. */
+  function guardedWrite(
+    operation: string,
+    typeName: string,
+    filter: Record<string, unknown>,
+    doc: Record<string, unknown>,
+    options: GuardedUpdateOptions<Record<string, unknown>> | undefined,
+  ) {
+    const setOnInsert = options?.setOnInsert;
+    const { ops, written, inserted } = multiUpdateOps(
+      operation,
+      typeName,
+      doc,
+      options?.max,
+      setOnInsert,
+    );
+    const upsert = options?.upsert === true;
+    if (upsert) {
+      const onInsert = upsertInsertFields({
+        insertSchema: schemaElements[typeName as keyof T],
+        filter,
+        values: inserted,
+        setOnInsert,
+        written,
+        injected: (candidate) => ({
+          _id: candidate._id ?? `${typeName}:${newId()}`,
+        }),
+        ignored: ["_type"],
+      });
+      if (Object.keys(onInsert).length > 0) ops.$setOnInsert = onInsert;
+    }
+    return { ops, guard: { ...filter, _type: typeName }, upsert };
+  }
+
+  const opts: DriverCollectionOptions & CollectionOptions = {
     ...{
       safeDelete: true,
       undefinedBehavior: "remove", // Default behavior
@@ -644,10 +890,6 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
   };
 
   async function applyValidator() {
-    log.debug(`applyValidator(${collectionName}): listCollections`);
-    const collections = await db.listCollections({ name: collectionName })
-      .toArray();
-
     const modelValidators = createMetadataSchemas();
 
     const validator = toMongoValidator(
@@ -663,50 +905,13 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
       ]),
     );
 
-    if (collections.length === 0) {
-      log.debug(`applyValidator(${collectionName}): createCollection`);
-      // Create the collection with the validator
-      await db.createCollection(collectionName, {
-        validator,
-      });
-      log.debug(`applyValidator(${collectionName}): createCollection done`);
-    } else {
-      log.debug(
-        `applyValidator(${collectionName}): exists, comparing validator`,
-      );
-      // Check collection options
-      const existingOptions = await db.command({
-        listCollections: 1,
-        filter: { name: collectionName },
-      });
-      const currentSchema =
-        existingOptions.cursor?.firstBatch?.[0]?.options?.validator || {};
-
-      const sameSchema = dirtyEquivalent(currentSchema, validator);
-
-      if (sameSchema) {
-        log.debug(
-          `applyValidator(${collectionName}): validator unchanged, skipping`,
-        );
-        return; // No need to update
-      }
-
-      log.debug(
-        `applyValidator(${collectionName}): collMod (updating validator)`,
-      );
-      // Update the collection with the validator
-      await db.command({
-        collMod: collectionName,
-        validator,
-      });
-      log.debug(`applyValidator(${collectionName}): collMod done`);
-    }
+    await ensureValidator(db, collectionName, validator);
   }
 
   async function applyIndexes() {
     log.debug(`applyIndexes(${collectionName}): start`);
     await applyMultiCollectionIndexes(collection, schemaElements, {
-      queue: mongoOperationQueue,
+      composites,
     });
     log.debug(`applyIndexes(${collectionName}): done`);
   }
@@ -733,8 +938,14 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     );
 
     if (shouldAutoApply && !insideSession) {
-      await applyValidator();
-      await applyIndexes();
+      // Validator and indexes are one DDL block, serialised per database (see
+      // ddl-lock.ts). The metadata step below stays OUTSIDE the lock on
+      // purpose: it goes through other mongodbee collections, whose own
+      // construction would take the same lock and deadlock.
+      await withDatabaseDdlLock(db, async () => {
+        await applyValidator();
+        await applyIndexes();
+      });
 
       // Auto-initialize metadata for multi-collection model (only in auto mode)
       // In managed mode, migrations handle metadata creation
@@ -766,7 +977,12 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     log.debug(`init(${collectionName}): end`);
   }
 
-  const collection = db.collection<TOutput>(collectionName, opts);
+  const collection = maintainedCollection(
+    db,
+    readingCollection<StoredDocument, typeof opts>(db, collectionName, opts),
+    collectionName,
+    Object.values(collectionSchema).some((fields) => COMPUTED_ROOT in fields),
+  );
   await init();
 
   const tele = createOperationTracer(opts.telemetry, {
@@ -776,30 +992,115 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
   });
   registerClientTelemetry(db.client, opts.telemetry);
 
-  return {
-    withSession: sessionContext!.withSession,
-    async insertOne(key, doc) {
-      const run = async () => {
-        const _id = doc._id ?? `${key as string}:${newId()}`;
-        const schema = schemaElements[key];
-        const validation = v.parse(schema, {
-          ...doc,
-          _id,
-        });
+  async function insertStored(
+    key: keyof T,
+    doc: { _id?: string },
+  ): Promise<{ id: string; stored: Record<string, unknown> }> {
+    const _id = doc._id ?? `${key as string}:${newId()}`;
+    const schema = schemaElements[key];
+    const validation = v.parse(schema, {
+      ...doc,
+      _id,
+    });
 
-        // Apply sanitization based on configuration
-        const safeDoc = sanitizeForMongoDB(validation, {
+    // Apply sanitization based on configuration
+    const safeDoc = toStoredDocument(
+      sanitizeForMongoDB(validation, {
+        undefinedBehavior: opts.undefinedBehavior || "remove",
+        deep: true,
+      }),
+    );
+
+    const session = sessionContext.getSession();
+    const result = await collection.insertOne(safeDoc, { session });
+    if (!result.acknowledged) {
+      throw new Error("Insert failed");
+    }
+
+    return {
+      id: result.insertedId as unknown as string,
+      stored: safeDoc as Record<string, unknown>,
+    };
+  }
+
+  async function insertManyStored(
+    key: keyof T,
+    docs: readonly { _id?: string }[],
+  ): Promise<{ ids: string[]; stored: Record<string, unknown>[] }> {
+    // Validate each doc against the SPECIFIC element schema (as insertOne
+    // does), not the whole union: the union would try every member per doc
+    // (O(types) work) and, on failure, surface an aggregated cross-type error
+    // instead of the precise one. Semantics are identical for valid input.
+    const schema = schemaElements[key];
+    const validation = docs.map((doc) => {
+      const _id = doc._id ?? `${key as string}:${newId()}`;
+      return v.parse(schema, {
+        ...doc,
+        _id,
+      });
+    });
+
+    // Apply sanitization based on configuration
+    const safeDocs = validation.map((doc) =>
+      toStoredDocument(
+        sanitizeForMongoDB(doc, {
           undefinedBehavior: opts.undefinedBehavior || "remove",
           deep: true,
-        }) as any;
+        }),
+      ),
+    );
 
-        const session = sessionContext.getSession();
-        const result = await collection.insertOne(safeDoc, { session });
-        if (!result.acknowledged) {
-          throw new Error("Insert failed");
-        }
+    const session = sessionContext.getSession();
+    const result = await collection.insertMany(safeDocs, { session });
+    if (!result.acknowledged) {
+      throw new Error("Insert failed");
+    }
 
-        return result.insertedId as unknown as string;
+    return {
+      ids: Object.values(result.insertedIds) as unknown as string[],
+      stored: safeDocs as Record<string, unknown>[],
+    };
+  }
+
+  function returningPlan(
+    key: keyof T,
+    operation: string,
+  ): ReturningPlan<never> {
+    return {
+      label: `${operation}(${key as string}) in "${collectionName}"`,
+      computed: COMPUTED_ROOT in collectionSchema[key],
+      decode: (doc) => parseStored(schemaElements[key], doc) as never,
+      readBack: (ids) =>
+        findThrough(
+          collection,
+          { _type: key as string, _id: { $in: ids.map(toStringId) } },
+          undefined,
+          { session: sessionContext.getSession() },
+        ) as Promise<Record<string, unknown>[]>,
+    };
+  }
+
+  return {
+    withSession: sessionContext!.withSession,
+    collection: ambientSessionCollection(collection),
+    async insertOne(key, doc) {
+      const run = async () => (await insertStored(key, doc)).id;
+      return traced(
+        tele,
+        "insertOne",
+        () => ({ [TA.DOC_TYPE]: String(key) }),
+        run,
+        () => ({ [TA.INSERTED_COUNT]: 1 }),
+      );
+    },
+    async insertOneReturning(key, doc) {
+      const run = async () => {
+        const { id, stored } = await insertStored(key, doc);
+        const [returned] = await returnInserted(
+          returningPlan(key, "insertOneReturning"),
+          { ids: [id], stored: [stored] },
+        );
+        return returned;
       };
       return traced(
         tele,
@@ -810,36 +1111,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
       );
     },
     async insertMany(key, docs) {
-      const run = async () => {
-        // Validate each doc against the SPECIFIC element schema (as insertOne
-        // does), not the whole union: the union would try every member per doc
-        // (O(types) work) and, on failure, surface an aggregated cross-type error
-        // instead of the precise one. Semantics are identical for valid input.
-        const schema = schemaElements[key];
-        const validation = docs.map((doc) => {
-          const _id = doc._id ?? `${key as string}:${newId()}`;
-          return v.parse(schema, {
-            ...doc,
-            _id,
-          });
-        });
-
-        // Apply sanitization based on configuration
-        const safeDocs = validation.map((doc) =>
-          sanitizeForMongoDB(doc, {
-            undefinedBehavior: opts.undefinedBehavior || "remove",
-            deep: true,
-          }) as any
-        );
-
-        const session = sessionContext.getSession();
-        const result = await collection.insertMany(safeDocs, { session });
-        if (!result.acknowledged) {
-          throw new Error("Insert failed");
-        }
-
-        return Object.values(result.insertedIds) as unknown as string[];
-      };
+      const run = async () => (await insertManyStored(key, docs)).ids;
       return traced(
         tele,
         "insertMany",
@@ -851,75 +1123,106 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         (ids) => ({ [TA.INSERTED_COUNT]: ids.length }),
       );
     },
-    async getById(key, id) {
+    async insertManyReturning(key, docs) {
+      const run = async () =>
+        await returnInserted(
+          returningPlan(key, "insertManyReturning"),
+          await insertManyStored(key, docs),
+        );
+      return traced(
+        tele,
+        "insertMany",
+        () => ({
+          [TA.DOC_TYPE]: String(key),
+          [TA.BATCH_SIZE]: docs.length,
+        }),
+        run,
+        (inserted) => ({ [TA.INSERTED_COUNT]: inserted.length }),
+      );
+    },
+    async getById(key, id, options?) {
       const run = async () => {
         const session = sessionContext.getSession();
-        const result = await collection.findOne({
-          $and: [
-            { _type: key as string },
-            { _id: id },
-          ],
-        } as any, { session });
+        const result = await findOneThrough(
+          collection,
+          { $and: [{ _type: key as string }, { _id: id }] },
+          options,
+          readOpts(session, options),
+        );
 
         if (!result) {
           throw new Error("No element found");
         }
 
-        return v.parse(schema, result);
+        return parseStored(schemaElements[key], result);
       };
-      return traced(tele, "getById", () => ({
-        [TA.DOC_TYPE]: String(key),
-        [TA.FILTER_KEYS]: "_id",
-      }), run);
+      return traced(
+        tele,
+        "getById",
+        () => ({
+          [TA.DOC_TYPE]: String(key),
+          [TA.FILTER_KEYS]: "_id",
+        }),
+        run,
+      );
     },
-    async findOne(key, filter) {
+    async findOne(key, filter, options?) {
       const run = async () => {
         const session = sessionContext.getSession();
-        const result = await collection.findOne({
-          $and: [
-            { _type: key as string },
-            filter,
-          ],
-        } as any, { session });
+        const result = await findOneThrough(
+          collection,
+          { $and: [{ _type: key as string }, toStoredFilter(filter)] },
+          options,
+          readOpts(session, options),
+        );
 
         if (!result) {
           return null;
         }
 
-        return v.parse(schema, result);
+        return parseStored(schemaElements[key], result);
       };
-      return traced(tele, "findOne", () => ({
-        [TA.DOC_TYPE]: String(key),
-        [TA.FILTER_KEYS]: filterKeys(filter),
-      }), run);
+      return traced(
+        tele,
+        "findOne",
+        () => ({
+          [TA.DOC_TYPE]: String(key),
+          [TA.FILTER_KEYS]: filterKeys(filter),
+        }),
+        run,
+      );
     },
     async find(key, filter, options) {
       const run = async () => {
+        refuseProjection("find", options, "findProject(type, fields)");
         const typeChecker = {
           _type: key as string,
         };
 
         const session = sessionContext.getSession();
-        const cursor = collection.find({
-          $and: filter ? [typeChecker, filter] : [typeChecker],
-        } as any, { session, ...options });
-
-        const result = await cursor.toArray();
-        let invalidsCount = 0;
-
-        const output = result.map((item) => {
-          const parsed = v.safeParse(schema, item);
-          if (!parsed.success) {
-            invalidsCount++;
-            return null;
-          }
-          return parsed.output;
-        }).filter((
-          item,
-        ): item is v.InferOutput<OutputElementSchema<T, typeof key>> =>
-          item !== null
+        const result = await findThrough(
+          collection,
+          {
+            $and:
+              filter === undefined
+                ? [typeChecker]
+                : [typeChecker, toStoredFilter(filter)],
+          },
+          options,
+          readOpts(session, options),
         );
 
+        const output: v.InferOutput<OutputElementSchema<T, typeof key>>[] = [];
+        for (const item of result) {
+          const parsed = v.safeParse(schemaElements[key], item);
+          if (parsed.success) output.push(parsed.output);
+        }
+        warnSkippedInvalid(
+          log,
+          collectionName,
+          result.length - output.length,
+          "find",
+        );
         return output;
       };
       return traced(
@@ -933,26 +1236,77 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         (docs) => ({ [TA.RETURNED_ROWS]: docs.length }),
       );
     },
-    // Implementation supports both single key and array of keys
-    // Type safety is enforced through the overload signatures above
-    async paginate(
-      keyOrKeys: keyof T | (keyof T)[],
-      filter?: m.Filter<any>,
-      options?: {
-        limit?: number;
-        afterId?: string;
-        beforeId?: string;
-        sort?: m.Sort | m.SortDirection;
-        naturalIdSort?: boolean;
-        pipeline?: (stage: StageBuilder<T>) => AggregationStage[];
-        sortPipeline?: (stage: StageBuilder<T>) => AggregationStage[];
-        prepare?: (doc: any) => Promise<any> | any;
-        filter?: (doc: any) => Promise<boolean> | boolean;
-        format?: (doc: any) => Promise<any> | any;
-        skipTotal?: boolean;
-        peek?: boolean;
-      },
+    async findProject<
+      E extends keyof T,
+      P extends ProjectionPath<v.InferOutput<OutputElementSchema<T, E>>>,
+    >(
+      key: E,
+      fields: readonly P[],
+      filter?: m.Filter<v.InferInput<OutputElementSchema<T, E>>>,
+      options?: FindOptions,
     ) {
+      const run = async () => {
+        const projection: Record<string, 1> = { _id: 1, _type: 1 };
+        for (const field of fields) projection[field as string] = 1;
+        const conditions: Record<string, unknown>[] = [
+          { _type: key as string },
+        ];
+        if (filter !== undefined) conditions.push(toStoredFilter(filter));
+        const session = sessionContext.getSession();
+        const rows = await findThrough(
+          collection,
+          { $and: conditions },
+          { ...options, projection },
+          { ...readOpts(session, options), projection },
+        );
+        return rows as unknown as ProjectedShape<
+          v.InferOutput<OutputElementSchema<T, E>>,
+          P | "_id" | "_type"
+        >[];
+      };
+      return traced(
+        tele,
+        "findProject",
+        () => ({
+          [TA.DOC_TYPE]: String(key),
+          [TA.FILTER_KEYS]: filterKeys(filter),
+        }),
+        run,
+        (docs) => ({ [TA.RETURNED_ROWS]: docs.length }),
+      );
+    },
+    distinct(key, field, filter, options) {
+      const run = async () => {
+        const conditions: Record<string, unknown>[] = [
+          { _type: key as string },
+        ];
+        if (filter !== undefined) conditions.push(toStoredFilter(filter));
+        const session = sessionContext.getSession();
+        const values = await collection.distinct(
+          field,
+          { $and: conditions },
+          readOpts(session, options),
+        );
+        return values as never[];
+      };
+      return traced(
+        tele,
+        "distinct",
+        () => ({
+          [TA.DOC_TYPE]: String(key),
+          [TA.FILTER_KEYS]: filterKeys(filter),
+        }),
+        run,
+        (values) => ({ [TA.RETURNED_ROWS]: values.length }),
+      );
+    },
+    async paginate<K extends keyof T, EN = ExtractByType<T, K>, R = EN>(
+      keyOrKeys: K | K[],
+      filter?: unknown,
+      options?: MultiPaginateOptions<T, K, EN, R> & {
+        naturalIdSort?: boolean;
+      },
+    ): Promise<Page<R>> {
       const run = async () => {
         const { skipTotal = false, peek = false } = options || {};
         const requestedLimit = options?.limit ?? 100;
@@ -976,19 +1330,34 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           );
         }
         const session = sessionContext.getSession();
+        const readOptions = readOpts(
+          session,
+          options?.readPreference
+            ? { readPreference: options.readPreference }
+            : undefined,
+        );
 
-        // Support both single key and array of keys for cross-pagination
-        const keys = Array.isArray(keyOrKeys)
-          ? keyOrKeys as (keyof T)[]
-          : [keyOrKeys as keyof T];
+        const keys: K[] = Array.isArray(keyOrKeys) ? keyOrKeys : [keyOrKeys];
+        const parseRow = (row: StoredDocument) => {
+          const type = keys.find((key) => key === row._type);
+          if (type === undefined) return undefined;
+          const parsed = v.safeParse(schemaElements[type], row);
+          return parsed.success
+            ? (parsed.output as ExtractByType<T, K>)
+            : undefined;
+        };
 
         // Build type checker: single type or $in for multiple types
-        const typeChecker = keys.length === 1
-          ? { _type: keys[0] as string }
-          : { _type: { $in: keys as string[] } };
+        const typeChecker =
+          keys.length === 1
+            ? { _type: keys[0] as string }
+            : { _type: { $in: keys as string[] } };
 
         // Build the base query with type filter
-        const baseQuery = filter ? [typeChecker, filter] : [typeChecker];
+        const baseQuery =
+          filter === undefined
+            ? [typeChecker]
+            : [typeChecker, toStoredFilter(filter)];
         let query: Record<string, unknown> = { $and: baseQuery };
 
         // Normalize sort + direction-following `_id` tie-break (see
@@ -1005,14 +1374,15 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         // filtered set on every page (measured at 10k docs, page of 25:
         // 10 000 docsExamined + hasSortStage per page) and lets the walk use
         // the find path like any `_id` sort.
-        const useNaturalIdSort = Boolean(naturalIdSort) && "_id" in sortObj &&
-          keys.length > 1;
+        const useNaturalIdSort =
+          Boolean(naturalIdSort) && "_id" in sortObj && keys.length > 1;
         const effectiveSortObj = useNaturalIdSort
-          ? Object.fromEntries(
-            Object.entries(sortObj).map((
-              [k, v],
-            ) => [k === "_id" ? "_ulid" : k, v]),
-          ) as Record<string, 1 | -1>
+          ? (Object.fromEntries(
+              Object.entries(sortObj).map(([k, v]) => [
+                k === "_id" ? "_ulid" : k,
+                v,
+              ]),
+            ) as Record<string, 1 | -1>)
           : sortObj;
         // `_ulid` is a SUBSTRING of `_id` and not unique across types: two
         // types can carry the same suffix (custom ids are legal). `$sort`
@@ -1042,10 +1412,8 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           direction: "after" | "before",
         ): Promise<Record<string, unknown>[] | null> => {
           const anchorDoc = await collection.findOne(
-            { _id: anchorId } as never,
-            {
-              session,
-            },
+            { _id: anchorId },
+            readOptions,
           );
           if (!anchorDoc) return null;
           const enrichedAnchorDoc = useNaturalIdSort
@@ -1065,7 +1433,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           allowedTypes: (keyof T)[],
         ): boolean => {
           return allowedTypes.some((type) =>
-            id.startsWith(`${type as string}:`)
+            id.startsWith(`${type as string}:`),
           );
         };
 
@@ -1073,8 +1441,9 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           createMultiStageBuilder<T>(collectionName);
 
         // Build cursor - use aggregate if pipeline is provided or naturalIdSort is enabled
-        // deno-lint-ignore no-explicit-any
-        let cursor: m.FindCursor<any> | m.AggregationCursor<any>;
+        let cursor:
+          | m.FindCursor<StoredDocument>
+          | m.AggregationCursor<StoredDocument>;
 
         // Stage to extract ULID part from _id for natural sorting across types
         const ulidExtractStage: AggregationStage = {
@@ -1104,9 +1473,8 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           sortStages,
           userPipeline,
         );
-        const sortMachinery = sortStages.length > 0
-          ? buildSortMachinery(sortObj)
-          : null;
+        const sortMachinery =
+          sortStages.length > 0 ? buildSortMachinery(sortObj) : null;
 
         // Resolve the cursor anchor THROUGH the sort pipeline: the sort key
         // may only exist after those stages run (e.g. a $lookup'ed field), so
@@ -1117,18 +1485,21 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           anchorId: string,
           label: "afterId" | "beforeId",
         ): Promise<Record<string, unknown>> => {
-          const rows = await collection.aggregate(
-            [{ $match: { _id: anchorId } }, ...sortStages, { $limit: 1 }],
-            { session },
-          ).toArray();
+          const rows = await collection
+            .aggregate(
+              [{ $match: { _id: anchorId } }, ...sortStages, { $limit: 1 }],
+              readOptions,
+            )
+            .toArray();
           if (rows[0]) return rows[0] as Record<string, unknown>;
-          const exists = await collection.findOne({ _id: anchorId } as never, {
-            session,
-          });
+          const exists = await collection.findOne(
+            { _id: anchorId },
+            readOptions,
+          );
           throw new Error(
             exists
               ? `paginate: ${label} was dropped by \`sortPipeline\` — cannot ` +
-                `anchor the page (the anchor must survive the sort pipeline)`
+                  `anchor the page (the anchor must survive the sort pipeline)`
               : `paginate: ${label} was not found — cannot anchor the page`,
           );
         };
@@ -1197,17 +1568,19 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           machinery: SortMachinery,
           cursor: AggregationStage | null,
         ): Promise<number> => {
-          const rows = await collection.aggregate(
-            buildSortPaginateStages({
-              baseMatch: { $and: baseQuery },
-              sortStages,
-              machinery,
-              cursorFilter: cursor,
-              pipeline: userPipeline,
-              count: true,
-            }),
-            { session },
-          ).toArray();
+          const rows = await collection
+            .aggregate(
+              buildSortPaginateStages({
+                baseMatch: { $and: baseQuery },
+                sortStages,
+                machinery,
+                cursorFilter: cursor,
+                pipeline: userPipeline,
+                count: true,
+              }),
+              readOptions,
+            )
+            .toArray();
           return (rows[0]?.total as number | undefined) ?? 0;
         };
 
@@ -1220,38 +1593,40 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           branches: Record<string, unknown>[] | null,
         ): Promise<number> => {
           if (useNaturalIdSort) {
-            const stages: AggregationStage[] = [
+            const stages: AggregationStage[] = countingPipeline([
               { $match: { $and: baseQuery } },
               ulidExtractStage,
               ...(branches
                 ? [{ $match: composeCursorStageMatch(branches) }]
                 : []),
               ...userPipeline,
-              { $count: "total" },
-            ];
-            const rows = await collection.aggregate(stages, { session })
+            ]);
+            const rows = await collection
+              .aggregate(stages, readOptions)
               .toArray();
             return (rows[0]?.total as number | undefined) ?? 0;
           }
           if (userPipeline.length > 0) {
-            const stages: AggregationStage[] = [
+            const stages: AggregationStage[] = countingPipeline([
               {
                 $match: branches
                   ? composeCursorQuery(baseQuery, branches)
                   : { $and: baseQuery },
               },
               ...userPipeline,
-              { $count: "total" },
-            ];
-            const rows = await collection.aggregate(stages, { session })
+            ]);
+            const rows = await collection
+              .aggregate(stages, readOptions)
               .toArray();
             return (rows[0]?.total as number | undefined) ?? 0;
           }
           return await collection.countDocuments(
-            (branches
-              ? composeCursorQuery(baseQuery, branches)
-              : { $and: baseQuery }) as never,
-            { session },
+            toStoredFilter(
+              branches
+                ? composeCursorQuery(baseQuery, branches)
+                : { $and: baseQuery },
+            ),
+            readOptions,
           );
         };
 
@@ -1266,8 +1641,8 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           if (sortMachinery) {
             total = await countViaSortPipeline(sortMachinery, null);
             if (afterId) {
-              position = total -
-                (await countViaSortPipeline(sortMachinery, exprCursor));
+              position =
+                total - (await countViaSortPipeline(sortMachinery, exprCursor));
             } else if (beforeId) {
               position = -1;
             } else {
@@ -1287,6 +1662,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           }
         }
 
+        const pageOptions = {
+          ...readOptions,
+          ...pageBatchSize(limit, customFilter),
+        };
         if (sortMachinery) {
           // sortPipeline path: the stages the sort depends on run over the
           // whole filtered set (the sort needs every value); the after-sort
@@ -1300,67 +1679,66 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
               pipeline: userPipeline,
               reverse: Boolean(beforeId),
             }),
-            { session },
+            pageOptions,
           );
         } else if (pipelineBuilder || useNaturalIdSort) {
           // For naturalIdSort, we need to add _ulid BEFORE the cursor filter can use it
           // So we split the query: base type filter first, then add _ulid, then cursor filter
           const aggregatePipeline: AggregationStage[] = useNaturalIdSort
             ? [
-              // First: match the base type filter
-              { $match: { $and: baseQuery } },
-              // Add _ulid field before cursor filter needs it
-              ulidExtractStage,
-              // Apply cursor filter if present (afterId/beforeId)
-              ...(cursorBranches
-                ? [{ $match: composeCursorStageMatch(cursorBranches) }]
-                : []),
-              ...userPipeline,
-              { $sort: sort as Record<string, 1 | -1> },
-            ]
+                // First: match the base type filter
+                { $match: { $and: baseQuery } },
+                // Add _ulid field before cursor filter needs it
+                ulidExtractStage,
+                // Apply cursor filter if present (afterId/beforeId)
+                ...(cursorBranches
+                  ? [{ $match: composeCursorStageMatch(cursorBranches) }]
+                  : []),
+                ...userPipeline,
+                { $sort: sort as Record<string, 1 | -1> },
+              ]
             : [
-              { $match: query },
-              ...userPipeline,
-              { $sort: sort as Record<string, 1 | -1> },
-            ];
-          cursor = collection.aggregate(aggregatePipeline, { session });
+                { $match: query },
+                ...userPipeline,
+                { $sort: sort as Record<string, 1 | -1> },
+              ];
+          cursor = collection.aggregate(aggregatePipeline, pageOptions);
         } else {
-          cursor = collection.find(query as never, { session }).sort(
-            sort as m.Sort,
-          );
+          cursor = collection
+            .find(toStoredFilter(query), pageOptions)
+            .sort(sort as m.Sort);
         }
 
         let hardLimit = 10_000;
-        const elements: unknown[] = [];
+        let skippedInvalid = 0;
+        const elements: R[] = [];
 
         try {
           while (hardLimit-- > 0 && limit > 0) {
             const doc = await cursor.next();
             if (!doc) break;
 
-            // Validate document with schema
-            const validation = v.safeParse(schema, doc);
-            if (!validation.success) {
-              continue; // Skip invalid documents
+            const output = parseRow(doc);
+            if (output === undefined) {
+              skippedInvalid++;
+              continue;
             }
 
-            // When a pipeline is used, merge validated doc with original doc to preserve
-            // additional fields added by pipeline stages (like $lookup results)
-            const validatedDoc = pipelineBuilder || sortPipelineBuilder
-              ? { ...doc, ...validation.output }
-              : validation.output;
+            const validatedDoc: ExtractByType<T, K> =
+              pipelineBuilder || sortPipelineBuilder
+                ? { ...doc, ...output }
+                : output;
 
-            // Step 1: Prepare - enrich document with external data
             const enrichedDoc = prepare
               ? await prepare(validatedDoc)
-              : validatedDoc;
+              : (validatedDoc as EN);
 
-            // Step 2: Filter - apply custom filtering logic
-            const isValid = await customFilter?.(enrichedDoc) ?? true;
+            const isValid = (await customFilter?.(enrichedDoc)) ?? true;
             if (!isValid) continue;
 
-            // Step 3: Format - transform document to final output format
-            const finalDoc = format ? await format(enrichedDoc) : enrichedDoc;
+            const finalDoc = format
+              ? await format(enrichedDoc)
+              : (enrichedDoc as unknown as R);
 
             elements.push(finalDoc);
             limit--;
@@ -1403,11 +1781,13 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           }
         }
 
+        warnSkippedInvalid(log, collectionName, skippedInvalid);
         return {
           total,
           position,
           data: elements,
           ...(peek ? { hasMore } : {}),
+          ...(skippedInvalid > 0 && { skippedInvalid }),
         };
       };
       return traced(
@@ -1436,15 +1816,20 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           $and: filter ? [typeChecker, filter] : [typeChecker],
         };
 
-        return collection.countDocuments(query as never, {
-          session,
-          ...options,
-        });
+        return collection.countDocuments(
+          toStoredFilter(query),
+          readOpts(session, options),
+        );
       };
-      return traced(tele, "countDocuments", () => ({
-        [TA.DOC_TYPE]: String(key),
-        [TA.FILTER_KEYS]: filterKeys(filter),
-      }), run);
+      return traced(
+        tele,
+        "countDocuments",
+        () => ({
+          [TA.DOC_TYPE]: String(key),
+          [TA.FILTER_KEYS]: filterKeys(filter),
+        }),
+        run,
+      );
     },
     async deleteId(key, id) {
       const run = async () => {
@@ -1457,9 +1842,12 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
         const session = sessionContext.getSession();
 
-        const result = await collection.deleteOne({
-          _id: id,
-        } as any, { session });
+        const result = await collection.deleteOne(
+          {
+            _id: id,
+          },
+          { session },
+        );
 
         if (!result.acknowledged) {
           throw new Error("Delete failed");
@@ -1491,12 +1879,15 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
         const session = sessionContext.getSession();
 
-        const result = await collection.deleteMany({
-          _id: {
-            $in: ids,
+        const result = await collection.deleteMany(
+          {
+            _id: {
+              $in: ids,
+            },
+            _type: key as string,
           },
-          _type: key as string,
-        } as any, { session });
+          { session },
+        );
 
         if (!result.acknowledged) {
           throw new Error("Delete failed");
@@ -1526,9 +1917,9 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
 
         // Combine the user filter with the type filter
         const combinedFilter = {
-          ...filter,
+          ...toStoredFilter(filter),
           _type: key as string,
-        } as any;
+        };
 
         const result = await collection.deleteMany(combinedFilter, { session });
 
@@ -1553,7 +1944,9 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
       const run = async () => {
         const session = sessionContext.getSession();
 
-        const result = await collection.deleteMany(filter as any, { session });
+        const result = await collection.deleteMany(toStoredFilter(filter), {
+          session,
+        });
 
         if (!result.acknowledged) {
           throw new Error("Delete failed");
@@ -1571,31 +1964,51 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         (count) => ({ [TA.DELETED_COUNT]: count }),
       );
     },
-    async findOneAny(filter) {
+    async findOneAny(filter, options?) {
       const run = async () => {
         const session = sessionContext.getSession();
-        const result = await collection.findOne(filter as any, { session });
+        const result = await findOneThrough(
+          collection,
+          toStoredFilter(filter),
+          options,
+          readOpts(session, options),
+        );
         if (!result) {
           return null;
         }
-        return v.parse(schema, result);
+        return parseStored(schema, result);
       };
-      return traced(tele, "findOneAny", () => ({
-        [TA.FILTER_KEYS]: filterKeys(filter),
-      }), run);
+      return traced(
+        tele,
+        "findOneAny",
+        () => ({
+          [TA.FILTER_KEYS]: filterKeys(filter),
+        }),
+        run,
+      );
     },
     async findAny(filter, options) {
       const run = async () => {
+        refuseProjection("findAny", options, "findProject(type, fields)");
         const session = sessionContext.getSession();
-        const cursor = collection.find(filter as any, { session, ...options });
-        const result = await cursor.toArray();
+        const result = await findThrough(
+          collection,
+          toStoredFilter(filter),
+          options,
+          readOpts(session, options),
+        );
 
-        const output = result.map((item) => {
+        const output: Output<T>[] = [];
+        for (const item of result) {
           const parsed = v.safeParse(schema, item);
-          if (!parsed.success) return null;
-          return parsed.output;
-        }).filter((item): item is Output<T> => item !== null);
-
+          if (parsed.success) output.push(parsed.output);
+        }
+        warnSkippedInvalid(
+          log,
+          collectionName,
+          result.length - output.length,
+          "findAny",
+        );
         return output;
       };
       return traced(
@@ -1608,69 +2021,55 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         (docs) => ({ [TA.RETURNED_ROWS]: docs.length }),
       );
     },
-    async updateOne(key, id, doc) {
+    async updateOne(key, id, doc, options) {
       const run = (op?: OpContext) => {
         // Validation happens inside run (so failures emit an ERROR span) but
         // outside retry - no need to retry validation errors
-        const dotSchema = dotSchemaElements[key];
-        if (!dotSchema) {
+        if (!dotSchemaElements[key]) {
           throw new Error(`Invalid element type`);
         }
-
-        // Extract fields to remove before validation (symbols would fail validation)
-        const { set, unset } = extractFieldsToRemove(
+        const { ops: updateOps } = multiUpdateOps(
+          "updateOne",
+          key as string,
           doc as Record<string, unknown>,
+          undefined,
+          undefined,
+          opts.undefinedBehavior || "remove",
         );
 
-        // Validate only the fields that will be set (not the removed ones)
-        if (Object.keys(set).length > 0) {
-          v.parse(dotSchema, set);
-        }
+        return retryOnWriteConflict(
+          async () => {
+            const session = sessionContext.getSession();
 
-        return retryOnWriteConflict(async () => {
-          const session = sessionContext.getSession();
+            if (Object.keys(updateOps).length === 0) {
+              return 0;
+            }
 
-          // Sanitize the remaining fields
-          const sanitizedDoc = sanitizeForMongoDB(set, {
-            undefinedBehavior: opts.undefinedBehavior || "remove",
-            deep: true,
-          });
+            const result = await collection.updateOne(
+              { _id: id, _type: key as string },
+              updateOps,
+              {
+                session,
+                ...(options?.arrayFilters && {
+                  arrayFilters: options.arrayFilters,
+                }),
+              },
+            );
 
-          // Build update operations
-          const updateOps: Record<string, unknown> = {};
-          if (Object.keys(sanitizedDoc as Record<string, unknown>).length > 0) {
-            updateOps.$set = sanitizedDoc;
-          }
-          if (Object.keys(unset).length > 0) {
-            updateOps.$unset = unset;
-          }
+            if (!result.acknowledged) {
+              throw new Error("Update failed");
+            }
 
-          // If no operations, return early
-          if (Object.keys(updateOps).length === 0) {
-            return 0; // No modifications
-          }
+            if (result.matchedCount === 0) {
+              throw new Error("No element that match the filter to update");
+            }
 
-          const result = await collection.updateOne(
-            {
-              _id: id,
-              _type: key as string,
-            } as unknown as m.Filter<TOutput>,
-            updateOps as m.UpdateFilter<TOutput>,
-            { session },
-          );
-
-          if (!result.acknowledged) {
-            throw new Error("Update failed");
-          }
-
-          if (result.matchedCount === 0) {
-            throw new Error("No element that match the filter to update");
-          }
-
-          // Note: modifiedCount can be 0 if the values didn't actually change
-          // This is not an error condition
-          return result.modifiedCount;
-        }, op ? { onRetry: op.onRetry } : undefined);
+            // Note: modifiedCount can be 0 if the values didn't actually change
+            // This is not an error condition
+            return result.modifiedCount;
+          },
+          op ? { onRetry: op.onRetry } : undefined,
+        );
       };
       return traced(
         tele,
@@ -1685,81 +2084,61 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
     },
     async updateMany(operation) {
       const run = (op?: OpContext) =>
-        retryOnWriteConflict(async () => {
-          const bulkOps: any[] = [];
-          for (const type in operation) {
-            const elements = operation[type];
-            for (const id in elements) {
-              const element = elements[id];
-              const dotSchema = dotSchemaElements[type];
-              if (!id.startsWith(`${type}:`)) {
-                throw new Error(`Invalid id format`);
-              }
-              if (!dotSchema) {
-                throw new Error(`Invalid element type`);
-              }
+        retryOnWriteConflict(
+          async () => {
+            const bulkOps: m.AnyBulkWriteOperation<StoredDocument>[] = [];
+            for (const type in operation) {
+              const elements = operation[type];
+              for (const id in elements) {
+                const element = elements[id];
+                if (!id.startsWith(`${type}:`)) {
+                  throw new Error(`Invalid id format`);
+                }
+                if (!dotSchemaElements[type]) {
+                  throw new Error(`Invalid element type`);
+                }
+                const { ops: updateOps } = multiUpdateOps(
+                  "updateMany",
+                  type,
+                  element as Record<string, unknown>,
+                  undefined,
+                  undefined,
+                  opts.undefinedBehavior || "remove",
+                );
 
-              // Extract fields to remove before validation (symbols would fail validation)
-              const { set, unset } = extractFieldsToRemove(
-                element as Record<string, unknown>,
-              );
+                if (Object.keys(updateOps).length === 0) {
+                  continue;
+                }
 
-              // Validate only the fields that will be set (not the removed ones)
-              if (Object.keys(set).length > 0) {
-                v.parse(dotSchema, set);
+                bulkOps.push({
+                  updateOne: {
+                    filter: { _id: id },
+                    update: updateOps,
+                  },
+                });
               }
-
-              // Sanitize the remaining fields
-              const sanitizedElement = sanitizeForMongoDB(set, {
-                undefinedBehavior: opts.undefinedBehavior || "remove",
-                deep: true,
-              });
-
-              // Build update operations
-              const updateOps: Record<string, unknown> = {};
-              if (
-                Object.keys(sanitizedElement as Record<string, unknown>)
-                  .length >
-                  0
-              ) {
-                updateOps.$set = sanitizedElement;
-              }
-              if (Object.keys(unset).length > 0) {
-                updateOps.$unset = unset;
-              }
-
-              // Skip if no operations
-              if (Object.keys(updateOps).length === 0) {
-                continue;
-              }
-
-              bulkOps.push({
-                updateOne: {
-                  filter: { _id: id },
-                  update: updateOps,
-                },
-              });
             }
-          }
 
-          op?.setAttributes({ [TA.BATCH_SIZE]: bulkOps.length });
+            op?.setAttributes({ [TA.BATCH_SIZE]: bulkOps.length });
 
-          if (bulkOps.length === 0) {
-            throw new Error("No element to update");
-          }
+            if (bulkOps.length === 0) {
+              throw new Error("No element to update");
+            }
 
-          const session = sessionContext.getSession();
+            const session = sessionContext.getSession();
 
-          const result = await collection.bulkWrite(bulkOps, { session });
+            const result = await collection.bulkWrite(bulkOps, { session });
 
-          if (result.matchedCount === 0) {
-            throw new Error("No element that match the filter to update");
-          }
+            if (result.matchedCount === 0) {
+              throw new Error("No element that match the filter to update");
+            }
 
-          // Note: modifiedCount can be 0 if the values didn't actually change
-          // This is not an error condition
-          return result.modifiedCount;
-        }, op ? { onRetry: op.onRetry } : undefined);
+            // Note: modifiedCount can be 0 if the values didn't actually change
+            // This is not an error condition
+            return result.modifiedCount;
+          },
+          op ? { onRetry: op.onRetry } : undefined,
+        );
       return traced(
         tele,
         "updateMany",
@@ -1768,24 +2147,117 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         (modified) => ({ [TA.MODIFIED_COUNT]: modified }),
       );
     },
-    async aggregate(stageBuilder) {
+    async updateWhere(key, filter, doc, options) {
+      const run = async (op?: OpContext) => {
+        const { ops, guard, upsert } = guardedWrite(
+          "updateWhere",
+          key as string,
+          filter as Record<string, unknown>,
+          doc as Record<string, unknown>,
+          options as GuardedUpdateOptions<Record<string, unknown>> | undefined,
+        );
+        if (Object.keys(ops).length === 0)
+          return { matched: 0, modified: 0, upsertedId: null };
+
+        return retryOnWriteConflict(
+          async () => {
+            const session = sessionContext.getSession();
+            const result = await collection.updateOne(guard, ops, {
+              session,
+              upsert,
+              ...(options?.arrayFilters && {
+                arrayFilters: options.arrayFilters,
+              }),
+            });
+            if (!result.acknowledged) throw new Error("Update failed");
+            return {
+              matched: result.matchedCount,
+              modified: result.modifiedCount,
+              upsertedId:
+                result.upsertedId === null || result.upsertedId === undefined
+                  ? null
+                  : String(result.upsertedId),
+            };
+          },
+          op ? { onRetry: op.onRetry } : undefined,
+        );
+      };
+      return traced(
+        tele,
+        "updateWhere",
+        () => ({
+          [TA.DOC_TYPE]: String(key),
+          [TA.FILTER_KEYS]: filterKeys(filter),
+          [TA.UPDATE_FIELDS]: Object.keys(doc).length,
+        }),
+        run,
+        (result) => ({ [TA.MODIFIED_COUNT]: result.modified }),
+      );
+    },
+    async findOneAndUpdate(key, filter, doc, options) {
+      const run = async (op?: OpContext) => {
+        const typeName = key as string;
+        const { ops, guard, upsert } = guardedWrite(
+          "findOneAndUpdate",
+          typeName,
+          filter as Record<string, unknown>,
+          doc as Record<string, unknown>,
+          options as GuardedUpdateOptions<Record<string, unknown>> | undefined,
+        );
+        if (Object.keys(ops).length === 0) {
+          throw new Error(
+            `findOneAndUpdate(${typeName}): the update document writes nothing`,
+          );
+        }
+        const raw = await retryOnWriteConflict(
+          async () => {
+            const session = sessionContext.getSession();
+            return await collection.findOneAndUpdate(guard, ops, {
+              session,
+              upsert,
+              returnDocument: options?.returnDocument ?? "after",
+              ...(options?.sort && { sort: options.sort }),
+              ...(options?.arrayFilters && {
+                arrayFilters: options.arrayFilters,
+              }),
+            });
+          },
+          op ? { onRetry: op.onRetry } : undefined,
+        );
+        if (!raw) return null;
+        return parseStored(schemaElements[key], raw);
+      };
+      return traced(
+        tele,
+        "findOneAndUpdate",
+        () => ({
+          [TA.DOC_TYPE]: String(key),
+          [TA.FILTER_KEYS]: filterKeys(filter),
+          [TA.UPDATE_FIELDS]: Object.keys(doc).length,
+        }),
+        run,
+      );
+    },
+    async aggregate<R extends m.Document = m.Document>(
+      stageBuilder: (stage: StageBuilder<T>) => AggregationStage[],
+      options?: ReadOptions,
+    ) {
       const run = async () => {
         const stage = createMultiStageBuilder<T>(collectionName);
 
         const session = sessionContext.getSession();
 
         const pipeline = stageBuilder(stage);
-        const cursor = collection.aggregate(pipeline, { session });
-
-        return await cursor.toArray();
+        return await aggregateThrough<StoredDocument, R>(
+          collection,
+          pipeline,
+          options,
+          readOpts(session, options),
+        );
       };
-      return traced(
-        tele,
-        "aggregate",
-        undefined,
-        run,
-        (docs) => ({ [TA.RETURNED_ROWS]: docs.length }),
-      );
+      return traced(tele, "aggregate", undefined, run, (docs) => ({
+        [TA.RETURNED_ROWS]: docs.length,
+      }));
     },
     async drop(options) {
       const run = async () => {
@@ -1847,7 +2319,7 @@ export async function newMultiCollection<const T extends MultiCollectionSchema>(
   db: Db,
   collectionName: string,
   schema: T,
-  options?: m.CollectionOptions & CollectionOptions,
+  options?: DriverCollectionOptions & CollectionOptions,
 ): Promise<MultiCollectionResult<T>> {
   // Check if we're in a session - DDL operations are incompatible with transactions
   const { getSession } = getSessionContext(db.client);
@@ -1870,7 +2342,8 @@ export async function newMultiCollection<const T extends MultiCollectionSchema>(
   }
 
   // Check if collection already exists
-  const collections = await db.listCollections({ name: collectionName })
+  const collections = await db
+    .listCollections({ name: collectionName }, { readPreference: PRIMARY })
     .toArray();
   if (collections.length > 0) {
     throw new Error(
@@ -1941,7 +2414,7 @@ export async function createMultiCollectionInstance<
   db: Db,
   collectionName: string,
   model: MultiCollectionModel<T>,
-  options?: m.CollectionOptions & CollectionOptions,
+  options?: DriverCollectionOptions & CollectionOptions,
 ): Promise<MultiCollectionResult<T>> {
   log.debug(
     `createMultiCollectionInstance(${collectionName}): begin model=${model?.name}`,

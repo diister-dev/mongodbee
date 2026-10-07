@@ -19,7 +19,8 @@ import * as v from "valibot";
 import { toMongoValidator } from "./validator.ts";
 import { extractIndexes } from "./indexes.ts";
 import { sanitizePathName } from "./schema-navigator.ts";
-import { mongoOperationQueue } from "./operation.ts";
+import { withDatabaseDdlLock } from "./ddl-lock.ts";
+import { PRIMARY, primaryCollection } from "./read-preference.ts";
 
 /**
  * Options for applying security (validators and indexes)
@@ -49,7 +50,7 @@ export interface ApplySecurityOptions {
  *
  * @example
  * ```typescript
- * import { applySecurityToCollection } from "@diister/mongodbee/security";
+ * import { applySecurityToCollection } from "@diister/mongodbee";
  * import * as v from "valibot";
  *
  * const userSchema = {
@@ -80,7 +81,7 @@ export async function applySecurityToCollection(
     ...options,
   };
 
-  const collection = db.collection(collectionName);
+  const collection = primaryCollection(db, collectionName);
 
   // Apply JSON Schema validator
   if (opts.applyValidator) {
@@ -88,7 +89,8 @@ export async function applySecurityToCollection(
     const validator = toMongoValidator(wrappedSchema);
 
     // Check if collection exists
-    const collections = await db.listCollections({ name: collectionName })
+    const collections = await db
+      .listCollections({ name: collectionName }, { readPreference: PRIMARY })
       .toArray();
 
     if (collections.length === 0) {
@@ -102,11 +104,12 @@ export async function applySecurityToCollection(
       listCollections: 1,
       filter: { name: collectionName },
     });
-    const currentValidator = existingOptions.cursor?.firstBatch?.[0]?.options
-      ?.validator;
+    const currentValidator =
+      existingOptions.cursor?.firstBatch?.[0]?.options?.validator;
 
     // Compare validators
-    const needsUpdate = opts.force ||
+    const needsUpdate =
+      opts.force ||
       !currentValidator ||
       JSON.stringify(currentValidator) !== JSON.stringify(validator);
 
@@ -127,8 +130,12 @@ export async function applySecurityToCollection(
       return;
     }
 
-    await Promise.all(indexes.map((index) => {
-      return mongoOperationQueue.add(async () => {
+    // Same per-database lock as collection(); one createIndex at a time, in
+    // declaration order, as the former single-slot queue did. The message-based
+    // "already exists" tolerance is kept as it was: this manual path has no
+    // reconcile step, so a pre-existing index is the expected case here.
+    await withDatabaseDdlLock(db, async () => {
+      for (const index of indexes) {
         const indexName = sanitizePathName(index.path);
         const keySpec: Record<string, number> = {};
         keySpec[index.path] = 1;
@@ -140,16 +147,12 @@ export async function applySecurityToCollection(
             sparse: false,
           });
         } catch (error) {
-          if (
-            error instanceof Error && error.message.includes("already exists")
-          ) {
-            // Index already exists, skip silently
-          } else {
-            throw error;
-          }
+          const alreadyExists =
+            error instanceof Error && error.message.includes("already exists");
+          if (!alreadyExists) throw error;
         }
-      });
-    }));
+      }
+    });
   }
 }
 
@@ -160,7 +163,7 @@ export async function applySecurityToCollection(
  *
  * @example
  * ```typescript
- * import { applySecurityToMultiCollection } from "@diister/mongodbee/security";
+ * import { applySecurityToMultiCollection } from "@diister/mongodbee";
  *
  * const commentsSchema = {
  *   user_comment: {
@@ -195,7 +198,7 @@ export async function applySecurityToMultiCollection(
     ...options,
   };
 
-  const collection = db.collection(collectionName);
+  const collection = primaryCollection(db, collectionName);
 
   // Apply union validator for all types
   if (opts.applyValidator) {
@@ -213,7 +216,8 @@ export async function applySecurityToMultiCollection(
     );
 
     // Check if collection exists
-    const collections = await db.listCollections({ name: collectionName })
+    const collections = await db
+      .listCollections({ name: collectionName }, { readPreference: PRIMARY })
       .toArray();
 
     if (collections.length === 0) {
@@ -227,10 +231,11 @@ export async function applySecurityToMultiCollection(
       listCollections: 1,
       filter: { name: collectionName },
     });
-    const currentValidator = existingOptions.cursor?.firstBatch?.[0]?.options
-      ?.validator;
+    const currentValidator =
+      existingOptions.cursor?.firstBatch?.[0]?.options?.validator;
 
-    const needsUpdate = opts.force ||
+    const needsUpdate =
+      opts.force ||
       !currentValidator ||
       JSON.stringify(currentValidator) !== JSON.stringify(validator);
 
@@ -242,47 +247,36 @@ export async function applySecurityToMultiCollection(
     }
   }
 
-  // Apply indexes for each type
+  // Apply indexes for each type — same lock and same sequential shape as
+  // applySecurityToCollection above.
   if (opts.applyIndexes) {
-    const indexOperations = [];
+    await withDatabaseDdlLock(db, async () => {
+      for (const [typeName, typeSchema] of Object.entries(
+        multiCollectionSchema,
+      )) {
+        const wrappedSchema = v.object(typeSchema);
+        const indexes = extractIndexes(wrappedSchema);
 
-    for (
-      const [typeName, typeSchema] of Object.entries(multiCollectionSchema)
-    ) {
-      const wrappedSchema = v.object(typeSchema);
-      const indexes = extractIndexes(wrappedSchema);
+        for (const index of indexes) {
+          const indexName = sanitizePathName(`${typeName}_${index.path}`);
+          const keySpec: Record<string, number> = {};
+          keySpec[index.path] = 1;
 
-      if (indexes.length === 0) continue;
-
-      for (const index of indexes) {
-        indexOperations.push(
-          mongoOperationQueue.add(async () => {
-            const indexName = sanitizePathName(`${typeName}_${index.path}`);
-            const keySpec: Record<string, number> = {};
-            keySpec[index.path] = 1;
-
-            try {
-              await collection.createIndex(keySpec, {
-                name: indexName,
-                unique: index.metadata.unique || false,
-                sparse: false,
-                partialFilterExpression: { _type: typeName }, // Only index docs of this type
-              });
-            } catch (error) {
-              if (
-                error instanceof Error &&
-                error.message.includes("already exists")
-              ) {
-                // Index already exists, skip silently
-              } else {
-                throw error;
-              }
-            }
-          }),
-        );
+          try {
+            await collection.createIndex(keySpec, {
+              name: indexName,
+              unique: index.metadata.unique || false,
+              sparse: false,
+              partialFilterExpression: { _type: typeName },
+            });
+          } catch (error) {
+            const alreadyExists =
+              error instanceof Error &&
+              error.message.includes("already exists");
+            if (!alreadyExists) throw error;
+          }
+        }
       }
-    }
-
-    await Promise.all(indexOperations);
+    });
   }
 }

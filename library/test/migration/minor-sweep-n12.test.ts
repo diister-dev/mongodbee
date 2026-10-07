@@ -12,7 +12,8 @@
  *    lossy-operation display must have an operation to describe.
  */
 
-import { assert, assertEquals } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals } from "../+assert.ts";
 import * as v from "../../src/schema.ts";
 import { refId } from "../../src/ids.ts";
 import { migrationBuilder } from "../../src/migration/builder.ts";
@@ -27,19 +28,16 @@ import { createSimulationValidator } from "../../src/migration/validators/simula
 // N12c — deterministicSeedId with no prefix
 // ============================================================================
 
-Deno.test("N12c: deterministicSeedId with empty prefix yields a bare id (no leading colon)", () => {
+test("N12c: deterministicSeedId with empty prefix yields a bare id (no leading colon)", () => {
   const id = deterministicSeedId("", "mig-001", "users", 0);
-  assert(
-    !id.startsWith(":"),
-    `expected no leading colon, got "${id}"`,
-  );
+  assert(!id.startsWith(":"), `expected no leading colon, got "${id}"`);
   assert(
     /^[a-z0-9]+$/.test(id),
     `expected bare [a-z0-9] fingerprint, got "${id}"`,
   );
 });
 
-Deno.test("N12c: deterministicSeedId keeps the `prefix:fingerprint` shape when a prefix is present", () => {
+test("N12c: deterministicSeedId keeps the `prefix:fingerprint` shape when a prefix is present", () => {
   const id = deterministicSeedId("user", "mig-001", "users", 0);
   assert(id.startsWith("user:"), `expected "user:" prefix, got "${id}"`);
   assert(
@@ -48,7 +46,7 @@ Deno.test("N12c: deterministicSeedId keeps the `prefix:fingerprint` shape when a
   );
 });
 
-Deno.test("N12c: no-prefix id is deterministic across calls", () => {
+test("N12c: no-prefix id is deterministic across calls", () => {
   const a = deterministicSeedId("", "mig-42", "orders:line", 3);
   const b = deterministicSeedId("", "mig-42", "orders:line", 3);
   assertEquals(a, b);
@@ -65,7 +63,7 @@ Deno.test("N12c: no-prefix id is deterministic across calls", () => {
 // flowed document was written with a bare, prefix-less id. The contract is now
 // that a typed target carries NO operation-wide id schema, and the applier reads
 // the prefix off each mapped document's `_type`.
-Deno.test("N12e: flow into a multi-collection defers the id prefix to each document", () => {
+test("N12e: flow into a multi-collection defers the id prefix to each document", () => {
   const schemas = {
     collections: {
       source: { _id: v.string(), name: v.string() },
@@ -95,7 +93,7 @@ Deno.test("N12e: flow into a multi-collection defers the id prefix to each docum
   );
 });
 
-Deno.test("N12e: flow into a scoped multi-collection defers the id prefix too", () => {
+test("N12e: flow into a scoped multi-collection defers the id prefix too", () => {
   const schemas = {
     collections: {
       source: { _id: v.string(), name: v.string() },
@@ -124,7 +122,7 @@ Deno.test("N12e: flow into a scoped multi-collection defers the id prefix too", 
   assertEquals(op.targetIdSchema, undefined);
 });
 
-Deno.test("N12e: flow into a plain collection still resolves one prefix for the operation", () => {
+test("N12e: flow into a plain collection still resolves one prefix for the operation", () => {
   const schemas = {
     collections: {
       source: { _id: v.string() },
@@ -149,7 +147,7 @@ Deno.test("N12e: flow into a plain collection still resolves one prefix for the 
 // N12d — simulation guard for a declared-but-never-created multi-collection
 // ============================================================================
 
-Deno.test("N12d: simulation does not crash on a declared-but-never-created multi-collection", async () => {
+test("N12d: simulation does not crash on a declared-but-never-created multi-collection", async () => {
   // The multi-collection "events" is declared in the schema but the migrate()
   // function never calls createMultiCollection() — so its state content is
   // undefined. Pre-fix this threw "Cannot read properties of undefined".
@@ -165,8 +163,9 @@ Deno.test("N12d: simulation does not crash on a declared-but-never-created multi
     migrate: (b) => b.compile(),
   });
 
-  const result = await createSimulationValidator({ powerLevel: "quick" })
-    .validateMigration(migration);
+  const result = await createSimulationValidator({
+    powerLevel: "quick",
+  }).validateMigration(migration);
 
   // The simulation must run to completion (guard skips the missing collection)
   // instead of blowing up with a TypeError.
@@ -177,12 +176,13 @@ Deno.test("N12d: simulation does not crash on a declared-but-never-created multi
   );
   // The creation check still reports the real problem.
   assert(
-    result.errors.some((e) =>
-      e.includes('Multi-collection "events"') && e.includes("not created")
+    result.errors.some(
+      (e) =>
+        e.includes('Multi-collection "events"') && e.includes("not created"),
     ),
-    `expected a declared-but-not-created error, got: ${
-      result.errors.join(" | ")
-    }`,
+    `expected a declared-but-not-created error, got: ${result.errors.join(
+      " | ",
+    )}`,
   );
 });
 
@@ -190,7 +190,7 @@ Deno.test("N12d: simulation does not crash on a declared-but-never-created multi
 // N12b — a scoped-multi-collection creation is a lossy operation to display
 // ============================================================================
 
-Deno.test("N12b: createScopedMultiCollection marks the migration lossy and records the op", () => {
+test("N12b: createScopedMultiCollection marks the migration lossy and records the op", () => {
   const schemas = {
     scopedMultiCollections: {
       "+scans": {

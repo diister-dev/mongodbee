@@ -34,14 +34,16 @@ export function resolveMigrationRef<T extends MigrationRef>(
     throw new Error("Migration reference is empty");
   }
 
-  const exact = migrations.find((m) => m.id === needle) ??
+  const exact =
+    migrations.find((m) => m.id === needle) ??
     migrations.find((m) => m.name === needle);
   if (exact) return exact;
 
   const lowered = needle.toLowerCase();
-  const partial = migrations.filter((m) =>
-    m.id.toLowerCase().includes(lowered) ||
-    m.name.toLowerCase().includes(lowered)
+  const partial = migrations.filter(
+    (m) =>
+      m.id.toLowerCase().includes(lowered) ||
+      m.name.toLowerCase().includes(lowered),
   );
 
   if (partial.length === 1) return partial[0];
@@ -49,9 +51,9 @@ export function resolveMigrationRef<T extends MigrationRef>(
   if (partial.length === 0) {
     throw new Error(
       `No migration matches "${ref}".\n` +
-        `Known migrations:\n${
-          migrations.map((m) => `  ${m.id} (${m.name})`).join("\n")
-        }`,
+        `Known migrations:\n${migrations
+          .map((m) => `  ${m.id} (${m.name})`)
+          .join("\n")}`,
     );
   }
 

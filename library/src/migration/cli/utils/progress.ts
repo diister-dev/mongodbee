@@ -12,7 +12,7 @@
  */
 import process from "node:process";
 import type { MigrationProgressEvent } from "../../appliers/mongodb.ts";
-import { dim } from "@std/fmt/colors";
+import { dim } from "../../../utils/colors.ts";
 
 const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -33,13 +33,11 @@ export interface ProgressReporter {
  *   injectable so the renderer can be unit-tested without a TTY.
  */
 export function createProgressReporter(
-  options: {
-    enabled?: boolean;
-    write?: (chunk: string) => void;
-  } = {},
+  options: { enabled?: boolean; write?: (chunk: string) => void } = {},
 ): ProgressReporter {
   const enabled = options.enabled ?? false;
-  const write = options.write ??
+  const write =
+    options.write ??
     ((chunk: string) => {
       process.stdout.write(chunk);
     });
@@ -51,9 +49,9 @@ export function createProgressReporter(
   const rate = (event: MigrationProgressEvent): string => {
     const seconds = event.elapsedMs / 1000;
     return seconds > 0
-      ? `${
-        Math.round(event.processed / seconds).toLocaleString("en-US")
-      } docs/s`
+      ? `${Math.round(event.processed / seconds).toLocaleString(
+          "en-US",
+        )} docs/s`
       : "—";
   };
 
@@ -69,15 +67,16 @@ export function createProgressReporter(
       const width = 18;
       const filled = Math.round((pct / 100) * width);
       body =
-        `${event.processed.toLocaleString("en-US")}/${
-          event.total.toLocaleString("en-US")
-        } ` +
-        `${"█".repeat(filled)}${"░".repeat(width - filled)} ${pct}%`;
+        `${event.processed.toLocaleString("en-US")}/${event.total.toLocaleString(
+          "en-US",
+        )} ` + `${"█".repeat(filled)}${"░".repeat(width - filled)} ${pct}%`;
     } else {
       body = `${event.processed.toLocaleString("en-US")} docs`;
     }
-    return `  ${FRAMES[frame]} ${event.operationType}${where}  ${body}  ` +
-      `${dim(rate(event))}  ${dim(`${(event.elapsedMs / 1000).toFixed(1)}s`)}`;
+    return (
+      `  ${FRAMES[frame]} ${event.operationType}${where}  ${body}  ` +
+      `${dim(rate(event))}  ${dim(`${(event.elapsedMs / 1000).toFixed(1)}s`)}`
+    );
   };
 
   const drawInPlace = (event: MigrationProgressEvent) => {

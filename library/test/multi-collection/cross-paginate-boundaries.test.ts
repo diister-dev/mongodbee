@@ -11,7 +11,8 @@
 // - that a subset of types (["a","c"]) never leaks the excluded type through
 //   the cursor's $type rungs (each branch must keep the _type pins).
 
-import { assertEquals } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assertEquals } from "../+assert.ts";
 import { withDatabase } from "../+shared.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
 import * as v from "../../src/schema.ts";
@@ -35,21 +36,17 @@ const DOCS: { _id: string; _type: string; w?: unknown }[] = [
   { _id: "c:d04", _type: "c" },
 ];
 
-// deno-lint-ignore no-explicit-any
-async function truth(
-  // deno-lint-ignore no-explicit-any
-  db: any,
-  types: string[],
-  dir: 1 | -1,
-): Promise<string[]> {
-  const rows = await db.collection("things").aggregate([
-    { $match: { _type: { $in: types } } },
-    { $sort: { w: dir, _id: dir } },
-  ]).toArray();
+async function truth(db: any, types: string[], dir: 1 | -1): Promise<string[]> {
+  const rows = await db
+    .collection("things")
+    .aggregate([
+      { $match: { _type: { $in: types } } },
+      { $sort: { w: dir, _id: dir } },
+    ])
+    .toArray();
   return (rows as { _id: string }[]).map((r) => String(r._id));
 }
 
-// deno-lint-ignore no-explicit-any
 async function setup(db: any) {
   const things = await multiCollection(db, "things", {
     a: { w: v.optional(v.nullable(v.unknown())) },
@@ -60,7 +57,7 @@ async function setup(db: any) {
   return things;
 }
 
-Deno.test("cross-type paginate: mixed brackets per _type — forward walk with counts", async (t) => {
+test("cross-type paginate: mixed brackets per _type — forward walk with counts", async (t) => {
   await withDatabase(t.name, async (db) => {
     const things = await setup(db);
 
@@ -71,11 +68,15 @@ Deno.test("cross-type paginate: mixed brackets per _type — forward walk with c
       let afterId: string | undefined;
       let offset = 0;
       for (let guard = 0; guard < 20; guard++) {
-        const p = await things.paginate(["a", "b", "c"], {}, {
-          sort: { w: dir },
-          limit,
-          ...(afterId ? { afterId } : {}),
-        });
+        const p = await things.paginate(
+          ["a", "b", "c"],
+          {},
+          {
+            sort: { w: dir },
+            limit,
+            ...(afterId ? { afterId } : {}),
+          },
+        );
         assertEquals(p.total, expected.length, `dir ${dir}: total drifted`);
         assertEquals(
           p.position,
@@ -97,7 +98,7 @@ Deno.test("cross-type paginate: mixed brackets per _type — forward walk with c
   });
 });
 
-Deno.test("cross-type paginate: mixed brackets per _type — backward round-trip", async (t) => {
+test("cross-type paginate: mixed brackets per _type — backward round-trip", async (t) => {
   await withDatabase(t.name, async (db) => {
     const things = await setup(db);
 
@@ -109,12 +110,16 @@ Deno.test("cross-type paginate: mixed brackets per _type — backward round-trip
       const seen: string[] = [];
       let beforeId: string | undefined = expected[expected.length - 1];
       for (let guard = 0; guard < 20; guard++) {
-        const p: { data: { _id: string }[]; position?: number } = await things
-          .paginate(["a", "b", "c"], {}, {
-            sort: { w: dir },
-            limit,
-            beforeId,
-          });
+        const p: { data: { _id: string }[]; position?: number } =
+          await things.paginate(
+            ["a", "b", "c"],
+            {},
+            {
+              sort: { w: dir },
+              limit,
+              beforeId,
+            },
+          );
         if (p.data.length === 0) break;
         seen.unshift(...p.data.map((d) => String(d._id)));
         assertEquals(
@@ -133,7 +138,7 @@ Deno.test("cross-type paginate: mixed brackets per _type — backward round-trip
   });
 });
 
-Deno.test("cross-type paginate: type subset never leaks the excluded type", async (t) => {
+test("cross-type paginate: type subset never leaks the excluded type", async (t) => {
   await withDatabase(t.name, async (db) => {
     const things = await setup(db);
 
@@ -142,11 +147,15 @@ Deno.test("cross-type paginate: type subset never leaks the excluded type", asyn
       const seen: string[] = [];
       let afterId: string | undefined;
       for (let guard = 0; guard < 20; guard++) {
-        const p = await things.paginate(["a", "c"], {}, {
-          sort: { w: dir },
-          limit: 2,
-          ...(afterId ? { afterId } : {}),
-        });
+        const p = await things.paginate(
+          ["a", "c"],
+          {},
+          {
+            sort: { w: dir },
+            limit: 2,
+            ...(afterId ? { afterId } : {}),
+          },
+        );
         if (p.data.length === 0) break;
         for (const d of p.data) {
           seen.push(String(d._id));

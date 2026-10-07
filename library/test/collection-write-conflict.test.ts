@@ -1,5 +1,6 @@
+import { test } from "./+harness.ts";
 import * as v from "../src/schema.ts";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "./+assert.ts";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
 
@@ -22,7 +23,7 @@ const productSchema = {
   stock: v.number(),
 };
 
-Deno.test("Collection Write Conflict: Sequential updates should work", async (t) => {
+test("Collection Write Conflict: Sequential updates should work", async (t) => {
   await withDatabase(t.name, async (db) => {
     const counters = await collection(db, "counters", counterSchema);
 
@@ -56,7 +57,7 @@ Deno.test("Collection Write Conflict: Sequential updates should work", async (t)
   });
 });
 
-Deno.test("Collection Write Conflict: Concurrent updates with retry", async (t) => {
+test("Collection Write Conflict: Concurrent updates with retry", async (t) => {
   await withDatabase(t.name, async (db) => {
     const counters = await collection(db, "counters", counterSchema);
 
@@ -83,7 +84,8 @@ Deno.test("Collection Write Conflict: Concurrent updates with retry", async (t) 
             },
           },
         );
-      })());
+      })(),
+    );
 
     // Execute all updates concurrently
     await Promise.all(updates);
@@ -94,7 +96,7 @@ Deno.test("Collection Write Conflict: Concurrent updates with retry", async (t) 
   });
 });
 
-Deno.test("Collection Write Conflict: Rapid fire updates", async (t) => {
+test("Collection Write Conflict: Rapid fire updates", async (t) => {
   await withDatabase(t.name, async (db) => {
     const products = await collection(db, "products", productSchema);
 
@@ -114,7 +116,7 @@ Deno.test("Collection Write Conflict: Rapid fire updates", async (t) => {
           { _id: productId },
           { $set: { stock: newStock } },
         );
-      })()
+      })(),
     );
 
     // All should complete without errors
@@ -129,7 +131,7 @@ Deno.test("Collection Write Conflict: Rapid fire updates", async (t) => {
   });
 });
 
-Deno.test("Collection Write Conflict: UpdateMany with retry", async (t) => {
+test("Collection Write Conflict: UpdateMany with retry", async (t) => {
   await withDatabase(t.name, async (db) => {
     const products = await collection(db, "products", productSchema);
 
@@ -151,18 +153,19 @@ Deno.test("Collection Write Conflict: UpdateMany with retry", async (t) => {
     // Verify updates
     const allProducts = await products.find({});
     allProducts.forEach((product) => {
-      const originalStock = productIds.indexOf(product._id as string) === 0
-        ? 10
-        : productIds.indexOf(product._id as string) === 1
-        ? 20
-        : 30;
+      const originalStock =
+        productIds.indexOf(product._id as string) === 0
+          ? 10
+          : productIds.indexOf(product._id as string) === 1
+            ? 20
+            : 30;
 
       assert(product.stock < originalStock, "Stock should be decremented");
     });
   });
 });
 
-Deno.test("Collection Write Conflict: Simple sequential updates never fail", async (t) => {
+test("Collection Write Conflict: Simple sequential updates never fail", async (t) => {
   await withDatabase(t.name, async (db) => {
     const products = await collection(db, "products", productSchema);
 
@@ -185,7 +188,7 @@ Deno.test("Collection Write Conflict: Simple sequential updates never fail", asy
   });
 });
 
-Deno.test("Collection Write Conflict: WithSession protects grouped operations", async (t) => {
+test("Collection Write Conflict: WithSession protects grouped operations", async (t) => {
   await withDatabase(t.name, async (db) => {
     const products = await collection(db, "products", productSchema);
     const counters = await collection(db, "counters", counterSchema);
@@ -205,16 +208,10 @@ Deno.test("Collection Write Conflict: WithSession protects grouped operations", 
     // Use withSession to ensure atomicity
     await products.withSession(async () => {
       // Decrement stock
-      await products.updateOne(
-        { _id: productId },
-        { $inc: { stock: -1 } },
-      );
+      await products.updateOne({ _id: productId }, { $inc: { stock: -1 } });
 
       // Increment counter
-      await counters.updateOne(
-        { _id: counterId },
-        { $inc: { value: 1 } },
-      );
+      await counters.updateOne({ _id: counterId }, { $inc: { value: 1 } });
     });
 
     const finalProduct = await products.getById(productId);
@@ -225,7 +222,7 @@ Deno.test("Collection Write Conflict: WithSession protects grouped operations", 
   });
 });
 
-Deno.test("Collection Write Conflict: Mixed operations don't interfere", async (t) => {
+test("Collection Write Conflict: Mixed operations don't interfere", async (t) => {
   await withDatabase(t.name, async (db) => {
     const counters = await collection(db, "counters", counterSchema);
 

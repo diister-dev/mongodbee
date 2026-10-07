@@ -20,6 +20,8 @@
 
 type Level = "trace" | "debug" | "info" | "warn" | "error";
 
+type EnvHolder = { process?: { env?: Record<string, string | undefined> } };
+
 const LEVEL_ORDER: Record<Level, number> = {
   trace: 10,
   debug: 20,
@@ -30,23 +32,11 @@ const LEVEL_ORDER: Record<Level, number> = {
 
 function readEnv(name: string): string | undefined {
   try {
-    // Deno first (this lib targets Deno primarily)
-    // deno-lint-ignore no-explicit-any
-    const denoGlobal = (globalThis as any).Deno;
-    if (denoGlobal?.env?.get) {
-      const value = denoGlobal.env.get(name);
-      if (value !== undefined && value !== "") return value;
-    }
-  } catch {
-    // Permission denied in Deno without --allow-env: ignore.
-  }
-  try {
-    // deno-lint-ignore no-explicit-any
-    const proc = (globalThis as any).process;
-    const value = proc?.env?.[name];
+    const value = (globalThis as EnvHolder).process?.env?.[name];
     if (typeof value === "string" && value !== "") return value;
   } catch {
-    // ignore
+    // Deno without --allow-env throws on access rather than returning
+    // undefined; a logger must never be the reason a program dies.
   }
   return undefined;
 }
@@ -55,8 +45,9 @@ const debugSpec = readEnv("MONGODBEE_DEBUG");
 // If MONGODBEE_DEBUG is set, default level is "debug" (the whole point is to see
 // debug logs); otherwise default to "info" so warn/error still surface.
 const defaultLevel: Level = debugSpec ? "debug" : "info";
-const levelSpec = (readEnv("MONGODBEE_LOG_LEVEL") || defaultLevel)
-  .toLowerCase() as Level;
+const levelSpec = (
+  readEnv("MONGODBEE_LOG_LEVEL") || defaultLevel
+).toLowerCase() as Level;
 const minLevel = LEVEL_ORDER[levelSpec] ?? LEVEL_ORDER[defaultLevel];
 
 const includePatterns: string[] = [];
@@ -113,13 +104,37 @@ function formatArg(arg: unknown): string {
   }
 }
 
+export type LogLevel = Level;
+
+export interface LogRecord {
+  readonly level: LogLevel;
+  readonly namespace: string;
+  readonly message: string;
+  readonly args: readonly unknown[];
+}
+
+export type LogSink = (record: LogRecord) => void;
+
+const consoleSink: LogSink = ({ level, namespace, message }) => {
+  const delta = formatDelta(namespace, Date.now());
+  console.log(
+    `[mongodbee:${namespace}] ${level.toUpperCase()} ${message} (${delta})`,
+  );
+};
+
+let sink: LogSink = consoleSink;
+
+export function setLogSink(next: LogSink | undefined): void {
+  sink = next ?? consoleSink;
+}
+
 function emit(level: Level, namespace: string, args: unknown[]): void {
-  const now = Date.now();
-  const delta = formatDelta(namespace, now);
   const message = args.map(formatArg).join(" ");
-  const line =
-    `[mongodbee:${namespace}] ${level.toUpperCase()} ${message} (${delta})`;
-  console.log(line);
+  try {
+    sink({ level, namespace, message, args });
+  } catch {
+    consoleSink({ level, namespace, message, args });
+  }
 }
 
 export interface Logger {

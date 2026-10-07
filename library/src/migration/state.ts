@@ -77,9 +77,7 @@ function operationToStateRecord(
     .pop();
 
   // Find last failed operation
-  const lastFailed = operations
-    .filter((op) => op.operation === "failed")
-    .pop();
+  const lastFailed = operations.filter((op) => op.operation === "failed").pop();
 
   return {
     id: migrationId,

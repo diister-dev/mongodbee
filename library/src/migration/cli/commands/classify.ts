@@ -1,6 +1,6 @@
 import process from "node:process";
-import { blue, bold, dim, red } from "@std/fmt/colors";
-import * as path from "@std/path";
+import { blue, bold, dim, red } from "../../../utils/colors.ts";
+import * as path from "node:path";
 
 import { loadConfig } from "../../config/loader.ts";
 import { buildMigrationChain, loadAllMigrations } from "../../discovery.ts";

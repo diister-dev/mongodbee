@@ -1,5 +1,6 @@
+import { test } from "../+harness.ts";
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects } from "../+assert.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import assert from "node:assert";
@@ -28,7 +29,7 @@ const createTestSchema = () =>
     },
   });
 
-Deno.test("MultiCollection Session: Basic transaction", async (t) => {
+test("MultiCollection Session: Basic transaction", async (t) => {
   await withDatabase(t.name, async (db) => {
     const store = await multiCollection(db, "store", createTestSchema());
 
@@ -74,7 +75,7 @@ Deno.test("MultiCollection Session: Basic transaction", async (t) => {
   });
 });
 
-Deno.test("MultiCollection Session: Transaction rollback", async (t) => {
+test("MultiCollection Session: Transaction rollback", async (t) => {
   await withDatabase(t.name, async (db) => {
     const store = await multiCollection(db, "store", createTestSchema());
 
@@ -138,7 +139,7 @@ Deno.test("MultiCollection Session: Transaction rollback", async (t) => {
   });
 });
 
-Deno.test("MultiCollection Session: Complex multi-entity update", async (t) => {
+test("MultiCollection Session: Complex multi-entity update", async (t) => {
   await withDatabase(t.name, async (db) => {
     const store = await multiCollection(db, "store", createTestSchema());
 
@@ -246,7 +247,7 @@ Deno.test("MultiCollection Session: Complex multi-entity update", async (t) => {
   });
 });
 
-Deno.test("MultiCollection Session: Read operations in transaction", async (t) => {
+test("MultiCollection Session: Read operations in transaction", async (t) => {
   await withDatabase(t.name, async (db) => {
     const store = await multiCollection(db, "store", createTestSchema());
 

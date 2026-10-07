@@ -132,8 +132,8 @@ export function watchEvent<TSchema extends m.Document = m.Document>(
       // Remove from collection-specific listeners
       const namespace = watchers.namespaceListener[collection.collectionName];
       if (namespace) {
-        watchers.namespaceListener[collection.collectionName] = namespace
-          .filter((l) => l !== callback);
+        watchers.namespaceListener[collection.collectionName] =
+          namespace.filter((l) => l !== callback);
       }
 
       // If no listeners left, clean up

@@ -10,7 +10,7 @@ export { generateCommand } from "./commands/generate.ts";
 export { migrateCommand } from "./commands/migrate.ts";
 export { rollbackCommand } from "./commands/rollback.ts";
 export { statusCommand } from "./commands/status.ts";
-export { checkCommand } from "./commands/check.ts";
+export { checkCommand, runCheck } from "./commands/check.ts";
 export { syncCommand } from "./commands/sync.ts";
 
 export type { InitCommandOptions } from "./commands/init.ts";
@@ -18,5 +18,11 @@ export type { GenerateCommandOptions } from "./commands/generate.ts";
 export type { MigrateCommandOptions } from "./commands/migrate.ts";
 export type { RollbackCommandOptions } from "./commands/rollback.ts";
 export type { StatusCommandOptions } from "./commands/status.ts";
-export type { CheckCommandOptions } from "./commands/check.ts";
+export type {
+  CheckCommandOptions,
+  CheckHooks,
+  CheckMigrationReport,
+  CheckReport,
+  CheckStage,
+} from "./commands/check.ts";
 export type { SyncCommandOptions } from "./commands/sync.ts";

@@ -10,7 +10,10 @@
  * @module
  */
 
-import { assert, assertEquals } from "@std/assert";
+import { test } from "../../+harness.ts";
+import process from "node:process";
+import { readFile, writeFile } from "node:fs/promises";
+import { assert, assertEquals } from "../../+assert.ts";
 import { MongoClient } from "../../../src/mongodb.ts";
 import { initCommand } from "../../../src/migration/cli/commands/init.ts";
 import { generateCommand } from "../../../src/migration/cli/commands/generate.ts";
@@ -25,17 +28,19 @@ import {
 } from "./shared.ts";
 
 // MongoDB test connection
-const TEST_MONGODB_URI = Deno.env.get("TEST_MONGODB_URI") ||
-  Deno.env.get("MONGODBEE_TEST_URI") ||
+const TEST_MONGODB_URI =
+  process.env.TEST_MONGODB_URI ||
+  process.env.MONGODBEE_TEST_URI ||
   "mongodb://localhost:27017";
 
 /**
  * Generate a unique database name for each test to avoid collisions
  */
 function generateTestDbName(): string {
-  return `mongodbee_test_integration_${
-    crypto.randomUUID().replace(/-/g, "").substring(0, 8)
-  }`;
+  return `mongodbee_test_integration_${crypto
+    .randomUUID()
+    .replace(/-/g, "")
+    .substring(0, 8)}`;
 }
 
 /**
@@ -75,13 +80,13 @@ async function withTestDb(
  * Setup test configuration
  */
 async function setupTestConfig(tempDir: string, dbName: string) {
-  await Deno.writeTextFile(
+  await writeFile(
     `${tempDir}/mongodbee.config.ts`,
     `export default { database: { connection: { uri: "${TEST_MONGODB_URI}" }, name: "${dbName}" }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
   );
 }
 
-Deno.test("integration - complete workflow: init → generate → migrate → status", async () => {
+test("integration - complete workflow: init → generate → migrate → status", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Step 1: Initialize project
@@ -111,7 +116,7 @@ Deno.test("integration - complete workflow: init → generate → migrate → st
   });
 });
 
-Deno.test("integration - incremental migrations: init → generate → migrate → generate → migrate", async () => {
+test("integration - incremental migrations: init → generate → migrate → generate → migrate", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Initialize
@@ -143,7 +148,7 @@ Deno.test("integration - incremental migrations: init → generate → migrate �
   });
 });
 
-Deno.test("integration - handles empty migration directory gracefully", async () => {
+test("integration - handles empty migration directory gracefully", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       // Initialize without generating migrations
@@ -157,7 +162,7 @@ Deno.test("integration - handles empty migration directory gracefully", async ()
   });
 });
 
-Deno.test("integration - multiple migrations with dependencies", async () => {
+test("integration - multiple migrations with dependencies", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -194,7 +199,7 @@ Deno.test("integration - multiple migrations with dependencies", async () => {
   });
 });
 
-Deno.test("integration - idempotent migrations: multiple migrate calls", async () => {
+test("integration - idempotent migrations: multiple migrate calls", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -215,7 +220,7 @@ Deno.test("integration - idempotent migrations: multiple migrate calls", async (
   });
 });
 
-Deno.test("integration - status shows correct information after migrations", async () => {
+test("integration - status shows correct information after migrations", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       // Setup
@@ -238,7 +243,7 @@ Deno.test("integration - status shows correct information after migrations", asy
   });
 });
 
-Deno.test("integration - dry run doesn't affect subsequent real migration", async () => {
+test("integration - dry run doesn't affect subsequent real migration", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -262,7 +267,7 @@ Deno.test("integration - dry run doesn't affect subsequent real migration", asyn
   });
 });
 
-Deno.test("integration - can continue after partial failure", async () => {
+test("integration - can continue after partial failure", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (_db, _client, dbName) => {
       // Setup
@@ -291,7 +296,7 @@ Deno.test("integration - can continue after partial failure", async () => {
   });
 });
 
-Deno.test("integration - migrations maintain parent-child relationships", async () => {
+test("integration - migrations maintain parent-child relationships", async () => {
   await withTempDir(async (tempDir) => {
     await withTestDb(async (db, _client, dbName) => {
       // Setup
@@ -309,8 +314,9 @@ Deno.test("integration - migrations maintain parent-child relationships", async 
 
       // Each migration (except first) should reference its parent
       for (let i = 1; i < files.length; i++) {
-        const content = await Deno.readTextFile(
+        const content = await readFile(
           getMigrationsDir(tempDir) + "/" + files[i],
+          "utf8",
         );
         assert(
           content.includes("import parent"),

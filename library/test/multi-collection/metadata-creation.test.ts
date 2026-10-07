@@ -1,5 +1,6 @@
+import { test } from "../+harness.ts";
 import * as v from "../../src/schema.ts";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "../+assert.ts";
 import {
   createMultiCollectionInstance,
   newMultiCollection,
@@ -16,7 +17,7 @@ const testModel = defineModel("test", {
   },
 });
 
-Deno.test("Metadata creation: newMultiCollection with raw schema should NOT create metadata", async (t) => {
+test("Metadata creation: newMultiCollection with raw schema should NOT create metadata", async (t) => {
   await withDatabase(t.name, async (db) => {
     const rawSchema = {
       product: {
@@ -47,17 +48,19 @@ Deno.test("Metadata creation: newMultiCollection with raw schema should NOT crea
   });
 });
 
-Deno.test("Metadata creation: createMultiCollectionInstance with model SHOULD create metadata", async (t) => {
+test("Metadata creation: createMultiCollectionInstance with model SHOULD create metadata", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create collection instance with model
     await createMultiCollectionInstance(db, "test_instance", testModel);
 
     // Check for metadata documents
     const collection = db.collection("test_instance");
-    const infoDoc = await collection.findOne({ _type: "_information" }) as any;
-    const migrationsDoc = await collection.findOne({
+    const infoDoc = (await collection.findOne({
+      _type: "_information",
+    })) as any;
+    const migrationsDoc = (await collection.findOne({
       _type: "_migrations",
-    }) as any;
+    })) as any;
 
     // Model-based instance SHOULD create metadata
     assert(
@@ -82,7 +85,7 @@ Deno.test("Metadata creation: createMultiCollectionInstance with model SHOULD cr
   });
 });
 
-Deno.test("Metadata creation: newMultiCollection with model SHOULD create metadata", async (t) => {
+test("Metadata creation: newMultiCollection with model SHOULD create metadata", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create collection with model (not instance)
     await newMultiCollection(db, "test_with_model", testModel.schema);

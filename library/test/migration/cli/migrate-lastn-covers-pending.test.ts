@@ -14,8 +14,12 @@
  * migration. Below that floor `--last N` is a request to skip validating
  * something that is about to be written to a real database.
  */
-import { assert, assertEquals, assertRejects } from "@std/assert";
-import * as path from "@std/path";
+import { test } from "../../+harness.ts";
+import process from "node:process";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { assert, assertEquals, assertRejects } from "../../+assert.ts";
+import * as path from "node:path";
 import { MongoClient } from "../../../src/mongodb.ts";
 import { migrateCommand } from "../../../src/migration/cli/commands/migrate.ts";
 import {
@@ -25,11 +29,12 @@ import {
 import { validateMigrationsWithSimulation } from "../../../src/migration/cli/utils/validate-migrations.ts";
 import { getAppliedMigrationIds } from "../../../src/migration/state.ts";
 
-const TEST_MONGODB_URI = Deno.env.get("TEST_MONGODB_URI") ||
-  Deno.env.get("MONGODBEE_TEST_URI") ||
+const TEST_MONGODB_URI =
+  process.env.TEST_MONGODB_URI ||
+  process.env.MONGODBEE_TEST_URI ||
   "mongodb://localhost:27017";
 
-const LIB = Deno.cwd(); // `deno test` runs from the library directory
+const LIB = process.cwd(); // `deno test` runs from the library directory
 const DEFINITION = path.resolve(LIB, "src/migration/definition.ts");
 const SCHEMA = path.resolve(LIB, "src/schema.ts");
 
@@ -109,24 +114,25 @@ async function writeProject(
   schemas: string,
   dbName: string,
 ): Promise<string> {
-  const dir = await Deno.makeTempDir({ prefix: "mongodbee_lastn_pending_" });
+  const dir = await mkdtemp(path.join(tmpdir(), "mongodbee_lastn_pending_"));
   const migrationsDir = path.join(dir, "migrations");
-  await Deno.mkdir(migrationsDir);
+  await mkdir(migrationsDir);
   for (const [name, content] of Object.entries(files)) {
-    await Deno.writeTextFile(path.join(migrationsDir, `${name}.ts`), content);
+    await writeFile(path.join(migrationsDir, `${name}.ts`), content);
   }
-  await Deno.writeTextFile(path.join(dir, "schemas.ts"), schemas);
-  await Deno.writeTextFile(
+  await writeFile(path.join(dir, "schemas.ts"), schemas);
+  await writeFile(
     path.join(dir, "mongodbee.config.ts"),
     `export default { database: { connection: { uri: "${TEST_MONGODB_URI}" }, name: "${dbName}" }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
   );
   return dir;
 }
 
-Deno.test("migrate --last N: the window widens to cover every pending migration", async () => {
-  const dbName = `mongodbee_test_lastn_${
-    crypto.randomUUID().replace(/-/g, "").substring(0, 8)
-  }`;
+test("migrate --last N: the window widens to cover every pending migration", async () => {
+  const dbName = `mongodbee_test_lastn_${crypto
+    .randomUUID()
+    .replace(/-/g, "")
+    .substring(0, 8)}`;
   const client = new MongoClient(TEST_MONGODB_URI);
   await client.connect();
   const db = client.db(dbName);
@@ -158,7 +164,10 @@ Deno.test("migrate --last N: the window widens to cover every pending migration"
     const windowOnly = await validateMigrationsWithSimulation(chain, {
       lastN: 1,
     });
-    assertEquals(windowOnly.map((r) => r.valid), [true]);
+    assertEquals(
+      windowOnly.map((r) => r.valid),
+      [true],
+    );
 
     // `--last 1` names only `leaf`. `broken` is pending right behind it and
     // is about to be applied, so the window has to widen to reach it.
@@ -181,7 +190,115 @@ Deno.test("migrate --last N: the window widens to cover every pending migration"
     await client.close();
     for (const dir of [appliedDir, fullDir]) {
       try {
-        await Deno.remove(dir, { recursive: true });
+        await rm(dir, { recursive: true, force: true });
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+  }
+});
+
+const NEXT_ID = "2025_01_02_0000_DDDDDDDDDDDDDDDDDDDDDDDDDD@next";
+
+// A valid child of `root`: the one pending migration of the test below.
+const nextFile = `
+import { migrationDefinition } from "${DEFINITION}";
+import * as v from "${SCHEMA}";
+import root from "./${ROOT_ID}.ts";
+export default migrationDefinition("${NEXT_ID}", "next", {
+  parent: root,
+  schemas: {
+    collections: { users: { _id: v.string() }, tags: { _id: v.string() } },
+    multiModels: {},
+  },
+  migrate(m) {
+    m.createCollection("tags");
+    return m.compile();
+  },
+});
+`;
+
+/** Runs `work` with console.log and stdout captured; returns the output. */
+async function captureLog(work: () => Promise<void>): Promise<string> {
+  const original = console.log;
+  const originalWrite = process.stdout.write;
+  const lines: string[] = [];
+  console.log = (...args: unknown[]) => lines.push(args.join(" "));
+  process.stdout.write = ((chunk: unknown) => {
+    lines.push(String(chunk));
+    return true;
+  }) as typeof process.stdout.write;
+  try {
+    await work();
+  } finally {
+    console.log = original;
+    process.stdout.write = originalWrite;
+  }
+  return lines.join("\n");
+}
+
+test("migrate: only the pending migrations are simulated, with --docs and --retention", async () => {
+  const dbName = `mongodbee_test_pending_${crypto
+    .randomUUID()
+    .replace(/-/g, "")
+    .substring(0, 8)}`;
+  const client = new MongoClient(TEST_MONGODB_URI);
+  await client.connect();
+  const db = client.db(dbName);
+  await db.dropDatabase();
+
+  const appliedDir = await writeProject(
+    { [ROOT_ID]: rootFile },
+    rootSchemas,
+    dbName,
+  );
+  const nextDir = await writeProject(
+    { [ROOT_ID]: rootFile, [NEXT_ID]: nextFile },
+    leafSchemas,
+    dbName,
+  );
+
+  try {
+    await migrateCommand({ cwd: appliedDir, force: true });
+
+    // Out-of-range values fail before anything is simulated or written.
+    await assertRejects(
+      () => migrateCommand({ cwd: nextDir, force: true, docs: 0 }),
+      Error,
+      "--docs",
+    );
+    await assertRejects(
+      () => migrateCommand({ cwd: nextDir, force: true, retention: 2 }),
+      Error,
+      "--retention",
+    );
+    assertEquals((await getAppliedMigrationIds(db)).length, 1);
+
+    const output = await captureLog(() =>
+      migrateCommand({ cwd: nextDir, force: true, docs: 3, retention: 0 }),
+    );
+    // `root` is history: only `next` goes through the simulation.
+    assert(output.includes("[1/1]"), output);
+    assert(!output.includes("[1/2]"), output);
+    assert(output.includes("3 docs, 0% kept"), output);
+    assertEquals((await getAppliedMigrationIds(db)).length, 2);
+
+    // Nothing pending: no simulation at all.
+    const idle = await captureLog(() =>
+      migrateCommand({ cwd: nextDir, force: true }),
+    );
+    assert(idle.includes("No pending migrations"), idle);
+    assert(!idle.includes("Validating migrations with simulation"), idle);
+  } finally {
+    try {
+      await db.dropDatabase();
+    } catch {
+      // Ignore cleanup errors
+    }
+    await client.close();
+    for (const dir of [appliedDir, nextDir]) {
+      try {
+        await rm(dir, { recursive: true, force: true });
       } catch {
         // Ignore cleanup errors
       }

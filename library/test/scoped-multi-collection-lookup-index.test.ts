@@ -13,7 +13,8 @@
  * - planner behaviour via `explain()` (partial index used, keys bounded),
  * - cross-scope isolation of every lookup form after the change.
  */
-import { assert, assertEquals } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import {
   type AggregationStage,
@@ -30,6 +31,7 @@ async function makeCatalog(
   db: Parameters<Parameters<typeof withDatabase>[1]>[0],
 ) {
   return await scopedMultiCollection(db, "catalog", {
+    schemaManagement: "auto",
     scope: refId("exposition"),
     types: {
       participant: {
@@ -44,19 +46,17 @@ async function makeCatalog(
 }
 
 /** Extract the `$lookup` stage stats from an executionStats explain. */
-// deno-lint-ignore no-explicit-any
 function lookupStats(explain: any): {
   indexesUsed: string[];
   collectionScans: number;
   totalKeysExamined: number;
 } {
-  // deno-lint-ignore no-explicit-any
   const stage = explain.stages?.find((s: any) => s.$lookup);
   assert(
     stage,
-    `expected a $lookup stage in explain output, got ${
-      JSON.stringify(Object.keys(explain))
-    }`,
+    `expected a $lookup stage in explain output, got ${JSON.stringify(
+      Object.keys(explain),
+    )}`,
   );
   return {
     indexesUsed: stage.indexesUsed ?? [],
@@ -65,7 +65,7 @@ function lookupStats(explain: any): {
   };
 }
 
-Deno.test("lookup: sub-pipeline match keeps constants OUT of $expr", async () => {
+test("lookup: the join key is the lookup's own fields, the constants stay query operators, and $expr is gone", async () => {
   await withDatabase("smc-lookup-shape", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);
@@ -80,40 +80,54 @@ Deno.test("lookup: sub-pipeline match keeps constants OUT of $expr", async () =>
       return captured;
     });
 
-    const subMatch = (stage: AggregationStage): Record<string, unknown> => {
-      const lookup = stage.$lookup as { pipeline: AggregationStage[] };
-      return lookup.pipeline[0].$match as Record<string, unknown>;
-    };
-    // _scope (and _type for the typed lookup) must be plain query-operator
-    // constraints (index-visible); $expr must contain ONLY the correlated
-    // join comparison.
-    const typed = subMatch(captured[1]);
-    assertEquals(typed._type, "badge");
-    assertEquals(typed._scope, EXPO_A);
-    assertEquals(typed.$expr, { $eq: ["$participantId", "$$localValue"] });
-    const any = subMatch(captured[2]);
-    assertEquals(any._scope, EXPO_A);
-    assertEquals(any.$expr, { $eq: ["$participantId", "$$localValue"] });
+    const lookupOf = (stage: AggregationStage) =>
+      stage.$lookup as {
+        localField: string;
+        foreignField: string;
+        let: Record<string, unknown>;
+        pipeline: AggregationStage[];
+      };
+    // Two `let` + `$expr` joins on one row, one on an absent local field, ran
+    // over 15 s on Mongo 8 for 6000 rows against 20000; the keyed form runs in
+    // 0.4 s and matches an array local value element by element. `_scope` (and
+    // `_type` for the typed lookup) stay plain query-operator constraints, and
+    // `$$localValue` stays bound for user stages that read it.
+    const typed = lookupOf(captured[1]);
+    assertEquals(typed.localField, "_id");
+    assertEquals(typed.foreignField, "participantId");
+    assertEquals(typed.let, { localValue: "$_id" });
+    assertEquals(typed.pipeline[0].$match, { _type: "badge", _scope: EXPO_A });
+    const any = lookupOf(captured[2]);
+    assertEquals(any.localField, "_id");
+    assertEquals(any.foreignField, "participantId");
+    assertEquals(any.pipeline[0].$match, { _scope: EXPO_A });
   });
 });
 
-Deno.test("lookup: planner uses the withIndex-created partial index", async () => {
+test("lookup: planner uses the withIndex-created partial index", async () => {
   await withDatabase("smc-lookup-partial-idx", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);
     const expoB = catalog.scope(EXPO_B);
 
     const N = 50;
-    for (let i = 0; i < N; i++) {
-      const pid = await expoA.insertOne("participant", { name: `p-${i}` });
-      await expoA.insertOne("badge", { participantId: pid, label: `b-${i}` });
-    }
+    const seed = async (view: typeof expoA, prefix: string) => {
+      const ids = await view.insertMany(
+        "participant",
+        Array.from({ length: N }, (_, i) => ({ name: `${prefix}-${i}` })),
+      );
+      await view.insertMany(
+        "badge",
+        ids.map((participantId, i) => ({
+          participantId,
+          label: `${prefix}-badge-${i}`,
+        })),
+      );
+    };
+    await seed(expoA, "p");
     // Same volume in another scope: an un-scoped or $expr-only lookup would
     // have to wade through these keys too.
-    for (let i = 0; i < N; i++) {
-      const pid = await expoB.insertOne("participant", { name: `q-${i}` });
-      await expoB.insertOne("badge", { participantId: pid, label: `c-${i}` });
-    }
+    await seed(expoB, "q");
 
     // Capture the pipeline the library actually emits, then explain it.
     let captured: AggregationStage[] = [];
@@ -125,18 +139,21 @@ Deno.test("lookup: planner uses the withIndex-created partial index", async () =
       return captured;
     });
 
-    const explain = await db.collection("catalog").aggregate([
-      // Mirrors the scope guard the ScopedView prepends in aggregate().
-      { $match: { _scope: EXPO_A } },
-      ...captured,
-    ]).explain("executionStats");
+    const explain = await db
+      .collection("catalog")
+      .aggregate([
+        // Mirrors the scope guard the ScopedView prepends in aggregate().
+        { $match: { _scope: EXPO_A } },
+        ...captured,
+      ])
+      .explain("executionStats");
 
     const stats = lookupStats(explain);
     assert(
       stats.indexesUsed.includes("_scope__type_badge_participantId"),
-      `expected the withIndex partial index to be used, got ${
-        JSON.stringify(stats.indexesUsed)
-      }`,
+      `expected the withIndex partial index to be used, got ${JSON.stringify(
+        stats.indexesUsed,
+      )}`,
     );
     assertEquals(stats.collectionScans, 0);
     // Each of the N sub-plans should examine ~1 key. The $expr-only shape
@@ -149,7 +166,7 @@ Deno.test("lookup: planner uses the withIndex-created partial index", async () =
   });
 });
 
-Deno.test("lookup: every form stays scope-isolated after the mixed-match change", async () => {
+test("lookup: every form stays scope-isolated after the mixed-match change", async () => {
   await withDatabase("smc-lookup-isolation", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);
@@ -191,7 +208,7 @@ Deno.test("lookup: every form stays scope-isolated after the mixed-match change"
   });
 });
 
-Deno.test("lookup: multi-scope view sees its scopes, nothing beyond", async () => {
+test("lookup: multi-scope view sees its scopes, nothing beyond", async () => {
   await withDatabase("smc-lookup-multiscope", async (db) => {
     const catalog = await makeCatalog(db);
     const expoA = catalog.scope(EXPO_A);

@@ -11,32 +11,69 @@ on:
       - develop
       - release/*
 
+defaults:
+  run:
+    working-directory: library
+
 jobs:
-  quality:
-    name:  SonarQube Quality Gate
+  static:
+    name: Typecheck, lint and build
     runs-on: ubuntu-latest
 
-    permissions:
-      contents: read
-      id-token: write
-
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: SonarSource/sonarqube-scan-action@v6
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run check
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Format
+        run: bun run fmt:check
+
+      - name: Build
+        run: bun run build
+
+      - name: Typecheck the studio
+        working-directory: studio
+        run: bun run check
+
+      - name: Lint the studio
+        working-directory: studio
+        run: bun run lint
+
+      - name: Format the studio
+        working-directory: studio
+        run: bun run fmt:check
+
+      - name: Build the studio
+        working-directory: studio
+        run: bun run build
 
   test:
+    name: Tests (${{ matrix.runtime }})
     runs-on: ubuntu-latest
 
     permissions:
       contents: read
-      id-token: write
+
+    # The suite targets `node:test`, so the same tests run on all three.
+    # Worth the matrix: Bun is JavaScriptCore, Node and Deno are V8 — and
+    # Deno is what Diivento runs the library on.
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [bun, node, deno]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Start MongoDB
         uses: supercharge/mongodb-github-action@1.12.0
@@ -44,12 +81,171 @@ jobs:
           mongodb-version: '6.0'
           mongodb-port: 27017
           mongodb-replica-set: rs0
-      
-      - name: Setup Deno
-        uses: denolib/setup-deno@v2
+
+      - uses: oven-sh/setup-bun@v2
         with:
-          deno-version: v2.6.10
-          
-      - name: Test
-        run: deno test -A --coverage=cov_profile
-        working-directory: library
+          bun-version: 1.4.2
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.18
+
+      - uses: denoland/setup-deno@v2
+        if: matrix.runtime == 'deno'
+        with:
+          deno-version: v2.9.7
+
+      - run: bun install --frozen-lockfile
+
+      - name: Test (bun)
+        if: matrix.runtime == 'bun'
+        run: bun test --parallel
+
+      - name: Test (node)
+        if: matrix.runtime == 'node'
+        run: node --test "test/**/*.test.ts"
+
+      # test/migration/cli generates migration files and imports them at run
+      # time; `deno test` refuses modules that were not in the graph when the
+      # run started ("Loading unprepared module"), while `deno run` — how the
+      # CLI is actually used — loads them fine. The CLI under Deno is covered
+      # by the consumers job below. Types are tsc's job (the check job).
+      - name: Test (deno)
+        if: matrix.runtime == 'deno'
+        run: deno test -A --parallel --no-check --ignore=test/migration/cli test/
+
+      - name: Build the core for the studio
+        run: bun run build
+
+      - name: Build the studio UI
+        working-directory: studio
+        run: bun run build:ui
+
+      - name: Test the studio (bun)
+        if: matrix.runtime == 'bun'
+        working-directory: studio
+        run: bun test --parallel
+
+      - name: Test the studio (node)
+        if: matrix.runtime == 'node'
+        working-directory: studio
+        run: node --test "test/**/*.test.ts"
+
+      - name: Test the studio (deno)
+        if: matrix.runtime == 'deno'
+        working-directory: studio
+        run: deno test -A --parallel --no-check --ignore=test/check.test.ts,test/studio-target.test.ts test/
+
+  consumers:
+    name: Consume the built package (${{ matrix.runtime }})
+    runs-on: ubuntu-latest
+    needs: static
+
+    # Installs the real tarball into an empty project — the only thing that
+    # exercises the `exports` map, the `bin` entry and the `.d.ts` the way a
+    # user does.
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [bun, node, deno]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.18
+
+      - uses: denoland/setup-deno@v2
+        if: matrix.runtime == 'deno'
+        with:
+          deno-version: v2.9.7
+
+      - run: bun install --frozen-lockfile
+
+      - name: Build and pack
+        run: |
+          bun run build
+          npm pack --pack-destination /tmp
+
+      - name: Build and pack the studio
+        working-directory: studio
+        run: |
+          bun run build
+          npm pack --pack-destination /tmp
+
+      - name: Install into an empty project
+        working-directory: /tmp
+        run: |
+          mkdir -p consumer && cd consumer
+          echo '{"name":"consumer","type":"module","private":true}' > package.json
+          npm install /tmp/diister-mongodbee-[0-9]*.tgz
+
+      - name: Import every entry point
+        working-directory: /tmp/consumer
+        run: |
+          cat > check.js <<'EOF'
+          import { collection, multiCollection, scopedMultiCollection } from "@diister/mongodbee";
+          import * as v from "@diister/mongodbee/schema";
+          import { migrationDefinition } from "@diister/mongodbee/migration";
+          for (const [name, value] of Object.entries({ collection, multiCollection, scopedMultiCollection, object: v.object, migrationDefinition })) {
+            if (typeof value !== "function") throw new Error(`${name} did not load`);
+          }
+          console.log("all entry points loaded");
+          EOF
+          if [ "${{ matrix.runtime }}" = "deno" ]; then
+            deno run -A check.js
+          else
+            ${{ matrix.runtime }} check.js
+          fi
+
+      - name: Run the CLI through its bin entry
+        working-directory: /tmp/consumer
+        run: ./node_modules/.bin/mongodbee --version
+
+      # `deno run npm:…/bin` (and `jsr:…/bin`, which cannot be exercised
+      # before publishing) runs the entry with a non-file URL: the CLI must
+      # still recognise itself as the entry point and not exit 0 silently.
+      - name: Run the CLI through a package specifier (deno)
+        if: matrix.runtime == 'deno'
+        working-directory: /tmp/consumer
+        run: |
+          out=$(deno run -A npm:@diister/mongodbee/migration/cli/bin --version)
+          echo "$out"
+          test -n "$out"
+
+      - name: Report a missing studio from the CLI
+        working-directory: /tmp/consumer
+        run: |
+          set +e
+          out=$(./node_modules/.bin/mongodbee studio)
+          code=$?
+          set -e
+          echo "$out"
+          test "$code" = 1
+          echo "$out" | grep -q "npm install --save-dev @diister/mongodbee-studio"
+
+      - name: Install the studio next to the core
+        working-directory: /tmp/consumer
+        run: npm install /tmp/diister-mongodbee-[0-9]*.tgz /tmp/diister-mongodbee-studio-*.tgz
+
+      - name: Load the studio entry point
+        working-directory: /tmp/consumer
+        run: |
+          cat > studio.js <<'EOF'
+          import { startStudioServer, studioCommand } from "@diister/mongodbee-studio";
+          import { plannedIndexes, runCheck } from "@diister/mongodbee/inspect";
+          for (const [name, value] of Object.entries({ startStudioServer, studioCommand, plannedIndexes, runCheck })) {
+            if (typeof value !== "function") throw new Error(`${name} did not load`);
+          }
+          console.log("the studio and the inspect contract loaded");
+          EOF
+          if [ "${{ matrix.runtime }}" = "deno" ]; then
+            deno run -A studio.js
+          else
+            ${{ matrix.runtime }} studio.js
+          fi

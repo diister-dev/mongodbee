@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { decodeTime } from "@std/ulid";
+import { decodeTime } from "../utils/ulid.ts";
 import {
   encodeUlidRandom,
   encodeUlidTime,

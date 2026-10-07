@@ -9,7 +9,8 @@
  * @module
  */
 
-import { assertEquals } from "@std/assert";
+import { test } from "../../+harness.ts";
+import { assertEquals } from "../../+assert.ts";
 import * as v from "valibot";
 import { migrationDefinition } from "../../../src/migration/definition.ts";
 import { validateMigrationWithSimulation } from "../../../src/migration/validators/simulation.ts";
@@ -20,7 +21,7 @@ import { validateMigrationWithSimulation } from "../../../src/migration/validato
  * Scenario: Adding a required field without providing a transformation
  * to populate existing documents should be blocked.
  */
-Deno.test("Validation Attack 1: Schema change without transformation should fail", async () => {
+test("Validation Attack 1: Schema change without transformation should fail", async () => {
   // Root migration: creates users collection with seed data
   const rootMigration = migrationDefinition("2025_01_01_ROOT", "create_users", {
     parent: null,
@@ -95,7 +96,7 @@ Deno.test("Validation Attack 1: Schema change without transformation should fail
  * Scenario: Removing a type from a multi-collection schema without
  * providing a transformation to migrate existing documents.
  */
-Deno.test("Validation Attack 2: Multi-collection type removal without transformation should fail", async () => {
+test("Validation Attack 2: Multi-collection type removal without transformation should fail", async () => {
   // Root migration: creates posts multi-collection with article and video types
   const rootMigration = migrationDefinition("2025_01_01_ROOT", "create_posts", {
     parent: null,
@@ -163,7 +164,7 @@ Deno.test("Validation Attack 2: Multi-collection type removal without transforma
  * ⚠️  CRITICAL TEST: This was discovered during manual testing!
  * Before the fix, this attack succeeded and corrupted the database.
  */
-Deno.test("Validation Attack 3: Transformation returning invalid values should fail", async () => {
+test("Validation Attack 3: Transformation returning invalid values should fail", async () => {
   // Root migration: creates users collection WITH SEED DATA
   const rootMigration = migrationDefinition("2025_01_01_ROOT", "create_users", {
     parent: null,
@@ -231,8 +232,9 @@ Deno.test("Validation Attack 3: Transformation returning invalid values should f
   // Should detect invalid transformed values
   assertEquals(result.success, false, "Should fail validation");
   assertEquals(
-    result.errors.some((e: string) =>
-      e.includes("verified") || e.includes("boolean") || e.includes("null")
+    result.errors.some(
+      (e: string) =>
+        e.includes("verified") || e.includes("boolean") || e.includes("null"),
     ),
     true,
     "Error should mention validation issue with verified field",
@@ -244,7 +246,7 @@ Deno.test("Validation Attack 3: Transformation returning invalid values should f
  *
  * Scenario: Transformation returns wrong type (string when number expected)
  */
-Deno.test("Validation Attack 4: Transformation with type mismatch should fail", async () => {
+test("Validation Attack 4: Transformation with type mismatch should fail", async () => {
   const rootMigration = migrationDefinition("2025_01_01_ROOT", "create_users", {
     parent: null,
     schemas: {
@@ -309,8 +311,9 @@ Deno.test("Validation Attack 4: Transformation with type mismatch should fail", 
 
   assertEquals(result.success, false, "Should fail validation");
   assertEquals(
-    result.errors.some((e: string) =>
-      e.includes("age") || e.includes("number") || e.includes("string")
+    result.errors.some(
+      (e: string) =>
+        e.includes("age") || e.includes("number") || e.includes("string"),
     ),
     true,
     "Error should mention validation issue with age field",
@@ -322,7 +325,7 @@ Deno.test("Validation Attack 4: Transformation with type mismatch should fail", 
  *
  * Scenario: Transformation doesn't add a required field
  */
-Deno.test("Validation Attack 5: Transformation missing required field should fail", async () => {
+test("Validation Attack 5: Transformation missing required field should fail", async () => {
   const rootMigration = migrationDefinition("2025_01_01_ROOT", "create_users", {
     parent: null,
     schemas: {
@@ -398,7 +401,7 @@ Deno.test("Validation Attack 5: Transformation missing required field should fai
  *
  * Positive test: A properly written transformation should pass validation
  */
-Deno.test("Valid transformation with correct values should pass", async () => {
+test("Valid transformation with correct values should pass", async () => {
   const rootMigration = migrationDefinition("2025_01_01_ROOT", "create_users", {
     parent: null,
     schemas: {
@@ -466,7 +469,7 @@ Deno.test("Valid transformation with correct values should pass", async () => {
  *
  * Scenario: Multi-collection type transformation returns invalid values
  */
-Deno.test("Validation Attack 7: Multi-collection transformation with invalid values should fail", async () => {
+test("Validation Attack 7: Multi-collection transformation with invalid values should fail", async () => {
   const rootMigration = migrationDefinition("2025_01_01_ROOT", "create_posts", {
     parent: null,
     schemas: {
@@ -507,16 +510,19 @@ Deno.test("Validation Attack 7: Multi-collection transformation with invalid val
       },
       migrate(migration) {
         // 🚨 ATTACK: Returns undefined instead of boolean
-        migration.multiCollection("posts").type("article").transform({
-          up: (doc) => ({
-            ...doc,
-            published: undefined as unknown as boolean,
-          }),
-          down: (doc) => {
-            const { published: _published, ...rest } = doc;
-            return rest;
-          },
-        });
+        migration
+          .multiCollection("posts")
+          .type("article")
+          .transform({
+            up: (doc) => ({
+              ...doc,
+              published: undefined as unknown as boolean,
+            }),
+            down: (doc) => {
+              const { published: _published, ...rest } = doc;
+              return rest;
+            },
+          });
         return migration.compile();
       },
     },

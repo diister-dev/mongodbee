@@ -46,12 +46,16 @@
  * @module
  */
 
+import { VERSION } from "../version.ts";
+
 // Core types and interfaces
 export type {
   CollectionBuilder as MigrationCollectionBuilder,
   CreateCollectionRule,
   // Database state
   DatabaseState,
+  DedupeKeep,
+  DedupeOptions,
   // Applier interfaces
   MigrationApplier,
   MigrationBuilder,
@@ -104,11 +108,30 @@ export type {
 // Configuration
 export * from "./config/mod.ts";
 
-// Validators (partial export of working functions)
+// Validators. This used to name only four symbols, which left the simulation
+// validators — the ones `mongodbee check` itself runs on — documented but
+// unreachable.
+//
+// Deliberately not `export *`: `validators/chain.ts` also exports a
+// `validateMigrationChain`, and `definition.ts` already exports that name from
+// here. A star export would resolve to `definition.ts`'s, silently handing
+// callers a `{ valid, errors }` where chain.ts's docs promise
+// `{ isValid, errors, warnings, metadata }`. Chain validation is reachable
+// through `createChainValidator().validateChain()` instead, which is
+// unambiguous.
 export {
+  type ChainValidationResult,
+  ChainValidator,
+  type ChainValidatorOptions,
   createChainValidator,
+  createSimulationValidator,
+  DEFAULT_SIMULATION_VALIDATOR_OPTIONS,
+  getMockGenerationConfig,
   type MigrationValidator,
+  SimulationValidator,
+  type SimulationValidatorOptions,
   type SimulationPowerLevel,
+  validateMigrationWithSimulation,
   type ValidationResult,
 } from "./validators/mod.ts";
 
@@ -182,10 +205,29 @@ export type {
   MigrationValidationDetails,
 } from "./check-status.ts";
 
+// Pre-flight privilege check (what the connected account may do vs. what a run needs)
+export {
+  checkMigrationPrivileges,
+  DB_ADMIN_ONLY_ACTIONS,
+  evaluatePrivileges,
+  MIGRATION_PRIVILEGE_ACTIONS,
+} from "./privileges.ts";
+export type {
+  CheckMigrationPrivilegesOptions,
+  ConnectionAuthInfo,
+  MigrationPrivilegeCheck,
+  PrivilegeEvaluation,
+  ServerPrivilege,
+} from "./privileges.ts";
+
 /**
- * Version information for the migration system
+ * The version of MongoDBee this migration system ships with.
+ *
+ * Re-exported from the single source of truth in `src/version.ts`, which
+ * `scripts/check-package.ts` keeps in step with package.json and jsr.json. It
+ * used to be a hardcoded "1.0.0" that no release ever updated.
  */
-export const VERSION = "1.0.0";
+export { VERSION };
 
 /**
  * Default export providing the most commonly used functions

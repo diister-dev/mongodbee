@@ -1,5 +1,8 @@
-import { ulid } from "@std/ulid";
-import type { MigrationTransformContext } from "../types.ts";
+import { ulid } from "../../utils/ulid.ts";
+import type {
+  MigrationTransformContext,
+  TransformScope,
+} from "../types.ts";
 import { fnv1a32 } from "./seed-id.ts";
 import { encodeUlidRandom, encodeUlidTime } from "../../utils/ulid-encode.ts";
 
@@ -37,6 +40,7 @@ export function createDeterministicTransformContext(
   let counter = 0;
   return {
     migrationId,
+    siblings: {},
     newId: () => {
       const index = counter++;
       return deterministicUlid(`${migrationId}|newId|${index}`, time + index);
@@ -50,7 +54,15 @@ export function createLiveTransformContext(
 ): MigrationTransformContext {
   return {
     migrationId,
+    siblings: {},
     newId: () => ulid().toLowerCase(),
     now: () => new Date(),
   };
+}
+
+export function withTransformScope(
+  context: MigrationTransformContext,
+  scope: TransformScope,
+): MigrationTransformContext {
+  return { ...context, scope: scope.scope, siblings: scope.siblings };
 }

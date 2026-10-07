@@ -43,9 +43,7 @@ export interface BaseMigrationOperation {
  */
 export function calculateMigrationStateFromHistory<
   T extends BaseMigrationOperation,
->(
-  operations: T[],
-): "pending" | "applied" | "failed" | "reverted" {
+>(operations: T[]): "pending" | "applied" | "failed" | "reverted" {
   if (operations.length === 0) {
     return "pending";
   }
@@ -159,9 +157,7 @@ export function groupOperationsByMigrationId<T extends BaseMigrationOperation>(
  */
 export function getAppliedMigrationIdsFromHistory<
   T extends BaseMigrationOperation,
->(
-  operations: T[],
-): string[] {
+>(operations: T[]): string[] {
   const states = groupOperationsByMigrationId(operations);
   const applied: string[] = [];
 

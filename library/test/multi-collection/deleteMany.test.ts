@@ -1,10 +1,11 @@
+import { test } from "../+harness.ts";
 import * as v from "../../src/schema.ts";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../+assert.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import { defineModel } from "../../src/multi-collection-model.ts";
 
-Deno.test("deleteMany - basic functionality", async (t) => {
+test("deleteMany - basic functionality", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {
@@ -47,7 +48,7 @@ Deno.test("deleteMany - basic functionality", async (t) => {
   });
 });
 
-Deno.test("deleteMany - multiple matches", async (t) => {
+test("deleteMany - multiple matches", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {
@@ -77,7 +78,7 @@ Deno.test("deleteMany - multiple matches", async (t) => {
   });
 });
 
-Deno.test("deleteMany - no matches", async (t) => {
+test("deleteMany - no matches", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {
@@ -103,7 +104,7 @@ Deno.test("deleteMany - no matches", async (t) => {
   });
 });
 
-Deno.test("deleteMany - only affects specified type", async (t) => {
+test("deleteMany - only affects specified type", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {

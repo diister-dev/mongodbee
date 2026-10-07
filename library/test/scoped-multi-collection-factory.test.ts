@@ -1,12 +1,14 @@
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals, assertRejects } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";
 import { refId } from "../src/ids.ts";
 
-Deno.test("scopedMultiCollection: creates the underlying MongoDB collection", async () => {
+test("scopedMultiCollection: creates the underlying MongoDB collection", async () => {
   await withDatabase("smc-factory-basic", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         artwork: { title: v.string() },
@@ -22,12 +24,13 @@ Deno.test("scopedMultiCollection: creates the underlying MongoDB collection", as
   });
 });
 
-Deno.test("scopedMultiCollection: auto-mints _id for a refId-typed _id when omitted", async () => {
+test("scopedMultiCollection: auto-mints _id for a refId-typed _id when omitted", async () => {
   // A per-type `_id` declared as a bare `refId(type)` is required with no
   // default — but inserts must still work without the caller supplying `_id`,
   // matching the multiCollection contract (auto-mint `type:<ulid>`).
   await withDatabase("smc-factory-autoid", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         security: { _id: refId("security"), token: v.string() },
@@ -49,21 +52,25 @@ Deno.test("scopedMultiCollection: auto-mints _id for a refId-typed _id when omit
     await view.insertMany("security", [{ token: "k2" }, { token: "k3" }]);
     assertEquals((await view.find("security", {})).length, 3);
 
-    // A caller-supplied `_id` is still honored at runtime. The DynId type
-    // treats a refId `_id` as auto-generated (so callers omit it); passing one
-    // explicitly — as the exposition `information` singleton does to pin
-    // `_id == expositionId` — goes through a cast, exactly like the app.
-    await (view as unknown as {
-      insertOne(t: string, d: Record<string, unknown>): Promise<string>;
-    }).insertOne("security", { _id: "security:custom", token: "k4" });
+    // A caller-supplied `_id` is honored, and typed: no cast needed.
+    await view.insertOne("security", { _id: "security:custom", token: "k4" });
     const custom = await view.findOne("security", { token: "k4" });
     assertEquals(custom?._id, "security:custom");
+
+    // A type's own `_id` schema used to be intersected with the default one,
+    // which infers `never`: every read id was assignable to anything.
+    type ReadId = NonNullable<typeof custom>["_id"];
+    const readId: [ReadId] extends [never] ? "never" : "typed" = "typed";
+    const asString: string = docs[0]._id;
+    assertEquals(readId, "typed");
+    assertEquals(typeof asString, "string");
   });
 });
 
-Deno.test("scopedMultiCollection: applies a MongoDB JSON Schema validator", async () => {
+test("scopedMultiCollection: applies a MongoDB JSON Schema validator", async () => {
   await withDatabase("smc-factory-validator", async (db) => {
     await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         artwork: { title: v.string() },
@@ -80,14 +87,14 @@ Deno.test("scopedMultiCollection: applies a MongoDB JSON Schema validator", asyn
   });
 });
 
-Deno.test("scopedMultiCollection: rejects _scope as a user field name", async () => {
+test("scopedMultiCollection: rejects _scope as a user field name", async () => {
   await withDatabase("smc-factory-reserved-scope", async (db) => {
     await assertRejects(
       () =>
         scopedMultiCollection(db, "catalog", {
+          schemaManagement: "auto",
           scope: refId("exposition"),
           types: {
-            // deno-lint-ignore no-explicit-any
             artwork: { _scope: v.string(), title: v.string() } as any,
           },
         }),
@@ -97,14 +104,14 @@ Deno.test("scopedMultiCollection: rejects _scope as a user field name", async ()
   });
 });
 
-Deno.test("scopedMultiCollection: rejects _type as a user field name", async () => {
+test("scopedMultiCollection: rejects _type as a user field name", async () => {
   await withDatabase("smc-factory-reserved-type", async (db) => {
     await assertRejects(
       () =>
         scopedMultiCollection(db, "catalog", {
+          schemaManagement: "auto",
           scope: refId("exposition"),
           types: {
-            // deno-lint-ignore no-explicit-any
             artwork: { _type: v.string(), title: v.string() } as any,
           },
         }),
@@ -114,12 +121,13 @@ Deno.test("scopedMultiCollection: rejects _type as a user field name", async () 
   });
 });
 
-Deno.test("scopedMultiCollection: rejects _id with wrong shape as a user field name", async () => {
+test("scopedMultiCollection: rejects _id with wrong shape as a user field name", async () => {
   // _id is allowed if it's a dbId/refId-shaped schema (consistent with multiCollection),
   // but we still need to refuse blatant misuse. For now, just ensure the factory works
   // when _id is absent (which is the documented happy path).
   await withDatabase("smc-factory-no-id", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: {
         artwork: { title: v.string() },
@@ -129,11 +137,12 @@ Deno.test("scopedMultiCollection: rejects _id with wrong shape as a user field n
   });
 });
 
-Deno.test("scopedMultiCollection: rejects empty types record", async () => {
+test("scopedMultiCollection: rejects empty types record", async () => {
   await withDatabase("smc-factory-empty-types", async (db) => {
     await assertRejects(
       () =>
         scopedMultiCollection(db, "catalog", {
+          schemaManagement: "auto",
           scope: refId("exposition"),
           types: {},
         }),

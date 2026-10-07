@@ -1,5 +1,6 @@
+import { test } from "./+harness.ts";
 import * as v from "../src/schema.ts";
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects } from "./+assert.ts";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
 
@@ -16,7 +17,7 @@ const productSchema = {
   stock: v.number(),
 };
 
-Deno.test("Session: Basic session creation and usage", async (t) => {
+test("Session: Basic session creation and usage", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create a collection with the schema
     const users = await collection(db, "users", userSchema);
@@ -39,7 +40,7 @@ Deno.test("Session: Basic session creation and usage", async (t) => {
   });
 });
 
-Deno.test("Session: Transaction rollback on error", async (t) => {
+test("Session: Transaction rollback on error", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create collections with schemas
     const users = await collection(db, "users", userSchema);
@@ -57,10 +58,7 @@ Deno.test("Session: Transaction rollback on error", async (t) => {
       async () => {
         await users.withSession(async () => {
           // This should succeed
-          await products.updateOne(
-            { _id: productId },
-            { $set: { stock: 4 } },
-          );
+          await products.updateOne({ _id: productId }, { $set: { stock: 4 } });
 
           // Insert user
           await users.insertOne({
@@ -95,7 +93,7 @@ Deno.test("Session: Transaction rollback on error", async (t) => {
   });
 });
 
-Deno.test("Session: Nested transactions", async (t) => {
+test("Session: Nested transactions", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create collections with schemas
     const users = await collection(db, "users", userSchema);
@@ -131,7 +129,7 @@ Deno.test("Session: Nested transactions", async (t) => {
   });
 });
 
-Deno.test("Session: Multiple collections in the same transaction", async (t) => {
+test("Session: Multiple collections in the same transaction", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create collections with schemas
     const users = await collection(db, "users", userSchema);
@@ -163,7 +161,7 @@ Deno.test("Session: Multiple collections in the same transaction", async (t) => 
   });
 });
 
-Deno.test("Session: Direct session access via getSession", async (t) => {
+test("Session: Direct session access via getSession", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create a collection with the schema
     const users = await collection(db, "users", userSchema);

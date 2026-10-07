@@ -4,7 +4,8 @@
  * Tests discovery, tracking, and version filtering of multi-collection instances
  */
 
-import { assert, assertEquals, assertExists } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals, assertExists } from "../+assert.ts";
 import { withDatabase } from "../+shared.ts";
 import {
   createMultiCollectionInfo,
@@ -24,7 +25,7 @@ import {
 // Multi-Collection Info Tests
 // ============================================================================
 
-Deno.test("createMultiCollectionInfo - creates metadata documents", async (t) => {
+test("createMultiCollectionInfo - creates metadata documents", async (t) => {
   await withDatabase(t.name, async (db) => {
     await createMultiCollectionInfo(db, "catalog_main", "catalog", "mig_001");
 
@@ -51,7 +52,7 @@ Deno.test("createMultiCollectionInfo - creates metadata documents", async (t) =>
   });
 });
 
-Deno.test("getMultiCollectionInfo - retrieves information document", async (t) => {
+test("getMultiCollectionInfo - retrieves information document", async (t) => {
   await withDatabase(t.name, async (db) => {
     await createMultiCollectionInfo(db, "catalog_main", "catalog");
 
@@ -63,7 +64,7 @@ Deno.test("getMultiCollectionInfo - retrieves information document", async (t) =
   });
 });
 
-Deno.test("getMultiCollectionInfo - returns null for non-existent collection", async (t) => {
+test("getMultiCollectionInfo - returns null for non-existent collection", async (t) => {
   await withDatabase(t.name, async (db) => {
     const info = await getMultiCollectionInfo(db, "nonexistent");
 
@@ -75,7 +76,7 @@ Deno.test("getMultiCollectionInfo - returns null for non-existent collection", a
 // Migration Recording Tests
 // ============================================================================
 
-Deno.test("recordMultiCollectionMigration - adds migration to history", async (t) => {
+test("recordMultiCollectionMigration - adds migration to history", async (t) => {
   await withDatabase(t.name, async (db) => {
     await createMultiCollectionInfo(db, "catalog_main", "catalog", "mig_001");
 
@@ -88,7 +89,7 @@ Deno.test("recordMultiCollectionMigration - adds migration to history", async (t
   });
 });
 
-Deno.test("getMultiCollectionMigrations - retrieves migration history", async (t) => {
+test("getMultiCollectionMigrations - retrieves migration history", async (t) => {
   await withDatabase(t.name, async (db) => {
     await createMultiCollectionInfo(db, "catalog_main", "catalog", "mig_001");
     await recordMultiCollectionMigration(db, "catalog_main", "mig_002");
@@ -106,7 +107,7 @@ Deno.test("getMultiCollectionMigrations - retrieves migration history", async (t
 // Instance Discovery Tests
 // ============================================================================
 
-Deno.test("discoverMultiCollectionInstances - finds all instances of a type", async (t) => {
+test("discoverMultiCollectionInstances - finds all instances of a type", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create multiple instances
     await createMultiCollectionInfo(db, "catalog_store1", "catalog");
@@ -126,7 +127,7 @@ Deno.test("discoverMultiCollectionInstances - finds all instances of a type", as
   });
 });
 
-Deno.test("discoverMultiCollectionInstances - returns empty array when no instances", async (t) => {
+test("discoverMultiCollectionInstances - returns empty array when no instances", async (t) => {
   await withDatabase(t.name, async (db) => {
     const instances = await discoverMultiCollectionInstances(db, "nonexistent");
 
@@ -134,7 +135,7 @@ Deno.test("discoverMultiCollectionInstances - returns empty array when no instan
   });
 });
 
-Deno.test("discoverMultiCollectionInstances - returns sorted results", async (t) => {
+test("discoverMultiCollectionInstances - returns sorted results", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create instances in random order
     await createMultiCollectionInfo(db, "catalog_c", "catalog");
@@ -151,7 +152,7 @@ Deno.test("discoverMultiCollectionInstances - returns sorted results", async (t)
 // Instance Existence Tests
 // ============================================================================
 
-Deno.test("multiCollectionInstanceExists - returns true for existing instance", async (t) => {
+test("multiCollectionInstanceExists - returns true for existing instance", async (t) => {
   await withDatabase(t.name, async (db) => {
     await createMultiCollectionInfo(db, "catalog_main", "catalog");
 
@@ -161,7 +162,7 @@ Deno.test("multiCollectionInstanceExists - returns true for existing instance", 
   });
 });
 
-Deno.test("multiCollectionInstanceExists - returns false for non-existent instance", async (t) => {
+test("multiCollectionInstanceExists - returns false for non-existent instance", async (t) => {
   await withDatabase(t.name, async (db) => {
     const exists = await multiCollectionInstanceExists(db, "nonexistent");
 
@@ -173,7 +174,7 @@ Deno.test("multiCollectionInstanceExists - returns false for non-existent instan
 // Version Filtering Tests
 // ============================================================================
 
-Deno.test("isInstanceCreatedAfterMigration - compares migration IDs correctly", () => {
+test("isInstanceCreatedAfterMigration - compares migration IDs correctly", () => {
   // Instance created in January
   const instanceCreatedAt = "2025_01_01_0000_AAAAAAAA@initial";
 
@@ -189,7 +190,7 @@ Deno.test("isInstanceCreatedAfterMigration - compares migration IDs correctly", 
   assert(!result);
 });
 
-Deno.test("isInstanceCreatedAfterMigration - detects future instances", () => {
+test("isInstanceCreatedAfterMigration - detects future instances", () => {
   // Instance created in December
   const instanceCreatedAt = "2025_12_31_2359_ZZZZZZZZ@future";
 
@@ -205,7 +206,7 @@ Deno.test("isInstanceCreatedAfterMigration - detects future instances", () => {
   assert(result);
 });
 
-Deno.test("isInstanceCreatedAfterMigration - handles unknown migration IDs", () => {
+test("isInstanceCreatedAfterMigration - handles unknown migration IDs", () => {
   const instanceCreatedAt = "unknown";
   const currentMigration = "2025_01_01_0000_AAAAAAAA@initial";
 
@@ -218,7 +219,7 @@ Deno.test("isInstanceCreatedAfterMigration - handles unknown migration IDs", () 
   assert(!result);
 });
 
-Deno.test("shouldInstanceReceiveMigration - returns true for old instances", async (t) => {
+test("shouldInstanceReceiveMigration - returns true for old instances", async (t) => {
   await withDatabase(t.name, async (db) => {
     const collection = db.collection("catalog_old");
     await collection.insertMany([
@@ -246,7 +247,7 @@ Deno.test("shouldInstanceReceiveMigration - returns true for old instances", asy
   });
 });
 
-Deno.test("shouldInstanceReceiveMigration - returns false for new instances", async (t) => {
+test("shouldInstanceReceiveMigration - returns false for new instances", async (t) => {
   await withDatabase(t.name, async (db) => {
     const collection = db.collection("catalog_new");
     await collection.insertMany([
@@ -278,7 +279,7 @@ Deno.test("shouldInstanceReceiveMigration - returns false for new instances", as
 // Mark As Multi-Collection Tests
 // ============================================================================
 
-Deno.test("markAsMultiCollection - converts existing collection", async (t) => {
+test("markAsMultiCollection - converts existing collection", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create a regular collection
     const collection = db.collection("existing_catalog");
@@ -303,7 +304,7 @@ Deno.test("markAsMultiCollection - converts existing collection", async (t) => {
   });
 });
 
-Deno.test("markAsMultiCollection - throws if already marked", async (t) => {
+test("markAsMultiCollection - throws if already marked", async (t) => {
   await withDatabase(t.name, async (db) => {
     await createMultiCollectionInfo(db, "catalog_main", "catalog");
 
@@ -321,7 +322,7 @@ Deno.test("markAsMultiCollection - throws if already marked", async (t) => {
 // Integration Tests
 // ============================================================================
 
-Deno.test("Multi-collection registry - full lifecycle", async (t) => {
+test("Multi-collection registry - full lifecycle", async (t) => {
   await withDatabase(t.name, async (db) => {
     // 1. Create instance
     await createMultiCollectionInfo(db, "catalog_main", "catalog", "mig_001");

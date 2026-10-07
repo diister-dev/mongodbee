@@ -12,6 +12,7 @@ import type { Collection } from "mongodb";
 import type { Db } from "../mongodb.ts";
 import { getCurrentVersion } from "./utils/package-info.ts";
 import { calculateMigrationStateFromHistory } from "./migration-history.ts";
+import { primaryCollection } from "../read-preference.ts";
 
 /**
  * Type of migration operation
@@ -78,7 +79,7 @@ export const MIGRATION_OPERATIONS_COLLECTION = "__dbee_migration__";
 export function getMigrationOperationsCollection(
   db: Db,
 ): Collection<MigrationOperation> {
-  return db.collection(MIGRATION_OPERATIONS_COLLECTION);
+  return primaryCollection(db, MIGRATION_OPERATIONS_COLLECTION);
 }
 
 /**
@@ -116,7 +117,6 @@ export async function recordOperation(
     ...(options?.adopted ? { adopted: true } : {}),
   };
 
-  // deno-lint-ignore no-explicit-any
   await collection.insertOne(record as any);
 }
 
@@ -170,10 +170,7 @@ export async function getLastOperation(
 export async function getAllOperations(db: Db): Promise<MigrationOperation[]> {
   const collection = getMigrationOperationsCollection(db);
 
-  return await collection
-    .find({})
-    .sort({ executedAt: 1 })
-    .toArray();
+  return await collection.find({}).sort({ executedAt: 1 }).toArray();
 }
 
 /**
@@ -205,10 +202,13 @@ export function calculateMigrationState(
  * @returns Map of migration ID to current state
  */
 export async function getCurrentState(db: Db): Promise<
-  Map<string, {
-    status: "pending" | "applied" | "failed" | "reverted";
-    lastOperation?: MigrationOperation;
-  }>
+  Map<
+    string,
+    {
+      status: "pending" | "applied" | "failed" | "reverted";
+      lastOperation?: MigrationOperation;
+    }
+  >
 > {
   const allOperations = await getAllOperations(db);
 
@@ -281,8 +281,14 @@ export async function getLastAppliedMigration(
     return null;
   }
 
-  appliedMigrations.sort((a, b) =>
-    b.executedAt.getTime() - a.executedAt.getTime()
+  // Newest execution first. One `migrate` run applies several migrations
+  // within the same millisecond, and a tie on executedAt used to leave them
+  // in Map order — so rollback could revert the earlier one. Their ids carry
+  // the chain order, and break the tie.
+  appliedMigrations.sort(
+    (a, b) =>
+      b.executedAt.getTime() - a.executedAt.getTime() ||
+      b.migrationId.localeCompare(a.migrationId),
   );
   return appliedMigrations[0];
 }

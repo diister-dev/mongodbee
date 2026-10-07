@@ -9,19 +9,20 @@
  */
 
 import type * as v from "../schema.ts";
+import type { TypeDefinition } from "../type-definition.ts";
 
 /**
  * Represents the different properties that can be applied to a migration
  */
 export type MigrationProperty =
   | {
-    /** Indicates that this migration cannot be reversed */
-    type: "irreversible";
-  }
+      /** Indicates that this migration cannot be reversed */
+      type: "irreversible";
+    }
   | {
-    /** Indicates that this migration has lossy transformations */
-    type: "lossy";
-  };
+      /** Indicates that this migration has lossy transformations */
+      type: "lossy";
+    };
 
 /**
  * Rule for creating a new collection
@@ -29,7 +30,7 @@ export type MigrationProperty =
 export type CreateCollectionRule = {
   type: "create_collection";
   collectionName: string;
-  schema: SchemaContent;
+  schema: TypeSource;
 };
 
 export type CreateMultiCollectionRule = {
@@ -170,6 +171,9 @@ export type TransformScopedMultiCollectionTypeRule<
   parentSchema?: SchemaContent;
   /** Restrict the transform to a subset of scope values. Empty/absent = all scopes. */
   scopeFilter?: readonly string[];
+  /** Sibling document types of the same scope the transform reads, handed to
+   *  `up` and `down` as `scope.siblings[type]`. */
+  reads?: readonly string[];
   /** Marks this transformation as irreversible (cannot be rolled back) */
   irreversible?: boolean;
   /** Marks this transformation as lossy (rollback loses data) */
@@ -268,6 +272,84 @@ export type DeleteScopedMultiCollectionTypeRule = {
   parentSchema?: SchemaContent;
 };
 
+export type DeleteMultiCollectionDocumentsRule = {
+  type: "delete_multicollection_documents";
+  collectionName: string;
+  documentType: string;
+  where: Record<string, unknown>;
+};
+
+export type DeleteCollectionDocumentsRule = {
+  type: "delete_collection_documents";
+  collectionName: string;
+  where: Record<string, unknown>;
+};
+
+export type DeleteMultiModelInstanceDocumentsRule = {
+  type: "delete_multimodel_instance_documents";
+  collectionName: string;
+  modelType: string;
+  documentType: string;
+  where: Record<string, unknown>;
+};
+
+export type DeleteMultiModelInstancesDocumentsRule = {
+  type: "delete_multimodel_instances_documents";
+  modelType: string;
+  documentType: string;
+  where: Record<string, unknown>;
+};
+
+export type DeleteScopedMultiCollectionDocumentsRule = {
+  type: "delete_scoped_multicollection_documents";
+  collectionName: string;
+  documentType: string;
+  where: Record<string, unknown>;
+  scopeFilter?: readonly string[];
+};
+
+export type DedupeKeep = "first" | "last";
+
+export interface DedupeOptions {
+  by: readonly string[];
+  keep?: DedupeKeep;
+  where?: Record<string, unknown>;
+}
+
+export type DedupeCollectionDocumentsRule = {
+  type: "dedupe_collection_documents";
+  collectionName: string;
+  by: readonly string[];
+  keep: DedupeKeep;
+  where?: Record<string, unknown>;
+};
+
+export type DedupeMultiCollectionDocumentsRule = {
+  type: "dedupe_multicollection_documents";
+  collectionName: string;
+  documentType: string;
+  by: readonly string[];
+  keep: DedupeKeep;
+  where?: Record<string, unknown>;
+};
+
+export type DedupeScopedMultiCollectionDocumentsRule = {
+  type: "dedupe_scoped_multicollection_documents";
+  collectionName: string;
+  documentType: string;
+  by: readonly string[];
+  keep: DedupeKeep;
+  where?: Record<string, unknown>;
+  scopeFilter?: readonly string[];
+};
+
+export type ApplyComputedScopedMultiCollectionTypeRule = {
+  type: "apply_computed_scoped_multicollection_type";
+  collectionName: string;
+  documentType: string;
+  field: string;
+};
+
 /**
  * Rule for renaming a type in a multi-collection or multi-model
  *
@@ -340,10 +422,10 @@ export type FlowToScopeSource =
   | { kind: "collection"; name: string; where?: Record<string, unknown> }
   | { kind: "multiModelInstances"; model: string }
   | {
-    kind: "multiCollectionType";
-    collectionName: string;
-    documentType: string;
-  };
+      kind: "multiCollectionType";
+      collectionName: string;
+      documentType: string;
+    };
 
 /**
  * Route documents from a source (a plain collection, every instance of a
@@ -427,6 +509,16 @@ export type MigrationRule =
   | DeleteMultiCollectionTypeRule
   | DeleteMultiModelInstancesTypeRule
   | DeleteScopedMultiCollectionTypeRule
+  | DeleteMultiCollectionDocumentsRule
+  | DeleteCollectionDocumentsRule
+  | DeleteMultiModelInstanceDocumentsRule
+  | DeleteMultiModelInstancesDocumentsRule
+  | DeleteScopedMultiCollectionDocumentsRule
+  // Dedupe documents
+  | DedupeCollectionDocumentsRule
+  | DedupeMultiCollectionDocumentsRule
+  | DedupeScopedMultiCollectionDocumentsRule
+  | ApplyComputedScopedMultiCollectionTypeRule
   // Rename type
   | RenameMultiCollectionTypeRule
   | RenameMultiModelInstancesTypeRule
@@ -444,10 +536,22 @@ export type MigrationRule =
  * @template T - Input document type
  * @template U - Output document type
  */
-export type TransformRule<
-  T = Record<string, any>,
-  U = Record<string, any>,
-> = {
+/**
+ * What a transform may read beside the document it rewrites: the documents
+ * of its own scope, by type, for the types the rule declared in `reads`. A
+ * créneau turning a salle name into the salle id needs the exposition's
+ * configuration, which lives in another document of the same scope. `scope` is
+ * absent outside a scoped multi-collection, and `siblings` is empty when the
+ * rule reads nothing.
+ */
+export type TransformScope = {
+  readonly scope?: string;
+  readonly siblings: Readonly<
+    Record<string, readonly Record<string, unknown>[]>
+  >;
+};
+
+export type TransformRule<T = Record<string, any>, U = Record<string, any>> = {
   /** Function to transform from old to new format */
   readonly up: (doc: T, context: MigrationTransformContext) => U;
   /** Function to transform from new to old format */
@@ -514,7 +618,11 @@ export interface CollectionBuilder {
    * @param rule - The transformation rule with up/down functions
    * @returns The collection builder for method chaining
    */
-  transform(rule: TransformRule): CollectionBuilder;
+  transform<T = Record<string, any>, U = Record<string, any>>(
+    rule: TransformRule<T, U>,
+  ): CollectionBuilder;
+  deleteWhere(where: Record<string, unknown>): CollectionBuilder;
+  dedupe(options: DedupeOptions): CollectionBuilder;
 
   /**
    * Finishes configuring this collection and returns to the main builder
@@ -557,7 +665,12 @@ export interface MultiCollectionTypeBuilder {
    * @param rule - The transformation rule with up/down functions
    * @returns The type builder for method chaining
    */
-  transform(rule: TransformRule): MultiCollectionTypeBuilder;
+  transform<T = Record<string, any>, U = Record<string, any>>(
+    rule: TransformRule<T, U>,
+  ): MultiCollectionTypeBuilder;
+
+  deleteWhere(where: Record<string, unknown>): MultiCollectionTypeBuilder;
+  dedupe(options: DedupeOptions): MultiCollectionTypeBuilder;
 
   /**
    * Finishes configuring this type and returns to the multi-collection builder
@@ -579,7 +692,10 @@ export interface MultiModelInstanceTypeBuilder {
    * @param rule - The transformation rule with up/down functions
    * @returns The type builder for method chaining
    */
-  transform(rule: TransformRule): MultiModelInstanceTypeBuilder;
+  transform<T = Record<string, any>, U = Record<string, any>>(
+    rule: TransformRule<T, U>,
+  ): MultiModelInstanceTypeBuilder;
+  deleteWhere(where: Record<string, unknown>): MultiModelInstanceTypeBuilder;
 
   /**
    * Finishes configuring this type and returns to the instance builder
@@ -601,7 +717,10 @@ export interface MultiModelInstancesTypeBuilder {
    * @param rule - The transformation rule with up/down functions
    * @returns The type builder for method chaining
    */
-  transform(rule: TransformRule): MultiModelInstancesTypeBuilder;
+  transform<T = Record<string, any>, U = Record<string, any>>(
+    rule: TransformRule<T, U>,
+  ): MultiModelInstancesTypeBuilder;
+  deleteWhere(where: Record<string, unknown>): MultiModelInstancesTypeBuilder;
 
   /**
    * Finishes configuring this type and returns to the main builder
@@ -703,11 +822,23 @@ export interface ScopedMultiCollectionTypeBuilder {
   /**
    * Applies a transformation to every document of this type. By default
    * the transform spans every scope ; pass `scopeFilter` to restrict the
-   * effect to a subset.
+   * effect to a subset. `reads` names the sibling types of the same scope
+   * the transform needs, handed to `up` and `down` as `scope.siblings`.
    */
-  transform(
-    rule: TransformRule & { readonly scopeFilter?: readonly string[] },
+  transform<T = Record<string, any>, U = Record<string, any>>(
+    rule: TransformRule<T, U> & {
+      readonly scopeFilter?: readonly string[];
+      readonly reads?: readonly string[];
+    },
   ): ScopedMultiCollectionTypeBuilder;
+  deleteWhere(
+    where: Record<string, unknown>,
+    options?: { readonly scopeFilter?: readonly string[] },
+  ): ScopedMultiCollectionTypeBuilder;
+  dedupe(
+    options: DedupeOptions & { readonly scopeFilter?: readonly string[] },
+  ): ScopedMultiCollectionTypeBuilder;
+  applyComputed(field: string): ScopedMultiCollectionTypeBuilder;
 
   /** Finishes configuring this type and returns to the scoped builder. */
   end(): ScopedMultiCollectionBuilder;
@@ -775,9 +906,7 @@ export interface MigrationBuilder {
    * @param modelType - The type/model of the multi-collection
    * @returns An instance builder that applies to all instances of this model type
    */
-  multiModelInstances(
-    modelType: string,
-  ): MultiModelInstancesBuilder;
+  multiModelInstances(modelType: string): MultiModelInstancesBuilder;
 
   /**
    * Creates a new scoped multi-collection.
@@ -888,7 +1017,8 @@ export type SchemaContent = Record<
   string,
   v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>
 >;
-export type MultiSchema = Record<string, SchemaContent>;
+export type TypeSource = SchemaContent | TypeDefinition;
+export type MultiSchema = Record<string, TypeSource>;
 
 /**
  * Schema shape for a scoped multi-collection inside migrations: a single
@@ -908,10 +1038,7 @@ export type ScopedMultiSchema = {
  */
 export type SchemasDefinition = {
   /** Schema definitions for regular collections */
-  collections?: Record<
-    string,
-    SchemaContent
-  >;
+  collections?: Record<string, TypeSource>;
 
   /** Schema definitions for regular multi-collections */
   multiCollections?: Record<
@@ -983,7 +1110,7 @@ export interface MigrationApplier {
   applyReverseOperation(operation: MigrationRule): Promise<void> | void;
 }
 
-export interface MigrationTransformContext {
+export interface MigrationTransformContext extends TransformScope {
   readonly migrationId: string;
   newId(): string;
   now(): Date;

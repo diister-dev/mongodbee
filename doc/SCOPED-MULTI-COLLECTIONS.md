@@ -25,6 +25,18 @@ This document covers the parts of the API that need more than the quickstart in
 the [README](../README.md#-scoped-multi-collections). For a general
 introduction, start there.
 
+## `insertOneReturning` / `insertManyReturning` — insert without reading back
+
+Both insert like `insertOne` / `insertMany` and return the documents as
+`getById` reads them: the document that was written, after the insert schema
+(defaults, transforms) and the sanitizer, parsed with the stored schema. No
+read reaches MongoDB, which removes the usual `insertOne` then `getById` pair.
+`insertManyReturning` keeps the input order.
+
+A type with computed fields is the exception: its computed values are filled
+by the maintained write, so the documents are read back with one `$in` read
+per call. `collection` and `multiCollection` have the same two methods.
+
 ## `findProject` — partial, unvalidated projected reads
 
 `findProject` is a **distinct method**, not a flag on `find`, because its result
@@ -41,7 +53,9 @@ findProject<K, P>(
 
 - **Partial**: only the fields you list are returned, plus the meta fields
   (`_id`, `_type`, `_scope`) which are always kept so a projected document stays
-  identifiable.
+  identifiable. A field may be a dot path (`"lifecycle.phase"`, `"lines.sku"`
+  across an array); the row then has the nested shape
+  (`{ lifecycle: { phase } }`).
 - **Unvalidated**: projected documents are returned _raw_. Validating a subset
   of fields against the full type schema would reject the omitted ones, so
   `findProject` deliberately skips the per-document parse. Schema transforms are
@@ -60,9 +74,101 @@ const rows = await catalog
 ```
 
 `findProject` is available on the single-scope view (`.scope(id)`) and on the
-read-only multi-scope views (`.scopes([...])` and `.unscoped`). It is **not** a
+read-only multi-scope views (`.scopes([...])` and `.unscoped`), and on
+`multiCollection` (meta fields `_id` and `_type`). It is **not** a
 `paginate` option — use `paginate`'s `pipeline` / `prepare` / `format` hooks for
 projected pagination.
+
+`find` and `findAny` refuse a `projection` option unless `validate: false`
+is passed: a projected document fails validation, so it would be silently
+dropped. `multiCollection.find` and `findAny` always refuse it.
+
+## `distinct`
+
+`distinct(type, field, filter?, options?)` returns the distinct values of a
+dot path across the documents of `type`, bound to the view's scope (or scopes).
+An array field contributes each of its items. `field` is typed as a path of the
+type and the values as its item type; they are returned as stored, not
+validated.
+
+```typescript
+const tags = await catalog.scope("exposition:abc123").distinct("artwork", "tags");
+const scopes = await catalog.unscoped.distinct("artwork", "_scope");
+```
+
+## Guarded writes — `updateWhere` and `findOneAndUpdate`
+
+`updateOne(type, id, doc)` targets one `_id` and throws on a miss. Concurrent
+code usually needs more: write *only if* the document is still in the state it
+was read in, move a counter forward and never back, or mint a singleton on its
+first write. Doing that as read-then-write races; these two methods make the
+guard part of the same atomic write, still narrowed to the bound scope.
+
+```typescript
+const inbox = catalog.scope(recipient);
+
+// Only if still live — a miss is { matched: 0 }, not an error.
+const { matched } = await inbox.updateWhere(
+  "notification",
+  { _id: id, supersededAt: null },
+  { body },
+);
+
+// Monotonic field + singleton minted on first write.
+await inbox.updateWhere("cursor", { _id: recipient }, { updatedAt: new Date() }, {
+  max: { seenUpTo },
+  upsert: true,
+  setOnInsert: { muted: false },
+});
+
+// Take the live head, atomically, and get what it was.
+const retired = await inbox.findOneAndUpdate(
+  "notification",
+  { groupKey, supersededAt: null },
+  { supersededAt: new Date() },
+  { returnDocument: "before" },
+);
+```
+
+- `doc` accepts `removeField()` and the update operator sentinels
+  (`increment`, `push`, `addToSet`, `pull`, `min`, `max`, see the README), and
+  is validated against the type's schema, exactly like `updateOne`. The `max`
+  option is the same `$max` as the `max()` sentinel and is validated the same
+  way; a field cannot be both written and bounded by `max` in one write.
+- An upsert stores what each operator would: `increment(n)` stores `n`,
+  `push` / `addToSet` store their items, `min` / `max` their value.
+- **Upsert never mints an invalid document.** The document the insert would
+  create — filter equalities, `setOnInsert`, `doc`, `max` — is validated
+  against the type's insert schema before the write. `_id` comes from a filter
+  equality when there is one, else it is minted like `insertOne`. A dotted
+  write (`"a.b"`) keeps the inserted document's sibling fields.
+- **Every upsert call must be able to create.** Whether the write will insert
+  is not known in advance, so the would-be document is validated on every
+  `upsert: true` call, even when the document exists: pass the insert-only
+  fields in `setOnInsert` each time. A write to a document known to exist
+  drops `upsert`.
+- The same contract holds on `multiCollection` (`updateWhere`,
+  `findOneAndUpdate`) and on `collection`, whose `updateOne` / `updateMany` /
+  `findOneAndUpdate` validate `$set`, `$setOnInsert`, `$max` and `$min`
+  against the schema, check the sentinels given in `$set` (raw `$inc`,
+  `$push`, ... pass as written), and, with `upsert`, validate the document
+  the insert would create
+  (including what `$inc`, `$push` and `$currentDate` would store); its schema
+  defaults land in `$setOnInsert`. A pipeline update passes unchecked.
+- Two concurrent upserts of the same unique key surface as the driver's
+  duplicate-key error; the caller decides whether to retry (the second attempt
+  finds the document and updates it).
+- `findOneAndUpdate` returns the document validated against the storage schema,
+  or `null` when nothing matched. Of two racing calls on the same guard,
+  exactly one gets the document. It takes the same `upsert` / `setOnInsert`
+  as `updateWhere` (a miss inserts and returns the new document) and a
+  `sort` that picks which match is updated, e.g. `{ createdAt: 1 }` to
+  promote the head of a waitlist.
+- `updateOne`, `updateWhere` and `findOneAndUpdate` take `arrayFilters` for
+  positional paths (`"comments.$[c].reactions"`); the value written there is
+  checked against the array item's schema. Update documents, `max` and
+  `setOnInsert` are typed with the dot paths of the type, positional ones
+  included.
 
 ## `paginate` — options and cursor semantics
 
@@ -346,6 +452,24 @@ exactly what scoped semantics must relax. Those legacy unique indexes are
 detected (by name prefix _and_ the `_type` partial-filter signature) and
 dropped, while user-created custom indexes and the bare `_type_1` index are
 preserved.
+
+## Schema management
+
+`scopedMultiCollection()` follows the same `runtime.schemaManagement` setting as
+`collection()` and `multiCollection()`:
+
+- `"managed"` (the default): initialisation never issues DDL. The validator and
+  the scoped indexes are owned by migrations, which apply them through the
+  migration applier. The application account only needs `readWrite`; in
+  particular it never runs `collMod`, an action the built-in `readWrite` role
+  does not grant.
+- `"auto"`: initialisation creates the collection with its validator, or updates
+  the validator when the stored one differs, and reconciles the scoped indexes.
+  Meant for development, where no migration is written yet.
+
+The per-collection `schemaManagement` option overrides the global setting for
+one catalog (`"auto"`, `"managed"`, or `"inherit"`, the default). Initialisation
+inside an active session never issues DDL, whatever the mode.
 
 ## See also
 

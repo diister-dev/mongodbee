@@ -2,6 +2,8 @@
  * Utilities for sanitizing documents before MongoDB operations
  */
 
+import { refuseComputedWrite } from "./computed-guard.ts";
+
 /**
  * Recursively removes undefined values from an object
  * This is needed because MongoDB doesn't support undefined as a BSON type
@@ -84,7 +86,9 @@ export function sanitizeDocument(
   options: SanitizeOptions = { undefinedBehavior: "remove", deep: true },
 ): any {
   if (
-    !options.deep && typeof obj === "object" && obj !== null &&
+    !options.deep &&
+    typeof obj === "object" &&
+    obj !== null &&
     !Array.isArray(obj)
   ) {
     // Shallow sanitization - only top level
@@ -204,18 +208,39 @@ export function extractFieldsToRemove(
 }
 
 /**
+ * The shape of `T` once sanitized: `undefined` never survives, so a key that
+ * may hold it becomes optional and loses `undefined`, in plain objects and
+ * arrays alike. Other objects (Date, ObjectId, ...) are kept as they are.
+ */
+export type Sanitized<T> = T extends readonly (infer U)[]
+  ? Sanitized<Exclude<U, undefined>>[]
+  : T extends Record<string, unknown>
+    ? {
+        [K in keyof T as undefined extends T[K] ? never : K]: Sanitized<T[K]>;
+      } & {
+        [K in keyof T as undefined extends T[K] ? K : never]?: Sanitized<
+          Exclude<T[K], undefined>
+        >;
+      }
+    : T;
+
+/**
  * Enhanced sanitization that handles explicit field removal
  *
  * @param obj - The object to sanitize
  * @param options - Sanitization options
  * @returns Sanitized object with proper field removal handling
  */
-export function sanitizeForMongoDB<T = unknown>(obj: T, options: {
-  /** How to handle undefined values: 'remove' | 'ignore' | 'error' */
-  undefinedBehavior: "remove" | "ignore" | "error";
-  /** Whether to sanitize nested objects (should always be true) */
-  deep: boolean;
-} = { undefinedBehavior: "remove", deep: true }): T {
+export function sanitizeForMongoDB<T = unknown>(
+  obj: T,
+  options: {
+    /** How to handle undefined values: 'remove' | 'ignore' | 'error' */
+    undefinedBehavior: "remove" | "ignore" | "error";
+    /** Whether to sanitize nested objects (should always be true) */
+    deep: boolean;
+  } = { undefinedBehavior: "remove", deep: true },
+): Sanitized<T> {
+  refuseComputedWrite(obj);
   function processValue(value: unknown): unknown {
     if (value === REMOVE_FIELD) {
       return undefined; // Will be removed by removeUndefined
@@ -241,13 +266,14 @@ export function sanitizeForMongoDB<T = unknown>(obj: T, options: {
     }
 
     if (Array.isArray(value)) {
-      return value.map(processValue).filter((item) =>
-        item !== undefined && item !== IGNORE_FIELD
-      );
+      return value
+        .map(processValue)
+        .filter((item) => item !== undefined && item !== IGNORE_FIELD);
     }
 
     if (
-      typeof value === "object" && value !== null &&
+      typeof value === "object" &&
+      value !== null &&
       value.constructor === Object
     ) {
       const result: Record<string, unknown> = {};
@@ -263,7 +289,7 @@ export function sanitizeForMongoDB<T = unknown>(obj: T, options: {
     return value;
   }
 
-  return processValue(obj) as T;
+  return processValue(obj) as Sanitized<T>;
 }
 
 // Special marker for fields to ignore during updates

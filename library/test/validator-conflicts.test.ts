@@ -1,8 +1,9 @@
-import { assertEquals } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assertEquals } from "./+assert.ts";
 import * as v from "../src/schema.ts";
 import { toMongoValidator } from "../src/validator.ts";
 
-Deno.test("Conflict between non_empty and min_length", () => {
+test("Conflict between non_empty and min_length", () => {
   // Test case 1: non_empty (minLength: 1) + min_length(5) - should be min_length(5)
   const schema1 = v.object({
     field: v.pipe(v.string(), v.nonEmpty(), v.minLength(5)),
@@ -14,7 +15,7 @@ Deno.test("Conflict between non_empty and min_length", () => {
   // nonEmpty gives minLength: 1, minLength(5) gives minLength: 5
   // Maintenant devrait prendre le max (minLength: 5)
   assertEquals(jsonSchema1.properties!.field.minLength, 5);
-  assertEquals(jsonSchema1.properties!.field.minItems, 1); // nonEmpty also sets minItems
+  assertEquals(jsonSchema1.properties!.field.minItems, undefined);
 
   // Test case 2: min_length(5) + non_empty - should keep min_length(5)
   const schema2 = v.object({
@@ -27,7 +28,7 @@ Deno.test("Conflict between non_empty and min_length", () => {
   // minLength(5) gives minLength: 5, nonEmpty gives minLength: 1
   // Maintenant devrait prendre le max (minLength: 5) - CORRIGÉ !
   assertEquals(jsonSchema2.properties!.field.minLength, 5); // Devrait être 5 maintenant !
-  assertEquals(jsonSchema2.properties!.field.minItems, 1);
+  assertEquals(jsonSchema2.properties!.field.minItems, undefined);
 
   // Test case 3: multiple min_length values
   const schema3 = v.object({
@@ -41,7 +42,21 @@ Deno.test("Conflict between non_empty and min_length", () => {
   assertEquals(jsonSchema3.properties!.field.minLength, 7);
 });
 
-Deno.test("Conflict between min_value and max_value", () => {
+test("nonEmpty is minLength on a string and minItems on an array, never both", () => {
+  const { properties } = toMongoValidator(
+    v.object({
+      text: v.pipe(v.string(), v.nonEmpty()),
+      list: v.pipe(v.array(v.string()), v.nonEmpty()),
+    }),
+  ).$jsonSchema!;
+
+  assertEquals(properties!.text.minLength, 1);
+  assertEquals(properties!.text.minItems, undefined);
+  assertEquals(properties!.list.minItems, 1);
+  assertEquals(properties!.list.minLength, undefined);
+});
+
+test("Conflict between min_value and max_value", () => {
   // Test conflicting numeric ranges
   const schema = v.object({
     field: v.pipe(v.number(), v.minValue(10), v.maxValue(5)), // Impossible !
@@ -55,7 +70,7 @@ Deno.test("Conflict between min_value and max_value", () => {
   assertEquals(jsonSchema.properties!.field.maximum, 5);
 });
 
-Deno.test("Smart conflict resolution test", () => {
+test("Smart conflict resolution test", () => {
   // Test que les conflits min/max sont résolus intelligemment
   const smartSchema = v.object({
     // Test résolution minLength intelligent

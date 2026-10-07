@@ -415,6 +415,103 @@ deno task mongodbee rollback
 deno task mongodbee status
 ```
 
+### What `migrate` simulates
+
+`migrate` simulates only the migrations it is about to apply: the pending
+ones (all of them, `--target` included), seeded from the parent schemas of
+the first one. The schema consistency of the chain's last migration against
+`schemas.ts` is always checked. With nothing pending, nothing is simulated.
+`--last N` can only widen the window (to re-validate applied migrations too),
+never shrink it below the pending ones. `--docs` and `--retention` tune the
+simulation exactly as they do for `check`.
+
+### Without a terminal (CI, agents)
+
+When stdin is not a terminal, a command that needs a confirmation (an
+irreversible migration, a lossy rollback, `baseline`, a multi-model catch-up)
+fails at once with a message naming the flag that skips it (`--force`, or
+`--auto-sync` for the catch-up), instead of waiting on stdin. No
+`< /dev/null` is needed. Every command closes its connection and the process
+ends on its own; a stray handle cannot keep it alive more than a few seconds.
+
+### Validators left disabled
+
+A migration switches off the validators of the collections it touches, runs,
+then restores them. Each collection is restored on its own, so one failure (a
+unique index the data violates) no longer leaves the others without
+validation. Before switching anything off, the applier records it in
+`__dbee_validator_guard__`, and clears the record only once everything is
+back. If a run dies in between, `migrate`, `rollback` and `sync` find the
+record and restore the validators of the applied head, saying so; `status`
+reports it.
+
+### Required Database Privileges
+
+A migration run is not just reads and writes. Around every migration the applier issues DDL commands: `collMod` to disable and restore validators, `create` for new collections, `createIndexes` / `dropIndexes` to synchronize indexes, `drop` and `renameCollection` for the operations that need them.
+
+The built-in `readWrite` role does **not** grant `collMod` — that action lives in `dbAdmin`. An account that can read and write every collection therefore fails half-way through a migration with `not authorized on <db> to execute command { collMod: ... }`.
+
+The actions `migrate`, `rollback` and `sync` can need on the target database:
+
+| Action                   | Built-in role | Used for                                                |
+|--------------------------|---------------|---------------------------------------------------------|
+| `find`                   | `readWrite`   | history, registries, documents to transform             |
+| `insert`                 | `readWrite`   | history records, seeds, transformed documents           |
+| `update`                 | `readWrite`   | bulk rewrites, multi-collection registry updates        |
+| `remove`                 | `readWrite`   | consumed sources, deleted types, deleted documents      |
+| `listCollections`        | `readWrite`   | collection existence, current validator                 |
+| `listIndexes`            | `readWrite`   | index diff                                              |
+| `createCollection`       | `readWrite`   | `create*` operations (created with their validator)     |
+| `dropCollection`         | `readWrite`   | drops, deleted instances, rollback of a create          |
+| `renameCollectionSameDB` | `readWrite`   | `rename_collection`                                     |
+| `createIndex`            | `readWrite`   | index synchronization                                   |
+| `dropIndex`              | `readWrite`   | index synchronization                                   |
+| `collMod`                | `dbAdmin`     | validators off/on around **every** migration            |
+
+Grant the migration account `readWrite` **and** `dbAdmin` on the database (or `dbOwner`, which bundles both):
+
+```javascript
+// mongosh, on the database the user authenticates against
+db.grantRolesToUser("migrator", [
+  { role: "readWrite", db: "myapp" },
+  { role: "dbAdmin", db: "myapp" },
+]);
+```
+
+On MongoDB Atlas, the *Read and write to any database* built-in privilege is `readWriteAnyDatabase` and lacks `collMod` too — use *Atlas admin* or a custom role that includes `dbAdmin` on the database.
+
+#### Pre-flight check
+
+`migrate`, `rollback` and `sync` verify the account before touching anything, through `connectionStatus { showPrivileges: true }` (a command every authenticated connection may run). When an action is missing the command stops **before** any write and prints the missing actions and the exact `grantRolesToUser` call to run:
+
+```
+✗ Insufficient privileges: this account cannot run migrations
+  Account:  migrator@myapp
+  Roles:    readWrite@myapp
+  Database: myapp
+  Missing actions on the database:
+    - collMod
+
+  Grant the built-in role(s) dbAdmin on "myapp" (or dbOwner), e.g. in mongosh:
+    use myapp
+    db.grantRolesToUser("migrator", [{ role: "dbAdmin", db: "myapp" }])
+```
+
+- With `--dry-run` the problem is reported but the preview continues.
+- When access control is disabled (no authenticated user) or the server does not implement `connectionStatus`, nothing can be verified: the command says so and proceeds.
+- `--skip-privilege-check` disables the verification entirely.
+
+The same check is available programmatically:
+
+```typescript
+import { checkMigrationPrivileges } from "@diister/mongodbee/migration";
+
+const check = await checkMigrationPrivileges(db);
+if (check.status === "missing") {
+  throw new Error(`Missing ${check.missing.join(", ")} on ${check.database}`);
+}
+```
+
 ### deno.json Configuration
 
 ```json
@@ -591,7 +688,20 @@ migrate(migration) {
 
 3. `MultiCollectionTypeBuilder`
    - `.transform({ up, down })` → transform documents (with version tracking)
+   - `.deleteWhere(where)` → delete the documents of the type matching `where` (irreversible)
    - `.end()` → back to `MultiCollectionBuilder`
+
+**Deleting documents by filter**: every builder that can `.transform()` documents can also `.deleteWhere(where)` them. The filter uses the same field operators the simulation supports (`$eq`, `$ne`, `$in`, `$nin`, `$gt`, `$gte`, `$lt`, `$lte`, `$exists`); the type discriminator (and the scope, for scoped multi-collections) is always added by the applier as an extra `$and` clause, so a filter cannot reach outside its type, and `_type` / `_scope` are refused inside `where` (restrict scopes with `scopeFilter`).
+
+| Builder | Operation |
+|---|---|
+| `.collection(name).deleteWhere(where)` | `delete_collection_documents` |
+| `.multiCollection(name).type(t).deleteWhere(where)` | `delete_multicollection_documents` |
+| `.scopedMultiCollection(name).type(t).deleteWhere(where, { scopeFilter })` | `delete_scoped_multicollection_documents` |
+| `.multiModelInstance(name, model).type(t).deleteWhere(where)` | `delete_multimodel_instance_documents` |
+| `.multiModelInstances(model).type(t).deleteWhere(where)` | `delete_multimodel_instances_documents` |
+
+A document deletion is irreversible: it marks the migration as such and rollback refuses it. The simulation adds two warnings around it: when the filter matched no simulated document (the deletion was not exercised), and when the deleted documents are still referenced elsewhere in the simulated state (the migration leaves dangling references).
 
 4. `MultiCollectionInstanceBuilder`
    - `.seedType(typeName, docs)` → seed data for a specific type

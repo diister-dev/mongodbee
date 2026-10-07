@@ -1,6 +1,6 @@
 import process from "node:process";
-import { blue, bold, dim, green, red, yellow } from "@std/fmt/colors";
-import * as path from "@std/path";
+import { blue, bold, dim, green, red, yellow } from "../../../utils/colors.ts";
+import * as path from "node:path";
 
 import { MongoClient } from "../../../mongodb.ts";
 import { loadConfig } from "../../config/loader.ts";

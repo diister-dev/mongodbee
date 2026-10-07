@@ -4,7 +4,7 @@
  * @module
  */
 
-import { bold, dim, green, red, yellow } from "@std/fmt/colors";
+import { bold, dim, green, red, yellow } from "../../../utils/colors.ts";
 import type { MigrationDefinition } from "../../types.ts";
 import {
   createEmptyDatabaseState,
@@ -35,7 +35,23 @@ export interface MigrationValidationResult {
   valid: boolean;
   errors: string[];
   warnings: string[];
+  operationCount?: number;
+  reversible?: boolean;
 }
+
+export interface MigrationProgressEvent {
+  index: number;
+  total: number;
+  migration: MigrationDefinition;
+}
+
+export type MigrationProgressHook = (
+  event: MigrationProgressEvent,
+) => void | Promise<void>;
+
+export type MigrationResultHook = (
+  event: MigrationProgressEvent & { result: MigrationValidationResult },
+) => void | Promise<void>;
 
 export interface ValidateMigrationsOptions {
   verbose?: boolean;
@@ -59,6 +75,8 @@ export interface ValidateMigrationsOptions {
    */
   powerLevel?: SimulationPowerLevel;
 
+  docsPerCollection?: number;
+
   /**
    * Only validate the last N migrations. If not provided, all migrations are
    * validated.
@@ -73,7 +91,7 @@ export interface ValidateMigrationsOptions {
 
   /**
    * Render transient "in flight" step lines. Defaults to
-   * `Deno.stdout.isTerminal()` — off in CI, pipes and the in-process test
+   * `process.stdout.isTTY` — off in CI, pipes and the in-process test
    * harness, where `\r` would be garbage.
    */
   tty?: boolean;
@@ -83,6 +101,12 @@ export interface ValidateMigrationsOptions {
    * reporting can be asserted without a terminal.
    */
   write?: (chunk: string) => void;
+
+  /** Called before each migration is simulated; awaited. */
+  onMigrationStart?: MigrationProgressHook;
+
+  /** Called with each migration's result once it is known; awaited. */
+  onMigrationResult?: MigrationResultHook;
 }
 
 /** Formats a step counter as a right-aligned `[ 3/12]`. */
@@ -105,9 +129,13 @@ interface ReportedFailure {
  * no way to see WHICH migration failed on WHAT without re-running everything.
  */
 export class MigrationValidationFailedError extends Error {
-  constructor(readonly results: MigrationValidationResult[]) {
+  /** The per-migration results, so callers can report WHICH one failed. */
+  readonly results: MigrationValidationResult[];
+
+  constructor(results: MigrationValidationResult[]) {
     super("Migration validation failed");
     this.name = "MigrationValidationFailedError";
+    this.results = results;
   }
 }
 
@@ -135,9 +163,9 @@ function reportFailures(
     const suffix = note ? ` ${dim(`— ${note}`)}` : "";
     steps.log(
       red(
-        `  ✗ ${result.migration.name} ${
-          dim(`(${result.migration.id})`)
-        }${suffix}`,
+        `  ✗ ${result.migration.name} ${dim(
+          `(${result.migration.id})`,
+        )}${suffix}`,
       ),
     );
     for (const error of result.errors) {
@@ -173,14 +201,23 @@ export async function validateMigrationsWithSimulation(
 
   const notValidated = windowed ? migrations.slice(0, -lastN!) : [];
 
-  const modeLabel = powerLevel === "quick"
-    ? "quick"
-    : powerLevel === "hard"
-    ? "hard"
-    : "normal";
-  const lastNLabel = lastN && lastN > 0
-    ? ` (last ${Math.min(lastN, migrations.length)})`
-    : "";
+  const presetLabel =
+    powerLevel === "quick"
+      ? "quick"
+      : powerLevel === "hard"
+        ? "hard"
+        : "normal";
+  const tuning = [
+    options.docsPerCollection !== undefined
+      ? `${options.docsPerCollection} docs`
+      : "",
+    options.stateRetentionRatio !== undefined
+      ? `${Math.round(options.stateRetentionRatio * 100)}% kept`
+      : "",
+  ].filter(Boolean);
+  const modeLabel = [presetLabel, ...tuning].join(", ");
+  const lastNLabel =
+    lastN && lastN > 0 ? ` (last ${Math.min(lastN, migrations.length)})` : "";
 
   const steps = createStepReporter({ tty: options.tty, write: options.write });
 
@@ -197,6 +234,7 @@ export async function validateMigrationsWithSimulation(
     maxOperations: 1000,
     stateRetentionRatio,
     powerLevel,
+    docsPerCollection: options.docsPerCollection,
     // The in-flight line is driven by the work, not by a clock: the validator
     // never yields to the event loop, so a timer-based animation cannot fire
     // (it did not, for 17 seconds at a stretch). The reporter throttles the
@@ -237,11 +275,17 @@ export async function validateMigrationsWithSimulation(
   let index = 0;
   for (const migration of migrationsToValidate) {
     index++;
-    const step = `${counter(index, migrationsToValidate.length)} ${
-      bold(migration.name)
-    } ${dim(`(${migration.id})`)}`;
+    const step = `${counter(index, migrationsToValidate.length)} ${bold(
+      migration.name,
+    )} ${dim(`(${migration.id})`)}`;
     // The reporter adds its own in-flight marker; a static `…` here reads as two.
     steps.start(`  ${step}`);
+    const progress = {
+      index,
+      total: migrationsToValidate.length,
+      migration,
+    };
+    await options.onMigrationStart?.(progress);
 
     try {
       // Pass the current state to avoid re-simulating all parent migrations
@@ -262,22 +306,23 @@ export async function validateMigrationsWithSimulation(
         warnings: validationResult.warnings,
       });
 
-      const warned = validationResult.warnings.length > 0
-        ? ` ${yellow(`⚠ ${validationResult.warnings.length}`)}`
-        : "";
+      const warned =
+        validationResult.warnings.length > 0
+          ? ` ${yellow(`⚠ ${validationResult.warnings.length}`)}`
+          : "";
 
       if (validationResult.success) {
         const operationCount = validationResult.data?.operationCount || 0;
         const isReversible = !validationResult.data?.hasIrreversibleProperty;
+        result.operationCount = operationCount as number;
+        result.reversible = isReversible;
 
         steps.done(
-          `  ${green("✓")} ${step} ${
-            dim(
-              `${operationCount} operation${operationCount !== 1 ? "s" : ""}, ${
-                isReversible ? "reversible" : "irreversible"
-              }`,
-            )
-          }${warned}`,
+          `  ${green("✓")} ${step} ${dim(
+            `${operationCount} operation${operationCount !== 1 ? "s" : ""}, ${
+              isReversible ? "reversible" : "irreversible"
+            }`,
+          )}${warned}`,
         );
 
         // Update state for next migration: apply retention ratio (keep X%, generate fresh X%)
@@ -299,13 +344,11 @@ export async function validateMigrationsWithSimulation(
         allValid = false;
         failures.push({ result });
         steps.done(
-          `  ${red("✗")} ${step} ${
-            red(
-              `${validationResult.errors.length} error${
-                validationResult.errors.length !== 1 ? "s" : ""
-              }`,
-            )
-          }${warned}`,
+          `  ${red("✗")} ${step} ${red(
+            `${validationResult.errors.length} error${
+              validationResult.errors.length !== 1 ? "s" : ""
+            }`,
+          )}${warned}`,
         );
       }
 
@@ -318,9 +361,8 @@ export async function validateMigrationsWithSimulation(
       }
     } catch (error) {
       allValid = false;
-      const errorMessage = error instanceof Error
-        ? error.message
-        : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       const result: MigrationValidationResult = {
         migration,
         valid: false,
@@ -331,6 +373,11 @@ export async function validateMigrationsWithSimulation(
       failures.push({ result });
       steps.done(`  ${red("✗")} ${step} ${red("validation error")}`);
     }
+
+    await options.onMigrationResult?.({
+      ...progress,
+      result: results[results.length - 1],
+    });
   }
 
   steps.finish();
@@ -394,9 +441,7 @@ export async function validateMigrationsWithSimulation(
       ),
     );
   } else {
-    steps.log(
-      green(bold("✓ All migrations are valid and ready to apply!")),
-    );
+    steps.log(green(bold("✓ All migrations are valid and ready to apply!")));
   }
 
   return results;

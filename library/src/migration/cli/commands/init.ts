@@ -9,8 +9,9 @@
 import process from "node:process";
 import * as fs from "node:fs/promises";
 import { existsSync } from "node:fs";
-import * as path from "@std/path";
-import { bold, dim, green, yellow } from "@std/fmt/colors";
+import * as path from "node:path";
+import { importSpecifier } from "../../utils/package-info.ts";
+import { bold, dim, green, yellow } from "../../../utils/colors.ts";
 import { prettyText } from "../utils.ts";
 
 export interface InitCommandOptions {
@@ -28,6 +29,7 @@ export async function initCommand(
   console.log();
 
   const cwd = options.cwd || process.cwd();
+  const pkg = importSpecifier();
   const configFilePath = path.resolve(cwd, "./mongodbee.config.ts");
   const schemasFilePath = path.resolve(cwd, "./schemas.ts");
   const migrationsDir = path.resolve(cwd, "./migrations");
@@ -61,18 +63,21 @@ export async function initCommand(
        *
        * @module
        */
-      import { type SchemasDefinition } from "@diister/mongodbee";
+      import { type SchemasDefinition } from "${pkg}/migration";
+      // Uncomment as you start declaring schemas:
+      // import * as v from "${pkg}/schema";
+      // import { dbId } from "${pkg}";
 
       export const schemas = {
-        collections: {
-          // @see @TODO
-        },
-        multiCollections: {
-          // @see @TODO
-        },
-        multiModels: {
-          // @see @TODO
-        }
+        // Plain collections: one document type each.
+        //   users: { _id: dbId("user"), name: v.string() },
+        collections: {},
+        // Multi-collections: several document types in one collection.
+        //   catalog: { product: { name: v.string() }, category: { name: v.string() } },
+        multiCollections: {},
+        // Multi-models: one shape, many collection instances.
+        //   workspace: { info: { _id: v.literal("info:0") }, task: { title: v.string() } },
+        multiModels: {}
       } satisfies SchemasDefinition;
     `),
       "utf-8",
@@ -86,7 +91,7 @@ export async function initCommand(
   await fs.writeFile(
     configFilePath,
     prettyText(`
-    import { defineConfig } from "@diister/mongodbee";
+    import { defineConfig } from "${pkg}";
 
     export default defineConfig({
       database: {

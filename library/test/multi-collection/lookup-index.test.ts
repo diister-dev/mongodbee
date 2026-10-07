@@ -1,14 +1,15 @@
 /**
  * Lookup sub-pipeline / index visibility regression tests (multiCollection).
  *
- * Both stage builders (aggregate + paginate) must emit the `_type` constant
- * as a query operator and keep ONLY the correlated join key in `$expr`: the
- * planner does not accept an `$expr` equality as subsuming a
- * `partialFilterExpression`, so an `$expr`-only match makes the partial
- * indexes created by `withIndex` invisible and the lookup scans every doc of
- * the type on every input row.
+ * Both stage builders (aggregate + paginate) must join on the lookup's own
+ * `localField` / `foreignField` and emit the `_type` constant as a query
+ * operator, with no `$expr` at all: an `$expr`-only match hid the partial
+ * indexes created by `withIndex`, and two `let` + `$expr` joins on one row,
+ * one on an absent local field, ran over 15 s on Mongo 8 where the keyed form
+ * runs in 0.4 s.
  */
-import { assert, assertEquals } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals } from "../+assert.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { defineModel } from "../../src/multi-collection-model.ts";
 import { withDatabase } from "../+shared.ts";
@@ -34,7 +35,7 @@ function subMatch(stage: Stage): Record<string, unknown> {
   return lookup.pipeline[0].$match as Record<string, unknown>;
 }
 
-Deno.test("lookup: aggregate + paginate builders keep _type OUT of $expr", async (t) => {
+test("lookup: aggregate + paginate builders join on the lookup's own fields, _type a query operator, no $expr", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "registry", badgeModel, {
       schemaManagement: "auto",
@@ -56,30 +57,35 @@ Deno.test("lookup: aggregate + paginate builders keep _type OUT of $expr", async
     });
 
     let viaPaginate: Stage[] = [];
-    await mc.paginate("participant", {}, {
-      limit: 10,
-      pipeline: (stage) => {
-        viaPaginate = [
-          stage.lookup("badge", "_id", "participantId", "badges"),
-        ];
-        return viaPaginate;
+    await mc.paginate(
+      "participant",
+      {},
+      {
+        limit: 10,
+        pipeline: (stage) => {
+          viaPaginate = [
+            stage.lookup("badge", "_id", "participantId", "badges"),
+          ];
+          return viaPaginate;
+        },
       },
-    });
+    );
 
-    for (
-      const match of [
-        subMatch(viaAggregate[1]),
-        subMatch(viaAggregate[2]),
-        subMatch(viaPaginate[0]),
-      ]
-    ) {
-      assertEquals(match._type, "badge");
-      assertEquals(match.$expr, { $eq: ["$participantId", "$$localValue"] });
+    for (const stage of [viaAggregate[1], viaAggregate[2], viaPaginate[0]]) {
+      const lookup = stage.$lookup as {
+        localField: string;
+        foreignField: string;
+        let: Record<string, unknown>;
+      };
+      assertEquals(lookup.localField, "_id");
+      assertEquals(lookup.foreignField, "participantId");
+      assertEquals(lookup.let, { localValue: "$_id" });
+      assertEquals(subMatch(stage), { _type: "badge" });
     }
   });
 });
 
-Deno.test("lookup: planner uses the withIndex-created partial index", async (t) => {
+test("lookup: planner uses the withIndex-created partial index", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "registry", badgeModel, {
       schemaManagement: "auto",
@@ -100,16 +106,17 @@ Deno.test("lookup: planner uses the withIndex-created partial index", async (t) 
       return captured;
     });
 
-    const explain = await db.collection("registry").aggregate(captured)
+    const explain = await db
+      .collection("registry")
+      .aggregate(captured)
       .explain("executionStats");
-    // deno-lint-ignore no-explicit-any
     const stage = (explain as any).stages?.find((s: any) => s.$lookup);
     assert(stage, "expected a $lookup stage in explain output");
     assert(
       (stage.indexesUsed ?? []).includes("badge_participantId"),
-      `expected the withIndex partial index to be used, got ${
-        JSON.stringify(stage.indexesUsed)
-      }`,
+      `expected the withIndex partial index to be used, got ${JSON.stringify(
+        stage.indexesUsed,
+      )}`,
     );
     assertEquals(stage.collectionScans ?? 0, 0);
     // Each of the N sub-plans should examine ~1 key; the $expr-only shape

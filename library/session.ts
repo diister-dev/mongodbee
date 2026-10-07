@@ -27,3 +27,22 @@
  */
 
 export * from "./src/session.ts";
+export {
+  invalidateReads,
+  invalidateReadsOnDriverWrites,
+  type RequestContextOptions,
+  type RequestReadStats,
+  requestReadStats,
+  withRequestContext,
+} from "./src/request-context.ts";
+export {
+  type AfterCommit,
+  afterCommit,
+  insideTransaction,
+} from "./src/transaction-scope.ts";
+export {
+  currentReadPreference,
+  type ReadPreferenceInput,
+  readingCollection,
+  withReadPreference,
+} from "./src/read-preference.ts";

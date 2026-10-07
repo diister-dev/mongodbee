@@ -4,8 +4,11 @@
  * Tests discovery, loading, and validation of migration files
  */
 
-import { assert, assertEquals, assertExists } from "@std/assert";
-import * as path from "@std/path";
+import { test } from "../+harness.ts";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { assert, assertEquals, assertExists } from "../+assert.ts";
+import * as path from "node:path";
 import {
   buildMigrationChain,
   discoverMigrationFiles,
@@ -17,19 +20,19 @@ import {
 import { migrationDefinition } from "../../src/migration/definition.ts";
 
 // Get absolute path to the definition module for dynamic imports in temp files
-const DEFINITION_IMPORT_PATH =
-  new URL("../../src/migration/definition.ts", import.meta.url).href;
+const DEFINITION_IMPORT_PATH = new URL(
+  "../../src/migration/definition.ts",
+  import.meta.url,
+).href;
 
 // Helper to create temporary test directory with migrations
-async function withTempMigrations(
-  work: (tempDir: string) => Promise<void>,
-) {
-  const tempDir = await Deno.makeTempDir({ prefix: "mongodbee_migrations_" });
+async function withTempMigrations(work: (tempDir: string) => Promise<void>) {
+  const tempDir = await mkdtemp(path.join(tmpdir(), "mongodbee_migrations_"));
 
   try {
     await work(tempDir);
   } finally {
-    await Deno.remove(tempDir, { recursive: true });
+    await rm(tempDir, { recursive: true, force: true });
   }
 }
 
@@ -40,14 +43,14 @@ async function createMigrationFile(
   content: string,
 ): Promise<void> {
   const filePath = path.join(dir, fileName);
-  await Deno.writeTextFile(filePath, content);
+  await writeFile(filePath, content);
 }
 
 // ============================================================================
 // File Discovery Tests
 // ============================================================================
 
-Deno.test("discoverMigrationFiles - finds all .ts files", async () => {
+test("discoverMigrationFiles - finds all .ts files", async () => {
   await withTempMigrations(async (tempDir) => {
     // Create test migration files
     await createMigrationFile(tempDir, "001_initial.ts", "export default {}");
@@ -67,7 +70,7 @@ Deno.test("discoverMigrationFiles - finds all .ts files", async () => {
   });
 });
 
-Deno.test("discoverMigrationFiles - returns sorted files", async () => {
+test("discoverMigrationFiles - returns sorted files", async () => {
   await withTempMigrations(async (tempDir) => {
     // Create files in random order
     await createMigrationFile(tempDir, "003_third.ts", "export default {}");
@@ -80,7 +83,7 @@ Deno.test("discoverMigrationFiles - returns sorted files", async () => {
   });
 });
 
-Deno.test("discoverMigrationFiles - returns empty array for empty directory", async () => {
+test("discoverMigrationFiles - returns empty array for empty directory", async () => {
   await withTempMigrations(async (tempDir) => {
     const files = await discoverMigrationFiles(tempDir);
 
@@ -88,7 +91,7 @@ Deno.test("discoverMigrationFiles - returns empty array for empty directory", as
   });
 });
 
-Deno.test("discoverMigrationFiles - throws on non-existent directory", async () => {
+test("discoverMigrationFiles - throws on non-existent directory", async () => {
   try {
     await discoverMigrationFiles("/nonexistent/directory");
     throw new Error("Should have thrown");
@@ -102,11 +105,13 @@ Deno.test("discoverMigrationFiles - throws on non-existent directory", async () 
 // Migration Loading Tests
 // ============================================================================
 
-Deno.test("loadMigrationFile - loads valid migration", async () => {
+test("loadMigrationFile - loads valid migration", async () => {
   await withTempMigrations(async (tempDir) => {
     // Get absolute path to the definition module
-    const definitionPath =
-      new URL("../../src/migration/definition.ts", import.meta.url).href;
+    const definitionPath = new URL(
+      "../../src/migration/definition.ts",
+      import.meta.url,
+    ).href;
 
     const migrationContent = `
       import { migrationDefinition } from "${definitionPath}";
@@ -136,7 +141,7 @@ Deno.test("loadMigrationFile - loads valid migration", async () => {
   });
 });
 
-Deno.test("loadMigrationFile - throws on missing default export", async () => {
+test("loadMigrationFile - throws on missing default export", async () => {
   await withTempMigrations(async (tempDir) => {
     const migrationContent = `
       // No default export
@@ -155,7 +160,7 @@ Deno.test("loadMigrationFile - throws on missing default export", async () => {
   });
 });
 
-Deno.test("loadMigrationFile - throws on missing required properties", async () => {
+test("loadMigrationFile - throws on missing required properties", async () => {
   await withTempMigrations(async (tempDir) => {
     const migrationContent = `
       export default {
@@ -176,7 +181,7 @@ Deno.test("loadMigrationFile - throws on missing required properties", async () 
   });
 });
 
-Deno.test("loadMigrationFile - throws on syntax errors", async () => {
+test("loadMigrationFile - throws on syntax errors", async () => {
   await withTempMigrations(async (tempDir) => {
     const migrationContent = `
       export default {
@@ -201,11 +206,13 @@ Deno.test("loadMigrationFile - throws on syntax errors", async () => {
 // Load All Migrations Tests
 // ============================================================================
 
-Deno.test("loadAllMigrations - loads multiple migrations", async () => {
+test("loadAllMigrations - loads multiple migrations", async () => {
   await withTempMigrations(async (tempDir) => {
     // Create first migration
-    const definitionPath =
-      new URL("../../src/migration/definition.ts", import.meta.url).href;
+    const definitionPath = new URL(
+      "../../src/migration/definition.ts",
+      import.meta.url,
+    ).href;
     const migration1 = `
       import { migrationDefinition } from "${definitionPath}";
       
@@ -240,7 +247,7 @@ Deno.test("loadAllMigrations - loads multiple migrations", async () => {
   });
 });
 
-Deno.test("loadAllMigrations - returns empty array for empty directory", async () => {
+test("loadAllMigrations - returns empty array for empty directory", async () => {
   await withTempMigrations(async (tempDir) => {
     const migrations = await loadAllMigrations(tempDir);
 
@@ -252,7 +259,7 @@ Deno.test("loadAllMigrations - returns empty array for empty directory", async (
 // Chain Validation Tests
 // ============================================================================
 
-Deno.test("validateMigrationChain - passes for valid chain", () => {
+test("validateMigrationChain - passes for valid chain", () => {
   const schemas = {
     collections: {},
   };
@@ -274,7 +281,7 @@ Deno.test("validateMigrationChain - passes for valid chain", () => {
   assertEquals(errors.length, 0);
 });
 
-Deno.test("validateMigrationChain - detects first migration with parent", () => {
+test("validateMigrationChain - detects first migration with parent", () => {
   const schemas = {
     collections: {},
   };
@@ -297,7 +304,7 @@ Deno.test("validateMigrationChain - detects first migration with parent", () => 
   assert(errors.some((e) => e.includes("should not have a parent")));
 });
 
-Deno.test("validateMigrationChain - detects incorrect parent", () => {
+test("validateMigrationChain - detects incorrect parent", () => {
   const schemas = {
     collections: {},
   };
@@ -320,7 +327,7 @@ Deno.test("validateMigrationChain - detects incorrect parent", () => {
   assert(errors.some((e) => e.includes("incorrect parent")));
 });
 
-Deno.test("validateMigrationChain - detects duplicate IDs", () => {
+test("validateMigrationChain - detects duplicate IDs", () => {
   const schemas = {
     collections: {},
   };
@@ -343,7 +350,7 @@ Deno.test("validateMigrationChain - detects duplicate IDs", () => {
   assert(errors.some((e) => e.includes("Duplicate")));
 });
 
-Deno.test("validateMigrationChain - returns empty for empty array", () => {
+test("validateMigrationChain - returns empty for empty array", () => {
   const errors = validateMigrationChain([]);
 
   assertEquals(errors.length, 0);
@@ -353,11 +360,13 @@ Deno.test("validateMigrationChain - returns empty for empty array", () => {
 // Build Migration Chain Tests
 // ============================================================================
 
-Deno.test("buildMigrationChain - builds valid chain from files", async () => {
+test("buildMigrationChain - builds valid chain from files", async () => {
   await withTempMigrations(async (tempDir) => {
     // Create migrations with proper parent-child relationship
-    const definitionPath =
-      new URL("../../src/migration/definition.ts", import.meta.url).href;
+    const definitionPath = new URL(
+      "../../src/migration/definition.ts",
+      import.meta.url,
+    ).href;
     const migration1 = `
       import { migrationDefinition } from "${definitionPath}";
       
@@ -394,7 +403,7 @@ Deno.test("buildMigrationChain - builds valid chain from files", async () => {
   });
 });
 
-Deno.test("buildMigrationChain - sorts files correctly", () => {
+test("buildMigrationChain - sorts files correctly", () => {
   const schemas = {
     collections: {},
   };
@@ -432,7 +441,7 @@ Deno.test("buildMigrationChain - sorts files correctly", () => {
   assertEquals(chain[2].id, "003");
 });
 
-Deno.test("buildMigrationChain - throws on invalid chain", () => {
+test("buildMigrationChain - throws on invalid chain", () => {
   const schemas = {
     collections: {},
   };
@@ -467,7 +476,7 @@ Deno.test("buildMigrationChain - throws on invalid chain", () => {
 // Pending Migrations Tests
 // ============================================================================
 
-Deno.test("getPendingMigrations - returns unapplied migrations", () => {
+test("getPendingMigrations - returns unapplied migrations", () => {
   const schemas = {
     collections: {},
   };
@@ -500,7 +509,7 @@ Deno.test("getPendingMigrations - returns unapplied migrations", () => {
   assertEquals(pending[1].id, "003");
 });
 
-Deno.test("getPendingMigrations - returns empty when all applied", () => {
+test("getPendingMigrations - returns empty when all applied", () => {
   const schemas = {
     collections: {},
   };
@@ -525,7 +534,7 @@ Deno.test("getPendingMigrations - returns empty when all applied", () => {
   assertEquals(pending.length, 0);
 });
 
-Deno.test("getPendingMigrations - returns all when none applied", () => {
+test("getPendingMigrations - returns all when none applied", () => {
   const schemas = {
     collections: {},
   };
@@ -556,7 +565,7 @@ Deno.test("getPendingMigrations - returns all when none applied", () => {
 // Integration Tests
 // ============================================================================
 
-Deno.test("Discovery - full workflow from files to chain", async () => {
+test("Discovery - full workflow from files to chain", async () => {
   await withTempMigrations(async (tempDir) => {
     // Create a complete migration chain
     const migration1 = `

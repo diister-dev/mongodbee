@@ -1,4 +1,5 @@
-import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals, assertStringIncludes } from "../+assert.ts";
 import * as v from "../../src/schema.ts";
 import { dbId, refId } from "../../src/ids.ts";
 import { withIndex } from "../../src/indexes.ts";
@@ -36,7 +37,7 @@ function pathOf(plan: PrivacyPlan, key: string, path: string) {
   return found;
 }
 
-Deno.test("messaging: a document about two persons is ambiguous until both owners are declared", () => {
+test("messaging: a document about two persons is ambiguous until both owners are declared", () => {
   const messages = {
     _id: dbId("message"),
     from: refId("user"),
@@ -84,7 +85,7 @@ Deno.test("messaging: a document about two persons is ambiguous until both owner
   assertEquals(declared.findings.filter((f) => f.level !== "info").length, 0);
 });
 
-Deno.test("guardian: a person referencing another person is a mention, never an inferred delegation", () => {
+test("guardian: a person referencing another person is a mention, never an inferred delegation", () => {
   const users = { _id: personId("user"), email: EmailSchema };
   const implicit = buildPrivacyPlan({
     schemas: {
@@ -124,7 +125,7 @@ Deno.test("guardian: a person referencing another person is a mention, never an 
   assertEquals(explicit.persons.get("minor")!.delegatesTo, ["user"]);
 });
 
-Deno.test("delegation to a space that is not a person is an error", () => {
+test("delegation to a space that is not a person is an error", () => {
   const plan = buildPrivacyPlan({
     schemas: {
       collections: {
@@ -144,7 +145,7 @@ Deno.test("delegation to a space that is not a person is an error", () => {
   );
 });
 
-Deno.test("marketplace: ownership chains through a non-person space only when declared", () => {
+test("marketplace: ownership chains through a non-person space only when declared", () => {
   const users = { _id: personId("user"), email: EmailSchema };
   const orders = {
     _id: dbId("order"),
@@ -208,7 +209,7 @@ Deno.test("marketplace: ownership chains through a non-person space only when de
   );
 });
 
-Deno.test("owner declared on a space that no field references is an error", () => {
+test("owner declared on a space that no field references is an error", () => {
   const plan = buildPrivacyPlan({
     schemas: {
       collections: {
@@ -296,7 +297,7 @@ const EXPOSITION = {
   },
 };
 
-Deno.test("exposition: persons, delegation, inference and declared owners across a scoped collection", () => {
+test("exposition: persons, delegation, inference and declared owners across a scoped collection", () => {
   const plan = buildPrivacyPlan({ schemas: EXPOSITION });
   assertEquals([...plan.persons.keys()].sort(), [
     "accountless_identity",
@@ -374,7 +375,7 @@ Deno.test("exposition: persons, delegation, inference and declared owners across
   assert(plan.summary.unknown >= 4);
 });
 
-Deno.test("embedded persons: direct identifiers in a document without owner are reported, not classified", () => {
+test("embedded persons: direct identifiers in a document without owner are reported, not classified", () => {
   const plan = buildPrivacyPlan({
     schemas: {
       collections: {
@@ -401,7 +402,7 @@ Deno.test("embedded persons: direct identifiers in a document without owner are 
   );
 });
 
-Deno.test("exempt document: typed identifiers become none, person references stay mentions", () => {
+test("exempt document: typed identifiers become none, person references stay mentions", () => {
   const plan = buildPrivacyPlan({
     schemas: {
       collections: {
@@ -425,7 +426,7 @@ Deno.test("exempt document: typed identifiers become none, person references sta
   assertEquals(plan.findings.filter((f) => f.level !== "info"), []);
 });
 
-Deno.test("derived values: mirrors and recomputed fields never keep the original", () => {
+test("derived values: mirrors and recomputed fields never keep the original", () => {
   const plan = buildPrivacyPlan({
     schemas: {
       collections: {
@@ -458,7 +459,7 @@ Deno.test("derived values: mirrors and recomputed fields never keep the original
   );
 });
 
-Deno.test("polymorphic reference: only the person option counts for ownership", () => {
+test("polymorphic reference: only the person option counts for ownership", () => {
   const plan = buildPrivacyPlan({
     schemas: {
       collections: {
@@ -484,7 +485,7 @@ Deno.test("polymorphic reference: only the person option counts for ownership", 
   assertEquals(ref.relation, "owner");
 });
 
-Deno.test("treatment per direction: an audit reference is remapped on extract and kept on erase", () => {
+test("treatment per direction: an audit reference is remapped on extract and kept on erase", () => {
   const plan = buildPrivacyPlan({
     schemas: {
       collections: {
@@ -510,7 +511,7 @@ Deno.test("treatment per direction: an audit reference is remapped on extract an
   });
 });
 
-Deno.test("report: renders persons, owners, unknowns and findings", () => {
+test("report: renders persons, owners, unknowns and findings", () => {
   const plan = buildPrivacyPlan({ schemas: EXPOSITION });
   const text = renderPrivacyReport(plan);
   assertStringIncludes(text, "persons");
@@ -522,7 +523,7 @@ Deno.test("report: renders persons, owners, unknowns and findings", () => {
   assertStringIncludes(text, "summary");
 });
 
-Deno.test("retrofit trap: a schema with no person space at all is an error, not a green report", () => {
+test("retrofit trap: a schema with no person space at all is an error, not a green report", () => {
   const plan = buildPrivacyPlan({
     schemas: {
       collections: {
@@ -539,7 +540,7 @@ Deno.test("retrofit trap: a schema with no person space at all is an error, not 
   assertStringIncludes(renderPrivacyReport(plan), "NONE DECLARED");
 });
 
-Deno.test("dates: a string carrying an ISO action is technical, like a date", () => {
+test("dates: a string carrying an ISO action is technical, like a date", () => {
   const DateSchema = v.union([v.date(), v.pipe(v.string(), v.isoTimestamp())]);
   const plan = buildPrivacyPlan({
     schemas: {
@@ -558,7 +559,7 @@ Deno.test("dates: a string carrying an ISO action is technical, like a date", ()
   assertEquals(pathOf(plan, "collections/users/", "nickname").tier, "unknown");
 });
 
-Deno.test("authorship: mention() removes a reference from owner inference without losing the remap", () => {
+test("authorship: mention() removes a reference from owner inference without losing the remap", () => {
   const users = { _id: personId("user"), email: EmailSchema };
   const dashboards = {
     _id: dbId("dashboard"),
@@ -598,7 +599,7 @@ Deno.test("authorship: mention() removes a reference from owner inference withou
   );
 });
 
-Deno.test("wrappers: an optional boolean or picklist is technical, the wrapper is not a type", () => {
+test("wrappers: an optional boolean or picklist is technical, the wrapper is not a type", () => {
   const plan = buildPrivacyPlan({
     schemas: {
       collections: {
@@ -624,7 +625,7 @@ Deno.test("wrappers: an optional boolean or picklist is technical, the wrapper i
   }
 });
 
-Deno.test("dynamic: a data-driven subtree is delegated to a resolver, its static signals are kept", () => {
+test("dynamic: a data-driven subtree is delegated to a resolver, its static signals are kept", () => {
   const plan = buildPrivacyPlan({
     schemas: {
       collections: {
@@ -666,7 +667,7 @@ Deno.test("dynamic: a data-driven subtree is delegated to a resolver, its static
   assertEquals(plan.summary.unknown, 0);
 });
 
-Deno.test("unique index: a direct identifier in an owned document, nothing in an unowned one", () => {
+test("unique index: a direct identifier in an owned document, nothing in an unowned one", () => {
   const plan = buildPrivacyPlan({
     schemas: {
       collections: {
@@ -690,7 +691,7 @@ Deno.test("unique index: a direct identifier in an owned document, nothing in an
   );
 });
 
-Deno.test("delegation: a polymorphic reference that can point elsewhere is a mention, not a delegation path", () => {
+test("delegation: a polymorphic reference that can point elsewhere is a mention, not a delegation path", () => {
   const plan = buildPrivacyPlan({
     schemas: {
       collections: {

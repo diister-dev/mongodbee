@@ -39,7 +39,10 @@ import {
   type TracerProvider,
 } from "@opentelemetry/api";
 import type { ClientSession, MongoClient } from "mongodb";
-import denoJson from "../deno.json" with { type: "json" };
+import { VERSION } from "./version.ts";
+import { DocumentValidationError } from "./validation-error.ts";
+import { invalidateReads, isReadOperation } from "./request-context.ts";
+import { assertOutsideComposite } from "./reader-frame.ts";
 
 /**
  * Opt-in tracing configuration accepted by `collection()`,
@@ -119,6 +122,12 @@ export const TELEMETRY_ATTRIBUTES = {
   TX_OUTCOME: "mongodbee.transaction.outcome",
   /** Write-conflict retries of operations executed inside the transaction. */
   TX_RETRY_COUNT: "mongodbee.transaction.retry_count",
+  READER: "mongodbee.reader",
+  READER_KIND: "mongodbee.reader.kind",
+  READER_LEVEL: "mongodbee.reader.level",
+  READER_OUTCOME: "mongodbee.reader.outcome",
+  READER_KEYS: "mongodbee.reader.keys",
+  READER_DISCARDED: "mongodbee.reader.discarded",
 } as const;
 
 const A = TELEMETRY_ATTRIBUTES;
@@ -192,7 +201,7 @@ const transactionRetryCounters = new WeakMap<
 
 function resolveTracer(telemetry: TelemetryOptions): Tracer {
   const provider = telemetry.tracerProvider ?? trace.getTracerProvider();
-  return provider.getTracer(TRACER_NAME, denoJson.version);
+  return provider.getTracer(TRACER_NAME, VERSION);
 }
 
 /** Drops `undefined` entries so they never reach the SDK. */
@@ -206,11 +215,10 @@ function prune(attributes: Attributes): Attributes {
 }
 
 function isValidationError(error: unknown): boolean {
-  if (error instanceof Error) return error.name === "ValiError";
-  // MongoDBee validation failures are thrown as plain objects:
-  // `{ message: "Validation error", errors, result }`
-  return typeof error === "object" && error !== null &&
-    (error as { message?: unknown }).message === "Validation error";
+  return (
+    error instanceof DocumentValidationError ||
+    (error instanceof Error && error.name === "ValiError")
+  );
 }
 
 /**
@@ -453,8 +461,59 @@ export function traced<T>(
   run: (op?: OpContext) => Promise<T>,
   resultAttributes?: (result: T) => Attributes | undefined,
 ): Promise<T> {
-  if (!tele) return run();
-  return tele.withOp(operationName, attributes?.(), run, resultAttributes);
+  assertOutsideComposite(operationName);
+  const execute = isReadOperation(operationName)
+    ? run
+    : async (op?: OpContext) => {
+        invalidateReads();
+        try {
+          return await run(op);
+        } finally {
+          invalidateReads();
+        }
+      };
+  if (!tele) return execute();
+  return tele.withOp(operationName, attributes?.(), execute, resultAttributes);
+}
+
+export interface ReaderSpan {
+  setAttributes(attributes: Attributes): void;
+}
+
+export type ReaderTracer = <T>(
+  reader: string,
+  attributes: Attributes,
+  run: (span: ReaderSpan) => Promise<T>,
+) => Promise<T>;
+
+export function createReaderTracer(
+  telemetry: TelemetryOptions | undefined,
+): ReaderTracer | null {
+  if (!telemetry?.enabled) return null;
+  const tracer = resolveTracer(telemetry);
+  return (reader, attributes, run) =>
+    tracer.startActiveSpan(
+      `reader ${reader}`,
+      {
+        kind: SpanKind.INTERNAL,
+        attributes: prune({
+          [A.READER]: reader,
+          ...attributes,
+        }),
+      },
+      async (span) => {
+        try {
+          return await run({
+            setAttributes: (extra) => span.setAttributes(prune(extra)),
+          });
+        } catch (error) {
+          recordSafeError(span, error);
+          throw error;
+        } finally {
+          span.end();
+        }
+      },
+    );
 }
 
 /**

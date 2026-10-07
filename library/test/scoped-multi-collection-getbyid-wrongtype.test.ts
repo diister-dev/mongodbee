@@ -2,7 +2,8 @@
 // WRONG type must throw not-found, not return the doc of the other type. This
 // guards against a caller accidentally trusting a type-punned read.
 
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals, assertRejects } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";
@@ -14,6 +15,7 @@ async function makeCatalog(
   db: Parameters<Parameters<typeof withDatabase>[1]>[0],
 ) {
   return await scopedMultiCollection(db, "catalog", {
+    schemaManagement: "auto",
     scope: refId("exposition"),
     types: {
       artwork: { title: v.string(), year: v.number() },
@@ -22,7 +24,7 @@ async function makeCatalog(
   });
 }
 
-Deno.test("getById: a right-scope id read under the wrong type throws not-found", async () => {
+test("getById: a right-scope id read under the wrong type throws not-found", async () => {
   await withDatabase("smc2-getbyid-wrongtype", async (db) => {
     const catalog = await makeCatalog(db);
     const expo = catalog.scope(EXPO_A);
@@ -51,7 +53,7 @@ Deno.test("getById: a right-scope id read under the wrong type throws not-found"
   });
 });
 
-Deno.test("getById: type-punning both ways is rejected", async () => {
+test("getById: type-punning both ways is rejected", async () => {
   await withDatabase("smc2-getbyid-wrongtype-both", async (db) => {
     const catalog = await makeCatalog(db);
     const expo = catalog.scope(EXPO_A);

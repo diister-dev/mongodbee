@@ -1,14 +1,17 @@
+import { test } from "./+harness.ts";
 import { removeField } from "../src/sanitizer.ts";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "./+assert.ts";
 
 // Mock collection behavior to test without MongoDB
 class MockCollection {
   private documents: any[] = [];
   private lastDoc: any = null;
 
-  constructor(
-    private undefinedBehavior: "remove" | "ignore" | "error" = "remove",
-  ) {}
+  private readonly undefinedBehavior: "remove" | "ignore" | "error";
+
+  constructor(undefinedBehavior: "remove" | "ignore" | "error" = "remove") {
+    this.undefinedBehavior = undefinedBehavior;
+  }
 
   async insertOne(doc: any) {
     // Simulate the sanitization that would happen in real collection
@@ -50,7 +53,8 @@ class MockCollection {
       return obj;
     }
     if (Array.isArray(obj)) {
-      return obj.map((item) => this.removeUndefinedRecursive(item))
+      return obj
+        .map((item) => this.removeUndefinedRecursive(item))
         .filter((item) => item !== undefined);
     }
     if (typeof obj === "object" && obj.constructor === Object) {
@@ -66,7 +70,7 @@ class MockCollection {
   }
 }
 
-Deno.test("Integration: Default behavior removes undefined fields", async () => {
+test("Integration: Default behavior removes undefined fields", async () => {
   const collection = new MockCollection("remove");
 
   await collection.insertOne({
@@ -96,7 +100,7 @@ Deno.test("Integration: Default behavior removes undefined fields", async () => 
   assert(!("tags" in result.metadata));
 });
 
-Deno.test("Integration: removeField() explicitly removes fields", async () => {
+test("Integration: removeField() explicitly removes fields", async () => {
   const collection = new MockCollection("remove");
 
   await collection.insertOne({
@@ -120,7 +124,7 @@ Deno.test("Integration: removeField() explicitly removes fields", async () => {
   assert(!("temporaryFlag" in result));
 });
 
-Deno.test("Integration: Error behavior throws on undefined", async () => {
+test("Integration: Error behavior throws on undefined", async () => {
   const collection = new MockCollection("error");
 
   // Should work fine without undefined
@@ -146,7 +150,7 @@ Deno.test("Integration: Error behavior throws on undefined", async () => {
   assert(errorThrown, "Expected error to be thrown for undefined values");
 });
 
-Deno.test("Integration: Complex nested scenario", async () => {
+test("Integration: Complex nested scenario", async () => {
   const collection = new MockCollection("remove");
 
   // Complex real-world scenario
@@ -206,7 +210,7 @@ Deno.test("Integration: Complex nested scenario", async () => {
   assert(!("admin" in result.user.metadata.flags));
 });
 
-Deno.test("Integration: Update operations maintain consistency", async () => {
+test("Integration: Update operations maintain consistency", async () => {
   const collection = new MockCollection("remove");
 
   // Initial insert
@@ -218,13 +222,16 @@ Deno.test("Integration: Update operations maintain consistency", async () => {
   });
 
   // Update with mixed undefined and removeField()
-  await collection.replaceOne({}, {
-    name: "John Updated",
-    email: "john.new@example.com",
-    phone: removeField(), // Explicit removal
-    bio: undefined, // Implicit removal
-    avatar: "http://example.com/avatar.jpg", // New field
-  });
+  await collection.replaceOne(
+    {},
+    {
+      name: "John Updated",
+      email: "john.new@example.com",
+      phone: removeField(), // Explicit removal
+      bio: undefined, // Implicit removal
+      avatar: "http://example.com/avatar.jpg", // New field
+    },
+  );
 
   const updatedDoc = collection.getLastDocument();
 
@@ -239,7 +246,7 @@ Deno.test("Integration: Update operations maintain consistency", async () => {
   assert(!("bio" in updatedDoc));
 });
 
-Deno.test("Integration: Array sanitization in complex structures", async () => {
+test("Integration: Array sanitization in complex structures", async () => {
   const collection = new MockCollection("remove");
 
   await collection.insertOne({
@@ -307,7 +314,7 @@ Deno.test("Integration: Array sanitization in complex structures", async () => {
   assert(!("hasPrev" in result.metadata.pagination));
 });
 
-Deno.test("Integration: Performance with large nested structures", async () => {
+test("Integration: Performance with large nested structures", async () => {
   const collection = new MockCollection("remove");
 
   // Create a reasonably large structure with many undefined values
@@ -336,7 +343,7 @@ Deno.test("Integration: Performance with large nested structures", async () => {
 
   // Should process quickly (under 10ms for this size)
   assert(
-    (endTime - startTime) < 100,
+    endTime - startTime < 100,
     `Sanitization took too long: ${endTime - startTime}ms`,
   );
 

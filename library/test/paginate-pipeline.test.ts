@@ -1,4 +1,5 @@
-import { assert } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert } from "./+assert.ts";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
 import * as v from "../src/schema.ts";
@@ -11,7 +12,7 @@ const userSchema = {
   isActive: v.boolean(),
 } as const;
 
-Deno.test("Basic prepare → filter → format pipeline", async (t) => {
+test("Basic prepare → filter → format pipeline", async (t) => {
   await withDatabase(t.name, async (db) => {
     const users = await collection(db, "users", userSchema);
 
@@ -35,24 +36,27 @@ Deno.test("Basic prepare → filter → format pipeline", async (t) => {
       isActive: true,
     });
 
-    const { data: results } = await users.paginate({}, {
-      // Step 1: Prepare (enrich with computed field)
-      prepare: async (user) => ({
-        ...user,
-        ageGroup: user.age < 30 ? "young" : "adult",
-        emailDomain: user.email.split("@")[1],
-      }),
+    const { data: results } = await users.paginate(
+      {},
+      {
+        // Step 1: Prepare (enrich with computed field)
+        prepare: async (user) => ({
+          ...user,
+          ageGroup: user.age < 30 ? "young" : "adult",
+          emailDomain: user.email.split("@")[1],
+        }),
 
-      // Step 2: Filter (only active users)
-      filter: (enrichedUser) => enrichedUser.isActive,
+        // Step 2: Filter (only active users)
+        filter: (enrichedUser) => enrichedUser.isActive,
 
-      // Step 3: Format (return simplified format)
-      format: async (enrichedUser) => ({
-        displayName: enrichedUser.name,
-        category: enrichedUser.ageGroup,
-        domain: enrichedUser.emailDomain,
-      }),
-    });
+        // Step 3: Format (return simplified format)
+        format: async (enrichedUser) => ({
+          displayName: enrichedUser.name,
+          category: enrichedUser.ageGroup,
+          domain: enrichedUser.emailDomain,
+        }),
+      },
+    );
 
     assert(results.length === 2, "Should return 2 active users");
     assert(results[0].displayName === "Alice", "First user should be Alice");
@@ -66,7 +70,7 @@ Deno.test("Basic prepare → filter → format pipeline", async (t) => {
   });
 });
 
-Deno.test("Only prepare stage (no filter/format)", async (t) => {
+test("Only prepare stage (no filter/format)", async (t) => {
   await withDatabase(t.name, async (db) => {
     const users = await collection(db, "users", userSchema);
 
@@ -83,13 +87,16 @@ Deno.test("Only prepare stage (no filter/format)", async (t) => {
       isActive: false,
     });
 
-    const { data: results } = await users.paginate({}, {
-      prepare: async (user) => ({
-        ...user,
-        ageGroup: user.age < 30 ? "young" : "adult",
-        canVote: user.age >= 18,
-      }),
-    });
+    const { data: results } = await users.paginate(
+      {},
+      {
+        prepare: async (user) => ({
+          ...user,
+          ageGroup: user.age < 30 ? "young" : "adult",
+          canVote: user.age >= 18,
+        }),
+      },
+    );
 
     assert(results.length === 2, "Should return all users");
     assert(results[0].ageGroup === "young", "Alice should be young");
@@ -99,7 +106,7 @@ Deno.test("Only prepare stage (no filter/format)", async (t) => {
   });
 });
 
-Deno.test("Only filter stage (no prepare/format)", async (t) => {
+test("Only filter stage (no prepare/format)", async (t) => {
   await withDatabase(t.name, async (db) => {
     const users = await collection(db, "users", userSchema);
 
@@ -122,9 +129,12 @@ Deno.test("Only filter stage (no prepare/format)", async (t) => {
       isActive: true,
     });
 
-    const { data: results } = await users.paginate({}, {
-      filter: (user) => user.age >= 30,
-    });
+    const { data: results } = await users.paginate(
+      {},
+      {
+        filter: (user) => user.age >= 30,
+      },
+    );
 
     assert(results.length === 2, "Should return 2 users >= 30");
     assert(results[0].name === "Bob", "First should be Bob");
@@ -132,7 +142,7 @@ Deno.test("Only filter stage (no prepare/format)", async (t) => {
   });
 });
 
-Deno.test("Only format stage (no prepare/filter)", async (t) => {
+test("Only format stage (no prepare/filter)", async (t) => {
   await withDatabase(t.name, async (db) => {
     const users = await collection(db, "users", userSchema);
 
@@ -149,13 +159,16 @@ Deno.test("Only format stage (no prepare/filter)", async (t) => {
       isActive: false,
     });
 
-    const { data: results } = await users.paginate({}, {
-      format: async (user) => ({
-        id: user._id,
-        fullName: user.name,
-        contact: user.email,
-      }),
-    });
+    const { data: results } = await users.paginate(
+      {},
+      {
+        format: async (user) => ({
+          id: user._id,
+          fullName: user.name,
+          contact: user.email,
+        }),
+      },
+    );
 
     assert(results.length === 2, "Should return all users");
     assert(results[0].fullName === "Alice", "First should be Alice");
@@ -164,7 +177,7 @@ Deno.test("Only format stage (no prepare/filter)", async (t) => {
   });
 });
 
-Deno.test("Async external API simulation", async (t) => {
+test("Async external API simulation", async (t) => {
   await withDatabase(t.name, async (db) => {
     const users = await collection(db, "users", userSchema);
 
@@ -203,42 +216,45 @@ Deno.test("Async external API simulation", async (t) => {
       },
     };
 
-    const { data: results } = await users.paginate({}, {
-      // Step 1: Prepare - fetch external data
-      prepare: async (user) => {
-        const profile = await mockExternalAPI.getUserProfile(user.email);
-        const preferences = await mockExternalAPI.getPreferences(
-          user._id.toString(),
-        );
+    const { data: results } = await users.paginate(
+      {},
+      {
+        // Step 1: Prepare - fetch external data
+        prepare: async (user) => {
+          const profile = await mockExternalAPI.getUserProfile(user.email);
+          const preferences = await mockExternalAPI.getPreferences(
+            user._id.toString(),
+          );
 
-        return {
-          ...user,
-          profile,
-          preferences,
-          enrichedAt: new Date(),
-        };
+          return {
+            ...user,
+            profile,
+            preferences,
+            enrichedAt: new Date(),
+          };
+        },
+
+        // Step 2: Filter - only verified users
+        filter: (enrichedUser) => enrichedUser.profile.verified,
+
+        // Step 3: Format - create final API response
+        format: async (enrichedUser) => ({
+          user: {
+            id: enrichedUser._id,
+            name: enrichedUser.name,
+            email: enrichedUser.email,
+          },
+          profile: {
+            reputation: enrichedUser.profile.reputation,
+            badges: enrichedUser.profile.badges,
+          },
+          settings: enrichedUser.preferences,
+          meta: {
+            enrichedAt: enrichedUser.enrichedAt,
+          },
+        }),
       },
-
-      // Step 2: Filter - only verified users
-      filter: (enrichedUser) => enrichedUser.profile.verified,
-
-      // Step 3: Format - create final API response
-      format: async (enrichedUser) => ({
-        user: {
-          id: enrichedUser._id,
-          name: enrichedUser.name,
-          email: enrichedUser.email,
-        },
-        profile: {
-          reputation: enrichedUser.profile.reputation,
-          badges: enrichedUser.profile.badges,
-        },
-        settings: enrichedUser.preferences,
-        meta: {
-          enrichedAt: enrichedUser.enrichedAt,
-        },
-      }),
-    });
+    );
 
     assert(results.length === 1, "Should return 1 verified user");
     assert(results[0].user.name === "Alice", "Should be Alice");
@@ -255,7 +271,7 @@ Deno.test("Async external API simulation", async (t) => {
   });
 });
 
-Deno.test("Error handling in pipeline stages", async (t) => {
+test("Error handling in pipeline stages", async (t) => {
   await withDatabase(t.name, async (db) => {
     const users = await collection(db, "users", userSchema);
 
@@ -274,14 +290,17 @@ Deno.test("Error handling in pipeline stages", async (t) => {
 
     // Test error in prepare
     try {
-      await users.paginate({}, {
-        prepare: async (user) => {
-          if (user.name === "Bob") {
-            throw new Error("Simulated prepare error");
-          }
-          return { ...user, processed: true };
+      await users.paginate(
+        {},
+        {
+          prepare: async (user) => {
+            if (user.name === "Bob") {
+              throw new Error("Simulated prepare error");
+            }
+            return { ...user, processed: true };
+          },
         },
-      });
+      );
       assert(false, "Should have thrown error");
     } catch (error) {
       assert(
@@ -292,14 +311,17 @@ Deno.test("Error handling in pipeline stages", async (t) => {
 
     // Test error in filter
     try {
-      await users.paginate({}, {
-        filter: (user) => {
-          if (user.name === "Bob") {
-            throw new Error("Simulated filter error");
-          }
-          return true;
+      await users.paginate(
+        {},
+        {
+          filter: (user) => {
+            if (user.name === "Bob") {
+              throw new Error("Simulated filter error");
+            }
+            return true;
+          },
         },
-      });
+      );
       assert(false, "Should have thrown error");
     } catch (error) {
       assert(
@@ -310,14 +332,17 @@ Deno.test("Error handling in pipeline stages", async (t) => {
 
     // Test error in format
     try {
-      await users.paginate({}, {
-        format: async (user) => {
-          if (user.name === "Bob") {
-            throw new Error("Simulated format error");
-          }
-          return { processed: user.name };
+      await users.paginate(
+        {},
+        {
+          format: async (user) => {
+            if (user.name === "Bob") {
+              throw new Error("Simulated format error");
+            }
+            return { processed: user.name };
+          },
         },
-      });
+      );
       assert(false, "Should have thrown error");
     } catch (error) {
       assert(
@@ -328,7 +353,7 @@ Deno.test("Error handling in pipeline stages", async (t) => {
   });
 });
 
-Deno.test("Type safety verification", async (t) => {
+test("Type safety verification", async (t) => {
   await withDatabase(t.name, async (db) => {
     const users = await collection(db, "users", userSchema);
 
@@ -340,40 +365,43 @@ Deno.test("Type safety verification", async (t) => {
     });
 
     // Test type transformations
-    const { data: results } = await users.paginate({}, {
-      prepare: async (user) => {
-        // user should be WithId<User>
-        assert(typeof user.name === "string", "Should have name");
-        assert(typeof user.age === "number", "Should have age");
-        assert(typeof user._id !== "undefined", "Should have _id");
+    const { data: results } = await users.paginate(
+      {},
+      {
+        prepare: async (user) => {
+          // user should be WithId<User>
+          assert(typeof user.name === "string", "Should have name");
+          assert(typeof user.age === "number", "Should have age");
+          assert(typeof user._id !== "undefined", "Should have _id");
 
-        return {
-          ...user,
-          computedField: "computed",
-        };
+          return {
+            ...user,
+            computedField: "computed",
+          };
+        },
+
+        filter: (enrichedUser) => {
+          // enrichedUser should have computedField
+          assert(
+            enrichedUser.computedField === "computed",
+            "Should have computed field",
+          );
+          return true;
+        },
+
+        format: async (enrichedUser) => {
+          // enrichedUser should still have computedField
+          assert(
+            enrichedUser.computedField === "computed",
+            "Should still have computed field",
+          );
+
+          return {
+            finalField: enrichedUser.name,
+          };
+        },
       },
-
-      filter: (enrichedUser) => {
-        // enrichedUser should have computedField
-        assert(
-          enrichedUser.computedField === "computed",
-          "Should have computed field",
-        );
-        return true;
-      },
-
-      format: async (enrichedUser) => {
-        // enrichedUser should still have computedField
-        assert(
-          enrichedUser.computedField === "computed",
-          "Should still have computed field",
-        );
-
-        return {
-          finalField: enrichedUser.name,
-        };
-      },
-    });
+    );
 
     assert(results.length === 1, "Should return 1 result");
     assert(results[0].finalField === "Alice", "Should have final field");

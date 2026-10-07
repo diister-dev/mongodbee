@@ -4,7 +4,8 @@
 // wrong; DESC with missing joined docs catches the `$expr` vs query-operator
 // cursor semantics.
 
-import { assertEquals, assertRejects } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assertEquals, assertRejects } from "./+assert.ts";
 import * as v from "../src/schema.ts";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
@@ -14,7 +15,6 @@ const OrderSchema = {
   customerId: v.optional(v.string()),
 };
 
-// deno-lint-ignore no-explicit-any
 const customerSortPipeline = (s: any) => [
   s.externalLookup("customers", "customerId", "_id", { as: "customerDocs" }),
   s.addFields({ customer: { $first: "$customerDocs" } }),
@@ -29,7 +29,6 @@ async function seed(db: Parameters<Parameters<typeof withDatabase>[1]>[0]) {
     if (i % 3 !== 0) {
       customerId = `cust${i}`;
       await customers.insertOne({
-        // deno-lint-ignore no-explicit-any
         _id: customerId as any,
         tier: (i % 4) * 10,
       });
@@ -42,41 +41,44 @@ async function seed(db: Parameters<Parameters<typeof withDatabase>[1]>[0]) {
   return orders;
 }
 
-// deno-lint-ignore no-explicit-any
 async function groundTruth(db: any, dir: 1 | -1): Promise<string[]> {
-  const rows = await db.collection("orders").aggregate([
-    {
-      $lookup: {
-        from: "customers",
-        localField: "customerId",
-        foreignField: "_id",
-        as: "customerDocs",
+  const rows = await db
+    .collection("orders")
+    .aggregate([
+      {
+        $lookup: {
+          from: "customers",
+          localField: "customerId",
+          foreignField: "_id",
+          as: "customerDocs",
+        },
       },
-    },
-    { $addFields: { customer: { $first: "$customerDocs" } } },
-    // `_id` tie-break follows the field's direction (normalizePaginateSort).
-    { $sort: { "customer.tier": dir, _id: dir } },
-  ]).toArray();
+      { $addFields: { customer: { $first: "$customerDocs" } } },
+      // `_id` tie-break follows the field's direction (normalizePaginateSort).
+      { $sort: { "customer.tier": dir, _id: dir } },
+    ])
+    .toArray();
   return (rows as { _id: string }[]).map((r) => String(r._id));
 }
 
-Deno.test("collection sortPipeline DESC with missing joined docs: full coverage, positions consistent", async (t) => {
+test("collection sortPipeline DESC with missing joined docs: full coverage, positions consistent", async (t) => {
   await withDatabase(t.name, async (db) => {
     const orders = await seed(db);
     const truth = await groundTruth(db, -1);
 
-    // deno-lint-ignore no-explicit-any
     const all: any[] = [];
     let afterId: string | undefined = undefined;
     let offset = 0;
     for (let guard = 0; guard < 100; guard++) {
-      // deno-lint-ignore no-explicit-any
-      const page: any = await orders.paginate({}, {
-        limit: 4,
-        sort: { "customer.tier": -1 },
-        afterId,
-        sortPipeline: customerSortPipeline,
-      });
+      const page: any = await orders.paginate(
+        {},
+        {
+          limit: 4,
+          sort: { "customer.tier": -1 },
+          afterId,
+          sortPipeline: customerSortPipeline,
+        },
+      );
       assertEquals(page.total, 15);
       assertEquals(page.position, offset);
       all.push(...page.data);
@@ -92,44 +94,51 @@ Deno.test("collection sortPipeline DESC with missing joined docs: full coverage,
   });
 });
 
-Deno.test("collection sortPipeline ASC: walk == raw $sort order; joined field survives", async (t) => {
+test("collection sortPipeline ASC: walk == raw $sort order; joined field survives", async (t) => {
   await withDatabase(t.name, async (db) => {
     const orders = await seed(db);
     const truth = await groundTruth(db, 1);
 
-    // deno-lint-ignore no-explicit-any
     const all: any[] = [];
     let afterId: string | undefined = undefined;
     for (let guard = 0; guard < 100; guard++) {
-      // deno-lint-ignore no-explicit-any
-      const page: any = await orders.paginate({}, {
-        limit: 4,
-        sort: { "customer.tier": 1 },
-        afterId,
-        sortPipeline: customerSortPipeline,
-      });
+      const page: any = await orders.paginate(
+        {},
+        {
+          limit: 4,
+          sort: { "customer.tier": 1 },
+          afterId,
+          sortPipeline: customerSortPipeline,
+        },
+      );
       all.push(...page.data);
       if (page.data.length < 4) break;
       afterId = page.data[page.data.length - 1]._id;
     }
 
-    assertEquals(all.map((d) => String(d._id)), truth);
+    assertEquals(
+      all.map((d) => String(d._id)),
+      truth,
+    );
     const withCustomer = all.find((d) => d.customerId);
     assertEquals(typeof withCustomer?.customer?.tier, "number");
   });
 });
 
-Deno.test("collection sortPipeline: sort key produced by `pipeline` throws, pointing at sortPipeline", async (t) => {
+test("collection sortPipeline: sort key produced by `pipeline` throws, pointing at sortPipeline", async (t) => {
   await withDatabase(t.name, async (db) => {
     const orders = await seed(db);
 
     await assertRejects(
       () =>
-        orders.paginate({}, {
-          limit: 4,
-          sort: { "customer.tier": 1 },
-          pipeline: customerSortPipeline,
-        }),
+        orders.paginate(
+          {},
+          {
+            limit: 4,
+            sort: { "customer.tier": 1 },
+            pipeline: customerSortPipeline,
+          },
+        ),
       Error,
       "sortPipeline",
     );

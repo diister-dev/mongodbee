@@ -12,7 +12,8 @@
 // Ground truth is the server's own $sort over the extracted `_ulid` with the
 // `_id` tie-break — never a hand-written order.
 
-import { assertEquals } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assertEquals } from "../+assert.ts";
 import { withDatabase } from "../+shared.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
 import * as v from "../../src/schema.ts";
@@ -25,30 +26,30 @@ const DOCS = [
   { _id: "a:s3", _type: "a", name: "a-s3" },
 ];
 
-// deno-lint-ignore no-explicit-any
 async function truth(db: any, dir: 1 | -1): Promise<string[]> {
-  const rows = await db.collection("people").aggregate([
-    {
-      $addFields: {
-        _ulid: {
-          $substr: ["$_id", { $add: [{ $indexOfCP: ["$_id", ":"] }, 1] }, -1],
+  const rows = await db
+    .collection("people")
+    .aggregate([
+      {
+        $addFields: {
+          _ulid: {
+            $substr: ["$_id", { $add: [{ $indexOfCP: ["$_id", ":"] }, 1] }, -1],
+          },
         },
       },
-    },
-    { $sort: { _ulid: dir, _id: dir } },
-  ]).toArray();
+      { $sort: { _ulid: dir, _id: dir } },
+    ])
+    .toArray();
   return (rows as { _id: string }[]).map((r) => r._id);
 }
 
-Deno.test("naturalIdSort: twin id suffixes across types — full walk, no loss, no dupes", async () => {
+test("naturalIdSort: twin id suffixes across types — full walk, no loss, no dupes", async () => {
   await withDatabase("mc-natural-tiebreak", async (db) => {
     const people = await multiCollection(db, "people", {
       a: { name: v.string() },
       b: { name: v.string() },
     });
-    await db.collection("people").insertMany(
-      structuredClone(DOCS) as never[],
-    );
+    await db.collection("people").insertMany(structuredClone(DOCS) as never[]);
 
     for (const dir of [1, -1] as const) {
       const expected = await truth(db, dir);
@@ -58,12 +59,16 @@ Deno.test("naturalIdSort: twin id suffixes across types — full walk, no loss, 
       const seen: string[] = [];
       let afterId: string | undefined;
       for (let guard = 0; guard < 10; guard++) {
-        const p = await people.paginate(["a", "b"], {}, {
-          naturalIdSort: true,
-          sort: { _id: dir },
-          limit: 1,
-          ...(afterId ? { afterId } : {}),
-        });
+        const p = await people.paginate(
+          ["a", "b"],
+          {},
+          {
+            naturalIdSort: true,
+            sort: { _id: dir },
+            limit: 1,
+            ...(afterId ? { afterId } : {}),
+          },
+        );
         if (p.data.length === 0) break;
         for (const d of p.data) seen.push(d._id);
         afterId = p.data[p.data.length - 1]._id;

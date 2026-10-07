@@ -1,5 +1,6 @@
+import { test } from "./+harness.ts";
 import * as v from "../src/schema.ts";
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects } from "./+assert.ts";
 import { collection } from "../src/collection.ts";
 import { multiCollection } from "../src/multi-collection.ts";
 import { withDatabase } from "./+shared.ts";
@@ -14,11 +15,13 @@ const userSchema = {
 };
 
 const orderSchema = {
-  items: v.array(v.object({
-    productId: v.string(),
-    quantity: v.number(),
-    price: v.number(),
-  })),
+  items: v.array(
+    v.object({
+      productId: v.string(),
+      quantity: v.number(),
+      price: v.number(),
+    }),
+  ),
   total: v.number(),
   status: v.string(),
 };
@@ -40,7 +43,7 @@ const catalogSchema = {
 
 const modelCatalog = defineModel("catalog", { schema: catalogSchema });
 
-Deno.test("Combined Session: Collection and Multi-Collection in same transaction", async (t) => {
+test("Combined Session: Collection and Multi-Collection in same transaction", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create regular collections
     const users = await collection(db, "users", userSchema);
@@ -70,7 +73,7 @@ Deno.test("Combined Session: Collection and Multi-Collection in same transaction
         await catalog.insertOne("product", {
           name: "Second Product",
           description: "Another description",
-          price: 35.50,
+          price: 35.5,
           stock: 50,
           category: "electronics",
         }),
@@ -85,9 +88,9 @@ Deno.test("Combined Session: Collection and Multi-Collection in same transaction
       const orderId = await orders.insertOne({
         items: [
           { productId: productIds[0], quantity: 2, price: 25.99 },
-          { productId: productIds[1], quantity: 1, price: 35.50 },
+          { productId: productIds[1], quantity: 1, price: 35.5 },
         ],
-        total: 2 * 25.99 + 35.50,
+        total: 2 * 25.99 + 35.5,
         status: "pending",
       });
 
@@ -112,11 +115,11 @@ Deno.test("Combined Session: Collection and Multi-Collection in same transaction
 
     const order = await orders.getById(results.orderId);
     assertEquals(order.items.length, 2);
-    assertEquals(order.total, 2 * 25.99 + 35.50);
+    assertEquals(order.total, 2 * 25.99 + 35.5);
   });
 });
 
-Deno.test("Combined Session: Transaction rollback across collection types", async (t) => {
+test("Combined Session: Transaction rollback across collection types", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create regular collections
     const users = await collection(db, "users", userSchema);
@@ -198,7 +201,7 @@ Deno.test("Combined Session: Transaction rollback across collection types", asyn
   });
 });
 
-Deno.test("Combined Session: Update operations across collection types", async (t) => {
+test("Combined Session: Update operations across collection types", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create regular collections
     const users = await collection(db, "users", userSchema);
@@ -227,9 +230,7 @@ Deno.test("Combined Session: Update operations across collection types", async (
 
       // Create order
       const orderId = await orders.insertOne({
-        items: [
-          { productId, quantity: 1, price: 15.99 },
-        ],
+        items: [{ productId, quantity: 1, price: 15.99 }],
         total: 15.99,
         status: "pending",
       });
@@ -240,10 +241,7 @@ Deno.test("Combined Session: Update operations across collection types", async (
     // Test update operations in a transaction
     await catalog.withSession(async () => {
       // Update user
-      await users.updateOne(
-        { _id: initialData.userId },
-        { $set: { age: 31 } },
-      );
+      await users.updateOne({ _id: initialData.userId }, { $set: { age: 31 } });
 
       // Update product in multi-collection
       await catalog.updateOne("product", initialData.productId, {
@@ -281,7 +279,7 @@ Deno.test("Combined Session: Update operations across collection types", async (
   });
 });
 
-Deno.test("Combined Session: Shared session context", async (t) => {
+test("Combined Session: Shared session context", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create regular collections
     const users = await collection(db, "users", userSchema);
@@ -323,9 +321,7 @@ Deno.test("Combined Session: Shared session context", async (t) => {
 
         // Create an order that references both
         const orderId = await orders.insertOne({
-          items: [
-            { productId: productId, quantity: 1, price: 29.99 },
-          ],
+          items: [{ productId: productId, quantity: 1, price: 29.99 }],
           total: 29.99,
           status: "pending",
         });

@@ -1,4 +1,5 @@
-import { assert } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert } from "../+assert.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import * as v from "../../src/schema.ts";
@@ -28,7 +29,7 @@ const collectionModel = defineModel("multi_test", {
   schema: collectionSchema,
 });
 
-Deno.test("Multi-Collection: Basic prepare → filter → format", async (t) => {
+test("Multi-Collection: Basic prepare → filter → format", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "multi_test", collectionModel);
 
@@ -52,25 +53,29 @@ Deno.test("Multi-Collection: Basic prepare → filter → format", async (t) => 
       isActive: true,
     });
 
-    const results = await mc.paginate("users", {}, {
-      // Step 1: Prepare (enrich with computed field)
-      prepare: async (user) => ({
-        ...user,
-        ageGroup: user.age < 30 ? "young" : "adult",
-        emailDomain: user.email.split("@")[1],
-      }),
+    const results = await mc.paginate(
+      "users",
+      {},
+      {
+        // Step 1: Prepare (enrich with computed field)
+        prepare: async (user) => ({
+          ...user,
+          ageGroup: user.age < 30 ? "young" : "adult",
+          emailDomain: user.email.split("@")[1],
+        }),
 
-      // Step 2: Filter (only active users)
-      filter: (enrichedUser) => enrichedUser.isActive,
+        // Step 2: Filter (only active users)
+        filter: (enrichedUser) => enrichedUser.isActive,
 
-      // Step 3: Format (return simplified format)
-      format: async (enrichedUser) => ({
-        displayName: enrichedUser.name,
-        category: enrichedUser.ageGroup,
-        domain: enrichedUser.emailDomain,
-        type: enrichedUser._type,
-      }),
-    });
+        // Step 3: Format (return simplified format)
+        format: async (enrichedUser) => ({
+          displayName: enrichedUser.name,
+          category: enrichedUser.ageGroup,
+          domain: enrichedUser.emailDomain,
+          type: enrichedUser._type,
+        }),
+      },
+    );
 
     assert(results.data.length === 2, "Should return 2 active users");
     assert(
@@ -88,7 +93,7 @@ Deno.test("Multi-Collection: Basic prepare → filter → format", async (t) => 
   });
 });
 
-Deno.test("Multi-Collection: Products with pricing logic", async (t) => {
+test("Multi-Collection: Products with pricing logic", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "multi_test", collectionModel);
 
@@ -112,30 +117,35 @@ Deno.test("Multi-Collection: Products with pricing logic", async (t) => {
       inStock: true,
     });
 
-    const results = await mc.paginate("products", {}, {
-      // Step 1: Prepare (enrich with pricing tiers)
-      prepare: async (product) => ({
-        ...product,
-        priceRange: product.price < 50
-          ? "budget"
-          : product.price < 500
-          ? "mid"
-          : "premium",
-        discountEligible: product.price > 100 && product.inStock,
-      }),
+    const results = await mc.paginate(
+      "products",
+      {},
+      {
+        // Step 1: Prepare (enrich with pricing tiers)
+        prepare: async (product) => ({
+          ...product,
+          priceRange:
+            product.price < 50
+              ? "budget"
+              : product.price < 500
+                ? "mid"
+                : "premium",
+          discountEligible: product.price > 100 && product.inStock,
+        }),
 
-      // Step 2: Filter (only in-stock products)
-      filter: (enrichedProduct) => enrichedProduct.inStock,
+        // Step 2: Filter (only in-stock products)
+        filter: (enrichedProduct) => enrichedProduct.inStock,
 
-      // Step 3: Format (create catalog format)
-      format: async (enrichedProduct) => ({
-        productName: enrichedProduct.name,
-        displayPrice: `$${enrichedProduct.price}`,
-        tier: enrichedProduct.priceRange,
-        canDiscount: enrichedProduct.discountEligible,
-        categoryTag: enrichedProduct.category.toUpperCase(),
-      }),
-    });
+        // Step 3: Format (create catalog format)
+        format: async (enrichedProduct) => ({
+          productName: enrichedProduct.name,
+          displayPrice: `$${enrichedProduct.price}`,
+          tier: enrichedProduct.priceRange,
+          canDiscount: enrichedProduct.discountEligible,
+          categoryTag: enrichedProduct.category.toUpperCase(),
+        }),
+      },
+    );
 
     assert(results.data.length === 2, "Should return 2 in-stock products");
     assert(
@@ -159,7 +169,7 @@ Deno.test("Multi-Collection: Products with pricing logic", async (t) => {
   });
 });
 
-Deno.test("Multi-Collection: Cross-type isolation", async (t) => {
+test("Multi-Collection: Cross-type isolation", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "multi_test", collectionModel);
 
@@ -183,27 +193,35 @@ Deno.test("Multi-Collection: Cross-type isolation", async (t) => {
       isActive: false,
     });
 
-    const userResults = await mc.paginate("users", {}, {
-      prepare: async (user) => ({
-        ...user,
-        type: "user-record",
-      }),
-      format: async (enrichedUser) => ({
-        name: enrichedUser.name,
-        recordType: enrichedUser.type,
-      }),
-    });
+    const userResults = await mc.paginate(
+      "users",
+      {},
+      {
+        prepare: async (user) => ({
+          ...user,
+          type: "user-record",
+        }),
+        format: async (enrichedUser) => ({
+          name: enrichedUser.name,
+          recordType: enrichedUser.type,
+        }),
+      },
+    );
 
-    const productResults = await mc.paginate("products", {}, {
-      prepare: async (product) => ({
-        ...product,
-        type: "product-record",
-      }),
-      format: async (enrichedProduct) => ({
-        name: enrichedProduct.name,
-        recordType: enrichedProduct.type,
-      }),
-    });
+    const productResults = await mc.paginate(
+      "products",
+      {},
+      {
+        prepare: async (product) => ({
+          ...product,
+          type: "product-record",
+        }),
+        format: async (enrichedProduct) => ({
+          name: enrichedProduct.name,
+          recordType: enrichedProduct.type,
+        }),
+      },
+    );
 
     assert(userResults.data.length === 2, "Should return 2 users");
     assert(
@@ -218,7 +236,7 @@ Deno.test("Multi-Collection: Cross-type isolation", async (t) => {
   });
 });
 
-Deno.test("Multi-Collection: External API enrichment", async (t) => {
+test("Multi-Collection: External API enrichment", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "multi_test", collectionModel);
 
@@ -250,43 +268,51 @@ Deno.test("Multi-Collection: External API enrichment", async (t) => {
       },
     };
 
-    const userResults = await mc.paginate("users", {}, {
-      prepare: async (user) => {
-        const reputation = await mockServices.getUserReputation(user.email);
-        return {
-          ...user,
-          reputation,
-          trustLevel: reputation > 80 ? "high" : "medium",
-        };
+    const userResults = await mc.paginate(
+      "users",
+      {},
+      {
+        prepare: async (user) => {
+          const reputation = await mockServices.getUserReputation(user.email);
+          return {
+            ...user,
+            reputation,
+            trustLevel: reputation > 80 ? "high" : "medium",
+          };
+        },
+
+        filter: (enrichedUser) => enrichedUser.isActive,
+
+        format: async (enrichedUser) => ({
+          userName: enrichedUser.name,
+          trust: enrichedUser.trustLevel,
+          score: enrichedUser.reputation,
+        }),
       },
+    );
 
-      filter: (enrichedUser) => enrichedUser.isActive,
+    const productResults = await mc.paginate(
+      "products",
+      {},
+      {
+        prepare: async (product) => {
+          const reviews = await mockServices.getProductReviews(product.name);
+          return {
+            ...product,
+            reviews,
+            isPopular: reviews.count > 100,
+          };
+        },
 
-      format: async (enrichedUser) => ({
-        userName: enrichedUser.name,
-        trust: enrichedUser.trustLevel,
-        score: enrichedUser.reputation,
-      }),
-    });
+        filter: (enrichedProduct) => enrichedProduct.inStock,
 
-    const productResults = await mc.paginate("products", {}, {
-      prepare: async (product) => {
-        const reviews = await mockServices.getProductReviews(product.name);
-        return {
-          ...product,
-          reviews,
-          isPopular: reviews.count > 100,
-        };
+        format: async (enrichedProduct) => ({
+          productName: enrichedProduct.name,
+          rating: enrichedProduct.reviews.rating,
+          popularity: enrichedProduct.isPopular ? "popular" : "niche",
+        }),
       },
-
-      filter: (enrichedProduct) => enrichedProduct.inStock,
-
-      format: async (enrichedProduct) => ({
-        productName: enrichedProduct.name,
-        rating: enrichedProduct.reviews.rating,
-        popularity: enrichedProduct.isPopular ? "popular" : "niche",
-      }),
-    });
+    );
 
     assert(userResults.data.length === 1, "Should return 1 active user");
     assert(
@@ -310,7 +336,7 @@ Deno.test("Multi-Collection: External API enrichment", async (t) => {
   });
 });
 
-Deno.test("Multi-Collection: Type safety with generics", async (t) => {
+test("Multi-Collection: Type safety with generics", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "multi_test", collectionModel);
 
@@ -322,43 +348,47 @@ Deno.test("Multi-Collection: Type safety with generics", async (t) => {
     });
 
     // Test type transformations maintain type safety
-    const results = await mc.paginate("users", {}, {
-      prepare: async (user) => {
-        // user should be User with _id and _type
-        assert(typeof user.name === "string", "Should have name");
-        assert(typeof user.age === "number", "Should have age");
-        assert(typeof user._id === "string", "Should have string _id");
-        assert(user._type === "users", "Should have correct _type");
+    const results = await mc.paginate(
+      "users",
+      {},
+      {
+        prepare: async (user) => {
+          // user should be User with _id and _type
+          assert(typeof user.name === "string", "Should have name");
+          assert(typeof user.age === "number", "Should have age");
+          assert(typeof user._id === "string", "Should have string _id");
+          assert(user._type === "users", "Should have correct _type");
 
-        return {
-          ...user,
-          enrichedField: "test-value",
-        };
+          return {
+            ...user,
+            enrichedField: "test-value",
+          };
+        },
+
+        filter: (enrichedUser) => {
+          // enrichedUser should have enrichedField
+          assert(
+            enrichedUser.enrichedField === "test-value",
+            "Should have enriched field",
+          );
+          return true;
+        },
+
+        format: async (enrichedUser) => {
+          // enrichedUser should still have all fields
+          assert(enrichedUser.name === "Alice", "Should have original name");
+          assert(
+            enrichedUser.enrichedField === "test-value",
+            "Should have enriched field",
+          );
+
+          return {
+            finalName: enrichedUser.name,
+            finalValue: enrichedUser.enrichedField,
+          };
+        },
       },
-
-      filter: (enrichedUser) => {
-        // enrichedUser should have enrichedField
-        assert(
-          enrichedUser.enrichedField === "test-value",
-          "Should have enriched field",
-        );
-        return true;
-      },
-
-      format: async (enrichedUser) => {
-        // enrichedUser should still have all fields
-        assert(enrichedUser.name === "Alice", "Should have original name");
-        assert(
-          enrichedUser.enrichedField === "test-value",
-          "Should have enriched field",
-        );
-
-        return {
-          finalName: enrichedUser.name,
-          finalValue: enrichedUser.enrichedField,
-        };
-      },
-    });
+    );
 
     assert(results.data.length === 1, "Should return 1 result");
     assert(results.data[0].finalName === "Alice", "Should have final name");
@@ -369,7 +399,7 @@ Deno.test("Multi-Collection: Type safety with generics", async (t) => {
   });
 });
 
-Deno.test("Multi-Collection: Error handling", async (t) => {
+test("Multi-Collection: Error handling", async (t) => {
   await withDatabase(t.name, async (db) => {
     const mc = await multiCollection(db, "multi_test", collectionModel);
 
@@ -388,14 +418,18 @@ Deno.test("Multi-Collection: Error handling", async (t) => {
 
     // Test error in prepare
     try {
-      await mc.paginate("users", {}, {
-        prepare: async (user) => {
-          if (user.name === "Bob") {
-            throw new Error("Simulated prepare error");
-          }
-          return { ...user, processed: true };
+      await mc.paginate(
+        "users",
+        {},
+        {
+          prepare: async (user) => {
+            if (user.name === "Bob") {
+              throw new Error("Simulated prepare error");
+            }
+            return { ...user, processed: true };
+          },
         },
-      });
+      );
       assert(false, "Should have thrown error");
     } catch (error) {
       assert(
@@ -406,14 +440,18 @@ Deno.test("Multi-Collection: Error handling", async (t) => {
 
     // Test error in filter
     try {
-      await mc.paginate("users", {}, {
-        filter: (user) => {
-          if (user.name === "Bob") {
-            throw new Error("Simulated filter error");
-          }
-          return true;
+      await mc.paginate(
+        "users",
+        {},
+        {
+          filter: (user) => {
+            if (user.name === "Bob") {
+              throw new Error("Simulated filter error");
+            }
+            return true;
+          },
         },
-      });
+      );
       assert(false, "Should have thrown error");
     } catch (error) {
       assert(
@@ -424,14 +462,18 @@ Deno.test("Multi-Collection: Error handling", async (t) => {
 
     // Test error in format
     try {
-      await mc.paginate("users", {}, {
-        format: async (user) => {
-          if (user.name === "Bob") {
-            throw new Error("Simulated format error");
-          }
-          return { processed: user.name };
+      await mc.paginate(
+        "users",
+        {},
+        {
+          format: async (user) => {
+            if (user.name === "Bob") {
+              throw new Error("Simulated format error");
+            }
+            return { processed: user.name };
+          },
         },
-      });
+      );
       assert(false, "Should have thrown error");
     } catch (error) {
       assert(

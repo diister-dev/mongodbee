@@ -17,6 +17,9 @@ import {
 import { getAppliedMigrationIdsFromHistory } from "./migration-history.ts";
 import { migrationBuilder } from "./builder.ts";
 import { getAppliedMigrationIds } from "./state.ts";
+import { createLogger } from "../utils/logger.ts";
+
+const log = createLogger("catch-up");
 
 /**
  * Information about an instance that needs catch-up
@@ -124,7 +127,7 @@ export async function detectInstancesNeedingCatchUp(
           .filter((m) => {
             // If we can't find the creation migration, include all to be safe
             if (!instanceCreationMigration) {
-              console.warn(
+              log.warn(
                 `Could not find creation migration ${migrationsDoc.fromMigrationId} for instance ${collectionName}. ` +
                   `This instance may need manual review.`,
               );
@@ -258,8 +261,9 @@ export function filterOperationsForModelType(
       // `multiModelInstances` source shape is model-scoped; `collection` and
       // `multiCollectionType` sources are unrelated to this model type.
       case "flow_to_scope":
-        return op.from.kind === "multiModelInstances" &&
-          op.from.model === modelType;
+        return (
+          op.from.kind === "multiModelInstances" && op.from.model === modelType
+        );
 
       // Skip collection and multi-collection operations
       case "create_collection":

@@ -19,7 +19,8 @@
  *   un-consolidated data. The fix returns the flow_to_scope op whenever its
  *   `from` reads from this model's instances.
  */
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals, assertRejects } from "../+assert.ts";
 import { withDatabase } from "../+shared.ts";
 import {
   createMultiCollectionInfo,
@@ -34,19 +35,19 @@ import { createMongodbApplier } from "../../src/migration/appliers/mongodb.ts";
 // [C7] discoverMultiCollectionInstances — fail loud, not fail destructive
 // ============================================================================
 
-Deno.test("[C7] discovery throws on a NON-EMPTY prefix collection with no marker (default)", async () => {
+test("[C7] discovery throws on a NON-EMPTY prefix collection with no marker (default)", async () => {
   await withDatabase("disc_guard_throw", async (db) => {
     // A properly registered instance (prefix name + valid `_information`).
     await createMultiCollectionInfo(db, "gadget:real", "gadget", "000");
-    await db.collection("gadget:real").insertOne(
-      { _id: "item:1", _type: "item", v: 1 } as never,
-    );
+    await db
+      .collection("gadget:real")
+      .insertOne({ _id: "item:1", _type: "item", v: 1 } as never);
 
     // An UNRELATED collection that merely matches the `gadget:` convention,
     // carrying real data but NO `_information` marker.
-    await db.collection("gadget:intruder").insertOne(
-      { _id: "keepme", secret: 42 } as never,
-    );
+    await db
+      .collection("gadget:intruder")
+      .insertOne({ _id: "keepme", secret: 42 } as never);
 
     const err = await assertRejects(
       () => discoverMultiCollectionInstances(db, "gadget"),
@@ -62,7 +63,7 @@ Deno.test("[C7] discovery throws on a NON-EMPTY prefix collection with no marker
   });
 });
 
-Deno.test("[C7] discovery silently skips an EMPTY prefix collection (adoption-safe carve-out)", async () => {
+test("[C7] discovery silently skips an EMPTY prefix collection (adoption-safe carve-out)", async () => {
   await withDatabase("disc_guard_empty", async (db) => {
     await createMultiCollectionInfo(db, "gadget:real", "gadget", "000");
     // Freshly-created / about-to-be-adopted instance: no marker yet, no data.
@@ -73,12 +74,12 @@ Deno.test("[C7] discovery silently skips an EMPTY prefix collection (adoption-sa
   });
 });
 
-Deno.test('[C7] onUnverifiedPrefixMatch "skip" excludes the suspicious collection without throwing', async () => {
+test('[C7] onUnverifiedPrefixMatch "skip" excludes the suspicious collection without throwing', async () => {
   await withDatabase("disc_guard_skip", async (db) => {
     await createMultiCollectionInfo(db, "gadget:real", "gadget", "000");
-    await db.collection("gadget:intruder").insertOne(
-      { _id: "keepme", secret: 42 } as never,
-    );
+    await db
+      .collection("gadget:intruder")
+      .insertOne({ _id: "keepme", secret: 42 } as never);
 
     const instances = await discoverMultiCollectionInstances(db, "gadget", {
       onUnverifiedPrefixMatch: "skip",
@@ -87,12 +88,12 @@ Deno.test('[C7] onUnverifiedPrefixMatch "skip" excludes the suspicious collectio
   });
 });
 
-Deno.test('[C7] onUnverifiedPrefixMatch "include" preserves legacy name-only discovery', async () => {
+test('[C7] onUnverifiedPrefixMatch "include" preserves legacy name-only discovery', async () => {
   await withDatabase("disc_guard_include", async (db) => {
     await createMultiCollectionInfo(db, "gadget:real", "gadget", "000");
-    await db.collection("gadget:intruder").insertOne(
-      { _id: "keepme", secret: 42 } as never,
-    );
+    await db
+      .collection("gadget:intruder")
+      .insertOne({ _id: "keepme", secret: 42 } as never);
 
     const instances = await discoverMultiCollectionInstances(db, "gadget", {
       onUnverifiedPrefixMatch: "include",
@@ -101,33 +102,33 @@ Deno.test('[C7] onUnverifiedPrefixMatch "include" preserves legacy name-only dis
   });
 });
 
-Deno.test("[C7] a prefix collection registered to a DIFFERENT model is excluded, not thrown", async () => {
+test("[C7] a prefix collection registered to a DIFFERENT model is excluded, not thrown", async () => {
   await withDatabase("disc_guard_othertype", async (db) => {
     await createMultiCollectionInfo(db, "gadget:real", "gadget", "000");
     // Same `gadget:` prefix but a valid marker for another model — trusted as
     // not-ours, must neither be returned nor trigger the loud guard.
     await createMultiCollectionInfo(db, "gadget:owned_by_widget", "widget");
-    await db.collection("gadget:owned_by_widget").insertOne(
-      { _id: "w:1", _type: "w", v: 1 } as never,
-    );
+    await db
+      .collection("gadget:owned_by_widget")
+      .insertOne({ _id: "w:1", _type: "w", v: 1 } as never);
 
     const instances = await discoverMultiCollectionInstances(db, "gadget");
     assertEquals(instances, ["gadget:real"]);
   });
 });
 
-Deno.test("[C7] flow-to-scope consume aborts LOUDLY on an unregistered prefix collection (no data flowed or dropped)", async () => {
+test("[C7] flow-to-scope consume aborts LOUDLY on an unregistered prefix collection (no data flowed or dropped)", async () => {
   await withDatabase("disc_guard_flow", async (db) => {
     // A legitimately registered instance with data.
     await createMultiCollectionInfo(db, "gadget:real", "gadget", "000");
-    await db.collection("gadget:real").insertOne(
-      { _id: "item:1", _type: "item", v: 1 } as never,
-    );
+    await db
+      .collection("gadget:real")
+      .insertOne({ _id: "item:1", _type: "item", v: 1 } as never);
 
     // An unrelated collection matching the convention, holding real data.
-    await db.collection("gadget:intruder").insertOne(
-      { _id: "keepme", secret: 42 } as never,
-    );
+    await db
+      .collection("gadget:intruder")
+      .insertOne({ _id: "keepme", secret: 42 } as never);
 
     const S = { collections: {} };
     const m = migrationDefinition(
@@ -137,20 +138,23 @@ Deno.test("[C7] flow-to-scope consume aborts LOUDLY on an unregistered prefix co
         parent: null,
         schemas: S,
         migrate: (b) =>
-          b.flowToScope({
-            from: { kind: "multiModelInstances", model: "gadget" },
-            into: { collection: "gadget_scoped" },
-            scope: (_d, ctx) => String(ctx.instanceName),
-            source: "consume",
-          }).compile(),
+          b
+            .flowToScope({
+              from: { kind: "multiModelInstances", model: "gadget" },
+              into: { collection: "gadget_scoped" },
+              scope: (_d, ctx) => String(ctx.instanceName),
+              source: "consume",
+            })
+            .compile(),
       },
     );
     const ops = m.migrate(migrationBuilder({ schemas: S })).operations;
 
     await assertRejects(
       () =>
-        createMongodbApplier(db, m, { currentMigrationId: m.id })
-          .applyMigration(ops, "up"),
+        createMongodbApplier(db, m, {
+          currentMigrationId: m.id,
+        }).applyMigration(ops, "up"),
       Error,
       "gadget:intruder",
     );
@@ -182,10 +186,10 @@ function flowOps(
     | { kind: "multiModelInstances"; model: string }
     | { kind: "collection"; name: string }
     | {
-      kind: "multiCollectionType";
-      collectionName: string;
-      documentType: string;
-    },
+        kind: "multiCollectionType";
+        collectionName: string;
+        documentType: string;
+      },
 ) {
   return migrationBuilder({ schemas: { collections: {} } })
     .flowToScope({
@@ -198,7 +202,7 @@ function flowOps(
     .compile().operations;
 }
 
-Deno.test("[C8] flow_to_scope from this model's instances is relevant to that model", () => {
+test("[C8] flow_to_scope from this model's instances is relevant to that model", () => {
   const ops = flowOps({ kind: "multiModelInstances", model: "exposition" });
 
   const relevant = filterOperationsForModelType(ops, "exposition");
@@ -209,7 +213,7 @@ Deno.test("[C8] flow_to_scope from this model's instances is relevant to that mo
   assertEquals(filterOperationsForModelType(ops, "other").length, 0);
 });
 
-Deno.test("[C8] flow_to_scope from a plain collection or multi-collection type is NOT model-relevant", () => {
+test("[C8] flow_to_scope from a plain collection or multi-collection type is NOT model-relevant", () => {
   const fromCollection = flowOps({ kind: "collection", name: "roots" });
   assertEquals(filterOperationsForModelType(fromCollection, "roots").length, 0);
   assertEquals(

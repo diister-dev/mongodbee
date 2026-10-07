@@ -10,13 +10,16 @@
  * @module
  */
 
-import { assert, assertEquals, assertExists } from "@std/assert";
-import * as path from "@std/path";
-import { existsSync } from "@std/fs";
+import { test } from "../../+harness.ts";
+import { readFile, writeFile } from "node:fs/promises";
+import { assert, assertEquals, assertExists } from "../../+assert.ts";
+import * as path from "node:path";
+import { existsSync, readdirSync } from "node:fs";
 import { initCommand } from "../../../src/migration/cli/commands/init.ts";
-import { fileContains, withTempDir } from "./shared.ts";
+import { fileURLToPath } from "node:url";
+import { fileContains, moduleDir, runScript, withTempDir } from "./shared.ts";
 
-Deno.test("init - creates config file and migrations directory", async () => {
+test("init - creates config file and migrations directory", async () => {
   await withTempDir(async (tempDir) => {
     await initCommand({ cwd: tempDir });
 
@@ -37,14 +40,14 @@ Deno.test("init - creates config file and migrations directory", async () => {
   });
 });
 
-Deno.test("init - respects force flag to overwrite existing config", async () => {
+test("init - respects force flag to overwrite existing config", async () => {
   await withTempDir(async (tempDir) => {
     // First init
     await initCommand({ cwd: tempDir });
 
     // Modify config file
     const configPath = path.join(tempDir, "mongodbee.config.ts");
-    await Deno.writeTextFile(configPath, "// Modified content");
+    await writeFile(configPath, "// Modified content");
 
     // Init without force should not overwrite
     await initCommand({ cwd: tempDir });
@@ -54,16 +57,16 @@ Deno.test("init - respects force flag to overwrite existing config", async () =>
     await initCommand({ force: true, cwd: tempDir });
     assert(await fileContains(configPath, "defineConfig"));
     assert(await fileContains(configPath, "database"));
-    assert(!await fileContains(configPath, "// Modified content"));
+    assert(!(await fileContains(configPath, "// Modified content")));
   });
 });
 
-Deno.test("init - creates config with correct structure", async () => {
+test("init - creates config with correct structure", async () => {
   await withTempDir(async (tempDir) => {
     await initCommand({ cwd: tempDir });
 
     const configPath = path.join(tempDir, "mongodbee.config.ts");
-    const content = await Deno.readTextFile(configPath);
+    const content = await readFile(configPath, "utf8");
 
     // Check for essential config sections
     assert(content.includes("import"));
@@ -77,12 +80,12 @@ Deno.test("init - creates config with correct structure", async () => {
   });
 });
 
-Deno.test("init - creates schemas file with correct structure", async () => {
+test("init - creates schemas file with correct structure", async () => {
   await withTempDir(async (tempDir) => {
     await initCommand({ cwd: tempDir });
 
     const schemasPath = path.join(tempDir, "schemas.ts");
-    const content = await Deno.readTextFile(schemasPath);
+    const content = await readFile(schemasPath, "utf8");
 
     // Check for essential schema structure
     assert(content.includes("export const schemas"));
@@ -90,30 +93,87 @@ Deno.test("init - creates schemas file with correct structure", async () => {
   });
 });
 
-Deno.test("init - does not overwrite existing files without force", async () => {
+test("init - does not overwrite existing files without force", async () => {
   await withTempDir(async (tempDir) => {
     // Create custom config
     const configPath = path.join(tempDir, "mongodbee.config.ts");
     const customContent = "// Custom configuration";
-    await Deno.writeTextFile(configPath, customContent);
+    await writeFile(configPath, customContent);
 
     // Run init without force
     await initCommand({ cwd: tempDir });
 
     // File should still have custom content
-    const content = await Deno.readTextFile(configPath);
+    const content = await readFile(configPath, "utf8");
     assertEquals(content, customContent);
   });
 });
 
-Deno.test("init - creates empty migrations directory", async () => {
+test("init - creates empty migrations directory", async () => {
   await withTempDir(async (tempDir) => {
     await initCommand({ cwd: tempDir });
 
     const migrationsDir = path.join(tempDir, "migrations");
-    const files = [...Deno.readDirSync(migrationsDir)];
+    const files = [...readdirSync(migrationsDir, { withFileTypes: true })];
 
     // Directory should be empty initially
     assertEquals(files.length, 0);
   });
+});
+
+/**
+ * The scaffold is the first TypeScript a new user ever sees, so it has to
+ * compile. The assertions above only checked that the files exist and contain
+ * a few substrings, which is how `schemas.ts` came to import
+ * `SchemasDefinition` from the package root — a subpath that does not export
+ * it — and fail to typecheck for everybody running `mongodbee init`.
+ *
+ * `paths` maps the package specifiers onto this repo's sources so the check
+ * needs no packing or install, and `typeRoots` points at the suite's own
+ * `@types` because the temp project has no `node_modules`.
+ */
+test({
+  name: "init - the files it scaffolds typecheck against the package",
+  // Spawning tsc over the package's own sources takes ~0.6 s warm and runs
+  // past the 5 s default on a cold CI runner.
+  timeout: 120_000,
+  fn: async () => {
+    await withTempDir(async (tempDir) => {
+      await initCommand({ cwd: tempDir });
+
+      const libRoot = fileURLToPath(new URL("../../../", import.meta.url));
+      const tsconfig = {
+        compilerOptions: {
+          target: "esnext",
+          module: "nodenext",
+          moduleResolution: "nodenext",
+          lib: ["esnext", "dom"],
+          strict: true,
+          noEmit: true,
+          skipLibCheck: true,
+          typeRoots: [path.dirname(moduleDir("@types/node") ?? libRoot)],
+          types: ["node"],
+          allowImportingTsExtensions: true,
+          paths: {
+            "@diister/mongodbee": [path.join(libRoot, "mod.ts")],
+            "@diister/mongodbee/*": [path.join(libRoot, "src/*/mod.ts")],
+          },
+        },
+        include: ["schemas.ts", "mongodbee.config.ts"],
+      };
+      await writeFile(
+        path.join(tempDir, "tsconfig.json"),
+        JSON.stringify(tsconfig, null, 2),
+        "utf-8",
+      );
+
+      const tsc = path.join(moduleDir("typescript") ?? libRoot, "bin/tsc");
+      const { code, stdout } = await runScript(
+        tsc,
+        ["-p", "tsconfig.json"],
+        tempDir,
+      );
+      assertEquals(code, 0, `scaffolded files do not typecheck:\n${stdout}`);
+    });
+  },
 });

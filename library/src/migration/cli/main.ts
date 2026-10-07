@@ -8,8 +8,8 @@
  */
 
 import process from "node:process";
-import { parseArgs } from "@std/cli/parse-args";
-import { blue, bold, green, red, yellow } from "@std/fmt/colors";
+import { parseArgs } from "../../utils/parse-args.ts";
+import { blue, bold, green, red, yellow } from "../../utils/colors.ts";
 
 import { generateCommand } from "./commands/generate.ts";
 import { migrateCommand } from "./commands/migrate.ts";
@@ -23,10 +23,11 @@ import { baselineCommand } from "./commands/baseline.ts";
 import { classifyCommand } from "./commands/classify.ts";
 import { seedCommand } from "./commands/seed.ts";
 import { extractCommand } from "./commands/extract.ts";
+import { studioEntry } from "./commands/studio-entry.ts";
 
-import packageInfo from "../../../deno.json" with { type: "json" };
-
-const VERSION = packageInfo.version;
+import { VERSION } from "../../version.ts";
+import { isMainModule } from "../utils/platform.ts";
+import { armExitGuard } from "./utils/exit-guard.ts";
 
 const commands = [
   {
@@ -96,6 +97,11 @@ const commands = [
     description: "Copy a database with personal data pseudonymised",
     handler: extractCommand,
   },
+  {
+    name: "studio",
+    description: "Open a local, read-only database explorer",
+    handler: studioEntry,
+  },
 ];
 
 /**
@@ -123,6 +129,7 @@ ${yellow("COMMANDS:")}
     green("seed")
   }      Generate a scenario world at a migration step and write it
   ${green("extract")}   Copy a database with personal data pseudonymised
+  ${green("studio")}    Open a local, read-only database explorer
 
 ${yellow("GLOBAL OPTIONS:")}
   -h, --help        Show this help message
@@ -133,6 +140,10 @@ ${yellow("GLOBAL OPTIONS:")}
 ${yellow("CHECK OPTIONS:")}
   -m, --mode        Simulation mode: quick, normal, hard (default: normal)
   -l, --last        Only validate the last N migrations
+  --docs            Mock documents per collection, 1 to 5000, overriding
+                    the mode (quick 10, normal 100, hard 500)
+  --retention       Share of each migration's documents carried into the
+                    next one, 0 to 1 (default: 0.5)
   --verbose         Print every warning under the migration that raised it
                     (default: warnings are deduplicated into a single digest)
   --check-indexes   Check database indexes against schema (requires database connection)
@@ -149,9 +160,16 @@ ${yellow("MIGRATE OPTIONS:")}
   --verbose         Show detailed migration information
   --progress        Force the live progress line (auto-detected on a TTY; use --no-progress to disable)
   -m, --mode        Simulation mode: quick, normal, hard (default: normal)
-  -l, --last        Only validate the last N migrations
+  -l, --last        Also re-validate applied migrations: simulate at least
+                    the last N (only the pending ones are simulated by default)
+  --docs            Mock documents per collection, 1 to 5000 (as for check)
+  --retention       Share of documents carried between migrations, 0 to 1
   --target          Stop after this migration (id, name, or unambiguous
                     substring); the later ones stay pending
+  --skip-privilege-check
+                    Do not verify the account's privileges before starting
+                    (by default the run is refused when the account lacks an
+                    action migrations need, e.g. collMod from dbAdmin)
 
 ${yellow("BASELINE OPTIONS:")}
   --target          Migration the database is already at, inclusive
@@ -161,6 +179,18 @@ ${yellow("BASELINE OPTIONS:")}
 ${yellow("ROLLBACK OPTIONS:")}
   --force           Skip all confirmations (use with caution!)
   --progress        Force the live progress line (auto-detected on a TTY; use --no-progress to disable)
+  --skip-privilege-check
+                    Do not verify the account's privileges before starting
+
+${yellow("STUDIO OPTIONS:")}
+  --port            Port to listen on (default: 4983)
+  --host            Interface to bind (default: 127.0.0.1)
+  --project         Project directory to open (config discovery and relative paths)
+  --uri             MongoDB connection string (or set MONGODBEE_STUDIO_URI)
+  --db              Database name
+  --migrations      Migrations directory
+  --schemas         Schemas file (schemas.ts)
+  --write           Allow editing, creating and deleting documents (loopback only)
 
 ${yellow("CLASSIFY OPTIONS:")}
   --at              Classify the schemas frozen in this migration instead of schemas.ts
@@ -189,6 +219,8 @@ ${yellow("EXTRACT OPTIONS:")}
 ${yellow("SYNC OPTIONS:")}
   --force           Sync even if pending migrations exist (not recommended)
   --verbose         Show detailed schema information
+  --skip-privilege-check
+                    Do not verify the account's privileges before starting
 `);
 }
 
@@ -216,6 +248,8 @@ async function main(): Promise<void> {
       "progress",
       "json",
       "allow-unknown",
+      "skip-privilege-check",
+      "write",
     ],
     // `progress` stays tri-state: `--progress` forces the live line on,
     // `--no-progress` forces it off, and omitting it leaves `undefined` so the
@@ -241,6 +275,10 @@ async function main(): Promise<void> {
       "shift-days",
       "scope",
       "from-migration",
+      "host",
+      "project",
+      "migrations",
+      "schemas",
     ],
     alias: {
       v: "version",
@@ -274,12 +312,10 @@ async function main(): Promise<void> {
     // was silently ignored by the six others and they ran against whichever
     // configuration file auto-discovery happened to find.
     const commandOptions = { ...args, configPath: args.config };
-    // deno-lint-ignore no-explicit-any
     await cmd.handler(commandOptions as any);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(red(bold("Error:")), message);
-    // deno-lint-ignore no-explicit-any
     const cause = (error as any).cause;
     if (cause) {
       // Errors:
@@ -298,13 +334,10 @@ async function main(): Promise<void> {
 }
 
 // Run main function if this is the main module
-const isMain =
-  import.meta.url === `file://${process.argv[1]?.replace(/\\/g, "/")}` ||
-  (import.meta as any).main === true;
-
-if (isMain) {
+if (isMainModule(import.meta)) {
   try {
     await main();
+    armExitGuard(process.argv.slice(2));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(red(bold("Error:")), message);

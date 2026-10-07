@@ -49,10 +49,13 @@ export const INSTANCES_PER_MODEL = 1;
  * pool (N), and the per-model batch budget divides the document count across
  * them (see `drawInstanceBatchCount` in `populate.ts`).
  */
-const POWER_LEVEL_PRESETS: Record<SimulationPowerLevel, {
-  docsPerCollectionMin: number;
-  docsPerCollectionMax: number;
-}> = {
+const POWER_LEVEL_PRESETS: Record<
+  SimulationPowerLevel,
+  {
+    docsPerCollectionMin: number;
+    docsPerCollectionMax: number;
+  }
+> = {
   quick: {
     docsPerCollectionMin: 10,
     docsPerCollectionMax: 10,
@@ -75,11 +78,24 @@ const POWER_LEVEL_PRESETS: Record<SimulationPowerLevel, {
  */
 export function getMockGenerationConfig(
   powerLevel: SimulationPowerLevel = "normal",
+  docsPerCollection?: number,
 ): MockGenerationConfig {
   const preset = POWER_LEVEL_PRESETS[powerLevel];
+  const docs =
+    docsPerCollection !== undefined &&
+    Number.isInteger(docsPerCollection) &&
+    docsPerCollection > 0
+      ? docsPerCollection
+      : undefined;
   return {
-    DOCS_PER_COLLECTION_MIN: preset.docsPerCollectionMin,
-    DOCS_PER_COLLECTION_MAX: preset.docsPerCollectionMax,
+    DOCS_PER_COLLECTION_MIN: docs ?? preset.docsPerCollectionMin,
+    DOCS_PER_COLLECTION_MAX: docs ?? preset.docsPerCollectionMax,
     DEFAULT_STATE_RETENTION_RATIO,
   };
+}
+
+export function presetDocsPerCollection(
+  powerLevel: SimulationPowerLevel,
+): number {
+  return POWER_LEVEL_PRESETS[powerLevel].docsPerCollectionMax;
 }

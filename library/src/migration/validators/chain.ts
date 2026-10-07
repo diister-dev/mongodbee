@@ -9,7 +9,7 @@
  *
  * @example
  * ```typescript
- * import { validateMigrationChain, createChainValidator } from "@diister/mongodbee/migration/validators";
+ * import { createChainValidator } from "@diister/mongodbee/migration";
  *
  * const validator = createChainValidator();
  * const migrations = [
@@ -85,7 +85,9 @@ export interface ChainValidatorOptions {
  * Migration chain validator for ensuring integrity and consistency
  */
 export class ChainValidator {
-  constructor(private options: ChainValidatorOptions = {}) {
+  private options: ChainValidatorOptions;
+
+  constructor(options: ChainValidatorOptions = {}) {
     // Set defaults
     this.options = {
       allowMultipleRoots: false,
@@ -127,8 +129,8 @@ export class ChainValidator {
 
     // Advanced validations
     this.validateCircularDependencies(migrations, errors);
-    const { roots, leaves, depth, topologicalOrder } = this
-      .analyzeChainStructure(migrations, errors, warnings);
+    const { roots, leaves, depth, topologicalOrder } =
+      this.analyzeChainStructure(migrations, errors, warnings);
 
     // Configuration-based validations
     this.validateRootsAndLeaves(roots, leaves, errors, warnings);
@@ -195,9 +197,9 @@ export class ChainValidator {
         (!migration.parent || typeof migration.parent !== "object")
       ) {
         errors.push(
-          `Migration "${migration.id}" has invalid parent reference: ${
-            JSON.stringify(migration.parent)
-          }`,
+          `Migration "${migration.id}" has invalid parent reference: ${JSON.stringify(
+            migration.parent,
+          )}`,
         );
       }
     }
@@ -390,6 +392,12 @@ export class ChainValidator {
   /**
    * Calculates maximum depth from a given migration
    *
+   * `path` carries the ids already being walked on this branch. Without it,
+   * two migrations sharing an id make `childrenMap` map that id to itself, and
+   * the recursion overflows the stack — so a duplicated migration id crashed
+   * the validator with a RangeError instead of reporting the duplicate that
+   * `validateUniqueIds` had already recorded.
+   *
    * @private
    */
   private calculateDepth(
@@ -397,7 +405,12 @@ export class ChainValidator {
     childrenMap: Map<string, Set<string>>,
     depthMap: Map<string, number>,
     currentDepth: number,
+    path: Set<string> = new Set(),
   ): number {
+    if (path.has(migrationId)) {
+      return currentDepth;
+    }
+
     if (depthMap.has(migrationId)) {
       return depthMap.get(migrationId)!;
     }
@@ -405,15 +418,18 @@ export class ChainValidator {
     let maxChildDepth = currentDepth;
     const children = childrenMap.get(migrationId) || new Set();
 
+    path.add(migrationId);
     for (const child of children) {
       const childDepth = this.calculateDepth(
         child,
         childrenMap,
         depthMap,
         currentDepth + 1,
+        path,
       );
       maxChildDepth = Math.max(maxChildDepth, childDepth);
     }
+    path.delete(migrationId);
 
     depthMap.set(migrationId, maxChildDepth);
     return maxChildDepth;
@@ -468,9 +484,9 @@ export class ChainValidator {
       );
     } else if (roots.length > 1 && !this.options.allowMultipleRoots) {
       errors.push(
-        `Multiple root migrations found: ${
-          roots.join(", ")
-        }. Set allowMultipleRoots: true if this is intended`,
+        `Multiple root migrations found: ${roots.join(
+          ", ",
+        )}. Set allowMultipleRoots: true if this is intended`,
       );
     }
 
@@ -480,9 +496,9 @@ export class ChainValidator {
       );
     } else if (leaves.length > 1 && !this.options.allowMultipleLeaves) {
       errors.push(
-        `Multiple leaf migrations found: ${
-          leaves.join(", ")
-        }. Set allowMultipleLeaves: true if this is intended`,
+        `Multiple leaf migrations found: ${leaves.join(
+          ", ",
+        )}. Set allowMultipleLeaves: true if this is intended`,
       );
     }
   }
@@ -546,7 +562,7 @@ export class ChainValidator {
  *
  * @example
  * ```typescript
- * import { createChainValidator } from "@diister/mongodbee/migration/validators";
+ * import { createChainValidator } from "@diister/mongodbee/migration";
  *
  * const validator = createChainValidator({
  *   allowMultipleRoots: false,
@@ -570,11 +586,14 @@ export function createChainValidator(
  *
  * @example
  * ```typescript
- * import { validateMigrationChain } from "@diister/mongodbee/migration/validators";
+ * // Not re-exported from "@diister/mongodbee/migration": `definition.ts`
+ * // already exports that name with a different result shape. Reach it through
+ * // `createChainValidator`, which is unambiguous.
+ * import { createChainValidator } from "@diister/mongodbee/migration";
  *
- * const result = validateMigrationChain(migrations, {
+ * const result = createChainValidator({
  *   allowMultipleRoots: false
- * });
+ * }).validateChain(migrations);
  *
  * if (!result.isValid) {
  *   throw new Error(`Chain validation failed: ${result.errors.join(', ')}`);

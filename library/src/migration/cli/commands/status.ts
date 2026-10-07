@@ -7,9 +7,18 @@
  */
 
 import process from "node:process";
-import { blue, bold, dim, gray, green, red, yellow } from "@std/fmt/colors";
-import { MongoClient } from "../../../mongodb.ts";
-import * as path from "@std/path";
+import {
+  blue,
+  bold,
+  dim,
+  gray,
+  green,
+  red,
+  yellow,
+} from "../../../utils/colors.ts";
+import type { MongoClient } from "../../../mongodb.ts";
+import { createMigrationClient } from "../utils/client.ts";
+import * as path from "node:path";
 
 import { loadConfig } from "../../config/loader.ts";
 import { buildMigrationChain, loadAllMigrations } from "../../discovery.ts";
@@ -21,6 +30,10 @@ import { getAllOperations } from "../../history.ts";
 import { validateMigrationChainWithProjectSchema } from "../../schema-validation.ts";
 import { migrationBuilder } from "../../builder.ts";
 import { detectInstancesNeedingCatchUp } from "../../catch-up.ts";
+import {
+  describeValidatorSuspension,
+  getValidatorSuspension,
+} from "../../validator-guard.ts";
 import { validateMigrationsWithSimulation } from "../utils/validate-migrations.ts";
 import type { SimulationPowerLevel } from "../../validators/simulation.ts";
 
@@ -50,7 +63,9 @@ function parseSimulationMode(mode?: string): SimulationPowerLevel {
   if (!mode) return "normal";
   const normalized = mode.toLowerCase();
   if (
-    normalized === "quick" || normalized === "normal" || normalized === "hard"
+    normalized === "quick" ||
+    normalized === "normal" ||
+    normalized === "hard"
   ) {
     return normalized;
   }
@@ -78,8 +93,8 @@ export async function statusCommand(
       cwd,
       config.paths?.migrations || "./migrations",
     );
-    const connectionUri = config.database?.connection?.uri ||
-      "mongodb://localhost:27017";
+    const connectionUri =
+      config.database?.connection?.uri || "mongodb://localhost:27017";
     const dbName = config.database?.name || "myapp";
 
     console.log(dim(`Migrations directory: ${migrationsDir}`));
@@ -87,10 +102,21 @@ export async function statusCommand(
     console.log();
 
     // Connect to database
-    client = new MongoClient(connectionUri);
+    client = createMigrationClient(connectionUri, config);
     await client.connect();
 
     const db = client.db(dbName);
+
+    // Read-only: report validators an interrupted run left off; `migrate`,
+    // `rollback` and `sync` repair them.
+    const suspension = await getValidatorSuspension(db);
+    if (suspension) {
+      console.log(red(`⚠ ${describeValidatorSuspension(suspension)}`));
+      console.log(
+        yellow("  Run `mongodbee sync` (or `migrate`) to restore them."),
+      );
+      console.log();
+    }
 
     // Load migrations from filesystem
     const migrationsWithFiles = await loadAllMigrations(migrationsDir);
@@ -193,22 +219,22 @@ export async function statusCommand(
 
     // Header
     const headerLine = options.verbose
-      ? `  ${"ID".padEnd(maxIdLength)}  ${
-        "Name".padEnd(maxNameLength)
-      }  Status      Applied             Properties`
-      : `  ${"ID".padEnd(maxIdLength)}  ${
-        "Name".padEnd(maxNameLength)
-      }  Status      Applied`;
+      ? `  ${"ID".padEnd(maxIdLength)}  ${"Name".padEnd(
+          maxNameLength,
+        )}  Status      Applied             Properties`
+      : `  ${"ID".padEnd(maxIdLength)}  ${"Name".padEnd(
+          maxNameLength,
+        )}  Status      Applied`;
 
     console.log(gray(headerLine));
 
     const separatorLine = options.verbose
-      ? `  ${"─".repeat(maxIdLength)}  ${"─".repeat(maxNameLength)}  ${
-        "─".repeat(10)
-      }  ${"─".repeat(20)}  ${"─".repeat(20)}`
-      : `  ${"─".repeat(maxIdLength)}  ${"─".repeat(maxNameLength)}  ${
-        "─".repeat(10)
-      }  ${"─".repeat(20)}`;
+      ? `  ${"─".repeat(maxIdLength)}  ${"─".repeat(maxNameLength)}  ${"─".repeat(
+          10,
+        )}  ${"─".repeat(20)}  ${"─".repeat(20)}`
+      : `  ${"─".repeat(maxIdLength)}  ${"─".repeat(maxNameLength)}  ${"─".repeat(
+          10,
+        )}  ${"─".repeat(20)}`;
 
     console.log(gray(separatorLine));
 
@@ -248,17 +274,16 @@ export async function statusCommand(
           const tags: string[] = [];
           if (props.irreversible) tags.push(red("irreversible"));
           if (props.lossy) tags.push(yellow("lossy"));
-          propertiesDisplay = tags.length > 0
-            ? `  ${tags.join(", ")}`
-            : "  " + dim("-");
+          propertiesDisplay =
+            tags.length > 0 ? `  ${tags.join(", ")}` : "  " + dim("-");
         } else {
           propertiesDisplay = "  " + dim("-");
         }
       }
 
-      const baseLine = `  ${dim(migration.id.padEnd(maxIdLength))}  ${
-        migration.name.padEnd(maxNameLength)
-      }  ${statusDisplay.padEnd(10)}  ${appliedDisplay}`;
+      const baseLine = `  ${dim(migration.id.padEnd(maxIdLength))}  ${migration.name.padEnd(
+        maxNameLength,
+      )}  ${statusDisplay.padEnd(10)}  ${appliedDisplay}`;
 
       console.log(baseLine + propertiesDisplay);
     }
@@ -266,8 +291,8 @@ export async function statusCommand(
     console.log();
 
     // Summary
-    const appliedCount = migrationStates.filter((s) =>
-      s.status === "applied"
+    const appliedCount = migrationStates.filter(
+      (s) => s.status === "applied",
     ).length;
     const pendingCount = allMigrations.length - appliedCount;
 
@@ -391,8 +416,10 @@ export async function statusCommand(
           console.log(dim(`  ${migration.name} (${migration.id}):`));
 
           for (const op of ops) {
-            const dateStr =
-              op.executedAt.toISOString().replace("T", " ").split(".")[0];
+            const dateStr = op.executedAt
+              .toISOString()
+              .replace("T", " ")
+              .split(".")[0];
             const durationStr = op.duration ? dim(`(${op.duration}ms)`) : "";
 
             let icon = "  ";
@@ -414,9 +441,9 @@ export async function statusCommand(
             }
 
             console.log(
-              `    ${icon} ${dim(dateStr)}  ${
-                opColor(op.operation.padEnd(10))
-              } ${durationStr}`,
+              `    ${icon} ${dim(dateStr)}  ${opColor(
+                op.operation.padEnd(10),
+              )} ${durationStr}`,
             );
             if (op.error) {
               console.log(`       ${red(dim(op.error.slice(0, 60)))}`);

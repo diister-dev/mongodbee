@@ -10,7 +10,8 @@
  * single-instance fallback; and the batch budget is per MODEL — divided
  * across instances — so multi-model volume stays linear in the pool size.
  */
-import { assert, assertEquals } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals } from "../+assert.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import { createSimulationValidator } from "../../src/migration/validators/simulation.ts";
 import {
@@ -62,7 +63,7 @@ function instanceNames(state: SimulationDatabaseState, model: string) {
   );
 }
 
-Deno.test("cardinality: every minted root id gets its own instance, none invented", () => {
+test("cardinality: every minted root id gets its own instance, none invented", () => {
   const state = createEmptyDatabaseState();
   const ctx = contextFor(OWNED);
 
@@ -99,7 +100,7 @@ Deno.test("cardinality: every minted root id gets its own instance, none invente
   );
 });
 
-Deno.test("cardinality: an empty entity pool keeps the single synthetic instance", () => {
+test("cardinality: an empty entity pool keeps the single synthetic instance", () => {
   const state = createEmptyDatabaseState();
   const ctx = contextFor(ORPHANED);
 
@@ -113,7 +114,7 @@ Deno.test("cardinality: an empty entity pool keeps the single synthetic instance
   );
 });
 
-Deno.test("cardinality: the batch budget is per model — volume stays linear in the pool size", () => {
+test("cardinality: the batch budget is per model — volume stays linear in the pool size", () => {
   const state = createEmptyDatabaseState();
   const ctx = contextFor(OWNED);
 
@@ -198,13 +199,14 @@ function consolidationChild() {
     parent,
     schemas: CHILD_SCHEMAS,
     migrate: (b) =>
-      b.flowToScope({
-        from: { kind: "collection", name: "+expositions" },
-        into: { collection: "+expositions_scoped" },
-        toType: () => "information",
-        scope: (d) => d._id as string,
-        source: "consume",
-      })
+      b
+        .flowToScope({
+          from: { kind: "collection", name: "+expositions" },
+          into: { collection: "+expositions_scoped" },
+          toType: () => "information",
+          scope: (d) => d._id as string,
+          source: "consume",
+        })
         .flowToScope({
           from: { kind: "multiModelInstances", model: "exposition" },
           into: { collection: "+expositions_scoped" },
@@ -219,9 +221,10 @@ function consolidationChild() {
   });
 }
 
-Deno.test("consolidation: EVERY scope produces a complete document, not just the first", async () => {
-  const result = await createSimulationValidator({ powerLevel: "quick" })
-    .validateMigration(consolidationChild());
+test("consolidation: EVERY scope produces a complete document, not just the first", async () => {
+  const result = await createSimulationValidator({
+    powerLevel: "quick",
+  }).validateMigration(consolidationChild());
 
   assertEquals(
     result.errors,
@@ -230,8 +233,9 @@ Deno.test("consolidation: EVERY scope produces a complete document, not just the
   );
 
   const state = result.data?.stateAfterMigration as SimulationDatabaseState;
-  const information = state.scopedMultiCollections["+expositions_scoped"]
-    .content.filter((d) => d._type === "information");
+  const information = state.scopedMultiCollections[
+    "+expositions_scoped"
+  ].content.filter((d) => d._type === "information");
 
   assert(information.length > 1, "the scenario must produce several scopes");
 

@@ -1,4 +1,5 @@
-import { assertEquals, assertRejects } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assertEquals, assertRejects } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";
@@ -10,6 +11,7 @@ const EXPO_C = "exposition:expoccccc03";
 
 async function seed(db: Parameters<Parameters<typeof withDatabase>[1]>[0]) {
   const catalog = await scopedMultiCollection(db, "catalog", {
+    schemaManagement: "auto",
     scope: refId("exposition"),
     types: {
       artwork: { title: v.string(), year: v.number() },
@@ -29,7 +31,7 @@ async function seed(db: Parameters<Parameters<typeof withDatabase>[1]>[0]) {
   return { catalog };
 }
 
-Deno.test("listScopes returns distinct scope values", async () => {
+test("listScopes returns distinct scope values", async () => {
   await withDatabase("smc-life-list", async (db) => {
     const { catalog } = await seed(db);
     const scopes = await catalog.listScopes();
@@ -37,9 +39,10 @@ Deno.test("listScopes returns distinct scope values", async () => {
   });
 });
 
-Deno.test("listScopes returns empty array when no docs exist", async () => {
+test("listScopes returns empty array when no docs exist", async () => {
   await withDatabase("smc-life-list-empty", async (db) => {
     const catalog = await scopedMultiCollection(db, "catalog", {
+      schemaManagement: "auto",
       scope: refId("exposition"),
       types: { artwork: { title: v.string() } },
     });
@@ -47,7 +50,7 @@ Deno.test("listScopes returns empty array when no docs exist", async () => {
   });
 });
 
-Deno.test("scopeExists returns true for active scope and false otherwise", async () => {
+test("scopeExists returns true for active scope and false otherwise", async () => {
   await withDatabase("smc-life-exists", async (db) => {
     const { catalog } = await seed(db);
     assertEquals(await catalog.scopeExists(EXPO_A), true);
@@ -56,11 +59,10 @@ Deno.test("scopeExists returns true for active scope and false otherwise", async
   });
 });
 
-Deno.test("dropScope refuses without { confirm: true }", async () => {
+test("dropScope refuses without { confirm: true }", async () => {
   await withDatabase("smc-life-drop-confirm", async (db) => {
     const { catalog } = await seed(db);
     await assertRejects(
-      // deno-lint-ignore no-explicit-any
       () => catalog.dropScope(EXPO_A, {} as any),
       Error,
       "confirm",
@@ -68,7 +70,7 @@ Deno.test("dropScope refuses without { confirm: true }", async () => {
   });
 });
 
-Deno.test("dropScope removes only docs of that scope", async () => {
+test("dropScope removes only docs of that scope", async () => {
   await withDatabase("smc-life-drop", async (db) => {
     const { catalog } = await seed(db);
     const removed = await catalog.dropScope(EXPO_A, { confirm: true });
@@ -79,7 +81,7 @@ Deno.test("dropScope removes only docs of that scope", async () => {
   });
 });
 
-Deno.test("scopeStats returns per-type counts within a scope", async () => {
+test("scopeStats returns per-type counts within a scope", async () => {
   await withDatabase("smc-life-stats", async (db) => {
     const { catalog } = await seed(db);
     const stats = await catalog.scopeStats(EXPO_A);
@@ -89,7 +91,7 @@ Deno.test("scopeStats returns per-type counts within a scope", async () => {
   });
 });
 
-Deno.test("scopeStats for missing scope returns zero counts", async () => {
+test("scopeStats for missing scope returns zero counts", async () => {
   await withDatabase("smc-life-stats-missing", async (db) => {
     const { catalog } = await seed(db);
     const stats = await catalog.scopeStats(EXPO_C);

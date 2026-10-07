@@ -1,6 +1,8 @@
+import { test } from "./+harness.ts";
+import process from "node:process";
 import * as v from "../src/schema.ts";
 import { multiCollection } from "../src/multi-collection.ts";
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "./+assert.ts";
 import { MongoClient } from "../src/mongodb.ts";
 import { defineModel } from "../src/multi-collection-model.ts";
 import { TEST_URI } from "./+shared.ts";
@@ -10,7 +12,7 @@ let client: MongoClient;
 let db: ReturnType<MongoClient["db"]>;
 
 async function setupTestDb() {
-  const mongoUrl = Deno.env.get("MONGODB_URL") || TEST_URI;
+  const mongoUrl = process.env.MONGODB_URL || TEST_URI;
   client = new MongoClient(mongoUrl);
   await client.connect();
   db = client.db("test_multi_collection_undefined");
@@ -25,7 +27,7 @@ async function cleanupTestDb() {
   }
 }
 
-Deno.test("MultiCollection: undefined behavior remove (default)", async () => {
+test("MultiCollection: undefined behavior remove (default)", async () => {
   await setupTestDb();
 
   try {
@@ -76,7 +78,7 @@ Deno.test("MultiCollection: undefined behavior remove (default)", async () => {
   }
 });
 
-Deno.test("MultiCollection: undefined behavior error", async () => {
+test("MultiCollection: undefined behavior error", async () => {
   await setupTestDb();
 
   try {
@@ -142,7 +144,7 @@ Deno.test("MultiCollection: undefined behavior error", async () => {
   }
 });
 
-Deno.test("MultiCollection: insertMany with undefined behavior", async () => {
+test("MultiCollection: insertMany with undefined behavior", async () => {
   await setupTestDb();
 
   try {
@@ -235,7 +237,7 @@ Deno.test("MultiCollection: insertMany with undefined behavior", async () => {
   }
 });
 
-Deno.test("MultiCollection: Mixed document types with different undefined values", async () => {
+test("MultiCollection: Mixed document types with different undefined values", async () => {
   await setupTestDb();
 
   try {
@@ -312,7 +314,7 @@ Deno.test("MultiCollection: Mixed document types with different undefined values
   }
 });
 
-Deno.test("MultiCollection: Multiple collections with different undefined behaviors", async () => {
+test("MultiCollection: Multiple collections with different undefined behaviors", async () => {
   await setupTestDb();
 
   try {
@@ -385,20 +387,24 @@ Deno.test("MultiCollection: Multiple collections with different undefined behavi
   }
 });
 
-Deno.test("MultiCollection: Nested undefined values", async () => {
+test("MultiCollection: Nested undefined values", async () => {
   await setupTestDb();
 
   try {
     const nestedSchema = {
       name: v.string(),
-      profile: v.optional(v.object({
-        bio: v.optional(v.string()),
-        website: v.optional(v.string()),
-        social: v.optional(v.object({
-          twitter: v.optional(v.string()),
-          github: v.optional(v.string()),
-        })),
-      })),
+      profile: v.optional(
+        v.object({
+          bio: v.optional(v.string()),
+          website: v.optional(v.string()),
+          social: v.optional(
+            v.object({
+              twitter: v.optional(v.string()),
+              github: v.optional(v.string()),
+            }),
+          ),
+        }),
+      ),
       preferences: v.optional(v.array(v.string())),
     };
 
@@ -446,7 +452,7 @@ Deno.test("MultiCollection: Nested undefined values", async () => {
   }
 });
 
-Deno.test("MultiCollection: Ignore undefined behavior", async () => {
+test("MultiCollection: Ignore undefined behavior", async () => {
   await setupTestDb();
 
   try {
@@ -487,7 +493,7 @@ Deno.test("MultiCollection: Ignore undefined behavior", async () => {
   }
 });
 
-Deno.test("MultiCollection: Performance with undefined sanitization", async () => {
+test("MultiCollection: Performance with undefined sanitization", async () => {
   await setupTestDb();
 
   try {
@@ -496,10 +502,12 @@ Deno.test("MultiCollection: Performance with undefined sanitization", async () =
         items: {
           id: v.string(),
           data: v.optional(v.string()),
-          metadata: v.optional(v.object({
-            created: v.optional(v.string()),
-            updated: v.optional(v.string()),
-          })),
+          metadata: v.optional(
+            v.object({
+              created: v.optional(v.string()),
+              updated: v.optional(v.string()),
+            }),
+          ),
         },
       },
     });
@@ -510,16 +518,18 @@ Deno.test("MultiCollection: Performance with undefined sanitization", async () =
 
     // Generate test data with many undefined values
     const testData = [];
-    for (let i = 0; i < 50; i++) { // Reduced for test performance
+    for (let i = 0; i < 50; i++) {
+      // Reduced for test performance
       testData.push({
         id: `item_${i}`,
         data: i % 3 === 0 ? undefined : `data_${i}`, // 1/3 undefined
-        metadata: i % 2 === 0
-          ? {
-            created: `2023-01-${i % 28 + 1}`,
-            updated: i % 4 === 0 ? undefined : `2023-02-${i % 28 + 1}`,
-          }
-          : undefined,
+        metadata:
+          i % 2 === 0
+            ? {
+                created: `2023-01-${(i % 28) + 1}`,
+                updated: i % 4 === 0 ? undefined : `2023-02-${(i % 28) + 1}`,
+              }
+            : undefined,
       });
     }
 
@@ -564,7 +574,7 @@ Deno.test("MultiCollection: Performance with undefined sanitization", async () =
   }
 });
 
-Deno.test("MultiCollection: Array sanitization with undefined values", async () => {
+test("MultiCollection: Array sanitization with undefined values", async () => {
   await setupTestDb();
 
   try {
@@ -573,11 +583,15 @@ Deno.test("MultiCollection: Array sanitization with undefined values", async () 
         posts: {
           title: v.string(),
           tags: v.optional(v.array(v.string())),
-          comments: v.optional(v.array(v.object({
-            author: v.string(),
-            text: v.optional(v.string()),
-            timestamp: v.optional(v.string()),
-          }))),
+          comments: v.optional(
+            v.array(
+              v.object({
+                author: v.string(),
+                text: v.optional(v.string()),
+                timestamp: v.optional(v.string()),
+              }),
+            ),
+          ),
         },
       },
     });

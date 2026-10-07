@@ -10,11 +10,47 @@
 import * as v from "./schema.ts";
 import type * as m from "mongodb";
 import type { Db } from "./mongodb.ts";
+import {
+  type StoredDocument,
+  toStoredDocument,
+  toStoredFilter,
+  toStringId,
+} from "./stored-document.ts";
 import { toMongoValidator } from "./validator.ts";
+import { type Page, warnSkippedInvalid } from "./page.ts";
+import { parseStored } from "./validation-error.ts";
+import { type ReturningPlan, returnInserted } from "./insert-returning.ts";
+import { createLogger } from "./utils/logger.ts";
 import { dbId, newId } from "./ids.ts";
-import { extractFieldsToRemove, sanitizeForMongoDB } from "./sanitizer.ts";
-import { getSessionContext } from "./session.ts";
+import { sanitizeForMongoDB } from "./sanitizer.ts";
+import type { OperatorFor } from "./update-operators.ts";
+import type { FlatType } from "../types/flat.ts";
+import {
+  type DistinctField,
+  type DistinctValue,
+  type ProjectedShape,
+  type ProjectionPath,
+  refuseProjection,
+} from "./typed-reads.ts";
+import { ambientSessionCollection, getSessionContext } from "./session.ts";
+import { COMPUTED_ROOT } from "./computed-guard.ts";
+import { maintainedCollection } from "./computed-maintenance.ts";
+import {
+  type DriverCollectionOptions,
+  type ReadPreferenceInput,
+  readingCollection,
+  readOpts,
+  type WithReadPreferenceInput,
+} from "./read-preference.ts";
 import { createDotNotationSchema } from "./dot-notation.ts";
+import {
+  type GuardedFindOneAndUpdateOptions,
+  type GuardedUpdateOptions,
+  type TypedUpdateOneOptions,
+  guardedUpdateOps,
+  type GuardedWriteResult,
+  upsertInsertFields,
+} from "./guarded-write.ts";
 import {
   assertSortResolvableBeforePipeline,
   buildCursorLadderBranches,
@@ -22,15 +58,27 @@ import {
   buildSortMachinery,
   buildSortPaginateStages,
   composeCursorQuery,
+  countingPipeline,
   normalizePaginateSort,
+  pageBatchSize,
   type SortMachinery,
 } from "./paginate-sort.ts";
 import { assertLetDoesNotShadowJoinBinding } from "./stage-builder.ts";
 import { retryOnWriteConflict } from "./utils/retry.ts";
-import { dirtyEquivalent } from "./utils/object.ts";
-import { createLogger } from "./utils/logger.ts";
+import { ensureValidator } from "./utils/ensure-validator.ts";
 import { applyScopedMultiCollectionIndexes } from "./indexes-applier.ts";
-import { mongoOperationQueue } from "./operation.ts";
+import {
+  normalizeTypes,
+  type ResolveTypes,
+  type TypeInput,
+} from "./type-definition.ts";
+import { withDatabaseDdlLock } from "./ddl-lock.ts";
+import { isSchemaManaged } from "./runtime-config.ts";
+import {
+  aggregateThrough,
+  findOneThrough,
+  findThrough,
+} from "./request-context.ts";
 import {
   createOperationTracer,
   errorWithSafeMessage,
@@ -55,9 +103,11 @@ const NON_NULLABLE_SORT_FIELDS: ReadonlySet<string> = new Set([
 /** Reserved internal field names — cannot appear in user-defined type schemas. */
 const RESERVED_FIELDS: Set<string> = new Set(["_scope", "_type"]);
 
-// deno-lint-ignore no-explicit-any
-type AnyMessage = any;
+type LiteralMessage = v.ErrorMessage<v.LiteralIssue> | undefined;
+type ObjectMessage = v.ErrorMessage<v.ObjectIssue> | undefined;
 type AnySchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
+type StoredSchema = v.ObjectSchema<v.ObjectEntries, undefined>;
+type StoredOutput = v.InferOutput<StoredSchema>;
 
 /**
  * Map of document-type names to their field schemas. Each type's fields are
@@ -75,7 +125,7 @@ export type ScopedMultiCollectionTypes = Record<
  * @template S - The Valibot schema validating scope values
  */
 export type ScopedMultiCollectionConfig<
-  T extends ScopedMultiCollectionTypes,
+  T extends Record<string, TypeInput>,
   S extends AnySchema,
 > = {
   /**
@@ -94,13 +144,29 @@ export type ScopedMultiCollectionConfig<
   allowUnscoped?: boolean;
   /** Opt-in OpenTelemetry tracing for this collection's operations. */
   telemetry?: TelemetryOptions;
+  /**
+   * Override global schema management for this collection
+   * - "auto": Apply validators/indexes automatically
+   * - "managed": Skip auto-apply (migrations handle this)
+   * - "inherit": Use global runtime config (default)
+   */
+  schemaManagement?: "auto" | "managed" | "inherit";
+  /**
+   * Read preference of this collection's reads outside a transaction, e.g.
+   * `{ mode: "secondaryPreferred", maxStalenessSeconds: 90 }`. Defaults to
+   * the client's. Transactions and index sync always use the primary.
+   */
+  readPreference?: ReadPreferenceInput;
+  /** Read concern of this collection's reads outside a transaction. */
+  readConcern?: m.ReadConcernLike;
 };
 
 // -------- Per-type schema augmentation -----------------------------------
 
-// Use the user-provided _id schema if any (literal IDs), otherwise dbId(type).
-type DynId<TField> = TField extends v.LiteralSchema<infer _L, AnyMessage>
-  ? TField
+// Mirrors the runtime `{ _id: dbId(type), ...fields }`: a type's own `_id`
+// replaces the default. Intersecting both instead infers `_id: never`.
+type IdSchema<TFields> = "_id" extends keyof TFields
+  ? TFields["_id"]
   : ReturnType<typeof dbId>;
 
 // Element schema with all reserved fields for **storage** (used when validating
@@ -111,14 +177,12 @@ type StorageElementSchema<
   K extends keyof T,
   S extends AnySchema,
 > = v.ObjectSchema<
-  & {
-    _id: DynId<T[K]["_id"]>;
-    _type: v.LiteralSchema<K & string, AnyMessage>;
+  {
+    _id: IdSchema<T[K]>;
+    _type: v.LiteralSchema<K & string, LiteralMessage>;
     _scope: S;
-  }
-  & T[K],
-  // deno-lint-ignore no-explicit-any
-  any
+  } & Omit<T[K], "_id">,
+  ObjectMessage
 >;
 
 // Element schema used for **insert validation** : _type is optional (auto-
@@ -129,22 +193,32 @@ type InsertElementSchema<
   K extends keyof T,
   S extends AnySchema,
 > = v.ObjectSchema<
-  & {
-    _id: DynId<T[K]["_id"]>;
+  {
+    _id: IdSchema<T[K]>;
     _type: v.OptionalSchema<
-      v.LiteralSchema<K & string, AnyMessage>,
+      v.LiteralSchema<K & string, LiteralMessage>,
       () => K & string
     >;
     _scope: S;
-  }
-  & T[K],
-  // deno-lint-ignore no-explicit-any
-  any
+  } & Omit<T[K], "_id">,
+  ObjectMessage
 >;
 
-/** Input shape the user passes to insertOne (no _scope/_type). */
-type UserInputDoc<T extends ScopedMultiCollectionTypes, K extends keyof T> =
-  Omit<v.InferInput<InsertElementSchema<T, K, AnySchema>>, "_scope" | "_type">;
+/** Input shape the user passes to insertOne (no _scope/_type); `_id` is minted when omitted. */
+type UserInputDoc<
+  T extends ScopedMultiCollectionTypes,
+  K extends keyof T,
+> = Omit<
+  v.InferInput<InsertElementSchema<T, K, AnySchema>>,
+  "_scope" | "_type" | "_id"
+> & { _id?: string };
+
+type Projected<
+  T extends ScopedMultiCollectionTypes,
+  K extends keyof T,
+  S extends AnySchema,
+  P extends string,
+> = ProjectedShape<OutputDoc<T, K, S>, P | "_id" | "_type" | "_scope">;
 
 /** Output shape returned by reads. Always includes _scope. */
 type OutputDoc<
@@ -166,14 +240,48 @@ type AnyScopedOutput<
 export type { OmitScopedMeta, ScopedMetaField } from "./types.ts";
 
 /**
- * Allow `removeField()` (a symbol) anywhere in an update document, mirroring
+ * Allow `removeField()` (a symbol) and the update operator sentinels
+ * (`increment()`, `push()`, ...) in an update document, mirroring
  * `multiCollection.updateOne`. Recurses into nested objects so a field can be
  * removed at any depth.
  */
-type DeepWithRemovable<X> = X extends Record<string, unknown>
-  ? { [K in keyof X]: DeepWithRemovable<X[K]> | symbol }
-  : X;
-type WithRemovable<X> = { [K in keyof X]: DeepWithRemovable<X[K]> | symbol };
+type DeepWithRemovable<X> =
+  X extends Record<string, unknown>
+    ? {
+        [K in keyof X]:
+          | DeepWithRemovable<X[K]>
+          | symbol
+          | OperatorFor<NonNullable<X[K]>>;
+      }
+    : X;
+type WithRemovable<X> = {
+  [K in keyof X]:
+    | DeepWithRemovable<X[K]>
+    | symbol
+    | OperatorFor<NonNullable<X[K]>>;
+};
+
+/**
+ * An update document of `type`: its fields and their dot paths
+ * (`"lifecycle.phase"`, `"lines.$[l].qty"`), each typed by the schema.
+ */
+type UpdateDoc<
+  T extends ScopedMultiCollectionTypes,
+  K extends keyof T,
+> = WithRemovable<Partial<FlatType<UserInputDoc<T, K>>>>;
+
+/** `max` and `setOnInsert` values of `type`, dot paths included. */
+type UpdateValues<
+  T extends ScopedMultiCollectionTypes,
+  K extends keyof T,
+> = Partial<FlatType<UserInputDoc<T, K>>>;
+
+export type {
+  GuardedFindOneAndUpdateOptions,
+  GuardedUpdateOptions,
+  GuardedWriteResult,
+  TypedUpdateOneOptions,
+};
 
 // -------- Views ----------------------------------------------------------
 
@@ -194,26 +302,67 @@ export type ScopedView<
     doc: UserInputDoc<T, K>,
   ): Promise<string>;
 
+  /**
+   * Inserts like `insertOne` and returns the document as `getById` would read
+   * it, without the read: the validated document that was written, parsed
+   * with the stored schema. A type with computed fields is read back, since
+   * its computed values are filled while it is written.
+   */
+  insertOneReturning<K extends keyof T>(
+    type: K,
+    doc: UserInputDoc<T, K>,
+  ): Promise<OutputDoc<T, K, S>>;
+
   insertMany<K extends keyof T>(
     type: K,
     docs: UserInputDoc<T, K>[],
   ): Promise<string[]>;
 
-  getById<K extends keyof T>(
+  /**
+   * Inserts like `insertMany` and returns the documents, in input order, as
+   * `getById` would read them. Same rule as `insertOneReturning`: no read,
+   * except one `$in` read back for a type with computed fields.
+   */
+  insertManyReturning<K extends keyof T>(
     type: K,
-    id: string,
-  ): Promise<OutputDoc<T, K, S>>;
+    docs: UserInputDoc<T, K>[],
+  ): Promise<OutputDoc<T, K, S>[]>;
+
+  getById<K extends keyof T>(type: K, id: string): Promise<OutputDoc<T, K, S>>;
 
   findOne<K extends keyof T>(
     type: K,
     filter?: m.Filter<OutputDoc<T, K, S>>,
   ): Promise<OutputDoc<T, K, S> | null>;
 
+  /**
+   * Every document of `type` in the bound scope matching `filter`,
+   * validated. A `projection` is refused unless `validate: false`: a
+   * projected document fails validation, so it would be dropped; use
+   * {@link ScopedView.findProject}.
+   */
   find<K extends keyof T>(
     type: K,
     filter?: m.Filter<OutputDoc<T, K, S>>,
-    options?: m.FindOptions & { validate?: boolean },
+    options?: WithReadPreferenceInput<m.FindOptions> & { validate?: boolean },
   ): Promise<OutputDoc<T, K, S>[]>;
+
+  /**
+   * The distinct values of `field` (a dot path) across the documents of
+   * `type` in the bound scope matching `filter`; an array field contributes
+   * each of its items. The values are returned as stored, not validated.
+   *
+   * @example
+   * ```typescript
+   * const tags = await expo.distinct("artwork", "tags", { published: true });
+   * ```
+   */
+  distinct<K extends keyof T, F extends DistinctField<OutputDoc<T, K, S>>>(
+    type: K,
+    field: F,
+    filter?: m.Filter<OutputDoc<T, K, S>>,
+    options?: WithReadPreferenceInput<m.DistinctOptions>,
+  ): Promise<DistinctValue<OutputDoc<T, K, S>, F>[]>;
 
   /**
    * Projected read: return only the listed fields, plus the meta fields
@@ -224,12 +373,12 @@ export type ScopedView<
    * read — measured ~2.3× faster than a full validated `find`. Use it when you
    * need a few fields from many documents.
    */
-  findProject<K extends keyof T, P extends keyof OutputDoc<T, K, S>>(
+  findProject<K extends keyof T, P extends ProjectionPath<OutputDoc<T, K, S>>>(
     type: K,
     fields: readonly P[],
     filter?: m.Filter<OutputDoc<T, K, S>>,
-    options?: m.FindOptions,
-  ): Promise<Pick<OutputDoc<T, K, S>, P | "_id" | "_type" | "_scope">[]>;
+    options?: WithReadPreferenceInput<m.FindOptions>,
+  ): Promise<Projected<T, K, S, P>[]>;
 
   /**
    * Find the first document matching a cross-type filter — no `_type`
@@ -247,13 +396,13 @@ export type ScopedView<
    */
   findAny(
     filter?: m.Filter<AnyScopedOutput<T, S>>,
-    options?: m.FindOptions & { validate?: boolean },
+    options?: WithReadPreferenceInput<m.FindOptions> & { validate?: boolean },
   ): Promise<AnyScopedOutput<T, S>[]>;
 
   countDocuments<K extends keyof T>(
     type: K,
     filter?: m.Filter<OutputDoc<T, K, S>>,
-    options?: m.CountDocumentsOptions,
+    options?: WithReadPreferenceInput<m.CountDocumentsOptions>,
   ): Promise<number>;
 
   deleteId<K extends keyof T>(type: K, id: string): Promise<number>;
@@ -275,7 +424,8 @@ export type ScopedView<
   updateOne<K extends keyof T>(
     type: K,
     id: string,
-    doc: WithRemovable<Partial<UserInputDoc<T, K>>>,
+    doc: UpdateDoc<T, K>,
+    options?: TypedUpdateOneOptions,
   ): Promise<number>;
 
   /**
@@ -290,58 +440,109 @@ export type ScopedView<
   updateMany(
     ops: {
       [K in keyof T]?: {
-        [id: string]: WithRemovable<Partial<UserInputDoc<T, K>>>;
+        [id: string]: UpdateDoc<T, K>;
       };
     },
   ): Promise<number>;
 
-  aggregate(
+  /**
+   * Guarded single-document update: the first document of `type`, in the
+   * bound scope, that ALSO matches `filter`. The guard is part of the same
+   * atomic write, so "only if still X" needs no read-then-write.
+   *
+   * - `max`: per-field `$max` — a monotonic field only ever moves forward.
+   * - `upsert`: when nothing matches, insert. The document that would be
+   *   created (filter equalities + `setOnInsert` + `doc` + `max`) is
+   *   validated against the type's insert schema BEFORE the write, so an
+   *   upsert can never mint an invalid document. `_id` comes from a filter
+   *   equality when there is one, else it is minted like `insertOne`.
+   *
+   * Returns the match / modification counts and the upserted `_id`, if any.
+   * Unlike `updateOne`, a miss is a normal outcome (`matched: 0`), not an
+   * error. A concurrent upsert of the same unique key surfaces as the
+   * driver's duplicate-key error — the caller decides whether to retry.
+   */
+  updateWhere<K extends keyof T>(
+    type: K,
+    filter: m.Filter<OutputDoc<T, K, S>>,
+    doc: UpdateDoc<T, K>,
+    options?: GuardedUpdateOptions<UpdateValues<T, K>>,
+  ): Promise<GuardedWriteResult>;
+
+  /**
+   * Atomically update the first document of `type` matching `filter` in the
+   * bound scope (the first in `sort` order when given) and return it, as it
+   * was (`"before"`) or as it became (`"after"`, the default). `null` when
+   * nothing matched. With `upsert`, a miss inserts the document `updateWhere`
+   * would create and returns it. The returned document is validated against
+   * the type's storage schema.
+   *
+   * @example
+   * ```typescript
+   * const head = await expo.findOneAndUpdate(
+   *   "registration",
+   *   { status: "waitlisted" },
+   *   { status: "confirmed" },
+   *   { sort: { createdAt: 1 } },
+   * );
+   * ```
+   */
+  findOneAndUpdate<K extends keyof T>(
+    type: K,
+    filter: m.Filter<OutputDoc<T, K, S>>,
+    doc: UpdateDoc<T, K>,
+    options?: GuardedFindOneAndUpdateOptions<UpdateValues<T, K>>,
+  ): Promise<OutputDoc<T, K, S> | null>;
+
+  aggregate<R extends m.Document = m.Document>(
     stageBuilder: (stage: ScopedStageBuilder<T>) => AggregationStage[],
-    // deno-lint-ignore no-explicit-any
-  ): Promise<any[]>;
+  ): Promise<R[]>;
 
   paginate<K extends keyof T, EN = OutputDoc<T, K, S>, R = EN>(
     type: K,
     filter?: m.Filter<OutputDoc<T, K, S>>,
-    options?: {
-      limit?: number;
-      afterId?: string;
-      beforeId?: string;
-      sort?: m.Sort | m.SortDirection;
-      /** Scope-safe pipeline stages run server-side before pagination (lookups, addFields, …). */
-      pipeline?: (stage: ScopedStageBuilder<T>) => AggregationStage[];
-      /**
-       * Scope-safe stages that run BEFORE the cursor match and the `$sort`,
-       * so `sort` may reference fields they compute (e.g. sort by a
-       * `$lookup`ed document's field). Unlike `pipeline` (which runs after
-       * the sort, lazily over ~`limit` docs), these stages run over the
-       * whole scoped+filtered set — keep them lean (join just what the sort
-       * needs). Fields they add survive into the returned docs. Sort keys
-       * must be scalar (arrays keep MongoDB's ambiguous array-sort
-       * semantics — `$first` the lookup result before sorting on it).
-       */
-      sortPipeline?: (stage: ScopedStageBuilder<T>) => AggregationStage[];
-      prepare?: (doc: OutputDoc<T, K, S>) => Promise<EN> | EN;
-      filter?: (doc: EN) => Promise<boolean> | boolean;
-      format?: (doc: EN) => Promise<R> | R;
-      /** Skip the countDocuments call(s); `total` and `position` come back undefined. */
-      skipTotal?: boolean;
-      /** Fetch one extra row to set `hasMore` cheaply; the extra row is dropped. */
-      peek?: boolean;
-    },
-  ): Promise<{
-    /** Total docs matching the (scoped) query — omitted when `skipTotal`. */
-    total?: number;
-    /** 0-based count of docs before this page's first row — omitted when `skipTotal`. */
-    position?: number;
-    data: R[];
-    /** Present only when `peek` was requested. */
-    hasMore?: boolean;
-  }>;
+    options?: ScopedPaginateOptions<T, K, S, EN, R>,
+  ): Promise<Page<R>>;
+};
+
+export type ScopedPaginateOptions<
+  T extends ScopedMultiCollectionTypes,
+  K extends keyof T,
+  S extends AnySchema,
+  EN,
+  R,
+> = {
+  limit?: number;
+  afterId?: string;
+  beforeId?: string;
+  sort?: m.Sort | m.SortDirection;
+  /** Scope-safe pipeline stages run server-side before pagination (lookups, addFields, …). */
+  pipeline?: (stage: ScopedStageBuilder<T>) => AggregationStage[];
+  /**
+   * Scope-safe stages that run BEFORE the cursor match and the `$sort`,
+   * so `sort` may reference fields they compute (e.g. sort by a
+   * `$lookup`ed document's field). Unlike `pipeline` (which runs after
+   * the sort, lazily over ~`limit` docs), these stages run over the
+   * whole scoped+filtered set: keep them lean (join just what the sort
+   * needs). Fields they add survive into the returned docs. Sort keys
+   * must be scalar (arrays keep MongoDB's ambiguous array-sort
+   * semantics: `$first` the lookup result before sorting on it).
+   */
+  sortPipeline?: (stage: ScopedStageBuilder<T>) => AggregationStage[];
+  prepare?: (doc: OutputDoc<T, K, S>) => Promise<EN> | EN;
+  filter?: (doc: EN) => Promise<boolean> | boolean;
+  format?: (doc: EN) => Promise<R> | R;
+  /** Skip the countDocuments call(s); `total` and `position` come back undefined. */
+  skipTotal?: boolean;
+  /** Fetch one extra row to set `hasMore` cheaply; the extra row is dropped. */
+  peek?: boolean;
 };
 
 /** Single MongoDB aggregation stage (already-built object form). */
-export type AggregationStage = Record<string, unknown>;
+// Re-exported so the public surface is unchanged, and imported so this module
+// can still name the type internally.
+import type { AggregationStage } from "./types.ts";
+export type { AggregationStage };
 
 /**
  * Stage builder injected into the user callback of
@@ -359,32 +560,38 @@ export type ScopedStageBuilder<T extends ScopedMultiCollectionTypes> = {
     type: K,
     localField: string,
     foreignField: string,
-    asOrOptions?: string | {
-      as?: string;
-      pipeline?: (stage: ScopedStageBuilder<T>) => AggregationStage[];
-      let?: Record<string, unknown>;
-    },
+    asOrOptions?:
+      | string
+      | {
+          as?: string;
+          pipeline?: (stage: ScopedStageBuilder<T>) => AggregationStage[];
+          let?: Record<string, unknown>;
+        },
   ) => AggregationStage;
   /** Lookup ignoring `_type` ; still scope-bounded. */
   anyLookup: (
     localField: string,
     foreignField: string,
-    asOrOptions?: string | {
-      as?: string;
-      pipeline?: (stage: ScopedStageBuilder<T>) => AggregationStage[];
-      let?: Record<string, unknown>;
-    },
+    asOrOptions?:
+      | string
+      | {
+          as?: string;
+          pipeline?: (stage: ScopedStageBuilder<T>) => AggregationStage[];
+          let?: Record<string, unknown>;
+        },
   ) => AggregationStage;
   /** Lookup into an external collection ; no scope injection. */
   externalLookup: (
     fromCollection: string,
     localField: string,
     foreignField: string,
-    asOrOptions?: string | {
-      as?: string;
-      pipeline?: AggregationStage[];
-      let?: Record<string, unknown>;
-    },
+    asOrOptions?:
+      | string
+      | {
+          as?: string;
+          pipeline?: AggregationStage[];
+          let?: Record<string, unknown>;
+        },
   ) => AggregationStage;
   project: (
     projection: Record<string, 1 | 0 | string | Record<string, unknown>>,
@@ -415,31 +622,41 @@ export type ReadOnlyMultiScopeView<
   find<K extends keyof T>(
     type: K,
     filter?: m.Filter<OutputDoc<T, K, S>>,
-    options?: m.FindOptions & { validate?: boolean },
+    options?: WithReadPreferenceInput<m.FindOptions> & { validate?: boolean },
   ): Promise<OutputDoc<T, K, S>[]>;
+
+  /**
+   * Distinct values of `field` across the view's scopes. See
+   * {@link ScopedView.distinct}.
+   */
+  distinct<K extends keyof T, F extends DistinctField<OutputDoc<T, K, S>>>(
+    type: K,
+    field: F,
+    filter?: m.Filter<OutputDoc<T, K, S>>,
+    options?: WithReadPreferenceInput<m.DistinctOptions>,
+  ): Promise<DistinctValue<OutputDoc<T, K, S>, F>[]>;
 
   /**
    * Projected read across the view's scopes — returns the listed fields plus
    * `_id`/`_type`/`_scope`. Partial + unvalidated by construction; cuts
    * deserialization cost. See {@link ScopedView.findProject}.
    */
-  findProject<K extends keyof T, P extends keyof OutputDoc<T, K, S>>(
+  findProject<K extends keyof T, P extends ProjectionPath<OutputDoc<T, K, S>>>(
     type: K,
     fields: readonly P[],
     filter?: m.Filter<OutputDoc<T, K, S>>,
-    options?: m.FindOptions,
-  ): Promise<Pick<OutputDoc<T, K, S>, P | "_id" | "_type" | "_scope">[]>;
+    options?: WithReadPreferenceInput<m.FindOptions>,
+  ): Promise<Projected<T, K, S, P>[]>;
 
   countDocuments<K extends keyof T>(
     type: K,
     filter?: m.Filter<OutputDoc<T, K, S>>,
-    options?: m.CountDocumentsOptions,
+    options?: WithReadPreferenceInput<m.CountDocumentsOptions>,
   ): Promise<number>;
 
-  aggregate(
+  aggregate<R extends m.Document = m.Document>(
     stageBuilder: (stage: ScopedStageBuilder<T>) => AggregationStage[],
-    // deno-lint-ignore no-explicit-any
-  ): Promise<any[]>;
+  ): Promise<R[]>;
 };
 
 /**
@@ -490,10 +707,7 @@ export type ScopedMultiCollectionResult<
    *
    * @returns Number of documents removed.
    */
-  dropScope(
-    id: v.InferInput<S>,
-    options: { confirm: true },
-  ): Promise<number>;
+  dropScope(id: v.InferInput<S>, options: { confirm: true }): Promise<number>;
 
   /**
    * Aggregate counts per type for one scope. Returns `{ total: 0, byType: {} }`
@@ -511,6 +725,14 @@ export type ScopedMultiCollectionResult<
    * session.
    */
   withSession: ReturnType<typeof getSessionContext>["withSession"];
+
+  /**
+   * The driver collection behind every scope, for what the typed API does
+   * not cover (change streams, exotic pipelines). It bypasses the scope and
+   * type guards and validation, but its operations still join the ambient
+   * `withSession` transaction; see {@link ambientSessionCollection}.
+   */
+  readonly collection: m.Collection<StoredDocument>;
 
   /**
    * Drop the underlying MongoDB collection entirely. Destroys every scope
@@ -549,19 +771,27 @@ export type ScopedMultiCollectionResult<
  * ```
  */
 export async function scopedMultiCollection<
-  const T extends ScopedMultiCollectionTypes,
+  const I extends Record<string, TypeInput>,
   S extends AnySchema,
 >(
   db: Db,
   collectionName: string,
-  config: ScopedMultiCollectionConfig<T, S>,
-): Promise<ScopedMultiCollectionResult<T, S>> {
-  validateConfig(config);
+  config: ScopedMultiCollectionConfig<I, S>,
+): Promise<ScopedMultiCollectionResult<ResolveTypes<I>, S>>;
+export async function scopedMultiCollection<S extends AnySchema>(
+  db: Db,
+  collectionName: string,
+  config: ScopedMultiCollectionConfig<Record<string, TypeInput>, S>,
+): Promise<ScopedMultiCollectionResult<ScopedMultiCollectionTypes, S>> {
+  type T = ScopedMultiCollectionTypes;
+  const normalized = normalizeTypes(config.types ?? {});
+  const types = normalized.fields as T;
+  validateConfig(config.scope, types);
 
   // Per-type schemas, used for insert validation. `_type` is optional with a
   // default of the type name so the user can omit it ; `_id` is optional via
   // dbId (auto-generated) ; `_scope` is required and supplied by the view.
-  const insertSchemas = Object.entries(config.types).reduce(
+  const insertSchemas = Object.entries(types).reduce(
     (acc, [typeName, fields]) => {
       acc[typeName] = v.object({
         _id: dbId(typeName),
@@ -571,13 +801,12 @@ export async function scopedMultiCollection<
       });
       return acc;
     },
-    // deno-lint-ignore no-explicit-any
-    {} as Record<string, v.ObjectSchema<any, any>>,
+    {} as Record<string, StoredSchema>,
   );
 
   // Storage schemas, used to build the MongoDB validator and to parse docs
   // read back from the database. `_type` is a strict literal here.
-  const storageSchemas = Object.entries(config.types).reduce(
+  const storageSchemas = Object.entries(types).reduce(
     (acc, [typeName, fields]) => {
       acc[typeName] = v.object({
         _id: dbId(typeName),
@@ -587,8 +816,7 @@ export async function scopedMultiCollection<
       });
       return acc;
     },
-    // deno-lint-ignore no-explicit-any
-    {} as Record<string, v.ObjectSchema<any, any>>,
+    {} as Record<string, StoredSchema>,
   );
 
   const storageUnion = v.union(Object.values(storageSchemas));
@@ -604,15 +832,44 @@ export async function scopedMultiCollection<
       acc[typeName] = createDotNotationSchema(schema);
       return acc;
     },
-    // deno-lint-ignore no-explicit-any
-    {} as Record<string, v.BaseSchema<any, any, any>>,
+    {} as Record<string, AnySchema>,
   );
 
-  await applyValidator(db, collectionName, storageUnion);
+  const typesWithComputed: ReadonlySet<string> = new Set(
+    Object.entries(types)
+      .filter(([, fields]) => COMPUTED_ROOT in fields)
+      .map(([name]) => name),
+  );
 
-  // deno-lint-ignore no-explicit-any
-  const collection = db.collection<any>(collectionName);
+  const collection = maintainedCollection(
+    db,
+    readingCollection<StoredDocument, DriverCollectionOptions>(
+      db,
+      collectionName,
+      {
+        readPreference: config.readPreference,
+        readConcern: config.readConcern,
+      },
+    ),
+    collectionName,
+    Object.values(types).some((fields) => COMPUTED_ROOT in fields),
+  );
   const sessionContext = getSessionContext(db.client);
+
+  const shouldAutoApply =
+    config.schemaManagement === "auto" ||
+    (config.schemaManagement !== "managed" && !isSchemaManaged());
+  const insideSession = !!sessionContext.getSession();
+  if (shouldAutoApply && !insideSession) {
+    // Validator and indexes are one DDL block, serialised per database (see
+    // ddl-lock.ts); both only issue driver commands, no re-entry possible.
+    await withDatabaseDdlLock(db, async () => {
+      await applyValidator(db, collectionName, storageUnion);
+      await applyScopedMultiCollectionIndexes(collection, storageSchemas, {
+        composites: normalized.indexes,
+      });
+    });
+  }
 
   const tele = createOperationTracer(config.telemetry, {
     dbName: db.databaseName,
@@ -626,10 +883,6 @@ export async function scopedMultiCollection<
   // `false`, every scope attribute is set to `undefined`, which `prune()`
   // drops before the value ever reaches the SDK.
   const recordScope = config.telemetry?.recordScope !== false;
-
-  await applyScopedMultiCollectionIndexes(collection, storageSchemas, {
-    queue: mongoOperationQueue,
-  });
 
   function assertScopeValue(id: unknown): string {
     if (id === null || id === undefined || id === "") {
@@ -675,38 +928,201 @@ export async function scopedMultiCollection<
     }
   }
 
+  /**
+   * The `$set` / `$unset` / `$max` of a guarded write, each validated against
+   * the type's dot-notation schema exactly like `updateOne`.
+   */
+  function scopedUpdateOps(
+    operation: string,
+    typeName: string,
+    doc: Record<string, unknown>,
+    max: Record<string, unknown> | undefined,
+  ) {
+    assertNoReservedFields(doc);
+    if (max) assertNoReservedFields(max);
+    for (const key of [...Object.keys(doc), ...Object.keys(max ?? {})]) {
+      const root = key.split(".")[0];
+      if (root !== key && (RESERVED_FIELDS.has(root) || root === "_id")) {
+        throw new Error(
+          `${operation}: "${key}" cannot be written, "${root}" is owned by the scoped view`,
+        );
+      }
+    }
+    const dotSchema = dotSchemaElements[typeName];
+    if (!dotSchema) throw new Error(`${operation}: unknown type "${typeName}"`);
+    return guardedUpdateOps(
+      operation,
+      { root: insertSchemas[typeName], dot: dotSchema },
+      doc,
+      max,
+    );
+  }
+
+  function scopedInsertFields(
+    typeName: string,
+    scopeId: string,
+    filter: Record<string, unknown>,
+    values: Record<string, unknown>,
+    setOnInsert: Record<string, unknown> | undefined,
+    written: readonly string[],
+  ): Record<string, unknown> {
+    if (setOnInsert) assertNoReservedFields(setOnInsert);
+    return upsertInsertFields({
+      insertSchema: insertSchemas[typeName],
+      filter,
+      values,
+      setOnInsert,
+      written,
+      injected: (candidate) => ({
+        _id: candidate._id ?? `${typeName}:${newId()}`,
+        _scope: scopeId,
+      }),
+      ignored: ["_type", "_scope"],
+    });
+  }
+
   function buildScopedView(scopeId: string): ScopedView<T, S> {
+    function guardedWrite(
+      operation: string,
+      typeName: string,
+      filter: Record<string, unknown>,
+      doc: Record<string, unknown>,
+      options: GuardedUpdateOptions<Record<string, unknown>> | undefined,
+    ) {
+      const { ops, written, inserted } = scopedUpdateOps(
+        operation,
+        typeName,
+        doc,
+        options?.max,
+      );
+      const upsert = options?.upsert === true;
+      if (upsert) {
+        const onInsert = scopedInsertFields(
+          typeName,
+          scopeId,
+          filter,
+          inserted,
+          options?.setOnInsert,
+          written,
+        );
+        if (Object.keys(onInsert).length > 0) ops.$setOnInsert = onInsert;
+      }
+      const guard = { ...filter, _type: typeName, _scope: scopeId };
+      return { ops, guard, upsert };
+    }
+
+    async function insertStored(
+      typeName: string,
+      doc: unknown,
+    ): Promise<{ id: string; stored: Record<string, unknown> }> {
+      const record = doc as Record<string, unknown>;
+      assertNoReservedFields(record);
+
+      const schema = insertSchemas[typeName];
+      const parsed = v.parse(schema, {
+        ...record,
+        // Auto-mint `_id` when the caller omits it, mirroring the
+        // multiCollection contract. The per-type `_id` schema is often a
+        // bare `refId(type)` (required, no default), so we cannot rely on a
+        // `dbId` default here — without this, inserting such a type would
+        // throw "Expected _id but received undefined".
+        _id: record._id ?? `${typeName}:${newId()}`,
+        _scope: scopeId,
+      });
+
+      const safeDoc = toStoredDocument(
+        sanitizeForMongoDB(parsed, {
+          undefinedBehavior: "remove",
+          deep: true,
+        }),
+      );
+      const session = sessionContext.getSession();
+      const result = await collection.insertOne(safeDoc, { session });
+      if (!result.acknowledged) throw new Error("Insert failed");
+      return {
+        id: toStringId(result.insertedId),
+        stored: safeDoc as Record<string, unknown>,
+      };
+    }
+
+    function returningPlan(
+      typeName: string,
+      operation: string,
+    ): ReturningPlan<never> {
+      return {
+        label: `${operation}(${typeName}) in scope "${scopeId}"`,
+        computed: typesWithComputed.has(typeName),
+        decode: (doc) => parseStored(storageSchemas[typeName], doc) as never,
+        readBack: (ids) =>
+          findThrough(
+            collection,
+            {
+              _id: { $in: ids.map(toStringId) },
+              _type: typeName,
+              _scope: scopeId,
+            },
+            undefined,
+            { session: sessionContext.getSession() },
+          ) as Promise<Record<string, unknown>[]>,
+      };
+    }
+
+    async function insertManyStored(
+      typeName: string,
+      docs: readonly unknown[],
+    ): Promise<{ ids: string[]; stored: Record<string, unknown>[] }> {
+      const schema = insertSchemas[typeName];
+      const safeDocs = docs.map((d) => {
+        const record = d as Record<string, unknown>;
+        assertNoReservedFields(record);
+        const parsed = v.parse(schema, {
+          ...record,
+          _id: record._id ?? `${typeName}:${newId()}`,
+          _scope: scopeId,
+        });
+        return toStoredDocument(
+          sanitizeForMongoDB(parsed, {
+            undefinedBehavior: "remove",
+            deep: true,
+          }),
+        );
+      });
+
+      const session = sessionContext.getSession();
+      const result = await collection.insertMany(safeDocs, { session });
+      if (!result.acknowledged) throw new Error("Insert failed");
+      return {
+        ids: Object.values(result.insertedIds).map(toStringId),
+        stored: safeDocs as Record<string, unknown>[],
+      };
+    }
+
     return {
       _scope: scopeId,
 
       async insertOne(type, doc) {
+        const run = async () => (await insertStored(type as string, doc)).id;
+        return traced(
+          tele,
+          "insertOne",
+          () => ({
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
+            [TA.DOC_TYPE]: String(type),
+          }),
+          run,
+          () => ({ [TA.INSERTED_COUNT]: 1 }),
+        );
+      },
+
+      async insertOneReturning(type, doc) {
         const run = async () => {
           const typeName = type as string;
-          const record = doc as Record<string, unknown>;
-          assertNoReservedFields(record);
-
-          const schema = insertSchemas[typeName];
-          const parsed = v.parse(schema, {
-            ...record,
-            // Auto-mint `_id` when the caller omits it, mirroring the
-            // multiCollection contract. The per-type `_id` schema is often a
-            // bare `refId(type)` (required, no default), so we cannot rely on a
-            // `dbId` default here — without this, inserting such a type would
-            // throw "Expected _id but received undefined".
-            _id: record._id ?? `${typeName}:${newId()}`,
-            _scope: scopeId,
-          });
-
-          const safeDoc = sanitizeForMongoDB(parsed, {
-            undefinedBehavior: "remove",
-            deep: true,
-            // deno-lint-ignore no-explicit-any
-          }) as any;
-
-          const session = sessionContext.getSession();
-          const result = await collection.insertOne(safeDoc, { session });
-          if (!result.acknowledged) throw new Error("Insert failed");
-          return result.insertedId as unknown as string;
+          const { id, stored } = await insertStored(typeName, doc);
+          const [returned] = await returnInserted(
+            returningPlan(typeName, "insertOneReturning"),
+            { ids: [id], stored: [stored] },
+          );
+          return returned;
         };
         return traced(
           tele,
@@ -721,33 +1137,8 @@ export async function scopedMultiCollection<
       },
 
       async insertMany(type, docs) {
-        const run = async () => {
-          const typeName = type as string;
-          const schema = insertSchemas[typeName];
-
-          const parsed = docs.map((d) => {
-            const record = d as Record<string, unknown>;
-            assertNoReservedFields(record);
-            return v.parse(schema, {
-              ...record,
-              _id: record._id ?? `${typeName}:${newId()}`,
-              _scope: scopeId,
-            });
-          });
-
-          const safeDocs = parsed.map((p) =>
-            sanitizeForMongoDB(p, {
-              undefinedBehavior: "remove",
-              deep: true,
-              // deno-lint-ignore no-explicit-any
-            }) as any
-          );
-
-          const session = sessionContext.getSession();
-          const result = await collection.insertMany(safeDocs, { session });
-          if (!result.acknowledged) throw new Error("Insert failed");
-          return Object.values(result.insertedIds) as unknown as string[];
-        };
+        const run = async () =>
+          (await insertManyStored(type as string, docs)).ids;
         return traced(
           tele,
           "insertMany",
@@ -761,30 +1152,55 @@ export async function scopedMultiCollection<
         );
       },
 
+      async insertManyReturning(type, docs) {
+        const run = async () => {
+          const typeName = type as string;
+          return await returnInserted(
+            returningPlan(typeName, "insertManyReturning"),
+            await insertManyStored(typeName, docs),
+          );
+        };
+        return traced(
+          tele,
+          "insertMany",
+          () => ({
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
+            [TA.DOC_TYPE]: String(type),
+            [TA.BATCH_SIZE]: docs.length,
+          }),
+          run,
+          (inserted) => ({ [TA.INSERTED_COUNT]: inserted.length }),
+        );
+      },
+
       async getById(type, id) {
         const run = async () => {
           const typeName = type as string;
           const session = sessionContext.getSession();
-          const raw = await collection.findOne({
-            _id: id,
-            _type: typeName,
-            _scope: scopeId,
-            // deno-lint-ignore no-explicit-any
-          } as any, { session });
+          const raw = await findOneThrough(
+            collection,
+            { _id: id, _type: typeName, _scope: scopeId },
+            undefined,
+            { session },
+          );
           if (!raw) {
             throw errorWithSafeMessage(
               `getById(${typeName}, ${id}): no element found in scope "${scopeId}"`,
               `getById(${typeName}): no element found in scope`,
             );
           }
-          // deno-lint-ignore no-explicit-any
-          return v.parse(storageSchemas[typeName], raw) as any;
+          return parseStored(storageSchemas[typeName], raw);
         };
-        return traced(tele, "getById", () => ({
-          [TA.SCOPE]: recordScope ? scopeId : undefined,
-          [TA.DOC_TYPE]: String(type),
-          [TA.FILTER_KEYS]: "_id",
-        }), run);
+        return traced(
+          tele,
+          "getById",
+          () => ({
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: "_id",
+          }),
+          run,
+        );
       },
 
       async findOne(type, filter) {
@@ -795,21 +1211,27 @@ export async function scopedMultiCollection<
             { _type: typeName },
             { _scope: scopeId },
           ];
-          if (filter) conditions.push(filter as Record<string, unknown>);
+          if (filter) conditions.push(toStoredFilter(filter));
 
-          // deno-lint-ignore no-explicit-any
-          const raw = await collection.findOne({ $and: conditions } as any, {
-            session,
-          });
+          const raw = await findOneThrough(
+            collection,
+            { $and: conditions },
+            undefined,
+            { session },
+          );
           if (!raw) return null;
-          // deno-lint-ignore no-explicit-any
-          return v.parse(storageSchemas[typeName], raw) as any;
+          return parseStored(storageSchemas[typeName], raw);
         };
-        return traced(tele, "findOne", () => ({
-          [TA.SCOPE]: recordScope ? scopeId : undefined,
-          [TA.DOC_TYPE]: String(type),
-          [TA.FILTER_KEYS]: filterKeys(filter),
-        }), run);
+        return traced(
+          tele,
+          "findOne",
+          () => ({
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: filterKeys(filter),
+          }),
+          run,
+        );
       },
 
       async find(type, filter, options) {
@@ -817,32 +1239,43 @@ export async function scopedMultiCollection<
           const typeName = type as string;
           const session = sessionContext.getSession();
           const { validate = true, ...findOptions } = options ?? {};
+          if (validate) {
+            refuseProjection(
+              "find",
+              findOptions,
+              "findProject(type, fields), or validate: false",
+            );
+          }
           const conditions: Record<string, unknown>[] = [
             { _type: typeName },
             { _scope: scopeId },
           ];
-          if (filter) conditions.push(filter as Record<string, unknown>);
+          if (filter) conditions.push(toStoredFilter(filter));
 
-          // deno-lint-ignore no-explicit-any
-          const cursor = collection.find({ $and: conditions } as any, {
-            session,
-            ...findOptions,
-          });
-          const raw = await cursor.toArray();
+          const raw = await findThrough(
+            collection,
+            { $and: conditions },
+            findOptions,
+            readOpts(session, findOptions),
+          );
           // `validate: false` skips the per-document parse for trusted hot-path
           // reads, returning the raw stored docs. Schema transforms are NOT
           // applied in that mode — opt out only when you don't depend on them.
           if (validate === false) {
-            // deno-lint-ignore no-explicit-any
-            return raw as any;
+            return raw;
           }
-          const out: unknown[] = [];
+          const out: StoredOutput[] = [];
           for (const item of raw) {
             const parsed = v.safeParse(storageSchemas[typeName], item);
             if (parsed.success) out.push(parsed.output);
           }
-          // deno-lint-ignore no-explicit-any
-          return out as any;
+          warnSkippedInvalid(
+            log,
+            collectionName,
+            raw.length - out.length,
+            "find",
+          );
+          return out;
         };
         return traced(
           tele,
@@ -857,28 +1290,31 @@ export async function scopedMultiCollection<
         );
       },
 
-      async findProject(type, fields, filter, options) {
-        const run = async () => {
+      async findProject<
+        K extends keyof T,
+        P extends ProjectionPath<OutputDoc<T, K, S>>,
+      >(
+        type: K,
+        fields: readonly P[],
+        filter?: m.Filter<OutputDoc<T, K, S>>,
+        options?: WithReadPreferenceInput<m.FindOptions>,
+      ) {
+        const run = async (): Promise<Projected<T, K, S, P>[]> => {
           const typeName = type as string;
           const session = sessionContext.getSession();
           const conditions: Record<string, unknown>[] = [
             { _type: typeName },
             { _scope: scopeId },
           ];
-          if (filter) conditions.push(filter as Record<string, unknown>);
-          const cursor = collection.find(
-            // deno-lint-ignore no-explicit-any
-            { $and: conditions } as any,
-            {
-              session,
-              ...options,
-              projection: buildProjection(fields as readonly string[]),
-            },
+          if (filter) conditions.push(toStoredFilter(filter));
+          const projection = buildProjection(fields as readonly string[]);
+          const raw = await findThrough(
+            collection,
+            { $and: conditions },
+            { ...options, projection },
+            { ...readOpts(session, options), projection },
           );
-          // Projected docs are partial — return them raw. Validating against
-          // the full type schema would reject the omitted fields.
-          // deno-lint-ignore no-explicit-any
-          return (await cursor.toArray()) as any;
+          return raw as Projected<T, K, S, P>[];
         };
         return traced(
           tele,
@@ -897,42 +1333,59 @@ export async function scopedMultiCollection<
         const run = async () => {
           const session = sessionContext.getSession();
           const conditions: Record<string, unknown>[] = [{ _scope: scopeId }];
-          if (filter) conditions.push(filter as Record<string, unknown>);
-          // deno-lint-ignore no-explicit-any
-          const raw = await collection.findOne({ $and: conditions } as any, {
-            session,
-          });
+          if (filter) conditions.push(toStoredFilter(filter));
+          const raw = await findOneThrough(
+            collection,
+            { $and: conditions },
+            undefined,
+            { session },
+          );
           if (!raw) return null;
-          // deno-lint-ignore no-explicit-any
-          return v.parse(storageUnion, raw) as any;
+          return parseStored(storageUnion, raw);
         };
-        return traced(tele, "findOneAny", () => ({
-          [TA.SCOPE]: recordScope ? scopeId : undefined,
-          [TA.FILTER_KEYS]: filterKeys(filter),
-        }), run);
+        return traced(
+          tele,
+          "findOneAny",
+          () => ({
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
+            [TA.FILTER_KEYS]: filterKeys(filter),
+          }),
+          run,
+        );
       },
 
       async findAny(filter, options) {
         const run = async () => {
           const session = sessionContext.getSession();
           const { validate = true, ...findOptions } = options ?? {};
+          if (validate) {
+            refuseProjection(
+              "findAny",
+              findOptions,
+              "findProject(type, fields), or validate: false",
+            );
+          }
           const conditions: Record<string, unknown>[] = [{ _scope: scopeId }];
-          if (filter) conditions.push(filter as Record<string, unknown>);
-          const cursor = collection.find(
-            // deno-lint-ignore no-explicit-any
-            { $and: conditions } as any,
-            { session, ...findOptions },
+          if (filter) conditions.push(toStoredFilter(filter));
+          const raw = await findThrough(
+            collection,
+            { $and: conditions },
+            findOptions,
+            readOpts(session, findOptions),
           );
-          const raw = await cursor.toArray();
-          // deno-lint-ignore no-explicit-any
-          if (validate === false) return raw as any;
-          const out: unknown[] = [];
+          if (validate === false) return raw;
+          const out: StoredOutput[] = [];
           for (const item of raw) {
             const parsed = v.safeParse(storageUnion, item);
             if (parsed.success) out.push(parsed.output);
           }
-          // deno-lint-ignore no-explicit-any
-          return out as any;
+          warnSkippedInvalid(
+            log,
+            collectionName,
+            raw.length - out.length,
+            "findAny",
+          );
+          return out;
         };
         return traced(
           tele,
@@ -946,6 +1399,34 @@ export async function scopedMultiCollection<
         );
       },
 
+      distinct(type, field, filter, options) {
+        const run = async () => {
+          const conditions: Record<string, unknown>[] = [
+            { _type: type as string },
+            { _scope: scopeId },
+          ];
+          if (filter) conditions.push(toStoredFilter(filter));
+          const session = sessionContext.getSession();
+          const values = await collection.distinct(
+            field,
+            { $and: conditions },
+            readOpts(session, options),
+          );
+          return values as never[];
+        };
+        return traced(
+          tele,
+          "distinct",
+          () => ({
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: filterKeys(filter),
+          }),
+          run,
+          (values) => ({ [TA.RETURNED_ROWS]: values.length }),
+        );
+      },
+
       countDocuments(type, filter, options) {
         const run = () => {
           const typeName = type as string;
@@ -954,30 +1435,36 @@ export async function scopedMultiCollection<
             { _type: typeName },
             { _scope: scopeId },
           ];
-          if (filter) conditions.push(filter as Record<string, unknown>);
+          if (filter) conditions.push(toStoredFilter(filter));
           return collection.countDocuments(
-            // deno-lint-ignore no-explicit-any
-            { $and: conditions } as any,
-            { session, ...options },
+            { $and: conditions },
+            readOpts(session, options),
           );
         };
-        return traced(tele, "countDocuments", () => ({
-          [TA.SCOPE]: recordScope ? scopeId : undefined,
-          [TA.DOC_TYPE]: String(type),
-          [TA.FILTER_KEYS]: filterKeys(filter),
-        }), run);
+        return traced(
+          tele,
+          "countDocuments",
+          () => ({
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: filterKeys(filter),
+          }),
+          run,
+        );
       },
 
       async deleteId(type, id) {
         const run = async () => {
           const typeName = type as string;
           const session = sessionContext.getSession();
-          const result = await collection.deleteOne({
-            _id: id,
-            _type: typeName,
-            _scope: scopeId,
-            // deno-lint-ignore no-explicit-any
-          } as any, { session });
+          const result = await collection.deleteOne(
+            {
+              _id: id,
+              _type: typeName,
+              _scope: scopeId,
+            },
+            { session },
+          );
           if (!result.acknowledged) throw new Error("Delete failed");
           if (result.deletedCount === 0) {
             throw errorWithSafeMessage(
@@ -987,23 +1474,30 @@ export async function scopedMultiCollection<
           }
           return result.deletedCount;
         };
-        return traced(tele, "deleteId", () => ({
-          [TA.SCOPE]: recordScope ? scopeId : undefined,
-          [TA.DOC_TYPE]: String(type),
-          [TA.FILTER_KEYS]: "_id",
-        }), run);
+        return traced(
+          tele,
+          "deleteId",
+          () => ({
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: "_id",
+          }),
+          run,
+        );
       },
 
       async deleteIds(type, ids) {
         const run = async () => {
           const typeName = type as string;
           const session = sessionContext.getSession();
-          const result = await collection.deleteMany({
-            _id: { $in: ids },
-            _type: typeName,
-            _scope: scopeId,
-            // deno-lint-ignore no-explicit-any
-          } as any, { session });
+          const result = await collection.deleteMany(
+            {
+              _id: { $in: ids },
+              _type: typeName,
+              _scope: scopeId,
+            },
+            { session },
+          );
           if (!result.acknowledged) throw new Error("Delete failed");
           return result.deletedCount;
         };
@@ -1025,12 +1519,14 @@ export async function scopedMultiCollection<
         const run = async () => {
           const typeName = type as string;
           const session = sessionContext.getSession();
-          const result = await collection.deleteMany({
-            ...(filter as Record<string, unknown>),
-            _type: typeName,
-            _scope: scopeId,
-            // deno-lint-ignore no-explicit-any
-          } as any, { session });
+          const result = await collection.deleteMany(
+            {
+              ...(filter as Record<string, unknown>),
+              _type: typeName,
+              _scope: scopeId,
+            },
+            { session },
+          );
           if (!result.acknowledged) throw new Error("Delete failed");
           return result.deletedCount;
         };
@@ -1047,53 +1543,46 @@ export async function scopedMultiCollection<
         );
       },
 
-      async updateOne(type, id, doc) {
+      async updateOne(type, id, doc, options) {
         const run = async (op?: OpContext) => {
           const typeName = type as string;
-          assertNoReservedFields(doc as Record<string, unknown>);
-
-          // Split out removeField() symbols → $unset, the rest → $set.
-          const { set, unset } = extractFieldsToRemove(
+          // Validated before the retry: a validation error is not a transient conflict.
+          const { ops: updateOps } = scopedUpdateOps(
+            "updateOne",
+            typeName,
             doc as Record<string, unknown>,
+            undefined,
           );
-
-          // Validate the $set paths against the per-type dot-notation schema
-          // (runs the schema's pipe checks/transforms) so a bad value surfaces
-          // a clear Valibot error instead of Mongo's opaque "Document failed
-          // validation". Reserved fields are already rejected above. Mirrors
-          // multiCollection.updateOne. Done before the retry — a validation
-          // error is not a transient write conflict — but inside `run` so the
-          // failure is recorded on the span.
-          const dotSchema = dotSchemaElements[typeName];
-          if (!dotSchema) {
-            throw new Error(`updateOne: unknown type "${typeName}"`);
-          }
-          if (Object.keys(set).length > 0) v.parse(dotSchema, set);
-
-          const updateOps = buildUpdateOps(set, unset);
           if (Object.keys(updateOps).length === 0) return 0;
 
-          return retryOnWriteConflict(async () => {
-            const session = sessionContext.getSession();
-            const result = await collection.updateOne(
-              {
-                _id: id,
-                _type: typeName,
-                _scope: scopeId,
-                // deno-lint-ignore no-explicit-any
-              } as any,
-              updateOps as any,
-              { session },
-            );
-            if (!result.acknowledged) throw new Error("Update failed");
-            if (result.matchedCount === 0) {
-              throw errorWithSafeMessage(
-                `updateOne(${typeName}, ${id}): no element found in scope "${scopeId}"`,
-                `updateOne(${typeName}): no element found in scope`,
+          return retryOnWriteConflict(
+            async () => {
+              const session = sessionContext.getSession();
+              const result = await collection.updateOne(
+                {
+                  _id: id,
+                  _type: typeName,
+                  _scope: scopeId,
+                },
+                updateOps,
+                {
+                  session,
+                  ...(options?.arrayFilters && {
+                    arrayFilters: options.arrayFilters,
+                  }),
+                },
               );
-            }
-            return result.modifiedCount;
-          }, op ? { onRetry: op.onRetry } : undefined);
+              if (!result.acknowledged) throw new Error("Update failed");
+              if (result.matchedCount === 0) {
+                throw errorWithSafeMessage(
+                  `updateOne(${typeName}, ${id}): no element found in scope "${scopeId}"`,
+                  `updateOne(${typeName}): no element found in scope`,
+                );
+              }
+              return result.modifiedCount;
+            },
+            op ? { onRetry: op.onRetry } : undefined,
+          );
         };
         return traced(
           tele,
@@ -1110,28 +1599,19 @@ export async function scopedMultiCollection<
 
       async updateMany(ops) {
         const run = async (op?: OpContext) => {
-          const bulkOps: m.AnyBulkWriteOperation[] = [];
+          const bulkOps: m.AnyBulkWriteOperation<StoredDocument>[] = [];
           for (const typeName in ops) {
             const items = ops[typeName as keyof T];
             if (!items) continue;
             for (const id in items) {
               const partial = items[id];
               if (!partial) continue;
-              assertNoReservedFields(partial as Record<string, unknown>);
-              const { set, unset } = extractFieldsToRemove(
+              const { ops: updateOps } = scopedUpdateOps(
+                "updateMany",
+                typeName,
                 partial as Record<string, unknown>,
+                undefined,
               );
-
-              // Validate the $set paths against the per-type dot-notation schema
-              // (pipe checks/transforms) before building the bulk op — same as
-              // updateOne / multiCollection.updateMany.
-              const dotSchema = dotSchemaElements[typeName];
-              if (!dotSchema) {
-                throw new Error(`updateMany: unknown type "${typeName}"`);
-              }
-              if (Object.keys(set).length > 0) v.parse(dotSchema, set);
-
-              const updateOps = buildUpdateOps(set, unset);
               if (Object.keys(updateOps).length === 0) continue;
               bulkOps.push({
                 updateOne: {
@@ -1139,8 +1619,7 @@ export async function scopedMultiCollection<
                     _id: id,
                     _type: typeName,
                     _scope: scopeId,
-                    // deno-lint-ignore no-explicit-any
-                  } as any,
+                  },
                   update: updateOps,
                 },
               });
@@ -1151,11 +1630,14 @@ export async function scopedMultiCollection<
           op?.setAttributes({ [TA.BATCH_SIZE]: bulkOps.length });
           if (bulkOps.length === 0) return 0;
 
-          return retryOnWriteConflict(async () => {
-            const session = sessionContext.getSession();
-            const result = await collection.bulkWrite(bulkOps, { session });
-            return result.modifiedCount;
-          }, op ? { onRetry: op.onRetry } : undefined);
+          return retryOnWriteConflict(
+            async () => {
+              const session = sessionContext.getSession();
+              const result = await collection.bulkWrite(bulkOps, { session });
+              return result.modifiedCount;
+            },
+            op ? { onRetry: op.onRetry } : undefined,
+          );
         };
         return traced(
           tele,
@@ -1169,7 +1651,108 @@ export async function scopedMultiCollection<
         );
       },
 
-      async aggregate(stageBuilder) {
+      async updateWhere(type, filter, doc, options) {
+        const run = async (op?: OpContext) => {
+          const { ops, guard, upsert } = guardedWrite(
+            "updateWhere",
+            type as string,
+            filter as Record<string, unknown>,
+            doc as Record<string, unknown>,
+            options as
+              | GuardedUpdateOptions<Record<string, unknown>>
+              | undefined,
+          );
+          if (Object.keys(ops).length === 0)
+            return { matched: 0, modified: 0, upsertedId: null };
+
+          return retryOnWriteConflict(
+            async () => {
+              const session = sessionContext.getSession();
+              const result = await collection.updateOne(guard, ops, {
+                session,
+                upsert,
+                ...(options?.arrayFilters && {
+                  arrayFilters: options.arrayFilters,
+                }),
+              });
+              if (!result.acknowledged) throw new Error("Update failed");
+              return {
+                matched: result.matchedCount,
+                modified: result.modifiedCount,
+                upsertedId:
+                  result.upsertedId === null || result.upsertedId === undefined
+                    ? null
+                    : String(result.upsertedId),
+              };
+            },
+            op ? { onRetry: op.onRetry } : undefined,
+          );
+        };
+        return traced(
+          tele,
+          "updateWhere",
+          () => ({
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: filterKeys(filter),
+            [TA.UPDATE_FIELDS]: Object.keys(doc).length,
+          }),
+          run,
+          (result) => ({ [TA.MODIFIED_COUNT]: result.modified }),
+        );
+      },
+
+      async findOneAndUpdate(type, filter, doc, options) {
+        const run = async (op?: OpContext) => {
+          const typeName = type as string;
+          const { ops, guard, upsert } = guardedWrite(
+            "findOneAndUpdate",
+            typeName,
+            filter as Record<string, unknown>,
+            doc as Record<string, unknown>,
+            options as
+              | GuardedUpdateOptions<Record<string, unknown>>
+              | undefined,
+          );
+          if (Object.keys(ops).length === 0) {
+            throw new Error(
+              `findOneAndUpdate(${typeName}): the update document writes nothing`,
+            );
+          }
+          const raw = await retryOnWriteConflict(
+            async () => {
+              const session = sessionContext.getSession();
+              return await collection.findOneAndUpdate(guard, ops, {
+                session,
+                upsert,
+                returnDocument: options?.returnDocument ?? "after",
+                ...(options?.sort && { sort: options.sort }),
+                ...(options?.arrayFilters && {
+                  arrayFilters: options.arrayFilters,
+                }),
+              });
+            },
+            op ? { onRetry: op.onRetry } : undefined,
+          );
+          if (!raw) return null;
+          return parseStored(storageSchemas[typeName], raw);
+        };
+        return traced(
+          tele,
+          "findOneAndUpdate",
+          () => ({
+            [TA.SCOPE]: recordScope ? scopeId : undefined,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: filterKeys(filter),
+            [TA.UPDATE_FIELDS]: Object.keys(doc).length,
+          }),
+          run,
+        );
+      },
+
+      async aggregate<R extends m.Document = m.Document>(
+        stageBuilder: (stage: ScopedStageBuilder<T>) => AggregationStage[],
+      ) {
         const run = async () => {
           const stage = buildScopedStageBuilder<T>(collectionName, {
             kind: "single",
@@ -1183,8 +1766,12 @@ export async function scopedMultiCollection<
             ...userPipeline,
           ];
           const session = sessionContext.getSession();
-          const cursor = collection.aggregate(pipeline, { session });
-          return await cursor.toArray();
+          return await aggregateThrough<StoredDocument, R>(
+            collection,
+            pipeline,
+            undefined,
+            { session },
+          );
         };
         return traced(
           tele,
@@ -1195,7 +1782,11 @@ export async function scopedMultiCollection<
         );
       },
 
-      async paginate(type, filter, options) {
+      async paginate<K extends keyof T, EN = OutputDoc<T, K, S>, R = EN>(
+        type: K,
+        filter?: m.Filter<OutputDoc<T, K, S>>,
+        options?: ScopedPaginateOptions<T, K, S, EN, R>,
+      ): Promise<Page<R>> {
         const run = async () => {
           const typeName = type as string;
           const { skipTotal = false, peek = false } = options || {};
@@ -1221,7 +1812,7 @@ export async function scopedMultiCollection<
             { _scope: scopeId },
             { _type: typeName },
           ];
-          if (filter) baseQuery.push(filter as Record<string, unknown>);
+          if (filter) baseQuery.push(toStoredFilter(filter));
 
           // User pipelines (scope-aware builder). `pipeline` is used for BOTH
           // the count and the data fetch so `total` reflects docs that survive
@@ -1243,9 +1834,8 @@ export async function scopedMultiCollection<
             sortStages,
             userPipeline,
           );
-          const sortMachinery = sortStages.length > 0
-            ? buildSortMachinery(sortObj)
-            : null;
+          const sortMachinery =
+            sortStages.length > 0 ? buildSortMachinery(sortObj) : null;
 
           // Resolve the anchor THROUGH the sort pipeline: the sort key may
           // only exist after those stages run (e.g. a $lookup'ed field), so a
@@ -1255,19 +1845,24 @@ export async function scopedMultiCollection<
             anchorId: string,
             label: "afterId" | "beforeId",
           ): Promise<Record<string, unknown>> => {
-            const rows = await collection.aggregate([
-              // deno-lint-ignore no-explicit-any
-              { $match: { _id: anchorId, _scope: scopeId, _type: typeName } },
-              ...sortStages,
-              { $limit: 1 },
-            ] as any, { session }).toArray();
+            const rows = await collection
+              .aggregate(
+                [
+                  {
+                    $match: { _id: anchorId, _scope: scopeId, _type: typeName },
+                  },
+                  ...sortStages,
+                  { $limit: 1 },
+                ],
+                { session },
+              )
+              .toArray();
             if (rows[0]) return rows[0] as Record<string, unknown>;
             // Fail loud, and say WHY: a dropped anchor (a $match inside
             // sortPipeline excluded it) is a different caller bug than a
             // stale/cross-scope id.
             const exists = await collection.findOne(
-              // deno-lint-ignore no-explicit-any
-              { _id: anchorId, _scope: scopeId, _type: typeName } as any,
+              { _id: anchorId, _scope: scopeId, _type: typeName },
               { session },
             );
             if (exists) {
@@ -1296,8 +1891,7 @@ export async function scopedMultiCollection<
             direction: "after" | "before",
           ): Promise<Record<string, unknown>[] | null> => {
             const anchor = await collection.findOne(
-              // deno-lint-ignore no-explicit-any
-              { _id: anchorId, _scope: scopeId, _type: typeName } as any,
+              { _id: anchorId, _scope: scopeId, _type: typeName },
               { session },
             );
             if (!anchor) return null;
@@ -1390,17 +1984,19 @@ export async function scopedMultiCollection<
             machinery: SortMachinery,
             cursor: AggregationStage | null,
           ): Promise<number> => {
-            const rows = await collection.aggregate(
-              buildSortPaginateStages({
-                baseMatch: { $and: baseQuery },
-                sortStages,
-                machinery,
-                cursorFilter: cursor,
-                pipeline: userPipeline,
-                count: true,
-              }),
-              { session },
-            ).toArray();
+            const rows = await collection
+              .aggregate(
+                buildSortPaginateStages({
+                  baseMatch: { $and: baseQuery },
+                  sortStages,
+                  machinery,
+                  cursorFilter: cursor,
+                  pipeline: userPipeline,
+                  count: true,
+                }),
+                { session },
+              )
+              .toArray();
             return (rows[0]?.total as number | undefined) ?? 0;
           };
 
@@ -1413,7 +2009,8 @@ export async function scopedMultiCollection<
             if (sortMachinery) {
               total = await countViaSortPipeline(sortMachinery, null);
               if (afterId) {
-                position = total -
+                position =
+                  total -
                   (await countViaSortPipeline(sortMachinery, exprCursor));
               } else if (beforeId) {
                 position = -1;
@@ -1421,22 +2018,20 @@ export async function scopedMultiCollection<
                 position = 0;
               }
             } else if (userPipeline.length > 0) {
-              const countPipeline: AggregationStage[] = [
+              const countPipeline: AggregationStage[] = countingPipeline([
                 { $match: { $and: baseQuery } },
                 ...userPipeline,
-                { $count: "total" },
-              ];
+              ]);
               const totalResult = await collection
                 .aggregate(countPipeline, { session })
                 .toArray();
               total = (totalResult[0]?.total as number | undefined) ?? 0;
               if (afterId) {
                 if (cursorBranches) {
-                  const afterPipeline: AggregationStage[] = [
+                  const afterPipeline: AggregationStage[] = countingPipeline([
                     { $match: composeCursorQuery(baseQuery, cursorBranches) },
                     ...userPipeline,
-                    { $count: "total" },
-                  ];
+                  ]);
                   const afterResult = await collection
                     .aggregate(afterPipeline, { session })
                     .toArray();
@@ -1453,15 +2048,13 @@ export async function scopedMultiCollection<
               }
             } else {
               total = await collection.countDocuments(
-                // deno-lint-ignore no-explicit-any
-                { $and: baseQuery } as any,
+                { $and: baseQuery },
                 { session },
               );
               if (afterId) {
                 if (cursorBranches) {
                   const afterCount = await collection.countDocuments(
-                    // deno-lint-ignore no-explicit-any
-                    composeCursorQuery(baseQuery, cursorBranches) as any,
+                    composeCursorQuery(baseQuery, cursorBranches),
                     { session },
                   );
                   position = total - afterCount;
@@ -1484,11 +2077,16 @@ export async function scopedMultiCollection<
           // callback is set — a rejecting filter can shrink the page, so we keep
           // the cursor open past `limit` and stop in JS instead. With no filter the
           // cap makes it a bounded top-`limit` query (index-friendly). The pipeline
-          // path never server-caps (see below) — it relies on the JS limit.
+          // path never server-caps (see below): it asks for a `limit`-row batch.
           const serverCap = customFilter ? undefined : limit;
+          const pageOptions = {
+            session,
+            ...pageBatchSize(limit, customFilter),
+          };
 
-          // deno-lint-ignore no-explicit-any
-          let cursor: m.FindCursor<any> | m.AggregationCursor<any>;
+          let cursor:
+            | m.FindCursor<StoredDocument>
+            | m.AggregationCursor<StoredDocument>;
           if (sortMachinery) {
             // sortPipeline path: the stages the sort depends on ($lookup, …)
             // necessarily run over the whole scoped+filtered set — the sort
@@ -1503,13 +2101,13 @@ export async function scopedMultiCollection<
                 pipeline: userPipeline,
                 reverse: Boolean(beforeId),
               }),
-              { session },
+              pageOptions,
             );
           } else if (userPipeline.length > 0) {
             // `$sort` goes BEFORE the user pipeline so it can ride an index, and
             // so the expensive pipeline stages ($lookup, …) run LAZILY — only for
-            // the ~`limit` docs the JS loop consumes before it closes the cursor,
-            // not for the whole cursor-filtered set. No server-side `$limit` here:
+            // the `limit`-row batches the JS loop consumes before it closes the
+            // cursor, not for the whole cursor-filtered set. No server-side `$limit` here:
             // a filtering pipeline can shrink the page, so `limit` is enforced
             // JS-side (which is also what lets the cursor close early).
             // Sorting on a field this pipeline computes is impossible in this
@@ -1520,15 +2118,15 @@ export async function scopedMultiCollection<
               { $sort: sort },
               ...userPipeline,
             ];
-            // deno-lint-ignore no-explicit-any
-            cursor = collection.aggregate(dataPipeline as any, { session });
+            cursor = collection.aggregate(dataPipeline, pageOptions);
           } else {
-            // deno-lint-ignore no-explicit-any
-            const findCursor = collection.find(finalQuery as any, { session })
+            const findCursor = collection
+              .find(finalQuery, { session })
               .sort(sort as m.Sort);
-            cursor = serverCap !== undefined
-              ? findCursor.limit(serverCap)
-              : findCursor;
+            cursor =
+              serverCap !== undefined
+                ? findCursor.limit(serverCap)
+                : findCursor;
           }
 
           // Stream rows: the `limit` is applied in JS so a rejecting
@@ -1536,26 +2134,29 @@ export async function scopedMultiCollection<
           // keeps yielding more candidates. `hardLimit` bounds a pathological
           // filter that rejects everything.
           let hardLimit = 10_000;
-          const data: unknown[] = [];
+          let skippedInvalid = 0;
+          const data: R[] = [];
           try {
             while (hardLimit-- > 0 && limit > 0) {
               const doc = await cursor.next();
               if (!doc) break;
               const parsed = v.safeParse(storageSchemas[typeName], doc);
-              if (!parsed.success) continue;
-              // Preserve pipeline-added fields ($lookup results) alongside the
-              // validated document (parse strips unknown keys).
-              const validatedDoc = pipelineBuilder || sortPipelineBuilder
-                ? { ...doc, ...parsed.output }
-                : parsed.output;
+              if (!parsed.success) {
+                skippedInvalid++;
+                continue;
+              }
+              const validatedDoc: OutputDoc<T, K, S> =
+                pipelineBuilder || sortPipelineBuilder
+                  ? { ...doc, ...parsed.output }
+                  : parsed.output;
               const enriched = prepare
-                ? await prepare(validatedDoc as never)
-                : validatedDoc;
-              const keep = (await customFilter?.(enriched as never)) ?? true;
+                ? await prepare(validatedDoc)
+                : (validatedDoc as EN);
+              const keep = (await customFilter?.(enriched)) ?? true;
               if (!keep) continue;
               const finalDoc = format
-                ? await format(enriched as never)
-                : enriched;
+                ? await format(enriched)
+                : (enriched as unknown as R);
               data.push(finalDoc);
               limit--;
             }
@@ -1594,21 +2195,18 @@ export async function scopedMultiCollection<
                 // pipeline's filtering stages).
                 let beforeCount: number;
                 if (userPipeline.length > 0) {
-                  const beforePipeline: AggregationStage[] = [
+                  const beforePipeline: AggregationStage[] = countingPipeline([
                     { $match: composeCursorQuery(baseQuery, cursorBranches) },
                     ...userPipeline,
-                    { $count: "total" },
-                  ];
+                  ]);
                   const beforeResult = await collection
                     .aggregate(beforePipeline, { session })
                     .toArray();
                   beforeCount =
-                    (beforeResult[0]?.total as number | undefined) ??
-                      0;
+                    (beforeResult[0]?.total as number | undefined) ?? 0;
                 } else {
                   beforeCount = await collection.countDocuments(
-                    // deno-lint-ignore no-explicit-any
-                    composeCursorQuery(baseQuery, cursorBranches) as any,
+                    composeCursorQuery(baseQuery, cursorBranches),
                     { session },
                   );
                 }
@@ -1619,12 +2217,13 @@ export async function scopedMultiCollection<
             }
           }
 
+          warnSkippedInvalid(log, collectionName, skippedInvalid);
           return {
             total,
             position,
-            // deno-lint-ignore no-explicit-any
-            data: data as any,
+            data: data,
             ...(peek ? { hasMore } : {}),
+            ...(skippedInvalid > 0 && { skippedInvalid }),
           };
         };
         return traced(
@@ -1646,11 +2245,12 @@ export async function scopedMultiCollection<
     scopeIds: string[] | null,
   ): ReadOnlyMultiScopeView<T, S> {
     // scopeIds: array of scope ids (may be empty), or null for unscoped.
-    const filter: ScopeFilterShape = scopeIds === null
-      ? null
-      : scopeIds.length === 1
-      ? { kind: "single", id: scopeIds[0] }
-      : { kind: "multi", ids: scopeIds };
+    const filter: ScopeFilterShape =
+      scopeIds === null
+        ? null
+        : scopeIds.length === 1
+          ? { kind: "single", id: scopeIds[0] }
+          : { kind: "multi", ids: scopeIds };
 
     function scopeMatch(): Record<string, unknown> | null {
       if (scopeIds === null) return null;
@@ -1663,9 +2263,8 @@ export async function scopedMultiCollection<
     // unscoped view (scopeIds === null) carries no scope attribute at all.
     // Only allocated when telemetry is enabled and scope recording is on —
     // when `recordScope` is false the attribute is entirely absent.
-    const scopeAttr = tele && recordScope && scopeIds !== null
-      ? [...scopeIds]
-      : undefined;
+    const scopeAttr =
+      tele && recordScope && scopeIds !== null ? [...scopeIds] : undefined;
 
     return {
       _scopes: scopeIds === null ? [] : [...scopeIds],
@@ -1678,22 +2277,28 @@ export async function scopedMultiCollection<
           const sm = scopeMatch();
           if (sm) conditions.push(sm);
           if (userFilter) {
-            conditions.push(userFilter as Record<string, unknown>);
+            conditions.push(toStoredFilter(userFilter));
           }
 
-          // deno-lint-ignore no-explicit-any
-          const raw = await collection.findOne({ $and: conditions } as any, {
-            session,
-          });
+          const raw = await findOneThrough(
+            collection,
+            { $and: conditions },
+            undefined,
+            { session },
+          );
           if (!raw) return null;
-          // deno-lint-ignore no-explicit-any
-          return v.parse(storageSchemas[typeName], raw) as any;
+          return parseStored(storageSchemas[typeName], raw);
         };
-        return traced(tele, "findOne", () => ({
-          [TA.SCOPE]: scopeAttr,
-          [TA.DOC_TYPE]: String(type),
-          [TA.FILTER_KEYS]: filterKeys(userFilter),
-        }), run);
+        return traced(
+          tele,
+          "findOne",
+          () => ({
+            [TA.SCOPE]: scopeAttr,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: filterKeys(userFilter),
+          }),
+          run,
+        );
       },
 
       async find(type, userFilter, options) {
@@ -1701,28 +2306,39 @@ export async function scopedMultiCollection<
           const typeName = type as string;
           const session = sessionContext.getSession();
           const { validate = true, ...findOptions } = options ?? {};
+          if (validate) {
+            refuseProjection(
+              "find",
+              findOptions,
+              "findProject(type, fields), or validate: false",
+            );
+          }
           const conditions: Record<string, unknown>[] = [{ _type: typeName }];
           const sm = scopeMatch();
           if (sm) conditions.push(sm);
           if (userFilter) {
-            conditions.push(userFilter as Record<string, unknown>);
+            conditions.push(toStoredFilter(userFilter));
           }
 
-          const cursor = collection.find(
-            // deno-lint-ignore no-explicit-any
-            { $and: conditions } as any,
-            { session, ...findOptions },
+          const raw = await findThrough(
+            collection,
+            { $and: conditions },
+            findOptions,
+            readOpts(session, findOptions),
           );
-          const raw = await cursor.toArray();
-          // deno-lint-ignore no-explicit-any
-          if (validate === false) return raw as any;
-          const out: unknown[] = [];
+          if (validate === false) return raw;
+          const out: StoredOutput[] = [];
           for (const item of raw) {
             const parsed = v.safeParse(storageSchemas[typeName], item);
             if (parsed.success) out.push(parsed.output);
           }
-          // deno-lint-ignore no-explicit-any
-          return out as any;
+          warnSkippedInvalid(
+            log,
+            collectionName,
+            raw.length - out.length,
+            "find",
+          );
+          return out;
         };
         return traced(
           tele,
@@ -1737,27 +2353,32 @@ export async function scopedMultiCollection<
         );
       },
 
-      async findProject(type, fields, userFilter, options) {
-        const run = async () => {
+      async findProject<
+        K extends keyof T,
+        P extends ProjectionPath<OutputDoc<T, K, S>>,
+      >(
+        type: K,
+        fields: readonly P[],
+        userFilter?: m.Filter<OutputDoc<T, K, S>>,
+        options?: WithReadPreferenceInput<m.FindOptions>,
+      ) {
+        const run = async (): Promise<Projected<T, K, S, P>[]> => {
           const typeName = type as string;
           const session = sessionContext.getSession();
           const conditions: Record<string, unknown>[] = [{ _type: typeName }];
           const sm = scopeMatch();
           if (sm) conditions.push(sm);
           if (userFilter) {
-            conditions.push(userFilter as Record<string, unknown>);
+            conditions.push(toStoredFilter(userFilter));
           }
-          const cursor = collection.find(
-            // deno-lint-ignore no-explicit-any
-            { $and: conditions } as any,
-            {
-              session,
-              ...options,
-              projection: buildProjection(fields as readonly string[]),
-            },
+          const projection = buildProjection(fields as readonly string[]);
+          const raw = await findThrough(
+            collection,
+            { $and: conditions },
+            { ...options, projection },
+            { ...readOpts(session, options), projection },
           );
-          // deno-lint-ignore no-explicit-any
-          return (await cursor.toArray()) as any;
+          return raw as Projected<T, K, S, P>[];
         };
         return traced(
           tele,
@@ -1772,6 +2393,35 @@ export async function scopedMultiCollection<
         );
       },
 
+      distinct(type, field, userFilter, options) {
+        const run = async () => {
+          const conditions: Record<string, unknown>[] = [
+            { _type: type as string },
+          ];
+          const sm = scopeMatch();
+          if (sm) conditions.push(sm);
+          if (userFilter) conditions.push(toStoredFilter(userFilter));
+          const session = sessionContext.getSession();
+          const values = await collection.distinct(
+            field,
+            { $and: conditions },
+            readOpts(session, options),
+          );
+          return values as never[];
+        };
+        return traced(
+          tele,
+          "distinct",
+          () => ({
+            [TA.SCOPE]: scopeAttr,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: filterKeys(userFilter),
+          }),
+          run,
+          (values) => ({ [TA.RETURNED_ROWS]: values.length }),
+        );
+      },
+
       countDocuments(type, userFilter, options) {
         const run = () => {
           const typeName = type as string;
@@ -1780,23 +2430,29 @@ export async function scopedMultiCollection<
           const sm = scopeMatch();
           if (sm) conditions.push(sm);
           if (userFilter) {
-            conditions.push(userFilter as Record<string, unknown>);
+            conditions.push(toStoredFilter(userFilter));
           }
 
           return collection.countDocuments(
-            // deno-lint-ignore no-explicit-any
-            { $and: conditions } as any,
-            { session, ...options },
+            { $and: conditions },
+            readOpts(session, options),
           );
         };
-        return traced(tele, "countDocuments", () => ({
-          [TA.SCOPE]: scopeAttr,
-          [TA.DOC_TYPE]: String(type),
-          [TA.FILTER_KEYS]: filterKeys(userFilter),
-        }), run);
+        return traced(
+          tele,
+          "countDocuments",
+          () => ({
+            [TA.SCOPE]: scopeAttr,
+            [TA.DOC_TYPE]: String(type),
+            [TA.FILTER_KEYS]: filterKeys(userFilter),
+          }),
+          run,
+        );
       },
 
-      async aggregate(stageBuilder) {
+      async aggregate<R extends m.Document = m.Document>(
+        stageBuilder: (stage: ScopedStageBuilder<T>) => AggregationStage[],
+      ) {
         const run = async () => {
           const stage = buildScopedStageBuilder<T>(collectionName, filter);
           const userPipeline = stageBuilder(stage);
@@ -1805,8 +2461,12 @@ export async function scopedMultiCollection<
           if (sm) pipeline.push({ $match: sm });
           pipeline.push(...userPipeline);
           const session = sessionContext.getSession();
-          const cursor = collection.aggregate(pipeline, { session });
-          return await cursor.toArray();
+          return await aggregateThrough<StoredDocument, R>(
+            collection,
+            pipeline,
+            undefined,
+            { session },
+          );
         };
         return traced(
           tele,
@@ -1822,24 +2482,28 @@ export async function scopedMultiCollection<
   const unscopedView: UnscopedView<T, S> = config.allowUnscoped
     ? buildReadOnlyView(null)
     : new Proxy({} as UnscopedView<T, S>, {
-      get(_target, prop) {
-        if (prop === "_scopes") return [];
-        // Let thenable checks (`then`), JSON serialization (`toJSON`) and any
-        // inspection symbol (Symbol.toStringTag / Symbol.iterator / Node's
-        // util.inspect.custom, …) probe the object harmlessly — otherwise a
-        // bare `console.log(catalog)` or an accidental `await catalog.unscoped`
-        // would explode. Only the real view methods stay guarded.
-        if (typeof prop === "symbol" || prop === "then" || prop === "toJSON") {
-          return undefined;
-        }
-        throw new Error(
-          `unscoped: access to "${
-            String(prop)
-          }" is disabled. Set { allowUnscoped: true } on the ` +
-            `scopedMultiCollection config to enable cross-scope reads.`,
-        );
-      },
-    });
+        get(_target, prop) {
+          if (prop === "_scopes") return [];
+          // Let thenable checks (`then`), JSON serialization (`toJSON`) and any
+          // inspection symbol (Symbol.toStringTag / Symbol.iterator / Node's
+          // util.inspect.custom, …) probe the object harmlessly — otherwise a
+          // bare `console.log(catalog)` or an accidental `await catalog.unscoped`
+          // would explode. Only the real view methods stay guarded.
+          if (
+            typeof prop === "symbol" ||
+            prop === "then" ||
+            prop === "toJSON"
+          ) {
+            return undefined;
+          }
+          throw new Error(
+            `unscoped: access to "${String(
+              prop,
+            )}" is disabled. Set { allowUnscoped: true } on the ` +
+              `scopedMultiCollection config to enable cross-scope reads.`,
+          );
+        },
+      });
 
   return {
     scope(id) {
@@ -1858,13 +2522,9 @@ export async function scopedMultiCollection<
         const values = await collection.distinct("_scope", {}, { session });
         return values.filter((v): v is string => typeof v === "string");
       };
-      return traced(
-        tele,
-        "listScopes",
-        undefined,
-        run,
-        (scopes) => ({ [TA.RETURNED_ROWS]: scopes.length }),
-      );
+      return traced(tele, "listScopes", undefined, run, (scopes) => ({
+        [TA.RETURNED_ROWS]: scopes.length,
+      }));
     },
 
     async scopeExists(id) {
@@ -1872,15 +2532,19 @@ export async function scopedMultiCollection<
       const run = async () => {
         const session = sessionContext.getSession();
         const count = await collection.countDocuments(
-          // deno-lint-ignore no-explicit-any
-          { _scope: validated } as any,
+          { _scope: validated },
           { session, limit: 1 },
         );
         return count > 0;
       };
-      return traced(tele, "scopeExists", () => ({
-        [TA.SCOPE]: recordScope ? validated : undefined,
-      }), run);
+      return traced(
+        tele,
+        "scopeExists",
+        () => ({
+          [TA.SCOPE]: recordScope ? validated : undefined,
+        }),
+        run,
+      );
     },
 
     async dropScope(id, options) {
@@ -1894,8 +2558,7 @@ export async function scopedMultiCollection<
       const run = async () => {
         const session = sessionContext.getSession();
         const result = await collection.deleteMany(
-          // deno-lint-ignore no-explicit-any
-          { _scope: validated } as any,
+          { _scope: validated },
           { session },
         );
         if (!result.acknowledged) throw new Error("dropScope: delete failed");
@@ -1928,8 +2591,7 @@ export async function scopedMultiCollection<
           byType[g._id] = g.count;
           total += g.count;
         }
-        // deno-lint-ignore no-explicit-any
-        return { total, byType: byType as any };
+        return { total, byType: byType };
       };
       return traced(
         tele,
@@ -1941,6 +2603,8 @@ export async function scopedMultiCollection<
     },
 
     withSession: sessionContext.withSession,
+
+    collection: ambientSessionCollection(collection),
 
     async drop(options) {
       // Guard runs INSIDE `run` so a misuse (missing `{ force: true }`) still
@@ -1994,24 +2658,62 @@ function buildScopedStageBuilder<T extends ScopedMultiCollectionTypes>(
   scopeFilter: ScopeFilterShape,
 ): ScopedStageBuilder<T> {
   const scopeValue = scopeQueryValue(scopeFilter);
-  // First $match of a lookup sub-pipeline. Constants (_type, _scope) are
-  // emitted as query operators and only the correlated join key stays in
-  // $expr: the planner does not accept an $expr equality as subsuming a
-  // partialFilterExpression, so an $expr-only match hides the partial
-  // indexes withIndex creates and every lookup degrades to scanning the
-  // whole scope. The object is library-built and user sub-pipeline stages
-  // are appended AFTER it, so the `_scope` constraint can only be narrowed,
-  // never dropped or overridden.
-  const lookupBaseMatch = (
-    foreignField: string,
-    typeName?: string,
-  ): AggregationStage => ({
+  // First $match of a lookup sub-pipeline: the constants (_type, _scope) as
+  // query operators, nothing else. The join key is the lookup's own
+  // localField / foreignField (see lookupBaseMatch in multi-collection.ts for
+  // the measurement behind it). The object is library-built and user
+  // sub-pipeline stages are appended AFTER it, so the `_scope` constraint can
+  // only be narrowed, never dropped or overridden.
+  const lookupBaseMatch = (typeName?: string): AggregationStage => ({
     $match: {
       ...(typeName !== undefined ? { _type: typeName } : {}),
       ...(scopeValue !== null ? { _scope: scopeValue } : {}),
-      $expr: { $eq: [`$${foreignField}`, "$$localValue"] },
     },
   });
+  const joinInto = (
+    localField: string,
+    foreignField: string,
+    typeName: string | undefined,
+    asOrOptions:
+      | string
+      | {
+          as?: string;
+          pipeline?: (stage: ScopedStageBuilder<T>) => AggregationStage[];
+          let?: Record<string, unknown>;
+        }
+      | undefined,
+  ): AggregationStage => {
+    if (typeof asOrOptions === "string") {
+      return {
+        $lookup: {
+          from: collectionName,
+          localField,
+          foreignField,
+          let: { localValue: `$${localField}` },
+          pipeline: [lookupBaseMatch(typeName)],
+          as: asOrOptions,
+        },
+      };
+    }
+    const options = asOrOptions || {};
+    const as = options.as || localField;
+    assertLetDoesNotShadowJoinBinding(options.let);
+    const basePipeline: AggregationStage[] = [lookupBaseMatch(typeName)];
+    if (options.pipeline) {
+      basePipeline.push(...options.pipeline(stage));
+    }
+    return {
+      $lookup: {
+        from: collectionName,
+        localField,
+        foreignField,
+        // Join binding spread LAST so it can never be shadowed.
+        let: { ...(options.let || {}), localValue: `$${localField}` },
+        pipeline: basePipeline,
+        as,
+      },
+    };
+  };
   const stage: ScopedStageBuilder<T> = {
     match: (type, filter) => ({
       $match: {
@@ -2020,67 +2722,10 @@ function buildScopedStageBuilder<T extends ScopedMultiCollectionTypes>(
       },
     }),
     unwind: (_type, field) => ({ $unwind: `$${field}` }),
-    lookup: (type, localField, foreignField, asOrOptions) => {
-      const typeName = type as string;
-      if (typeof asOrOptions === "string") {
-        return {
-          $lookup: {
-            from: collectionName,
-            let: { localValue: `$${localField}` },
-            pipeline: [lookupBaseMatch(foreignField, typeName)],
-            as: asOrOptions,
-          },
-        };
-      }
-      const options = asOrOptions || {};
-      const as = options.as || localField;
-      assertLetDoesNotShadowJoinBinding(options.let);
-      const basePipeline: AggregationStage[] = [
-        lookupBaseMatch(foreignField, typeName),
-      ];
-      if (options.pipeline) {
-        basePipeline.push(...options.pipeline(stage));
-      }
-      return {
-        $lookup: {
-          from: collectionName,
-          // Join binding spread LAST so it can never be shadowed.
-          let: { ...(options.let || {}), localValue: `$${localField}` },
-          pipeline: basePipeline,
-          as,
-        },
-      };
-    },
-    anyLookup: (localField, foreignField, asOrOptions) => {
-      if (typeof asOrOptions === "string") {
-        return {
-          $lookup: {
-            from: collectionName,
-            let: { localValue: `$${localField}` },
-            pipeline: [lookupBaseMatch(foreignField)],
-            as: asOrOptions,
-          },
-        };
-      }
-      const options = asOrOptions || {};
-      const as = options.as || localField;
-      assertLetDoesNotShadowJoinBinding(options.let);
-      const basePipeline: AggregationStage[] = [
-        lookupBaseMatch(foreignField),
-      ];
-      if (options.pipeline) {
-        basePipeline.push(...options.pipeline(stage));
-      }
-      return {
-        $lookup: {
-          from: collectionName,
-          // Join binding spread LAST so it can never be shadowed.
-          let: { ...(options.let || {}), localValue: `$${localField}` },
-          pipeline: basePipeline,
-          as,
-        },
-      };
-    },
+    lookup: (type, localField, foreignField, asOrOptions) =>
+      joinInto(localField, foreignField, type as string, asOrOptions),
+    anyLookup: (localField, foreignField, asOrOptions) =>
+      joinInto(localField, foreignField, undefined, asOrOptions),
     externalLookup: (fromCollection, localField, foreignField, asOrOptions) => {
       if (typeof asOrOptions === "string") {
         return {
@@ -2128,34 +2773,15 @@ function buildProjection(fields: readonly string[]): Record<string, 1> {
   return projection;
 }
 
-/**
- * Build a Mongo update document from a `{ set, unset }` split (as produced
- * by {@link extractFieldsToRemove}). `set` values are sanitized ; `unset`
- * keys become a `$unset`. Returns `{}` when there is nothing to do.
- */
-function buildUpdateOps(
-  set: Record<string, unknown>,
-  unset: Record<string, unknown>,
-): Record<string, unknown> {
-  const sanitized = sanitizeForMongoDB(set, {
-    undefinedBehavior: "remove",
-    deep: true,
-  }) as Record<string, unknown>;
-  const ops: Record<string, unknown> = {};
-  if (Object.keys(sanitized).length > 0) ops.$set = sanitized;
-  if (Object.keys(unset).length > 0) ops.$unset = unset;
-  return ops;
-}
-
-function validateConfig<
-  T extends ScopedMultiCollectionTypes,
-  S extends AnySchema,
->(config: ScopedMultiCollectionConfig<T, S>): void {
-  if (!config.scope) {
+function validateConfig(
+  scope: AnySchema | undefined,
+  types: ScopedMultiCollectionTypes,
+): void {
+  if (!scope) {
     throw new Error("scopedMultiCollection: `scope` schema is required");
   }
 
-  const typeNames = Object.keys(config.types);
+  const typeNames = Object.keys(types);
   if (typeNames.length === 0) {
     throw new Error(
       "scopedMultiCollection: `types` must define at least one type",
@@ -2163,7 +2789,7 @@ function validateConfig<
   }
 
   for (const typeName of typeNames) {
-    const fields = config.types[typeName];
+    const fields = types[typeName];
     for (const fieldName of Object.keys(fields)) {
       if (RESERVED_FIELDS.has(fieldName)) {
         throw new Error(
@@ -2181,30 +2807,7 @@ async function applyValidator(
   collectionName: string,
   unionSchema: AnySchema,
 ): Promise<void> {
-  const validator = toMongoValidator(unionSchema);
-  const collections = await db.listCollections({ name: collectionName })
-    .toArray();
-
-  if (collections.length === 0) {
-    log.debug(`applyValidator(${collectionName}): createCollection`);
-    await db.createCollection(collectionName, { validator });
-    return;
-  }
-
-  const existingOptions = await db.command({
-    listCollections: 1,
-    filter: { name: collectionName },
-  });
-  const currentValidator =
-    existingOptions.cursor?.firstBatch?.[0]?.options?.validator || {};
-
-  if (dirtyEquivalent(currentValidator, validator)) {
-    log.debug(`applyValidator(${collectionName}): unchanged`);
-    return;
-  }
-
-  log.debug(`applyValidator(${collectionName}): collMod`);
-  await db.command({ collMod: collectionName, validator });
+  await ensureValidator(db, collectionName, toMongoValidator(unionSchema));
 }
 
 // Internal — exported so tests can audit reserved-field handling.

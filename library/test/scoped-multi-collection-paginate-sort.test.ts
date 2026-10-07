@@ -4,7 +4,8 @@
 // use the default `_id` sort). Duplicate sort values are seeded on purpose so
 // the tie-breaker branch (sortValue == anchor AND _id > anchor) is hit.
 
-import { assertEquals } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assertEquals } from "./+assert.ts";
 import { withDatabase } from "./+shared.ts";
 import { scopedMultiCollection } from "../src/scoped-multi-collection.ts";
 import * as v from "../src/schema.ts";
@@ -16,6 +17,7 @@ async function makeCatalog(
   db: Parameters<Parameters<typeof withDatabase>[1]>[0],
 ) {
   return await scopedMultiCollection(db, "catalog", {
+    schemaManagement: "auto",
     scope: refId("exposition"),
     types: {
       participant: { name: v.string(), seat: v.number() },
@@ -28,11 +30,7 @@ async function makeCatalog(
  * Seed `count` participants whose `seat` repeats (seat = floor(i/2)), so many
  * docs share a sort value and the `_id` tie-breaker decides their order.
  */
-async function seed(
-  // deno-lint-ignore no-explicit-any
-  catalog: any,
-  count: number,
-): Promise<void> {
+async function seed(catalog: any, count: number): Promise<void> {
   const view = catalog.scope(EXPO);
   for (let i = 0; i < count; i++) {
     await view.insertOne("participant", {
@@ -43,9 +41,7 @@ async function seed(
 }
 
 /** Walk every page via afterId and return the concatenated rows. */
-// deno-lint-ignore no-explicit-any
 async function walkAll(view: any, sort: Record<string, 1 | -1>, limit: number) {
-  // deno-lint-ignore no-explicit-any
   const all: any[] = [];
   let afterId: string | undefined = undefined;
   // hard stop so a cursor bug can't loop forever
@@ -67,7 +63,6 @@ async function walkAll(view: any, sort: Record<string, 1 | -1>, limit: number) {
  * own authoritative sort with no cursor involved. A correct compound-cursor
  * walk must reproduce this exact id sequence.
  */
-// deno-lint-ignore no-explicit-any
 async function groundTruth(view: any, sort: Record<string, 1 | -1>) {
   const page = await view.paginate("participant", undefined, {
     limit: 100_000,
@@ -76,7 +71,7 @@ async function groundTruth(view: any, sort: Record<string, 1 | -1>) {
   return (page.data as { _id: string }[]).map((d) => d._id);
 }
 
-Deno.test("paginate custom sort ASC: walk reproduces MongoDB's sorted order, once each", async () => {
+test("paginate custom sort ASC: walk reproduces MongoDB's sorted order, once each", async () => {
   await withDatabase("smc-paginate-sort-asc", async (db) => {
     const catalog = await makeCatalog(db);
     await seed(catalog, 47); // odd count → a partial last page
@@ -99,7 +94,7 @@ Deno.test("paginate custom sort ASC: walk reproduces MongoDB's sorted order, onc
   });
 });
 
-Deno.test("paginate custom sort DESC: walk reproduces MongoDB's sorted order, once each", async () => {
+test("paginate custom sort DESC: walk reproduces MongoDB's sorted order, once each", async () => {
   await withDatabase("smc-paginate-sort-desc", async (db) => {
     const catalog = await makeCatalog(db);
     await seed(catalog, 47);
@@ -114,7 +109,7 @@ Deno.test("paginate custom sort DESC: walk reproduces MongoDB's sorted order, on
   });
 });
 
-Deno.test("paginate custom sort: position + total are correct under a custom sort", async () => {
+test("paginate custom sort: position + total are correct under a custom sort", async () => {
   await withDatabase("smc-paginate-sort-pos", async (db) => {
     const catalog = await makeCatalog(db);
     await seed(catalog, 30);
@@ -141,7 +136,7 @@ Deno.test("paginate custom sort: position + total are correct under a custom sor
   });
 });
 
-Deno.test("paginate custom sort + pipeline: walk == Mongo order over JOIN survivors", async () => {
+test("paginate custom sort + pipeline: walk == Mongo order over JOIN survivors", async () => {
   await withDatabase("smc-paginate-sort-pipeline", async (db) => {
     const catalog = await makeCatalog(db);
     const view = catalog.scope(EXPO);
@@ -164,7 +159,6 @@ Deno.test("paginate custom sort + pipeline: walk == Mongo order over JOIN surviv
     }
 
     // INNER-JOIN filter: keep participants with >=1 membership, sorted by seat.
-    // deno-lint-ignore no-explicit-any
     const pipeline = (stage: any) => [
       stage.lookup("membership", "_id", "participantId", "m"),
       { $match: { "m.0": { $exists: true } } },
@@ -203,7 +197,7 @@ Deno.test("paginate custom sort + pipeline: walk == Mongo order over JOIN surviv
   });
 });
 
-Deno.test("paginate custom sort: beforeId returns the prior page in forward order", async () => {
+test("paginate custom sort: beforeId returns the prior page in forward order", async () => {
   await withDatabase("smc-paginate-sort-before", async (db) => {
     const catalog = await makeCatalog(db);
     await seed(catalog, 30);

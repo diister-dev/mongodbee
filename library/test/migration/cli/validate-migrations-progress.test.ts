@@ -18,8 +18,9 @@
  * The last case is the one that matters most: none of this may change what
  * the check DETECTS.
  */
-import { assert, assertEquals } from "@std/assert";
-import { stripAnsiCode } from "@std/fmt/colors";
+import { test } from "../../+harness.ts";
+import { assert, assertEquals } from "../../+assert.ts";
+import { stripAnsiCode } from "../../../src/utils/colors.ts";
 import { migrationDefinition } from "../../../src/migration/definition.ts";
 import type { MigrationDefinition } from "../../../src/migration/types.ts";
 import { validateMigrationsWithSimulation } from "../../../src/migration/cli/utils/validate-migrations.ts";
@@ -34,9 +35,9 @@ function chain(length: number): MigrationDefinition[] {
     const collections: Record<string, unknown> = {};
     for (let j = 0; j <= i; j++) collections[`c${j}`] = { _id: dbId(`c${j}`) };
     const migration: MigrationDefinition = migrationDefinition(
-      `2025_02_${String(i + 1).padStart(2, "0")}_0000_${
-        "P".repeat(25)
-      }${i}@step_${i}`,
+      `2025_02_${String(i + 1).padStart(2, "0")}_0000_${"P".repeat(
+        25,
+      )}${i}@step_${i}`,
       `step_${i}`,
       {
         parent,
@@ -57,7 +58,7 @@ function chain(length: number): MigrationDefinition[] {
 const isRedraw = (chunk: string) => chunk.startsWith("\r\x1b[K");
 const isCommitted = (chunk: string) => chunk.endsWith("\n");
 
-Deno.test("check progress: every in-flight line is redrawn from the work, not once", async () => {
+test("check progress: every in-flight line is redrawn from the work, not once", async () => {
   const chunks: string[] = [];
   await validateMigrationsWithSimulation(chain(3), {
     tty: true,
@@ -82,9 +83,9 @@ Deno.test("check progress: every in-flight line is redrawn from the work, not on
   for (const window of windows) {
     assert(
       window.length > 1,
-      `a step drew its line once and then went silent: ${
-        JSON.stringify(window.map(stripAnsiCode))
-      }`,
+      `a step drew its line once and then went silent: ${JSON.stringify(
+        window.map(stripAnsiCode),
+      )}`,
     );
   }
   const notes = chunks.filter((c) => stripAnsiCode(c).includes(" · "));
@@ -94,7 +95,7 @@ Deno.test("check progress: every in-flight line is redrawn from the work, not on
   );
 });
 
-Deno.test("check progress: the notes name the phase the loop is actually in", async () => {
+test("check progress: the notes name the phase the loop is actually in", async () => {
   const notes: string[] = [];
   const validator = createSimulationValidator({
     powerLevel: "quick",
@@ -126,9 +127,9 @@ Deno.test("check progress: the notes name the phase the loop is actually in", as
     "the schema-change phase reports nothing",
   );
   assert(
-    notes.slice(afterRoot, afterPropagation).some((n) =>
-      n.startsWith("mocking ")
-    ),
+    notes
+      .slice(afterRoot, afterPropagation)
+      .some((n) => n.startsWith("mocking ")),
     "state propagation — the slowest phase of the loop — reports nothing",
   );
   assert(
@@ -140,7 +141,7 @@ Deno.test("check progress: the notes name the phase the loop is actually in", as
 // Verrou — the propagation phase runs after the verdict has landed, so it
 // owns no step line. It was measured at 5-16s per migration on the owner's
 // chain: the single longest silence on screen, and the one nothing pointed at.
-Deno.test("check progress: state propagation gets its own in-flight line", async () => {
+test("check progress: state propagation gets its own in-flight line", async () => {
   const chunks: string[] = [];
   await validateMigrationsWithSimulation(chain(3), {
     tty: true,
@@ -149,7 +150,7 @@ Deno.test("check progress: state propagation gets its own in-flight line", async
   });
 
   const propagation = chunks.filter((c) =>
-    stripAnsiCode(c).includes("propagating state")
+    stripAnsiCode(c).includes("propagating state"),
   );
   assert(
     propagation.length > 0,
@@ -170,7 +171,7 @@ Deno.test("check progress: state propagation gets its own in-flight line", async
 // the first migration's `validateMigration`, before its first operation — so
 // the only line on screen is that migration's own, and the mock engine has to
 // keep it fed or the command looks hung exactly where it used to.
-Deno.test("check progress: the --last N window reports while it seeds itself", async () => {
+test("check progress: the --last N window reports while it seeds itself", async () => {
   const chunks: string[] = [];
   await validateMigrationsWithSimulation(chain(4), {
     tty: true,
@@ -193,13 +194,13 @@ Deno.test("check progress: the --last N window reports while it seeds itself", a
 
   assert(
     seedNotes.length > 0,
-    `seeding the window says nothing while it works: ${
-      JSON.stringify(beforeFirstVerdict)
-    }`,
+    `seeding the window says nothing while it works: ${JSON.stringify(
+      beforeFirstVerdict,
+    )}`,
   );
   assert(
     seedNotes.some((n) =>
-      /^(harvesting|minting|mocking|covering|realizing)/.test(n)
+      /^(harvesting|minting|mocking|covering|realizing)/.test(n),
     ),
     `the notes must name the seeding, got: ${JSON.stringify(seedNotes)}`,
   );
@@ -212,7 +213,7 @@ Deno.test("check progress: the --last N window reports while it seeds itself", a
 });
 
 // Verrou — progress is REPORTING. Adding it may not move a single verdict.
-Deno.test("check progress: reporting progress changes nothing that is detected", async () => {
+test("check progress: reporting progress changes nothing that is detected", async () => {
   const silent: string[] = [];
   const withProgress: string[] = [];
 

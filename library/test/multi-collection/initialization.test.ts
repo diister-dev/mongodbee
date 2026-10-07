@@ -1,11 +1,12 @@
+import { test } from "../+harness.ts";
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects } from "../+assert.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
-import { withIndex } from "@diister/mongodbee";
+import { withIndex } from "../../mod.ts";
 import { defineModel } from "../../src/multi-collection-model.ts";
 
-Deno.test("Ensure Schema are not recreated", async (t) => {
+test("Ensure Schema are not recreated", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {
@@ -39,7 +40,7 @@ Deno.test("Ensure Schema are not recreated", async (t) => {
   });
 });
 
-Deno.test("Ensure Schema are updated if changed", async (t) => {
+test("Ensure Schema are updated if changed", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {
@@ -91,7 +92,7 @@ Deno.test("Ensure Schema are updated if changed", async (t) => {
   });
 });
 
-Deno.test("Ensure indexes are not recreated if already exist", async (t) => {
+test("Ensure indexes are not recreated if already exist", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {
@@ -148,7 +149,7 @@ Deno.test("Ensure indexes are not recreated if already exist", async (t) => {
   });
 });
 
-Deno.test("Ensure indexes are updated if changed", async (t) => {
+test("Ensure indexes are updated if changed", async (t) => {
   await withDatabase(t.name, async (db) => {
     const model = defineModel("test", {
       schema: {

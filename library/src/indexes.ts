@@ -6,11 +6,40 @@ import {
 import * as v from "./schema.ts";
 import type * as m from "mongodb";
 
+export {
+  asc,
+  desc,
+  type FieldRef,
+  type FieldsOf,
+  index,
+  IndexDeclaration,
+  unique,
+} from "./index-builder.ts";
+
 /**
  * Symbol used to mark a field as requiring a unique index
  * @internal
  */
-export const INDEX_SYMBOL = Symbol("mongodbee.index");
+export const INDEX_SYMBOL = Symbol.for("mongodbee.index");
+
+/**
+ * Reads `withIndex` metadata from a Valibot metadata object, including
+ * metadata written by another copy of mongodbee whose symbol is local.
+ * @internal
+ */
+export function indexMetadataOf(
+  metadata: Record<PropertyKey, unknown> | undefined | null,
+): IndexDatabase | undefined {
+  if (!metadata || typeof metadata !== "object") return undefined;
+  const own = metadata[INDEX_SYMBOL];
+  if (own !== undefined) return own as IndexDatabase;
+  for (const key of Object.getOwnPropertySymbols(metadata)) {
+    if (key.description === "mongodbee.index") {
+      return metadata[key] as IndexDatabase;
+    }
+  }
+  return undefined;
+}
 
 /**
  * Metadata for unique index validation
@@ -45,6 +74,30 @@ export type IndexMetadata = {
   global?: boolean;
 };
 
+export type CompositeIndexDescriptor = {
+  name?: string;
+  key: Record<string, 1 | -1>;
+  unique?: boolean;
+  insensitive?: boolean;
+  collation?: m.CollationOptions;
+  expireAfterSeconds?: number;
+  partialFilterExpression?: m.Document;
+  global?: boolean;
+};
+
+export function deriveCompositeIndexName(
+  descriptor: CompositeIndexDescriptor,
+  sanitizePath: (path: string) => string,
+): string {
+  if (descriptor.name) return sanitizePath(descriptor.name);
+  return Object.entries(descriptor.key)
+    .map(
+      ([path, direction]) =>
+        `${sanitizePath(path)}_${direction < 0 ? "desc" : "asc"}`,
+    )
+    .join("_");
+}
+
 export type IndexDatabase = {
   unique?: boolean;
   collation?: m.CollationOptions;
@@ -70,12 +123,12 @@ export type IndexDatabase = {
  *
  * @example
  * ```typescript
- * import * as v from "mongodbee/schema";
- * import { uniqueIndex } from "mongodbee";
+ * import * as v from "@diister/mongodbee/schema";
+ * import { withIndex } from "@diister/mongodbee";
  *
  * const userSchema = {
- *   email: uniqueIndex(v.string()),
- *   username: uniqueIndex(v.pipe(v.string(), v.minLength(3)))
+ *   email: withIndex(v.string(), { unique: true }),
+ *   username: withIndex(v.pipe(v.string(), v.minLength(3)), { unique: true })
  * };
  * ```
  */
@@ -87,9 +140,12 @@ export function withIndex<
 ): v.SchemaWithPipe<
   readonly [
     T,
-    v.MetadataAction<v.InferOutput<T>, {
-      readonly [INDEX_SYMBOL]: IndexDatabase;
-    }>,
+    v.MetadataAction<
+      v.InferOutput<T>,
+      {
+        readonly [INDEX_SYMBOL]: IndexDatabase;
+      }
+    >,
   ]
 > {
   // Build the index metadata based on provided options
@@ -148,7 +204,7 @@ export function extractIndexes(
 
       // Check for index metadata on the schema itself
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let indexMetadata = (node.schema as any).metadata?.[INDEX_SYMBOL];
+      let indexMetadata = indexMetadataOf((node.schema as any).metadata);
 
       // If not found on schema, check in pipe validations (for withIndex on unions, etc.)
       if (!indexMetadata) {
@@ -157,7 +213,7 @@ export function extractIndexes(
         if (pipes && Array.isArray(pipes)) {
           for (const pipe of pipes) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const pipeMetadata = (pipe as any).metadata?.[INDEX_SYMBOL];
+            const pipeMetadata = indexMetadataOf((pipe as any).metadata);
             if (pipeMetadata) {
               indexMetadata = pipeMetadata;
               break; // Only need one index per field
@@ -222,9 +278,7 @@ function normalizeCollation(
 /**
  * Normalize index options for comparison purposes.
  */
-export function normalizeIndexOptions(
-  opts: unknown,
-): {
+export function normalizeIndexOptions(opts: unknown): {
   unique: boolean;
   collation?: string;
   partialFilterExpression?: string;
@@ -235,18 +289,24 @@ export function normalizeIndexOptions(
   const hasUnique = Object.prototype.hasOwnProperty.call(objTyped, "unique")
     ? Boolean(objTyped["unique"])
     : false;
-  const collationVal =
-    Object.prototype.hasOwnProperty.call(objTyped, "collation")
-      ? objTyped["collation"]
-      : undefined;
-  const pfeVal =
-    Object.prototype.hasOwnProperty.call(objTyped, "partialFilterExpression")
-      ? objTyped["partialFilterExpression"]
-      : undefined;
-  const ttlVal =
-    Object.prototype.hasOwnProperty.call(objTyped, "expireAfterSeconds")
-      ? objTyped["expireAfterSeconds"]
-      : undefined;
+  const collationVal = Object.prototype.hasOwnProperty.call(
+    objTyped,
+    "collation",
+  )
+    ? objTyped["collation"]
+    : undefined;
+  const pfeVal = Object.prototype.hasOwnProperty.call(
+    objTyped,
+    "partialFilterExpression",
+  )
+    ? objTyped["partialFilterExpression"]
+    : undefined;
+  const ttlVal = Object.prototype.hasOwnProperty.call(
+    objTyped,
+    "expireAfterSeconds",
+  )
+    ? objTyped["expireAfterSeconds"]
+    : undefined;
   return {
     unique: hasUnique,
     collation: collationVal

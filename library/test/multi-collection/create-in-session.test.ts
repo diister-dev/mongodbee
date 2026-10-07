@@ -1,5 +1,6 @@
+import { test } from "../+harness.ts";
 import * as v from "../../src/schema.ts";
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects } from "../+assert.ts";
 import {
   createMultiCollectionInstance,
   discoverMultiCollectionInstances,
@@ -44,7 +45,7 @@ const userSchema = {
   email: v.string(),
 };
 
-Deno.test("Create multiCollection in session: Basic creation and insert", async (t) => {
+test("Create multiCollection in session: Basic creation and insert", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Get session context directly from the client
     const { withSession } = getSessionContext(db.client);
@@ -85,7 +86,7 @@ Deno.test("Create multiCollection in session: Basic creation and insert", async 
   });
 });
 
-Deno.test("Create multiCollection in session: Rollback on error", async (t) => {
+test("Create multiCollection in session: Rollback on error", async (t) => {
   await withDatabase(t.name, async (db) => {
     const { withSession } = getSessionContext(db.client);
 
@@ -137,7 +138,7 @@ Deno.test("Create multiCollection in session: Rollback on error", async (t) => {
   });
 });
 
-Deno.test("Create multiCollection in session: Multiple collections in same session", async (t) => {
+test("Create multiCollection in session: Multiple collections in same session", async (t) => {
   await withDatabase(t.name, async (db) => {
     const { withSession } = getSessionContext(db.client);
 
@@ -191,7 +192,7 @@ Deno.test("Create multiCollection in session: Multiple collections in same sessi
   });
 });
 
-Deno.test("Create multiCollection in session: Using collection's withSession", async (t) => {
+test("Create multiCollection in session: Using collection's withSession", async (t) => {
   await withDatabase(t.name, async (db) => {
     // First create an existing collection to get withSession from
     const users = await collection(db, "users", userSchema);
@@ -239,7 +240,7 @@ Deno.test("Create multiCollection in session: Using collection's withSession", a
   });
 });
 
-Deno.test("Create multiCollection in session: Nested withSession calls", async (t) => {
+test("Create multiCollection in session: Nested withSession calls", async (t) => {
   await withDatabase(t.name, async (db) => {
     const { withSession } = getSessionContext(db.client);
 
@@ -279,7 +280,7 @@ Deno.test("Create multiCollection in session: Nested withSession calls", async (
   });
 });
 
-Deno.test("Create multiCollection in session: With schemaManagement auto (explicit)", async (t) => {
+test("Create multiCollection in session: With schemaManagement auto (explicit)", async (t) => {
   await withDatabase(t.name, async (db) => {
     // When using schemaManagement: "auto" explicitly, validators/indexes are applied
     // This can cause issues in transactions, so collections should be created BEFORE the session
@@ -313,7 +314,7 @@ Deno.test("Create multiCollection in session: With schemaManagement auto (explic
 // Tests for utility functions in sessions
 // ============================================================================
 
-Deno.test("Utility functions in session: createMultiCollectionInstance", async (t) => {
+test("Utility functions in session: createMultiCollectionInstance", async (t) => {
   await withDatabase(t.name, async (db) => {
     const { withSession } = getSessionContext(db.client);
 
@@ -333,7 +334,7 @@ Deno.test("Utility functions in session: createMultiCollectionInstance", async (
   });
 });
 
-Deno.test("Utility functions in session: multiCollectionInstanceExists", async (t) => {
+test("Utility functions in session: multiCollectionInstanceExists", async (t) => {
   await withDatabase(t.name, async (db) => {
     const { withSession } = getSessionContext(db.client);
 
@@ -363,7 +364,7 @@ Deno.test("Utility functions in session: multiCollectionInstanceExists", async (
   });
 });
 
-Deno.test("Utility functions in session: discoverMultiCollectionInstances", async (t) => {
+test("Utility functions in session: discoverMultiCollectionInstances", async (t) => {
   await withDatabase(t.name, async (db) => {
     // Create multiple instances OUTSIDE session (DDL operations incompatible with transactions)
     await createMultiCollectionInstance(db, "catalog_paris", catalogModel);
@@ -406,7 +407,7 @@ Deno.test("Utility functions in session: discoverMultiCollectionInstances", asyn
   });
 });
 
-Deno.test("Utility functions in session: getMultiCollectionInfo", async (t) => {
+test("Utility functions in session: getMultiCollectionInfo", async (t) => {
   await withDatabase(t.name, async (db) => {
     const { withSession } = getSessionContext(db.client);
 
@@ -431,7 +432,7 @@ Deno.test("Utility functions in session: getMultiCollectionInfo", async (t) => {
   });
 });
 
-Deno.test("Utility functions in session: getMultiCollectionMigrations", async (t) => {
+test("Utility functions in session: getMultiCollectionMigrations", async (t) => {
   await withDatabase(t.name, async (db) => {
     const { withSession } = getSessionContext(db.client);
 
@@ -472,7 +473,7 @@ Deno.test("Utility functions in session: getMultiCollectionMigrations", async (t
   });
 });
 
-Deno.test("Utility functions in session: markAsMultiCollection", async (t) => {
+test("Utility functions in session: markAsMultiCollection", async (t) => {
   await withDatabase(t.name, async (db) => {
     const { withSession } = getSessionContext(db.client);
 
@@ -508,7 +509,7 @@ Deno.test("Utility functions in session: markAsMultiCollection", async (t) => {
   });
 });
 
-Deno.test("Utility functions in session: Combined operations", async (t) => {
+test("Utility functions in session: Combined operations", async (t) => {
   await withDatabase(t.name, async (db) => {
     const { withSession } = getSessionContext(db.client);
 
@@ -545,7 +546,7 @@ Deno.test("Utility functions in session: Combined operations", async (t) => {
 });
 
 // Test that createMultiCollectionInstance throws when called in a session
-Deno.test("Utility functions in session: createMultiCollectionInstance throws in session", async (t) => {
+test("Utility functions in session: createMultiCollectionInstance throws in session", async (t) => {
   await withDatabase(t.name, async (db) => {
     const { withSession } = getSessionContext(db.client);
 

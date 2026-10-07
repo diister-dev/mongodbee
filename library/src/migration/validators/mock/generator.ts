@@ -11,6 +11,9 @@
 import * as v from "valibot";
 import { createMockGenerator } from "@diister/valibot-mock";
 import type { MockGeneratorOptions } from "@diister/valibot-mock";
+import { createLogger } from "../../../utils/logger.ts";
+
+const log = createLogger("simulation");
 
 /**
  * Options threaded into ONE generator invocation.
@@ -81,20 +84,19 @@ export function generateMockDocument(
   options?: MockDocumentOptions,
 ): Record<string, unknown> {
   // Wrap the schema in v.object() for valibot-mock
-  // deno-lint-ignore no-explicit-any
   const schemaObject = v.object(
     schema as Record<string, v.BaseSchema<any, any, any>>,
   );
 
   // Use valibot-mock to generate realistic test data from schema
-  // deno-lint-ignore no-explicit-any
   const generator = createMockGenerator(
     schemaObject as any,
     toGeneratorOptions(options),
   );
-  const mockData = stripUndefinedKeys(
-    generator.generate(),
-  ) as Record<string, unknown>;
+  const mockData = stripUndefinedKeys(generator.generate()) as Record<
+    string,
+    unknown
+  >;
 
   // Validate the generated data matches the schema
   const validation = v.safeParse(schemaObject, mockData);
@@ -102,8 +104,8 @@ export function generateMockDocument(
     return validation.output;
   }
   // If validation fails (shouldn't happen), fallback to simple mock
-  console.warn(
-    "/!\\ Generated mock data did not validate against schema, using simple mock instead",
+  log.warn(
+    "Generated mock data did not validate against schema, using the raw mock instead",
   );
   return mockData;
 }
@@ -118,7 +120,6 @@ export function generateMockScopeValue(
   schema: v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>,
   options?: MockDocumentOptions,
 ): unknown {
-  // deno-lint-ignore no-explicit-any
   const generator = createMockGenerator(
     schema as any,
     toGeneratorOptions(options),
@@ -129,8 +130,8 @@ export function generateMockScopeValue(
   if (validation.success) {
     return validation.output;
   }
-  console.warn(
-    "/!\\ Generated mock scope value did not validate against the scope schema, using raw mock instead",
+  log.warn(
+    "Generated mock scope value did not validate against the scope schema, using the raw mock instead",
   );
   return mockValue;
 }

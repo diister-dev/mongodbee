@@ -10,11 +10,144 @@
 
 import * as m from "mongodb";
 import type * as v from "./schema.ts";
-import { extractIndexes, keyEqual, normalizeIndexOptions } from "./indexes.ts";
+import {
+  type CompositeIndexDescriptor,
+  deriveCompositeIndexName,
+  extractIndexes,
+  keyEqual,
+  normalizeIndexOptions,
+} from "./indexes.ts";
 import { sanitizePathName } from "./schema-navigator.ts";
 import { createLogger } from "./utils/logger.ts";
+import { PRIMARY } from "./read-preference.ts";
 
 const log = createLogger("indexes-applier");
+
+export interface IndexTarget {
+  readonly collectionName: string;
+  indexes(options: {
+    readPreference: m.ReadPreference;
+  }): Promise<m.IndexDescriptionInfo[]>;
+  dropIndex(name: string): Promise<unknown>;
+  createIndexes(specs: m.IndexDescription[]): Promise<string[]>;
+}
+
+export const COMPOSITE_INDEX_MARKER = "_idx_";
+
+export interface CompositeProjection {
+  name: string;
+  key: Record<string, number>;
+  options: m.CreateIndexesOptions;
+}
+
+function compositeOptions(
+  descriptor: CompositeIndexDescriptor,
+  name: string,
+  partialFilterExpression?: m.Document,
+): m.CreateIndexesOptions {
+  const options: m.CreateIndexesOptions = { name };
+  if (descriptor.unique) options.unique = true;
+  if (descriptor.collation) {
+    options.collation = descriptor.collation;
+  } else if (descriptor.insensitive) {
+    options.collation = { locale: "en", strength: 2 };
+  }
+  if (descriptor.expireAfterSeconds !== undefined) {
+    options.expireAfterSeconds = descriptor.expireAfterSeconds;
+  }
+  if (partialFilterExpression) {
+    options.partialFilterExpression = partialFilterExpression;
+  } else if (descriptor.partialFilterExpression) {
+    options.partialFilterExpression = descriptor.partialFilterExpression;
+  }
+  return options;
+}
+
+export function projectComposites(
+  descriptors: readonly CompositeIndexDescriptor[],
+  family: "collection" | "multi" | "scoped",
+  typeName?: string,
+): CompositeProjection[] {
+  return descriptors.map((descriptor) => {
+    const suffix = deriveCompositeIndexName(descriptor, sanitizePathName);
+    const isGlobal = descriptor.global === true;
+
+    let name: string;
+    let key: Record<string, number>;
+    let partial: m.Document | undefined;
+
+    if (family === "collection") {
+      name = `${COMPOSITE_INDEX_MARKER}${suffix}`;
+      key = { ...descriptor.key };
+      partial = descriptor.partialFilterExpression;
+    } else {
+      const typeFilter = { _type: { $eq: typeName } };
+      partial = descriptor.partialFilterExpression
+        ? { $and: [descriptor.partialFilterExpression, typeFilter] }
+        : typeFilter;
+      if (family === "multi") {
+        name = `${typeName}_${COMPOSITE_INDEX_MARKER}${suffix}`;
+        key = { ...descriptor.key };
+      } else if (isGlobal) {
+        name = `__type_${typeName}_${COMPOSITE_INDEX_MARKER}${suffix}`;
+        key = { _type: 1, ...descriptor.key };
+      } else {
+        name = `_scope__type_${typeName}_${COMPOSITE_INDEX_MARKER}${suffix}`;
+        key = { _scope: 1, _type: 1, ...descriptor.key };
+      }
+    }
+
+    return { name, key, options: compositeOptions(descriptor, name, partial) };
+  });
+}
+
+type ExistingIndex = m.IndexDescriptionInfo;
+
+type PlannedIndex = {
+  key: Record<string, number>;
+  options: m.CreateIndexesOptions;
+};
+
+function indexKeyOf(index: ExistingIndex): Record<string, unknown> {
+  const key = index.key as unknown;
+  if (key instanceof Map) return Object.fromEntries(key);
+  return (key ?? {}) as Record<string, unknown>;
+}
+
+function reconcileIndex(
+  currentIndexes: ExistingIndex[],
+  expectedNames: Set<string>,
+  key: Record<string, number>,
+  options: m.CreateIndexesOptions,
+  toCreate: PlannedIndex[],
+  toDrop: string[],
+): void {
+  const existing =
+    currentIndexes.find((i) => i.name === options.name) ||
+    currentIndexes.find(
+      (i) => !expectedNames.has(i.name ?? "") && keyEqual(indexKeyOf(i), key),
+    );
+
+  if (existing) {
+    const existingNorm = normalizeIndexOptions(existing);
+    const desiredNorm = normalizeIndexOptions(options);
+    if (
+      existingNorm.unique === desiredNorm.unique &&
+      existingNorm.collation === desiredNorm.collation &&
+      existingNorm.partialFilterExpression ===
+        desiredNorm.partialFilterExpression &&
+      existingNorm.expireAfterSeconds === desiredNorm.expireAfterSeconds &&
+      keyEqual(indexKeyOf(existing), key)
+    ) {
+      return;
+    }
+    if (existing.name && !toDrop.includes(existing.name)) {
+      toDrop.push(existing.name);
+    }
+  }
+
+  toCreate.push({ key, options });
+}
 
 /**
  * Strip mongodbee-only sentinel keys from index metadata before the options
@@ -46,22 +179,73 @@ function stripIndexSentinels<T extends Record<string, unknown>>(
  * - TTL (`expireAfterSeconds`): the server only honors TTL on the shapes it
  *   already accepts — changing them is not this concern.
  */
-function paginationKeySuffix(
-  metadata: { unique?: boolean; expireAfterSeconds?: number },
-): Record<string, number> {
+function paginationKeySuffix(metadata: {
+  unique?: boolean;
+  expireAfterSeconds?: number;
+}): Record<string, number> {
   return metadata.unique === true || metadata.expireAfterSeconds !== undefined
     ? {}
     : { _id: 1 };
 }
 
 export interface ApplyIndexesOptions {
-  /**
-   * Optional queue for managing concurrent MongoDB operations.
-   * If not provided, operations will run directly without queuing.
-   */
-  queue?: {
-    add<T>(fn: () => Promise<T>): Promise<T>;
-  };
+  composites?: Record<string, readonly CompositeIndexDescriptor[]>;
+}
+
+export interface ApplyCollectionIndexesOptions {
+  composites?: readonly CompositeIndexDescriptor[];
+}
+
+/** `codeName` on current servers; bare code 27 on legacy ones. */
+function isIndexNotFound(error: unknown): boolean {
+  return (
+    (error instanceof m.MongoServerError &&
+      error.codeName === "IndexNotFound") ||
+    (error as { code?: number }).code === 27
+  );
+}
+
+/**
+ * Drops are the rare path (a declaration changed), so they stay parallel.
+ * IndexNotFound is tolerated: two processes booting against the same database
+ * (an api and a worker) both plan the same drop, and the loser's index is
+ * already gone — same reasoning as NamespaceExists in `ensureValidator`.
+ */
+async function dropIndexes(
+  collection: IndexTarget,
+  names: readonly string[],
+): Promise<void> {
+  await Promise.all(
+    names.map((name) =>
+      collection.dropIndex(name).catch((error: unknown) => {
+        if (!isIndexNotFound(error)) throw error;
+      }),
+    ),
+  );
+}
+
+/**
+ * The whole create plan of a collection goes out as ONE `createIndexes`
+ * command — not one `createIndex` per spec, which is what `b3619ab` had split
+ * it into. On a replica set every DDL command costs ~30-45 ms of server-side
+ * latency regardless of the write concern (measured: `createCollection` 32 ms,
+ * `createIndexes` with three specs 45 ms, versus ~25 ms per single
+ * `createIndex`), so the round-trip count is the cost. The server builds all
+ * specs in a single index build and skips those that already exist with an
+ * identical spec, so this is also the idempotent shape.
+ *
+ * No catch here: the plan was reconciled against `listIndexes` just before, so
+ * a conflict means a concurrent booter changed the collection in between, and
+ * that must surface rather than be tolerated as "already exists".
+ */
+async function createIndexes(
+  collection: IndexTarget,
+  planned: readonly PlannedIndex[],
+): Promise<void> {
+  if (planned.length === 0) return;
+  await collection.createIndexes(
+    planned.map(({ key, options }) => ({ key, ...options })),
+  );
 }
 
 /**
@@ -75,7 +259,7 @@ export interface ApplyIndexesOptions {
  *
  * @param collection - MongoDB collection to apply indexes to
  * @param schema - Valibot object schema defining the collection structure
- * @param options - Optional configuration including operation queue
+ * @param options - Optional composite index declarations
  *
  * @example
  * ```typescript
@@ -91,18 +275,15 @@ export interface ApplyIndexesOptions {
  * ```
  */
 export async function applyCollectionIndexes(
-  collection: m.Collection<any>,
+  collection: IndexTarget,
   schema: v.ObjectSchema<any, any>,
-  options: ApplyIndexesOptions = {},
+  options: ApplyCollectionIndexesOptions = {},
 ): Promise<void> {
-  const currentIndexes = await collection.indexes();
+  const currentIndexes = await collection.indexes({ readPreference: PRIMARY });
   const indexes = extractIndexes(schema);
 
   // Collect all indexes that need to be created or recreated
-  const indexesToCreate: Array<{
-    key: Record<string, number>;
-    options: m.CreateIndexesOptions;
-  }> = [];
+  const indexesToCreate: PlannedIndex[] = [];
   const indexesToDrop: string[] = [];
 
   // Collect all expected index names from the current schema
@@ -110,6 +291,11 @@ export async function applyCollectionIndexes(
   for (const index of indexes) {
     const indexPath = sanitizePathName(index.path);
     expectedIndexNames.add(indexPath);
+  }
+
+  const composites = projectComposites(options.composites ?? [], "collection");
+  for (const composite of composites) {
+    expectedIndexNames.add(composite.name);
   }
 
   // Get all possible field paths from the current schema to detect potential mongodbee indexes
@@ -134,8 +320,9 @@ export async function applyCollectionIndexes(
 
     // Check if this index name matches any field in our schema
     const isSchemaField = allSchemaPaths.has(indexName);
+    const isComposite = indexName.startsWith(COMPOSITE_INDEX_MARKER);
 
-    if (isSchemaField && !expectedIndexNames.has(indexName)) {
+    if ((isSchemaField || isComposite) && !expectedIndexNames.has(indexName)) {
       // This is an orphaned mongodbee index that should be removed
       indexesToDrop.push(indexName);
     }
@@ -146,7 +333,8 @@ export async function applyCollectionIndexes(
     const indexPath = sanitizePathName(index.path);
 
     // Try to find an existing index: prefer exact name, fallback to key match
-    const existingIndex = currentIndexes.find((i) => i.name === indexPath) ||
+    const existingIndex =
+      currentIndexes.find((i) => i.name === indexPath) ||
       currentIndexes.find((i) => keyEqual(i.key || {}, keySpec));
 
     const desiredOptions = {
@@ -188,47 +376,19 @@ export async function applyCollectionIndexes(
     });
   }
 
-  // Drop indexes
-  if (indexesToDrop.length > 0) {
-    const dropPromises = indexesToDrop.map((indexName) => {
-      const dropFn = () =>
-        collection.dropIndex(indexName).catch((err: unknown) => {
-          // tolerate race / already dropped
-          if (
-            err instanceof m.MongoServerError &&
-            err.codeName === "IndexNotFound"
-          ) {
-            // ignore
-            return;
-          }
-          const maybe = err as { code?: number };
-          if (maybe.code === 27) {
-            // legacy IndexNotFound code
-            return;
-          }
-          throw err;
-        });
-
-      return options.queue ? options.queue.add(dropFn) : dropFn();
-    });
-
-    await Promise.all(dropPromises);
+  for (const composite of composites) {
+    reconcileIndex(
+      currentIndexes,
+      expectedIndexNames,
+      composite.key,
+      composite.options,
+      indexesToCreate,
+      indexesToDrop,
+    );
   }
 
-  // Create indexes
-  if (indexesToCreate.length > 0) {
-    const createPromises = indexesToCreate.map((indexSpec) => {
-      const createFn = () =>
-        collection.createIndex(
-          indexSpec.key,
-          indexSpec.options,
-        );
-
-      return options.queue ? options.queue.add(createFn) : createFn();
-    });
-
-    await Promise.all(createPromises);
-  }
+  await dropIndexes(collection, indexesToDrop);
+  await createIndexes(collection, indexesToCreate);
 }
 
 /**
@@ -246,7 +406,7 @@ export async function applyCollectionIndexes(
  *
  * @param collection - MongoDB collection to apply indexes to
  * @param schemasPerType - Map of type names to their valibot schemas
- * @param options - Optional configuration including operation queue
+ * @param options - Optional composite index declarations
  *
  * @example
  * ```typescript
@@ -283,7 +443,8 @@ function partialFilterPinsType(pfe: unknown, typeName: string): boolean {
     const val = obj["_type"];
     if (val === typeName) return true;
     if (
-      val && typeof val === "object" &&
+      val &&
+      typeof val === "object" &&
       (val as Record<string, unknown>)["$eq"] === typeName
     ) {
       return true;
@@ -294,6 +455,29 @@ function partialFilterPinsType(pfe: unknown, typeName: string): boolean {
     return and.some((clause) => partialFilterPinsType(clause, typeName));
   }
   return false;
+}
+
+/**
+ * The type a mongodbee per-type index is pinned to by its partial filter
+ * (`{ _type: t }`, `{ _type: { $eq: t } }`, or either inside `$and`).
+ */
+function pinnedTypeOf(pfe: unknown): string | undefined {
+  if (!pfe || typeof pfe !== "object") return undefined;
+  const obj = pfe as Record<string, unknown>;
+  const value = obj["_type"];
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object") {
+    const eq = (value as Record<string, unknown>)["$eq"];
+    if (typeof eq === "string") return eq;
+  }
+  const and = obj["$and"];
+  if (Array.isArray(and)) {
+    for (const clause of and) {
+      const found = pinnedTypeOf(clause);
+      if (found !== undefined) return found;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -329,10 +513,10 @@ function partialFilterPinsType(pfe: unknown, typeName: string): boolean {
  *
  * @param collection - MongoDB collection
  * @param schemasPerType - Map of type names to their Valibot schemas
- * @param options - { queue? }
+ * @param options - { composites? }
  */
 export async function applyScopedMultiCollectionIndexes(
-  collection: m.Collection<any>,
+  collection: IndexTarget,
   schemasPerType: Record<string, v.ObjectSchema<any, any>>,
   options: ApplyIndexesOptions = {},
 ): Promise<void> {
@@ -340,7 +524,7 @@ export async function applyScopedMultiCollectionIndexes(
   log.debug(
     `applyScopedMultiCollectionIndexes(${collName}): list current indexes`,
   );
-  const currentIndexes = await collection.indexes();
+  const currentIndexes = await collection.indexes({ readPreference: PRIMARY });
 
   // Always-on base index : {_scope: 1, _type: 1, _id: 1}. The trailing `_id`
   // makes the ScopedView's default paginate sort ({_id: 1} under {_scope,_type}
@@ -364,10 +548,7 @@ export async function applyScopedMultiCollectionIndexes(
   // index that merely shares one of these names (e.g. a hand-created unique or
   // collated variant) is reconciled — dropped and recreated to the correct
   // spec — instead of being blindly accepted as "the" base index.
-  const systemIndexes: Array<{
-    key: Record<string, number>;
-    options: m.CreateIndexesOptions;
-  }> = [
+  const systemIndexes: PlannedIndex[] = [
     { key: baseIndexKey, options: { name: baseIndexName } },
     { key: typeIndexKey, options: { name: typeIndexName } },
   ];
@@ -381,6 +562,11 @@ export async function applyScopedMultiCollectionIndexes(
     ([typeName, schema]) => ({
       typeName,
       indexes: extractIndexes(schema),
+      composites: projectComposites(
+        options.composites?.[typeName] ?? [],
+        "scoped",
+        typeName,
+      ),
     }),
   );
 
@@ -388,7 +574,7 @@ export async function applyScopedMultiCollectionIndexes(
   const expectedNames = new Set<string>();
   expectedNames.add(baseIndexName);
   expectedNames.add(typeIndexName);
-  for (const { typeName, indexes } of declaredPerType) {
+  for (const { typeName, indexes, composites } of declaredPerType) {
     for (const idx of indexes) {
       const isGlobal = idx.metadata.global === true;
       const prefix = isGlobal
@@ -396,12 +582,12 @@ export async function applyScopedMultiCollectionIndexes(
         : `_scope__type_${typeName}`;
       expectedNames.add(`${prefix}_${sanitizePathName(idx.path)}`);
     }
+    for (const composite of composites) {
+      expectedNames.add(composite.name);
+    }
   }
 
-  const indexesToCreate: Array<{
-    key: Record<string, number>;
-    options: m.CreateIndexesOptions;
-  }> = [];
+  const indexesToCreate: PlannedIndex[] = [];
   const indexesToDrop: string[] = [];
 
   // Drop orphans: any index whose name starts with our prefixes but is no
@@ -409,8 +595,8 @@ export async function applyScopedMultiCollectionIndexes(
   for (const existing of currentIndexes) {
     const name = existing.name;
     if (!name || name === "_id_" || name === baseIndexName) continue;
-    const looksOwned = name.startsWith("_scope__type_") ||
-      name.startsWith("__type_");
+    const looksOwned =
+      name.startsWith("_scope__type_") || name.startsWith("__type_");
     if (looksOwned && !expectedNames.has(name)) {
       indexesToDrop.push(name);
     }
@@ -438,8 +624,8 @@ export async function applyScopedMultiCollectionIndexes(
       continue;
     }
     const pfe = (existing as Record<string, unknown>).partialFilterExpression;
-    const isLegacy = declaredTypeNames.some((t) =>
-      name.startsWith(`${t}_`) && partialFilterPinsType(pfe, t)
+    const isLegacy = declaredTypeNames.some(
+      (t) => name.startsWith(`${t}_`) && partialFilterPinsType(pfe, t),
     );
     if (isLegacy && !indexesToDrop.includes(name)) {
       indexesToDrop.push(name);
@@ -521,9 +707,10 @@ export async function applyScopedMultiCollectionIndexes(
       // patterns { _scope:1, _type:1, <field>:1 } and the fallback would match
       // the *other* type's live index — dropping it and oscillating on every
       // init (see applyScopedMultiCollectionIndexes tests).
-      const existing = currentIndexes.find((i) => i.name === indexName) ||
-        currentIndexes.find((i) =>
-          !expectedNames.has(i.name ?? "") && keyEqual(i.key || {}, key)
+      const existing =
+        currentIndexes.find((i) => i.name === indexName) ||
+        currentIndexes.find(
+          (i) => !expectedNames.has(i.name ?? "") && keyEqual(i.key || {}, key),
         );
 
       let needsRecreate = true;
@@ -549,65 +736,37 @@ export async function applyScopedMultiCollectionIndexes(
     }
   }
 
-  if (indexesToDrop.length > 0) {
-    const dropPromises = indexesToDrop.map((name) => {
-      const dropFn = () =>
-        collection.dropIndex(name).catch((e) => {
-          if (
-            e instanceof m.MongoServerError && e.codeName === "IndexNotFound"
-          ) {
-            return;
-          }
-          const maybe = e as { code?: number };
-          if (maybe.code === 27) return;
-          throw e;
-        });
-      return options.queue ? options.queue.add(dropFn) : dropFn();
-    });
-    await Promise.all(dropPromises);
+  for (const { composites } of declaredPerType) {
+    for (const composite of composites) {
+      reconcileIndex(
+        currentIndexes,
+        expectedNames,
+        composite.key,
+        composite.options,
+        indexesToCreate,
+        indexesToDrop,
+      );
+    }
   }
 
-  if (indexesToCreate.length > 0) {
-    const createPromises = indexesToCreate.map((spec) => {
-      const createFn = () => collection.createIndex(spec.key, spec.options);
-      return options.queue ? options.queue.add(createFn) : createFn();
-    });
-    await Promise.all(createPromises);
-  }
+  await dropIndexes(collection, indexesToDrop);
+  await createIndexes(collection, indexesToCreate);
 }
 
 export async function applyMultiCollectionIndexes(
-  collection: m.Collection<any>,
+  collection: IndexTarget,
   schemasPerType: Record<string, v.ObjectSchema<any, any>>,
   options: ApplyIndexesOptions = {},
 ): Promise<void> {
   const collName = collection.collectionName;
   log.debug(`applyMultiCollectionIndexes(${collName}): list current indexes`);
-  const currentIndexes = await collection.indexes();
+  const currentIndexes = await collection.indexes({ readPreference: PRIMARY });
   log.debug(
     `applyMultiCollectionIndexes(${collName}): found ${currentIndexes.length} existing indexes`,
   );
 
-  // Ensure _type index exists - this is critical for multi-collection performance
-  // All queries filter by _type, and partial indexes depend on efficient _type filtering
   const typeIndexName = "_type_1";
   const hasTypeIndex = currentIndexes.some((i) => i.name === typeIndexName);
-
-  if (!hasTypeIndex) {
-    log.debug(`applyMultiCollectionIndexes(${collName}): create _type index`);
-    const createFn = () =>
-      collection.createIndex(
-        { _type: 1 },
-        { name: typeIndexName },
-      );
-
-    if (options.queue) {
-      await options.queue.add(createFn);
-    } else {
-      await createFn();
-    }
-    log.debug(`applyMultiCollectionIndexes(${collName}): _type index created`);
-  }
 
   // Extract indexes for all types
   const allIndexes = Object.entries(schemasPerType).map(
@@ -626,23 +785,38 @@ export async function applyMultiCollectionIndexes(
       return {
         type,
         indexes,
+        composites: projectComposites(
+          options.composites?.[type] ?? [],
+          "multi",
+          type,
+        ),
       };
     },
   );
 
   // Collect all indexes that need to be created or recreated
-  const indexesToCreate: Array<{
-    key: Record<string, number>;
-    options: m.CreateIndexesOptions;
-  }> = [];
+  const indexesToCreate: PlannedIndex[] = [];
   const indexesToDrop: string[] = [];
+
+  // The `_type` index every multi-collection query filters on. It used to be
+  // its own awaited `createIndex` ahead of the plan; it now rides the same
+  // single `createIndexes` command as the per-type indexes.
+  if (!hasTypeIndex) {
+    indexesToCreate.push({
+      key: { _type: 1 },
+      options: { name: typeIndexName },
+    });
+  }
 
   // Collect all expected index names from the current schema
   const expectedIndexNames = new Set<string>();
-  for (const { type, indexes } of allIndexes) {
+  for (const { type, indexes, composites } of allIndexes) {
     for (const index of indexes) {
       const indexName = sanitizePathName(`${type}_${index.path}`);
       expectedIndexNames.add(indexName);
+    }
+    for (const composite of composites) {
+      expectedIndexNames.add(composite.name);
     }
   }
 
@@ -653,10 +827,26 @@ export async function applyMultiCollectionIndexes(
 
     // Check if this looks like a mongodbee-created index (has type prefix)
     const hasTypePrefix = Object.keys(schemasPerType).some((type) =>
-      indexName.startsWith(`${type}_`)
+      indexName.startsWith(`${type}_`),
     );
 
-    if (hasTypePrefix && !expectedIndexNames.has(indexName)) {
+    // An index of a type the schema no longer declares (a rollback removing
+    // the type, a type dropped by a migration): no declared prefix matches
+    // it, so it used to survive forever. It is recognised by mongodbee's own
+    // signature instead: its name starts with the type it is pinned to by
+    // its `_type` partial filter. A user index without that filter is spared.
+    const pinned = pinnedTypeOf(
+      (existingIndex as Record<string, unknown>).partialFilterExpression,
+    );
+    const ofRemovedType =
+      pinned !== undefined &&
+      !(pinned in schemasPerType) &&
+      indexName.startsWith(`${pinned}_`);
+
+    if (
+      (hasTypePrefix || ofRemovedType) &&
+      !expectedIndexNames.has(indexName)
+    ) {
       // This is an orphaned mongodbee index that should be removed
       indexesToDrop.push(indexName);
     }
@@ -675,10 +865,12 @@ export async function applyMultiCollectionIndexes(
       // expected names. Two types sharing a field name produce identical key
       // patterns (e.g. `{email:1}`); without this guard the fallback would
       // match a sibling type's index and drop/recreate it on every init.
-      const existingIndex = currentIndexes.find((i) => i.name === indexName) ||
-        currentIndexes.find((i) =>
-          !expectedIndexNames.has(i.name ?? "") &&
-          keyEqual(i.key || {}, keySpec)
+      const existingIndex =
+        currentIndexes.find((i) => i.name === indexName) ||
+        currentIndexes.find(
+          (i) =>
+            !expectedIndexNames.has(i.name ?? "") &&
+            keyEqual(i.key || {}, keySpec),
         );
 
       // partialFilterExpression is needed to scope unique constraints by type
@@ -734,55 +926,36 @@ export async function applyMultiCollectionIndexes(
     }
   }
 
+  for (const { composites } of allIndexes) {
+    for (const composite of composites) {
+      reconcileIndex(
+        currentIndexes,
+        expectedIndexNames,
+        composite.key,
+        composite.options,
+        indexesToCreate,
+        indexesToDrop,
+      );
+    }
+  }
+
   // Drop indexes
   if (indexesToDrop.length > 0) {
     log.debug(
-      `applyMultiCollectionIndexes(${collName}): dropping ${indexesToDrop.length} indexes: ${
-        indexesToDrop.join(", ")
-      }`,
+      `applyMultiCollectionIndexes(${collName}): dropping ${indexesToDrop.length} indexes: ${indexesToDrop.join(
+        ", ",
+      )}`,
     );
-    const dropPromises = indexesToDrop.map((indexName) => {
-      const dropFn = () =>
-        collection.dropIndex(indexName).catch((e) => {
-          // tolerate index already dropped
-          if (
-            e instanceof m.MongoServerError && e.codeName === "IndexNotFound"
-          ) {
-            // already gone, continue
-            return;
-          }
-          const maybe = e as { code?: number };
-          if (maybe.code === 27) {
-            // legacy code
-            return;
-          }
-          throw e;
-        });
-
-      return options.queue ? options.queue.add(dropFn) : dropFn();
-    });
-
-    await Promise.all(dropPromises);
+    await dropIndexes(collection, indexesToDrop);
     log.debug(`applyMultiCollectionIndexes(${collName}): drops done`);
   }
 
-  // Create indexes
   if (indexesToCreate.length > 0) {
     log.debug(
       `applyMultiCollectionIndexes(${collName}): creating ${indexesToCreate.length} indexes:`,
       indexesToCreate.map((i) => i.options.name).join(", "),
     );
-    const createPromises = indexesToCreate.map((indexSpec) => {
-      const createFn = () =>
-        collection.createIndex(
-          indexSpec.key,
-          indexSpec.options,
-        );
-
-      return options.queue ? options.queue.add(createFn) : createFn();
-    });
-
-    await Promise.all(createPromises);
+    await createIndexes(collection, indexesToCreate);
     log.debug(`applyMultiCollectionIndexes(${collName}): creates done`);
   }
 }

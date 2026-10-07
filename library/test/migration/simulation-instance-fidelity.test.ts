@@ -17,7 +17,8 @@
  *     schema bounding an array at 150k produced 150k items and the validator
  *     ran out of memory cloning the state.
  */
-import { assert, assertEquals } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals } from "../+assert.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import { createSimulationValidator } from "../../src/migration/validators/simulation.ts";
 import { migrationBuilder } from "../../src/migration/builder.ts";
@@ -36,7 +37,7 @@ const SCOPED = {
   },
 };
 
-Deno.test("simulation: instances flowed into a scope-constrained collection carry a valid _scope", async () => {
+test("simulation: instances flowed into a scope-constrained collection carry a valid _scope", async () => {
   // The parent owns the multi-model, so the validator mock-populates its
   // instances; the child consolidates them into a scoped collection whose
   // `scope` is regex-constrained. The instance NAME becomes `_scope`, so a
@@ -50,30 +51,33 @@ Deno.test("simulation: instances flowed into a scope-constrained collection carr
     parent,
     schemas: SCOPED,
     migrate: (b) =>
-      b.flowToScope({
-        from: { kind: "multiModelInstances", model: "exposition" },
-        into: { collection: "+expositions" },
-        scope: (_d, ctx) => ctx.instanceName!,
-        map: (d, ctx) => ({ ...d, _id: ctx.instanceName }),
-        onConflict: "merge",
-        merge: (a, b2) => ({ ...b2, ...a }),
-        source: "consume",
-      }).compile(),
+      b
+        .flowToScope({
+          from: { kind: "multiModelInstances", model: "exposition" },
+          into: { collection: "+expositions" },
+          scope: (_d, ctx) => ctx.instanceName!,
+          map: (d, ctx) => ({ ...d, _id: ctx.instanceName }),
+          onConflict: "merge",
+          merge: (a, b2) => ({ ...b2, ...a }),
+          source: "consume",
+        })
+        .compile(),
   });
 
-  const result = await createSimulationValidator({ powerLevel: "quick" })
-    .validateMigration(child);
+  const result = await createSimulationValidator({
+    powerLevel: "quick",
+  }).validateMigration(child);
 
   assertEquals(
     result.errors,
     [],
-    `simulated consolidation must produce valid scopes, got: ${
-      result.errors.join(" | ")
-    }`,
+    `simulated consolidation must produce valid scopes, got: ${result.errors.join(
+      " | ",
+    )}`,
   );
 });
 
-Deno.test("memory applier: the bare `<model>` registry entry is not an instance", async () => {
+test("memory applier: the bare `<model>` registry entry is not an instance", async () => {
   const state = createEmptyDatabaseState();
   // What the simulator builds: the bare registry entry alongside real ones.
   state.multiModels["exposition"] = {
@@ -89,12 +93,14 @@ Deno.test("memory applier: the bare `<model>` registry entry is not an instance"
     parent: null,
     schemas: SCOPED,
     migrate: (b) =>
-      b.flowToScope({
-        from: { kind: "multiModelInstances", model: "exposition" },
-        into: { collection: "+expositions" },
-        scope: (_d, ctx) => ctx.instanceName!,
-        source: "consume",
-      }).compile(),
+      b
+        .flowToScope({
+          from: { kind: "multiModelInstances", model: "exposition" },
+          into: { collection: "+expositions" },
+          scope: (_d, ctx) => ctx.instanceName!,
+          source: "consume",
+        })
+        .compile(),
   });
 
   const ops = m.migrate(migrationBuilder({ schemas: SCOPED })).operations;
@@ -107,7 +113,7 @@ Deno.test("memory applier: the bare `<model>` registry entry is not an instance"
   assertEquals(scopes.has("exposition:A"), true, "real instance must flow");
 });
 
-Deno.test("simulation: mock arrays stay bounded when a schema declares a huge maxLength", () => {
+test("simulation: mock arrays stay bounded when a schema declares a huge maxLength", () => {
   const schemas = {
     collections: {
       "+maps": {
@@ -124,11 +130,15 @@ Deno.test("simulation: mock arrays stay bounded when a schema declares a huge ma
 
   const state = createEmptyDatabaseState();
   state.collections["+maps"] = {
-    content: [{ _id: "map:1", grids: [] }, { _id: "map:2", grids: [] }],
+    content: [
+      { _id: "map:1", grids: [] },
+      { _id: "map:2", grids: [] },
+    ],
   };
 
-  const prepared = createSimulationValidator({ powerLevel: "quick" })
-    .prepareStateForNextMigration(state, schemas);
+  const prepared = createSimulationValidator({
+    powerLevel: "quick",
+  }).prepareStateForNextMigration(state, schemas);
 
   for (const doc of prepared.collections["+maps"].content) {
     const grids = (doc.grids ?? []) as number[][];

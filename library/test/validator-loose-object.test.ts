@@ -1,4 +1,5 @@
-import { assert, assertEquals } from "@std/assert";
+import { test } from "./+harness.ts";
+import { assert, assertEquals, assertExists } from "./+assert.ts";
 import { collection } from "../src/collection.ts";
 import { withDatabase } from "./+shared.ts";
 import * as v from "../src/schema.ts";
@@ -15,7 +16,7 @@ import * as v from "../src/schema.ts";
  * Regression: these schema types used to hit the translator's default branch
  * → `Unsupported schema type: loose_object` thrown at collection creation.
  */
-Deno.test("looseObject: envelope validated, unknown keys PRESERVED end-to-end", async (t) => {
+test("looseObject: envelope validated, unknown keys PRESERVED end-to-end", async (t) => {
   await withDatabase(t.name, async (db) => {
     const schema = {
       name: v.string(),
@@ -35,14 +36,13 @@ Deno.test("looseObject: envelope validated, unknown keys PRESERVED end-to-end", 
     });
     assert(id, "insert with extra keys should pass");
     const stored = await docs.findOne({ _id: id });
-    assertEquals(
-      (stored?.node as Record<string, unknown>).title,
-      "Participants",
-    );
-    assertEquals(
-      ((stored?.node as Record<string, unknown>).sources as unknown[]).length,
-      1,
-    );
+    // Asserted rather than optional-chained: the chain was immediately
+    // dereferenced anyway, so a missing document threw an unhelpful
+    // "cannot read property of undefined" instead of naming the real failure.
+    assertExists(stored, "the inserted document should be readable back");
+    const node = stored.node as Record<string, unknown>;
+    assertEquals(node.title, "Participants");
+    assertEquals((node.sources as unknown[]).length, 1);
 
     // The REQUIRED entry is still enforced.
     try {
@@ -57,7 +57,7 @@ Deno.test("looseObject: envelope validated, unknown keys PRESERVED end-to-end", 
   });
 });
 
-Deno.test("strictObject: additional properties REJECTED", async (t) => {
+test("strictObject: additional properties REJECTED", async (t) => {
   await withDatabase(t.name, async (db) => {
     const schema = {
       config: v.strictObject({ mode: v.string() }),

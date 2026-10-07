@@ -1,5 +1,6 @@
-import { assert, assertEquals, assertNotEquals } from "@std/assert";
-import { decodeTime } from "@std/ulid";
+import { test } from "../+harness.ts";
+import { assert, assertEquals, assertNotEquals } from "../+assert.ts";
+import { decodeTime } from "../../src/utils/ulid.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import { migrationBuilder } from "../../src/migration/builder.ts";
 import { createMemoryApplier } from "../../src/migration/appliers/memory.ts";
@@ -64,7 +65,7 @@ async function applied() {
   return state.collections.things.content;
 }
 
-Deno.test("transform context: ids and clock inside a migration are deterministic in memory", async () => {
+test("transform context: ids and clock inside a migration are deterministic in memory", async () => {
   const first = await applied();
   const second = await applied();
   assertEquals(first, second);
@@ -80,7 +81,7 @@ Deno.test("transform context: ids and clock inside a migration are deterministic
   assertEquals(stamp.toISOString(), "2026-08-04T15:36:00.000Z");
 });
 
-Deno.test("transform context: a transform that ignores the context still works", async () => {
+test("transform context: a transform that ignores the context still works", async () => {
   const plain = migrationDefinition("2026_08_05_0900_PLAIN01@plain", "plain", {
     parent: null,
     schemas: SCHEMAS,
@@ -102,7 +103,7 @@ Deno.test("transform context: a transform that ignores the context still works",
   ]);
 });
 
-Deno.test("transform context: the live context mints fresh ulids and reads the wall clock", () => {
+test("transform context: the live context mints fresh ulids and reads the wall clock", () => {
   const ctx = createLiveTransformContext("live");
   const a = ctx.newId();
   const b = ctx.newId();

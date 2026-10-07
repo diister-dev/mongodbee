@@ -1,4 +1,7 @@
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { mkdir, writeFile } from "node:fs/promises";
+import process from "node:process";
+import { test } from "../../+harness.ts";
+import { assert, assertEquals, assertRejects } from "../../+assert.ts";
 import { MongoClient } from "../../../src/mongodb.ts";
 import { classifyCommand } from "../../../src/migration/cli/commands/classify.ts";
 import { seedCommand } from "../../../src/migration/cli/commands/seed.ts";
@@ -6,8 +9,9 @@ import { extractCommand } from "../../../src/migration/cli/commands/extract.ts";
 import { getAppliedMigrationIds } from "../../../src/migration/state.ts";
 import { withTempDir } from "./shared.ts";
 
-const TEST_URI = Deno.env.get("TEST_MONGODB_URI") ||
-  Deno.env.get("MONGODBEE_TEST_URI") ||
+const TEST_URI =
+  process.env.TEST_MONGODB_URI ||
+  process.env.MONGODBEE_TEST_URI ||
   "mongodb://localhost:27017";
 const SRC = new URL("../../../src/", import.meta.url).href;
 
@@ -52,8 +56,8 @@ export default migrationDefinition(${JSON.stringify(id)}, ${
 }
 
 async function writeProject(dir: string, dbName: string): Promise<void> {
-  await Deno.mkdir(`${dir}/migrations`, { recursive: true });
-  await Deno.writeTextFile(
+  await mkdir(`${dir}/migrations`, { recursive: true });
+  await writeFile(
     `${dir}/mongodbee.config.ts`,
     `export default { database: { connection: { uri: ${
       JSON.stringify(TEST_URI)
@@ -61,12 +65,12 @@ async function writeProject(dir: string, dbName: string): Promise<void> {
       JSON.stringify(dbName)
     } }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
   );
-  await Deno.writeTextFile(`${dir}/lib.ts`, SHARED);
-  await Deno.writeTextFile(
+  await writeFile(`${dir}/lib.ts`, SHARED);
+  await writeFile(
     `${dir}/migrations/${BIRTH}.ts`,
     migrationFile(BIRTH, "birth", null, "participantV1", "b.compile()"),
   );
-  await Deno.writeTextFile(
+  await writeFile(
     `${dir}/migrations/${VERSION}.ts`,
     migrationFile(
       VERSION,
@@ -79,7 +83,7 @@ async function writeProject(dir: string, dbName: string): Promise<void> {
     }).end().end().compile()`,
     ),
   );
-  await Deno.writeTextFile(
+  await writeFile(
     `${dir}/schemas.ts`,
     `
 import { users, expositions, participantV2, refId } from "./lib.ts";
@@ -89,7 +93,7 @@ export const schemas = {
 };
 `,
   );
-  await Deno.writeTextFile(
+  await writeFile(
     `${dir}/scenario.ts`,
     `
 export const scenario = {
@@ -110,7 +114,7 @@ function dbName(tag: string): string {
   }`;
 }
 
-Deno.test("cli: classify reports the plan of the project schemas and fails on classification errors", async () => {
+test("cli: classify reports the plan of the project schemas and fails on classification errors", async () => {
   await withTempDir(async (dir) => {
     await writeProject(dir, dbName("classify"));
     await classifyCommand({ cwd: dir });
@@ -118,7 +122,7 @@ Deno.test("cli: classify reports the plan of the project schemas and fails on cl
   });
   await withTempDir(async (dir) => {
     await writeProject(dir, dbName("classify"));
-    await Deno.writeTextFile(
+    await writeFile(
       `${dir}/schemas.ts`,
       `
 import { v, dbId } from "./lib.ts";
@@ -133,7 +137,7 @@ export const schemas = { collections: { users: { _id: dbId("user"), email: v.pip
   });
 });
 
-Deno.test("cli: seed writes the world at the head and baselines the ledger, extract copies it pseudonymised", async () => {
+test("cli: seed writes the world at the head and baselines the ledger, extract copies it pseudonymised", async () => {
   await withTempDir(async (dir) => {
     const source = dbName("seed");
     const target = dbName("extract");

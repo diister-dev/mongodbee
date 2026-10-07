@@ -9,7 +9,8 @@
  * re-keyed to the scope so it MERGES with the root-derived one, and `system`
  * is re-keyed to a fresh id.
  */
-import { assert, assertEquals } from "@std/assert";
+import { test } from "../+harness.ts";
+import { assert, assertEquals } from "../+assert.ts";
 import { withDatabase } from "../+shared.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import {
@@ -28,14 +29,15 @@ function consolidationMigration() {
     parent: null,
     schemas: SCHEMAS,
     migrate: (b) =>
-      b.flowToScope({
-        // global roots → `information` docs (scope = their own _id)
-        from: { kind: "collection", name: "+expositions" },
-        into: { collection: "+expositions_scoped" },
-        toType: () => "information",
-        scope: (d) => d._id as string,
-        source: "consume",
-      })
+      b
+        .flowToScope({
+          // global roots → `information` docs (scope = their own _id)
+          from: { kind: "collection", name: "+expositions" },
+          into: { collection: "+expositions_scoped" },
+          toType: () => "information",
+          scope: (d) => d._id as string,
+          source: "consume",
+        })
         .flowToScope({
           // each per-expo instance's docs → its scope (= instance name)
           from: { kind: "multiModelInstances", model: "exposition" },
@@ -45,8 +47,8 @@ function consolidationMigration() {
             d._type === "information"
               ? { ...d, _id: ctx.instanceName } // align with root → merge
               : d._type === "system"
-              ? { ...d, _id: undefined } // re-key
-              : d,
+                ? { ...d, _id: undefined } // re-key
+                : d,
           onConflict: "merge",
           merge: (root, sub) => ({ ...sub, ...root }), // root fields win
           source: "consume",
@@ -97,13 +99,13 @@ function seed() {
   return state;
 }
 
-Deno.test("flowToScope: marked irreversible", () => {
+test("flowToScope: marked irreversible", () => {
   const m = consolidationMigration();
   const ops = m.migrate(migrationBuilder({ schemas: SCHEMAS })).operations;
   assertEquals(getIrreversibleOperations(ops).length, 2);
 });
 
-Deno.test("flowToScope: consolidates roots + instances, merges singleton, consumes source", async () => {
+test("flowToScope: consolidates roots + instances, merges singleton, consumes source", async () => {
   const state = seed();
   const m = consolidationMigration();
   const ops = m.migrate(migrationBuilder({ schemas: SCHEMAS })).operations;
@@ -143,7 +145,7 @@ Deno.test("flowToScope: consolidates roots + instances, merges singleton, consum
   assertEquals(scoped.length, 6);
 });
 
-Deno.test("flowToScope: onConflict 'error' throws on duplicate target id", async () => {
+test("flowToScope: onConflict 'error' throws on duplicate target id", async () => {
   const state = createEmptyDatabaseState();
   state.collections["src"] = {
     content: [
@@ -155,13 +157,15 @@ Deno.test("flowToScope: onConflict 'error' throws on duplicate target id", async
     parent: null,
     schemas: { collections: { src: { _id: v.string() } } },
     migrate: (b) =>
-      b.flowToScope({
-        from: { kind: "collection", name: "src" },
-        into: { collection: "dst" },
-        toType: () => "thing",
-        scope: () => "exposition:Z",
-        source: "keep",
-      }).compile(),
+      b
+        .flowToScope({
+          from: { kind: "collection", name: "src" },
+          into: { collection: "dst" },
+          toType: () => "thing",
+          scope: () => "exposition:Z",
+          source: "keep",
+        })
+        .compile(),
   });
   const ops = m.migrate(
     migrationBuilder({
@@ -178,7 +182,7 @@ Deno.test("flowToScope: onConflict 'error' throws on duplicate target id", async
   assert(threw, "expected onConflict 'error' (default) to throw on duplicate");
 });
 
-Deno.test("mongodb flowToScope: collection → scoped, merge + consume on a real DB", async () => {
+test("mongodb flowToScope: collection → scoped, merge + consume on a real DB", async () => {
   await withDatabase("flow-to-scope-mongo", async (db) => {
     await db.collection("roots").insertMany([
       { _id: "exposition:A", name: "Expo A" },
@@ -196,13 +200,14 @@ Deno.test("mongodb flowToScope: collection → scoped, merge + consume on a real
       parent: null,
       schemas: S,
       migrate: (b) =>
-        b.flowToScope({
-          from: { kind: "collection", name: "roots" },
-          into: { collection: "scoped" },
-          toType: () => "info",
-          scope: (d) => d._id as string,
-          source: "consume",
-        })
+        b
+          .flowToScope({
+            from: { kind: "collection", name: "roots" },
+            into: { collection: "scoped" },
+            toType: () => "info",
+            scope: (d) => d._id as string,
+            source: "consume",
+          })
           .flowToScope({
             from: { kind: "collection", name: "details" },
             into: { collection: "scoped" },
@@ -215,13 +220,17 @@ Deno.test("mongodb flowToScope: collection → scoped, merge + consume on a real
           .compile(),
     });
     const ops = m.migrate(migrationBuilder({ schemas: S })).operations;
-    await createMongodbApplier(db, m, { currentMigrationId: m.id })
-      .applyMigration(ops, "up");
+    await createMongodbApplier(db, m, {
+      currentMigrationId: m.id,
+    }).applyMigration(ops, "up");
 
     assertEquals(await db.collection("roots").countDocuments(), 0);
     assertEquals(await db.collection("details").countDocuments(), 0);
 
-    const docs = await db.collection("scoped").find({} as never).toArray();
+    const docs = await db
+      .collection("scoped")
+      .find({} as never)
+      .toArray();
     assertEquals(docs.length, 2);
     const a = docs.find((d) => d._scope === "exposition:A")!;
     assertEquals(a._type, "info");

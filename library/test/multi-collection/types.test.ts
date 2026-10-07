@@ -1,10 +1,11 @@
+import { test } from "../+harness.ts";
 import * as v from "../../src/schema.ts";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../+assert.ts";
 import { multiCollection } from "../../src/multi-collection.ts";
 import { withDatabase } from "../+shared.ts";
 import { defineModel } from "../../src/multi-collection-model.ts";
 
-Deno.test("Types test - deleteMany and deleteAny should compile", async (t) => {
+test("Types test - deleteMany and deleteAny should compile", async (t) => {
   await withDatabase(t.name, async (db) => {
     const testModel = defineModel("test", {
       schema: {

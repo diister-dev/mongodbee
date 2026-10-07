@@ -6,10 +6,10 @@
  * @module
  */
 
-import packageInfo from "../../../deno.json" with { type: "json" };
+import { NAME, VERSION } from "../../version.ts";
 
 /**
- * Gets the current version of MongoDBee from deno.json
+ * Gets the current version of MongoDBee
  *
  * @returns The version string (e.g., "0.13.0")
  *
@@ -21,7 +21,7 @@ import packageInfo from "../../../deno.json" with { type: "json" };
  * ```
  */
 export function getCurrentVersion(): string {
-  return packageInfo.version;
+  return VERSION;
 }
 
 /**
@@ -33,12 +33,27 @@ export function getCurrentVersion(): string {
  * ```typescript
  * const info = getPackageInfo();
  * console.log(`${info.name} v${info.version}`);
- * // Output: @diister/mongodbee v0.13.0
+ * // Output: mongodbee v0.13.0
  * ```
  */
 export function getPackageInfo(): { name: string; version: string } {
-  return {
-    name: packageInfo.name,
-    version: packageInfo.version,
-  };
+  return { name: NAME, version: VERSION };
+}
+
+/**
+ * The specifier generated files should import MongoDBee under.
+ *
+ * One name serves both registries, so nothing has to be inferred — kept as a
+ * function because the generated templates read better calling it than
+ * interpolating a constant, and because npm refused the unscoped `mongodbee`
+ * (too close to `mongodb`), which is the kind of decision worth leaving a
+ * handle on.
+ *
+ * @example
+ * ```typescript
+ * const template = `import { migrationDefinition } from "${importSpecifier()}/migration";`;
+ * ```
+ */
+export function importSpecifier(): string {
+  return NAME;
 }
