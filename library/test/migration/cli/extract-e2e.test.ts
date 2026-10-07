@@ -7,6 +7,7 @@ import {
   assertStringIncludes,
 } from "../../+assert.ts";
 import process from "node:process";
+import { withTempDir } from "./shared.ts";
 import { MongoClient } from "../../../src/mongodb.ts";
 import { extractCommand } from "../../../src/migration/cli/commands/extract.ts";
 import { getAppliedMigrationIds } from "../../../src/migration/state.ts";
@@ -29,6 +30,7 @@ import {
   type SourceWorld,
   TEST_URI,
   withProject,
+  writeProject,
 } from "./extract-fixture.ts";
 
 const SECRET = "test-secret";
@@ -388,7 +390,10 @@ e2e(
         }),
       );
       const summary = JSON.parse(output);
-      assertEquals(summary.skipped, { "multiCollections/scans": { ghost: 1 } });
+      assertEquals(summary.skipped, {
+        "multiCollections/scans": { ghost: 1, _hidden: 1 },
+        "multiModels/exposition": { _audit: 2 },
+      });
       assertEquals(
         await client.db(target).collection("scans").countDocuments({
           _type: "ghost",
@@ -431,7 +436,7 @@ e2e(
         ...REAL.emails,
         ...REAL.firstnames,
         ...REAL.badges,
-        ...REAL.zoneLabels.slice(0, 0),
+        ...REAL.zoneLabels,
       ];
       for (const options of [
         { json: true },
@@ -535,6 +540,100 @@ e2e(
         assert(!fromEnv.combined.includes("from-the-environment"));
       } finally {
         delete process.env.EXTRACT_TEST_SECRET;
+      }
+    });
+  },
+);
+
+e2e(
+  "extract: multi-model bookkeeping is rebuilt from known fields, with its times shifted and no error text",
+  async () => {
+    await withSourceAndTarget(
+      async ({ dir, client, source, target, world }) => {
+        await captureOutput(() =>
+          extractCommand({
+            cwd: dir,
+            fromDb: source,
+            toDb: target,
+            secret: SECRET,
+            shiftDays: 2,
+            json: true,
+          }),
+        );
+        const out = client.db(target);
+        const name = remapId(SECRET, world.instanceNames[0], 2 * 86_400_000);
+        const docs = await rawCollection(out, name).find({}).toArray();
+        assert(
+          !docs.some((d) => String(d._type).startsWith("_a")),
+          "an underscore-prefixed type that is not bookkeeping is not copied",
+        );
+        const info = docs.find((d) => d._type === "_information");
+        assertEquals(
+          info?.createdAt,
+          new Date("2026-01-03T00:00:00Z"),
+          "the instance creation time is shifted",
+        );
+        const migrations = docs.find((d) => d._type === "_migrations") as
+          | { appliedMigrations: Record<string, unknown>[] }
+          | undefined;
+        const [applied] = migrations?.appliedMigrations ?? [];
+        assertEquals(applied.appliedAt, new Date("2026-01-03T00:00:00Z"));
+        assertEquals("error" in applied, false);
+      },
+    );
+  },
+);
+
+e2e(
+  "extract: the --json summary echoes the remapped scope, never the source one",
+  async () => {
+    await withSourceAndTarget(async ({ dir, source, world }) => {
+      const scope = world.expositionIds[0];
+      const { output } = await captureOutput(() =>
+        extractCommand({
+          cwd: dir,
+          fromDb: source,
+          dryRun: true,
+          secret: SECRET,
+          scope,
+          json: true,
+        }),
+      );
+      assertEquals(JSON.parse(output).scope.scope, remapId(SECRET, scope));
+      assert(!output.includes(scope.split(":")[1]));
+    });
+  },
+);
+
+e2e(
+  "extract: a project without a migrations directory extracts with the indexes of schemas.ts",
+  async () => {
+    await withTempDir(async (dir) => {
+      await writeProject(dir, { migrations: false });
+      const source = dbName("src");
+      const target = dbName("dst");
+      const client = new MongoClient(TEST_URI);
+      await client.connect();
+      try {
+        await populateSource(client.db(source));
+        await captureOutput(() =>
+          extractCommand({
+            cwd: dir,
+            fromDb: source,
+            toDb: target,
+            secret: SECRET,
+            json: true,
+          }),
+        );
+        const out = client.db(target);
+        assertEquals(await rawCollection(out, "users").countDocuments(), 4);
+        const indexes = await out.collection("users").indexes();
+        assert(indexes.some((i) => i.unique && i.key.email === 1));
+        assertEquals(await getAppliedMigrationIds(out), []);
+      } finally {
+        await client.db(source).dropDatabase();
+        await client.db(target).dropDatabase();
+        await client.close();
       }
     });
   },

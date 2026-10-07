@@ -1,4 +1,5 @@
 import type { Db } from "../mongodb.ts";
+import { isMetadataDocument } from "./state.ts";
 import { sanitizeForMongoDB } from "../sanitizer.ts";
 import { createMongodbApplier } from "../migration/appliers/mongodb.ts";
 import {
@@ -73,10 +74,6 @@ async function insertAll(
     }
   }
   return docs.length;
-}
-
-function isMetadataDocument(doc: Record<string, unknown>): boolean {
-  return typeof doc._type === "string" && doc._type.startsWith("_");
 }
 
 type WriteBucket = Exclude<keyof DatabaseState, "multiModels">;

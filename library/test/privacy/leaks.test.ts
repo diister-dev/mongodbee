@@ -119,6 +119,7 @@ function extract(
     transformer,
     ...transformState(state, plan, transformer, {
       schemas,
+      timeShiftMs: options.timeShiftMs ?? 0,
       remapInstanceName: (name) =>
         remapId(SECRET, name, options.timeShiftMs ?? 0),
     }),
@@ -1286,10 +1287,8 @@ test({
   },
 });
 
-// TODO(privacy): R4, unblocked by copying only the known _information and _migrations metadata documents
 test({
   name: "leak R4 (strict cli): any document whose _type starts with an underscore is copied verbatim",
-  ignore: true,
   timeout: 60_000,
   fn: async () => {
     const run = await strictCli();
@@ -1297,7 +1296,7 @@ test({
   },
 });
 
-// TODO(privacy): R5, unblocked by shifting the dates of copied metadata documents
+// TODO(privacy): R5, unblocked by R1: extract must hand transformState the default strict time shift
 test({
   name: "leak R5 (strict cli): multi-model metadata keeps the real instance creation and migration times",
   ignore: true,
@@ -1472,10 +1471,8 @@ test("guard: a unique field that cannot be made distinct reports a collision wit
   );
 });
 
-// TODO(privacy): R8, unblocked by the summary echoing the remapped scope, not the source one
 test({
   name: "leak R8 (strict cli): the --json summary echoes the source scope id",
-  ignore: true,
   timeout: 60_000,
   fn: async () => {
     const tag = crypto.randomUUID().replace(/-/g, "").slice(0, 8);

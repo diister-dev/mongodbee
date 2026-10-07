@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import process from "node:process";
 import { blue, bold, dim, green, red, yellow } from "../../../utils/colors.ts";
 import * as path from "node:path";
@@ -9,6 +10,7 @@ import { loadProjectSchema } from "../../schema-validation.ts";
 import { resolveMigrationRef } from "../utils/resolve-ref.ts";
 import { parsePosture } from "./classify.ts";
 import { COMPUTED_REVISION, COMPUTED_ROOT } from "../../../computed-guard.ts";
+import { MULTI_COLLECTION_INFO_TYPE } from "../../multicollection-registry.ts";
 import { isRecord } from "../../../utils/guards.ts";
 import { migrationDefinition } from "../../definition.ts";
 import { getAppliedMigrationIds, markMigrationAsAdopted } from "../../state.ts";
@@ -29,6 +31,7 @@ import {
   countDocuments,
   recomputeComputedFields,
   docsOf,
+  isMetadataDocument,
   populateDatabase,
   readStateFromDatabase,
   type ScenarioViolation,
@@ -86,6 +89,7 @@ export interface ExtractSummary {
 
 export interface TransformStateOptions {
   readonly schemas: SchemasDefinition;
+  readonly timeShiftMs: number;
   readonly remapInstanceName: (name: string) => string;
 }
 
@@ -147,8 +151,55 @@ function parseConsistency(raw: string | undefined): PrivacyConsistency {
   );
 }
 
-function isMetadataDocument(doc: Record<string, unknown>): boolean {
-  return typeof doc._type === "string" && doc._type.startsWith("_");
+function shiftedDate(value: unknown, shiftMs: number): unknown {
+  return value instanceof Date ? new Date(value.getTime() + shiftMs) : value;
+}
+
+function sanitiseMetadata(
+  doc: Record<string, unknown>,
+  shiftMs: number,
+): Record<string, unknown> {
+  if (doc._type === MULTI_COLLECTION_INFO_TYPE) {
+    return {
+      _id: doc._id,
+      _type: doc._type,
+      collectionType: doc.collectionType,
+      createdAt: shiftedDate(doc.createdAt, shiftMs),
+    };
+  }
+  const operations = Array.isArray(doc.appliedMigrations)
+    ? doc.appliedMigrations.filter(isRecord)
+    : [];
+  return {
+    _id: doc._id,
+    _type: doc._type,
+    fromMigrationId: doc.fromMigrationId,
+    mongodbeeVersion: doc.mongodbeeVersion,
+    appliedMigrations: operations.map(({ error: _error, ...operation }) => ({
+      ...operation,
+      appliedAt: shiftedDate(operation.appliedAt, shiftMs),
+    })),
+  };
+}
+
+async function replayWithoutValues(
+  state: DatabaseState,
+  replay: readonly MigrationDefinition[],
+): Promise<{ state: DatabaseState; applied: string[] }> {
+  let current = state;
+  const applied: string[] = [];
+  for (const migration of replay) {
+    try {
+      const step = await applyMigrationsInMemory(current, [migration]);
+      current = step.state;
+      applied.push(...step.applied);
+    } catch {
+      throw new Error(
+        `Replaying migration ${migration.id} in memory failed; the original message is withheld because it can quote source values. Run the migration on a copy of the source to see it.`,
+      );
+    }
+  }
+  return { state: current, applied };
 }
 
 async function serverIdentity(client: MongoClient): Promise<string> {
@@ -269,7 +320,7 @@ export function transformState(
     const metadata = content.filter(isMetadataDocument);
     if (metadata.length > 0) {
       (out.multiCollections[name] ??= { content: [] }).content.push(
-        ...structuredClone(metadata),
+        ...metadata.map((doc) => sanitiseMetadata(doc, options.timeShiftMs)),
       );
     }
   }
@@ -281,9 +332,9 @@ export function transformState(
 
   for (const [name, instance] of Object.entries(state.multiModels)) {
     countSkipped("multiModels", instance.modelType, instance.content);
-    const content: Record<string, unknown>[] = structuredClone(
-      instance.content.filter(isMetadataDocument),
-    );
+    const content: Record<string, unknown>[] = instance.content
+      .filter(isMetadataDocument)
+      .map((doc) => sanitiseMetadata(doc, options.timeShiftMs));
     for (const target of plan.targets.values()) {
       if (
         target.bucket !== "multiModels" ||
@@ -347,7 +398,9 @@ export async function extractCommand(
     cwd,
     config.paths?.migrations || "./migrations",
   );
-  const chain = buildMigrationChain(await loadAllMigrations(migrationsDir));
+  const chain = buildMigrationChain(
+    existsSync(migrationsDir) ? await loadAllMigrations(migrationsDir) : [],
+  );
   let schemas: SchemasDefinition;
   let replay: readonly MigrationDefinition[] = [];
   let head: MigrationDefinition | undefined;
@@ -439,7 +492,7 @@ export async function extractCommand(
         ...(options.scope !== undefined && { scope: options.scope }),
       },
     );
-    const replayed = await applyMigrationsInMemory(state, replay);
+    const replayed = await replayWithoutValues(state, replay);
 
     const shiftMs = shiftDays * 86_400_000;
     const transformer = createPrivacyTransformer({
@@ -452,6 +505,7 @@ export async function extractCommand(
     });
     const result = transformState(replayed.state, plan, transformer, {
       schemas,
+      timeShiftMs: shiftMs,
       remapInstanceName: (name) => remapId(secret, name, shiftMs),
     });
     const violations = checkScenarioState({
@@ -464,7 +518,7 @@ export async function extractCommand(
       posture: plan.posture,
       ...(options.scope !== undefined && {
         scope: {
-          scope: options.scope,
+          scope: remapId(secret, options.scope, shiftMs),
           copiedWhole: [
             ...Object.keys(replayed.state.collections),
             ...Object.keys(replayed.state.multiCollections),

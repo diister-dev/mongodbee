@@ -114,3 +114,63 @@ test({
     });
   },
 });
+
+test({
+  name: "extract: a failing replay names the migration and never echoes the source ids",
+  timeout: 60_000,
+  fn: async () => {
+    await withTempDir(async (dir) => {
+      const tag = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
+      const source = `mongodbee_test_replayerr_${tag}`;
+      await mkdir(`${dir}/migrations`, { recursive: true });
+      await writeFile(
+        `${dir}/mongodbee.config.ts`,
+        `export default { database: { connection: { uri: ${JSON.stringify(TEST_URI)} } }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
+      );
+      await writeFile(`${dir}/lib.ts`, SHARED);
+      await writeFile(
+        `${dir}/migrations/${BIRTH}.ts`,
+        migrationFile(BIRTH, null, "participantV1", "b.compile()"),
+      );
+      await writeFile(
+        `${dir}/migrations/${VERSION}.ts`,
+        migrationFile(
+          VERSION,
+          `${BIRTH}.ts`,
+          "participantV2",
+          `b.collection("participants").transform({
+            up: (doc) => { throw new Error("cannot upgrade " + doc._id); },
+            down: (doc) => doc,
+          }).end().compile()`,
+        ),
+      );
+      const client = new MongoClient(TEST_URI);
+      await client.connect();
+      try {
+        const participantId = `participant:${newId()}`;
+        await client
+          .db(source)
+          .collection<{ _id: string; [key: string]: unknown }>("participants")
+          .insertOne({ _id: participantId, userId: `user:${newId()}` });
+        const error = await extractCommand({
+          cwd: dir,
+          fromDb: source,
+          dryRun: true,
+          fromMigration: BIRTH,
+          secret: "replay-secret",
+          json: true,
+        }).then(
+          () => undefined,
+          (caught: unknown) => caught,
+        );
+        assert(error instanceof Error, "the replay must fail");
+        assert(error.message.includes(VERSION));
+        assert(!error.message.includes(participantId.split(":")[1]));
+        assertEquals(error.cause, undefined);
+      } finally {
+        await client.db(source).dropDatabase();
+        await client.close();
+      }
+    });
+  },
+});

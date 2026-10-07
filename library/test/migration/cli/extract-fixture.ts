@@ -91,11 +91,15 @@ export const schemas = {
 
 export const BIRTH = "2026_01_01_0900_BIRTH01@birth";
 
-export async function writeProject(dir: string): Promise<void> {
-  await mkdir(`${dir}/migrations`, { recursive: true });
-  await writeFile(
-    `${dir}/migrations/${BIRTH}.ts`,
-    `
+export async function writeProject(
+  dir: string,
+  options: { migrations?: boolean } = {},
+): Promise<void> {
+  if (options.migrations !== false) {
+    await mkdir(`${dir}/migrations`, { recursive: true });
+    await writeFile(
+      `${dir}/migrations/${BIRTH}.ts`,
+      `
 import { migrationDefinition } from "${SRC}migration/definition.ts";
 import { schemas } from "../schemas.ts";
 export default migrationDefinition(${JSON.stringify(BIRTH)}, "birth", {
@@ -104,7 +108,8 @@ export default migrationDefinition(${JSON.stringify(BIRTH)}, "birth", {
   migrate: (b) => b.compile(),
 });
 `,
-  );
+    );
+  }
   await writeFile(
     `${dir}/mongodbee.config.ts`,
     `export default { database: { connection: { uri: ${JSON.stringify(
@@ -178,6 +183,7 @@ export async function populateSource(db: Db): Promise<SourceWorld> {
       flag: true,
     },
     { _id: `ghost:${newId()}`, _type: "ghost", secret: REAL.badges[0] },
+    { _id: `hidden:${newId()}`, _type: "_hidden", secret: REAL.badges[1] },
   ]);
   for (const [index, name] of instanceNames.entries()) {
     const coll = rawCollection(db, name);
@@ -208,6 +214,11 @@ export async function populateSource(db: Db): Promise<SourceWorld> {
         _type: "zone",
         ownerId: userIds[index],
         label: REAL.zoneLabels[index],
+      },
+      {
+        _id: `audit:${newId()}`,
+        _type: "_audit",
+        text: REAL.zoneLabels[index],
       },
       {
         _id: `zone:${newId()}`,

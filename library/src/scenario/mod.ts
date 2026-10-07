@@ -35,7 +35,7 @@ export {
   runScenario,
   type RunScenarioOptions,
 } from "./run.ts";
-export { docsOf, resolveTargetKey } from "./state.ts";
+export { docsOf, isMetadataDocument, resolveTargetKey } from "./state.ts";
 export { SKIP } from "@diister/valibot-mock";
 export {
   countDocuments,

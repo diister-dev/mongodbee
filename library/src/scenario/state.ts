@@ -4,7 +4,20 @@ import type {
   SchemasDefinition,
 } from "../migration/types.ts";
 import type { PrivacyPlan, PrivacyTarget } from "../privacy/plan.ts";
+import {
+  MULTI_COLLECTION_INFO_TYPE,
+  MULTI_COLLECTION_MIGRATIONS_TYPE,
+} from "../migration/multicollection-registry.ts";
 import { fieldsOf } from "../privacy/transform.ts";
+
+const METADATA_TYPES: ReadonlySet<string> = new Set([
+  MULTI_COLLECTION_INFO_TYPE,
+  MULTI_COLLECTION_MIGRATIONS_TYPE,
+]);
+
+export function isMetadataDocument(doc: Record<string, unknown>): boolean {
+  return typeof doc._type === "string" && METADATA_TYPES.has(doc._type);
+}
 
 export function docsOf(
   state: DatabaseState,

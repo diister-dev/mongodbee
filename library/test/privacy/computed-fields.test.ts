@@ -103,6 +103,7 @@ test("computed: extracted computed values equal a recomputation over the transfo
   };
   const { state: out } = transformState(state, plan, transformer, {
     schemas: SCHEMAS,
+    timeShiftMs: 0,
     remapInstanceName: (name) => name,
   });
   const [participant] = out.collections.participants.content;
