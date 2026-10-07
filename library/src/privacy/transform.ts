@@ -1,6 +1,5 @@
 import * as v from "../schema.ts";
 import { createMockGenerator, SKIP } from "@diister/valibot-mock";
-import { INDEX_SYMBOL } from "../indexes.ts";
 import { extractIdPrefix } from "../migration/utils/seed-id.ts";
 import type {
   SchemaContent,
@@ -32,6 +31,7 @@ import {
   remapObjectId,
 } from "./pseudonym.ts";
 import { unwrapSchema } from "./schema-shape.ts";
+import { uniqueKeysOfTarget, uniqueMembership } from "./unique-keys.ts";
 import {
   DROP,
   walkDocument,
@@ -231,15 +231,6 @@ export function schemaAtPath(fields: SchemaContent, path: string): unknown {
   return unwrapSchema(rawSchemaAtPath(fields, path));
 }
 
-function hasUniqueIndex(schema: unknown): boolean {
-  return collectActions(schema).some((action) => {
-    const metadata = (action as { metadata?: Record<PropertyKey, unknown> })
-      .metadata;
-    const index = metadata?.[INDEX_SYMBOL] as { unique?: boolean } | undefined;
-    return index?.unique === true;
-  });
-}
-
 type SeededGenerator = (seed: number) => unknown;
 
 const generatorCache = new WeakMap<object, Map<string, SeededGenerator>>();
@@ -358,7 +349,8 @@ export function createPrivacyTransformer(
           schema: unwrapSchema(raw),
           path,
           scoped: target.bucket === "scopedMultiCollections",
-          unique: hasUniqueIndex(raw),
+          unique: uniqueMembership(uniqueKeysOfTarget(schemas, target), path)
+            .unique,
         };
         break;
       }
@@ -369,15 +361,14 @@ export function createPrivacyTransformer(
 
   const uniquePaths = new Map<string, boolean>();
 
-  const isUnique = (
-    targetKey: string,
-    fields: SchemaContent,
-    path: string,
-  ): boolean => {
+  const isUnique = (targetKey: string, path: string): boolean => {
     const id = `${targetKey}|${path}`;
     let unique = uniquePaths.get(id);
     if (unique === undefined) {
-      unique = hasUniqueIndex(rawSchemaAtPath(fields, path));
+      const target = plan.targets.get(targetKey);
+      unique =
+        target !== undefined &&
+        uniqueMembership(uniqueKeysOfTarget(schemas, target), path).unique;
       uniquePaths.set(id, unique);
     }
     return unique;
@@ -518,7 +509,7 @@ export function createPrivacyTransformer(
       produce(
         `fake|${targetKey}|${leaf.path}`,
         fakeMessage(leaf.path),
-        isUnique(targetKey, fields, leaf.path),
+        isUnique(targetKey, leaf.path),
         schema,
         leaf.path,
       );
@@ -672,7 +663,7 @@ export function createPrivacyTransformer(
           return produce(
             spaceOf(cls),
             valueMessage(cls, leaf.path, leaf.value),
-            !override && isUnique(targetKey, fields, leaf.path),
+            !override && isUnique(targetKey, leaf.path),
             schema,
             leaf.path,
           );

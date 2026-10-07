@@ -134,8 +134,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C3, transform isUnique() only reads field-level withIndex; it must also read indexesOf(source) unique composites like plan.ts does
-  ignore: true,
   name: "C3 unique: a field covered by a defineType unique composite is made distinct or reported",
   fn: () => {
     const CODE = personal(v.pipe(v.string(), v.regex(/^[ab]$/)), {
@@ -165,8 +163,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C4, a unique index alone on a technical type (picklist/literal/number/date/boolean) must not promote the path to direct+pseudonym
-  ignore: true,
   name: "C4 strict: a unique picklist discriminator keeps its value",
   fn: () => {
     const schemas = {

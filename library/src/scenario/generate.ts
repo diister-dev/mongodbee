@@ -42,12 +42,13 @@ import {
 } from "./state.ts";
 import { setValueAt, valueAt } from "./doc-path.ts";
 import { createDocLookup, mirrorExpectations } from "./mirror.ts";
+import { partitionedDocs } from "./unique.ts";
 import {
-  partitionedDocs,
-  uniqueIndexesOf,
-  uniqueKeysOf,
+  type UniqueKey,
   type UniquePartition,
-} from "./unique.ts";
+  uniqueEntriesOf,
+  uniqueKeysOfTarget,
+} from "../privacy/unique-keys.ts";
 
 const UNIQUE_ATTEMPTS = 64;
 
@@ -69,6 +70,22 @@ interface Batch {
   readonly scope: string | null;
   readonly parent?: Record<string, unknown>;
   readonly count: number;
+}
+
+function uniqueEntries(
+  keys: readonly UniqueKey[],
+  doc: Record<string, unknown>,
+  partition: UniquePartition,
+): string[] {
+  return keys.flatMap((key) => {
+    const result = uniqueEntriesOf(key, doc, partition);
+    if (result.covered !== undefined) {
+      return result.covered ? result.entries : [];
+    }
+    const { partialFilter: _unknown, ...unfiltered } = key;
+    const conservative = uniqueEntriesOf(unfiltered, doc, partition);
+    return conservative.covered ? conservative.entries : [];
+  });
 }
 
 function injectAnchors(
@@ -384,10 +401,10 @@ export function generateScenarioState(
     fields: SchemaContent,
     minted: readonly Minted[],
   ): void => {
-    const unique = uniqueIndexesOf(fields);
+    const unique = uniqueKeysOfTarget(schemas, target);
     const taken = new Set(
       partitionedDocs(state, target).flatMap(({ doc, partition }) =>
-        uniqueKeysOf(unique, doc, partition),
+        uniqueEntries(unique, doc, partition),
       ),
     );
     for (const { batch, ids } of minted) {
@@ -417,13 +434,13 @@ export function generateScenarioState(
           let attempt = 1;
           doc &&
           attempt < UNIQUE_ATTEMPTS &&
-          uniqueKeysOf(unique, doc, partition).some((key) => taken.has(key));
+          uniqueEntries(unique, doc, partition).some((key) => taken.has(key));
           attempt++
         ) {
           doc = generate();
         }
         if (!doc) continue;
-        for (const key of uniqueKeysOf(unique, doc, partition)) taken.add(key);
+        for (const key of uniqueEntries(unique, doc, partition)) taken.add(key);
         if (doc._id === undefined && ids?.[i] !== undefined) doc._id = ids[i];
         content.push({
           ...doc,
