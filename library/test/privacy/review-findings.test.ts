@@ -380,3 +380,43 @@ test({
     assertEquals(Object.keys(out.state.multiModels), [ref]);
   },
 });
+
+test({
+  // TODO(privacy): R14, walk removes a DROPped tuple item instead of leaving a hole (undefined/null), so later items shift position
+  ignore: true,
+  name: "R14 walk: dropping a tuple item keeps the positions of the items after it",
+  fn: () => {
+    const schemas = {
+      collections: {
+        "+users": {
+          _id: personId("user"),
+          pair: v.tuple([
+            v.optional(personal(v.string(), { role: "sensitive" })),
+            v.number(),
+          ]),
+        },
+      },
+    };
+    const { transformer } = transformerFor(schemas);
+    const out = transformer.transform(USERS, {
+      _id: USER_ID,
+      pair: ["diagnosis", 5],
+    });
+    assertEquals((out.doc.pair as unknown[])[1], 5);
+  },
+});
+
+test({
+  // TODO(privacy): R15, walk returns the raw handler result on the no-variant and schema-less branches; map KEEP to the value there too
+  ignore: true,
+  name: "R15 walk: KEEP on a value matching no union option keeps the value, not the symbol",
+  fn: async () => {
+    const { walkDocument, KEEP } = await import("../../src/privacy/walk.ts");
+    const out = walkDocument(
+      { u: v.union([v.string(), v.number()]) } as never,
+      { u: true },
+      () => KEEP,
+    );
+    assertEquals(out.doc.u, true);
+  },
+});
