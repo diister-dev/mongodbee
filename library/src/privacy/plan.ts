@@ -9,6 +9,12 @@ import { fieldsOf as fieldsOfSource, indexesOf } from "../type-definition.ts";
 import { extractIdPrefix } from "../migration/utils/seed-id.ts";
 import { INDEX_SYMBOL } from "../indexes.ts";
 import {
+  OBJECT_TYPES,
+  TUPLE_TYPES,
+  UNION_TYPES,
+  WRAPPER_TYPES,
+} from "./schema-shape.ts";
+import {
   collectActions,
   PRIVACY_SYMBOL,
   type PrivacyConsistency,
@@ -117,33 +123,6 @@ const BUCKET_ORDER: Record<keyof DatabaseState, number> = {
   multiModels: 2,
   scopedMultiCollections: 3,
 };
-
-const WRAPPER_TYPES: ReadonlySet<string> = new Set([
-  "optional",
-  "nullable",
-  "nullish",
-  "non_optional",
-  "non_nullable",
-  "non_nullish",
-  "undefinedable",
-  "exact_optional",
-]);
-
-const OBJECT_TYPES: ReadonlySet<string> = new Set([
-  "object",
-  "loose_object",
-  "strict_object",
-  "object_with_rest",
-]);
-
-const TUPLE_TYPES: ReadonlySet<string> = new Set([
-  "tuple",
-  "loose_tuple",
-  "strict_tuple",
-  "tuple_with_rest",
-]);
-
-const UNION_TYPES: ReadonlySet<string> = new Set(["union", "variant"]);
 
 const CONTAINER_TYPES: ReadonlySet<string> = new Set([
   ...OBJECT_TYPES,

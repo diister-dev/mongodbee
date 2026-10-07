@@ -2,6 +2,13 @@ import * as v from "../schema.ts";
 import type { SchemaContent } from "../migration/types.ts";
 import { COMPUTED_ROOT } from "../computed-guard.ts";
 import { readPrivacyMetadata } from "./metadata.ts";
+import {
+  OBJECT_TYPES,
+  PLAIN_OBJECT_TYPES,
+  TUPLE_TYPES,
+  unwrap,
+  unwrapSchema,
+} from "./schema-shape.ts";
 
 export const KEEP: unique symbol = Symbol("mongodbee.privacy.keep");
 export const DROP: unique symbol = Symbol("mongodbee.privacy.drop");
@@ -43,46 +50,6 @@ export interface WalkOptions {
   readonly mapKey?: (key: WalkKey) => string;
 }
 
-const WRAPPER_TYPES: ReadonlySet<string> = new Set([
-  "optional",
-  "nullable",
-  "nullish",
-  "non_optional",
-  "non_nullable",
-  "non_nullish",
-  "undefinedable",
-  "exact_optional",
-]);
-
-const OPTIONAL_WRAPPERS: ReadonlySet<string> = new Set([
-  "optional",
-  "nullish",
-  "undefinedable",
-  "exact_optional",
-]);
-
-const NULLABLE_WRAPPERS: ReadonlySet<string> = new Set(["nullable", "nullish"]);
-
-const PLAIN_OBJECT_TYPES: ReadonlySet<string> = new Set([
-  "object",
-  "loose_object",
-  "strict_object",
-]);
-
-const OBJECT_TYPES: ReadonlySet<string> = new Set([
-  "object",
-  "loose_object",
-  "strict_object",
-  "object_with_rest",
-]);
-
-const TUPLE_TYPES: ReadonlySet<string> = new Set([
-  "tuple",
-  "loose_tuple",
-  "strict_tuple",
-  "tuple_with_rest",
-]);
-
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -91,26 +58,48 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return proto === Object.prototype || proto === null;
 }
 
-function unwrap(schema: unknown): {
-  schema: Record<string, unknown>;
-  optional: boolean;
-  nullable: boolean;
-} {
-  let current = schema as Record<string, unknown>;
-  const chain: string[] = [];
-  while (current && WRAPPER_TYPES.has(current.type as string)) {
-    chain.push(current.type as string);
-    current = current.wrapped as Record<string, unknown>;
+function declaredEntries(option: unknown): Record<string, unknown> | undefined {
+  return unwrapSchema(option)?.entries as Record<string, unknown> | undefined;
+}
+
+function chooseOption(
+  schema: Record<string, unknown>,
+  value: unknown,
+): unknown | undefined {
+  let options = schema.options as unknown[];
+  if (
+    schema.type === "variant" &&
+    typeof schema.key === "string" &&
+    isPlainObject(value)
+  ) {
+    const key = schema.key;
+    const keyed = options.filter((option) => {
+      const entry = declaredEntries(option)?.[key];
+      return (
+        entry !== undefined &&
+        v.safeParse(entry as v.GenericSchema, value[key]).success
+      );
+    });
+    if (keyed.length > 0) options = keyed;
   }
-  let optional = false;
-  let nullable = false;
-  for (const type of chain.reverse()) {
-    if (OPTIONAL_WRAPPERS.has(type)) optional = true;
-    if (NULLABLE_WRAPPERS.has(type)) nullable = true;
-    if (type === "non_optional" || type === "non_nullish") optional = false;
-    if (type === "non_nullable" || type === "non_nullish") nullable = false;
+  const matching = options.filter(
+    (option) => v.safeParse(option as v.GenericSchema, value).success,
+  );
+  if (matching.length <= 1 || !isPlainObject(value)) return matching[0];
+  const keys = Object.keys(value);
+  let best = matching[0];
+  let bestCovered = -1;
+  for (const option of matching) {
+    const entries = declaredEntries(option);
+    const covered = entries
+      ? keys.filter((k) => Object.hasOwn(entries, k)).length
+      : 0;
+    if (covered > bestCovered) {
+      best = option;
+      bestCovered = covered;
+    }
   }
-  return { schema: current, optional, nullable };
+  return best;
 }
 
 function mergeIntersect(
@@ -167,19 +156,19 @@ export function walkDocument(
   ): unknown => {
     if (value === undefined) return undefined;
     const { schema, optional, nullable } = unwrap(rawSchema);
-    if (value === null || schema === undefined) {
-      return value === null
-        ? null
-        : handler({
-            path: path.join("."),
-            keys,
-            key,
-            value,
-            schema: rawSchema,
-            optional,
-            nullable,
-            doc,
-          });
+    if (value === null) return null;
+    if (schema === undefined) {
+      const r = handler({
+        path: path.join("."),
+        keys,
+        key,
+        value,
+        schema: rawSchema,
+        optional,
+        nullable,
+        doc,
+      });
+      return r === KEEP ? value : r;
     }
     const type = schema.type as string;
 
@@ -245,6 +234,7 @@ export function walkDocument(
     if (TUPLE_TYPES.has(type) && Array.isArray(value)) {
       const items = schema.items as unknown[];
       const out: unknown[] = [];
+      let kept = 0;
       value.forEach((item, i) => {
         const itemSchema =
           items[i] ?? (type === "tuple_with_rest" ? schema.rest : undefined);
@@ -262,9 +252,11 @@ export function walkDocument(
           [...keys, String(i)],
           String(i),
         );
-        if (r !== DROP && r !== undefined) out.push(r);
+        // BSON arrays cannot hold a hole: a dropped slot becomes null so later items keep their position
+        out.push(r === DROP || r === undefined ? null : r);
+        if (r !== DROP && r !== undefined) kept = out.length;
       });
-      return out;
+      return out.slice(0, kept);
     }
     if (type === "record" && isPlainObject(value)) {
       const out: Record<string, unknown> = {};
@@ -277,14 +269,10 @@ export function walkDocument(
       return out;
     }
     if (type === "union" || type === "variant") {
-      const options = schema.options as unknown[];
-      for (const option of options) {
-        if (v.safeParse(option as v.GenericSchema, value).success) {
-          return visit(option, value, path, keys, key);
-        }
-      }
+      const option = chooseOption(schema, value);
+      if (option !== undefined) return visit(option, value, path, keys, key);
       notes.push({ path: path.join("."), kind: "no_variant" });
-      return handler({
+      const r = handler({
         path: path.join("."),
         keys,
         key,
@@ -294,6 +282,7 @@ export function walkDocument(
         nullable,
         doc,
       });
+      return r === KEEP ? value : r;
     }
     if (type === "intersect" && isPlainObject(value)) {
       const merged = mergeIntersect(schema);

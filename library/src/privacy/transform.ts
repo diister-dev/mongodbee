@@ -32,6 +32,7 @@ import {
   remapId,
   remapObjectId,
 } from "./pseudonym.ts";
+import { unwrapSchema } from "./schema-shape.ts";
 import {
   DROP,
   walkDocument,
@@ -168,17 +169,6 @@ function mapTemporal(
   return out + (zone ?? "");
 }
 
-const WRAPPER_TYPES: ReadonlySet<string> = new Set([
-  "optional",
-  "nullable",
-  "nullish",
-  "non_optional",
-  "non_nullable",
-  "non_nullish",
-  "undefinedable",
-  "exact_optional",
-]);
-
 function sourceOf(
   schemas: SchemasDefinition,
   target: PrivacyTarget,
@@ -203,14 +193,6 @@ export function fieldsOf(
 ): SchemaContent | undefined {
   const source = sourceOf(schemas, target);
   return source === undefined ? undefined : fieldsOfSource(source);
-}
-
-function unwrapSchema(schema: unknown): Record<string, unknown> | undefined {
-  let current = schema as Record<string, unknown> | undefined;
-  while (current && WRAPPER_TYPES.has(current.type as string)) {
-    current = current.wrapped as Record<string, unknown>;
-  }
-  return current;
 }
 
 function rawSchemaAtPath(fields: SchemaContent, path: string): unknown {
