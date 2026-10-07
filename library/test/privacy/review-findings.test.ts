@@ -444,3 +444,24 @@ test({
     assertEquals(run(values), run([...values].reverse()));
   },
 });
+
+test("C4 plan: a unique string in an exempt document is kept under personal posture and pseudonymised under strict", () => {
+  const schemas = {
+    collections: {
+      "+security": {
+        _id: notPersonal(dbId("security"), "platform keys"),
+        publicRef: withIndex(v.string(), { unique: true }),
+        version: withIndex(v.number(), { unique: true }),
+      },
+      "+users": { _id: personId("user") },
+    },
+  };
+  const treatment = (posture: PrivacyPosture, path: string) =>
+    transformerFor(schemas, posture)
+      .plan.targets.get("collections/+security/")
+      ?.paths.find((p) => p.path === path)?.treatment.extract;
+  assertEquals(treatment("personal", "publicRef"), "keep");
+  assertEquals(treatment("strict", "publicRef"), "pseudonym");
+  assertEquals(treatment("personal", "version"), "keep");
+  assertEquals(treatment("strict", "version"), "keep");
+});
