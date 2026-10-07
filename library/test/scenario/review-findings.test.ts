@@ -30,9 +30,9 @@ const BIRTH = migrationDefinition("2026_01_01_0900_BIRTH01@birth", "birth", {
 });
 
 test({
-  // TODO(privacy): R16, scenario/unique.ts uniqueIndexesOf only reads field-level withIndex; read indexesOf(source) composites in generate (retry) and oracle (violation)
+  // TODO(privacy): C16, scenario/unique.ts uniqueIndexesOf only reads field-level withIndex; read indexesOf(source) composites in generate (retry) and oracle (violation)
   ignore: true,
-  name: "R16 scenario: a defineType unique composite is honoured by the generator or flagged by the oracle",
+  name: "C16 scenario: a defineType unique composite is honoured by the generator or flagged by the oracle",
   fn: async () => {
     const run = await runScenario({
       migrations: [BIRTH],
@@ -57,9 +57,9 @@ test({
 });
 
 test({
-  // TODO(privacy): R17, runScenario/seed never recompute computed fields: the generator fills the computed root with mock values; call recomputeComputedFields(state, at.schemas) after replay
+  // TODO(privacy): C17, runScenario/seed never recompute computed fields: the generator fills the computed root with mock values; call recomputeComputedFields(state, at.schemas) after replay
   ignore: true,
-  name: "R17 scenario: seeded computed fields equal the truth of the seeded sources",
+  name: "C17 scenario: seeded computed fields equal the truth of the seeded sources",
   fn: async () => {
     const { from } = await import("../../src/computed.ts");
     const { recomputeComputedFields } = await import(

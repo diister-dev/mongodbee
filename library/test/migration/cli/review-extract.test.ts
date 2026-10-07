@@ -85,9 +85,9 @@ function names() {
 type Raw = { _id: string; [key: string]: unknown };
 
 test({
-  // TODO(privacy): R8, extract must read the source ledger and default --from-migration to its last applied id (or refuse when it is behind the chain head)
+  // TODO(privacy): C8, extract must read the source ledger and default --from-migration to its last applied id (or refuse when it is behind the chain head)
   ignore: true,
-  name: "R8 extract: a source behind the chain head is replayed, not baselined at head with old-shaped documents",
+  name: "C8 extract: a source behind the chain head is replayed, not baselined at head with old-shaped documents",
   timeout: 60_000,
   fn: async () => {
     await withTempDir(async (dir) => {
@@ -138,9 +138,9 @@ test({
 });
 
 test({
-  // TODO(privacy): R2+R9, unique pseudonyms fold case (R2); populateDatabase must also undo inserts into collections that pre-existed empty
+  // TODO(privacy): C2+C9, unique pseudonyms fold case (C2); populateDatabase must also undo inserts into collections that pre-existed empty
   ignore: true,
-  name: "R2+R9 extract: logins differing only by case extract cleanly, and a failed write leaves the target empty",
+  name: "C2+C9 extract: logins differing only by case extract cleanly, and a failed write leaves the target empty",
   timeout: 60_000,
   fn: async () => {
     await withTempDir(async (dir) => {
@@ -187,9 +187,9 @@ test({
 });
 
 test({
-  // TODO(privacy): R12, extract passes timeShiftMs = 0 when --shift-days is absent, so the strict posture's secret-derived shift never applies (leak L12 via the CLI); pass undefined unless --shift-days is given
+  // TODO(privacy): C12, extract passes timeShiftMs = 0 when --shift-days is absent, so the strict posture's secret-derived shift never applies (leak L12 via the CLI); pass undefined unless --shift-days is given
   ignore: true,
-  name: "R12 extract: the strict default posture shifts ulid timestamps like the library does",
+  name: "C12 extract: the strict default posture shifts ulid timestamps like the library does",
   timeout: 60_000,
   fn: async () => {
     const { decodeTime } = await import("../../../src/utils/ulid.ts");
