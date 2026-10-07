@@ -1056,7 +1056,11 @@ export async function scopedMultiCollection<S extends AnySchema>(
         readBack: (ids) =>
           findThrough(
             collection,
-            { _id: { $in: ids.map(toStringId) }, _type: typeName, _scope: scopeId },
+            {
+              _id: { $in: ids.map(toStringId) },
+              _type: typeName,
+              _scope: scopeId,
+            },
             undefined,
             { session: sessionContext.getSession() },
           ) as Promise<Record<string, unknown>[]>,

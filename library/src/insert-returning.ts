@@ -10,7 +10,9 @@ export interface ReturningPlan<T> {
   readonly label: string;
   readonly computed: boolean;
   readonly decode: (document: unknown) => T;
-  readonly readBack: (ids: readonly unknown[]) => Promise<readonly Record<string, unknown>[]>;
+  readonly readBack: (
+    ids: readonly unknown[],
+  ) => Promise<readonly Record<string, unknown>[]>;
 }
 
 function idKey(id: unknown): string {

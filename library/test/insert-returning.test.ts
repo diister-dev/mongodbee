@@ -193,7 +193,10 @@ const CrmModel = defineModel("crm", {
 });
 
 async function openMulti(db: Db) {
-  registerComputed(db, computedTopology({ multiCollections: { crm: CrmModel.schema } }));
+  registerComputed(
+    db,
+    computedTopology({ multiCollections: { crm: CrmModel.schema } }),
+  );
   return await multiCollection(db, "crm", CrmModel);
 }
 
@@ -203,7 +206,10 @@ test("multiCollection insertOneReturning: returns what getById reads, without re
     const startsAt = new Date("2026-10-02T09:00:00.000Z");
 
     const before = reads();
-    const returned = await crm.insertOneReturning("event", { title: "  Keynote  ", startsAt });
+    const returned = await crm.insertOneReturning("event", {
+      title: "  Keynote  ",
+      startsAt,
+    });
     assertEquals(reads() - before, 0);
     assertEquals(returned, await crm.getById("event", returned._id));
     assertEquals(returned.title, "Keynote");
@@ -222,23 +228,33 @@ test("multiCollection insertManyReturning: input order, no read, and a computed 
       { title: "Second", startsAt, tags: ["a"] },
     ]);
     assertEquals(reads() - before, 0);
-    assertEquals(events.map((doc) => doc.title), ["First", "Second"]);
-    for (const doc of events) assertEquals(doc, await crm.getById("event", doc._id));
+    assertEquals(
+      events.map((doc) => doc.title),
+      ["First", "Second"],
+    );
+    for (const doc of events)
+      assertEquals(doc, await crm.getById("event", doc._id));
 
     const plainStart = reads();
     await crm.insertMany("participant", [{ name: "Ada" }]);
     const plainReads = reads() - plainStart;
     const computedStart = reads();
-    const participants = await crm.insertManyReturning("participant", [{ name: "Alan" }, { name: "Edsger" }]);
+    const participants = await crm.insertManyReturning("participant", [
+      { name: "Alan" },
+      { name: "Edsger" },
+    ]);
     assertEquals(reads() - computedStart, plainReads + 1);
-    for (const doc of participants) assertEquals(doc, await crm.getById("participant", doc._id));
+    for (const doc of participants)
+      assertEquals(doc, await crm.getById("participant", doc._id));
   });
 });
 
 test("multiCollection insertOneReturning: rejects a document insertOne would reject", async () => {
   await withCountedDatabase(async (db) => {
     const crm = await openMulti(db);
-    await assertRejects(() => crm.insertOneReturning("event", { title: "No date" } as never));
+    await assertRejects(() =>
+      crm.insertOneReturning("event", { title: "No date" } as never),
+    );
   });
 });
 
@@ -255,13 +271,19 @@ test("collection insertOneReturning and insertManyReturning: return what getById
 
     const before = reads();
     const one = await notes.insertOneReturning({ title: "  Hello  ", at });
-    const many = await notes.insertManyReturning([{ title: " A ", at }, { title: "B", at, pinned: true }]);
+    const many = await notes.insertManyReturning([
+      { title: " A ", at },
+      { title: "B", at, pinned: true },
+    ]);
     assertEquals(reads() - before, 0);
 
     assertEquals(one, await notes.getById(one._id));
     assertEquals(one.title, "Hello");
     assertEquals(one.pinned, false);
-    assertEquals(many.map((doc) => doc.title), ["A", "B"]);
+    assertEquals(
+      many.map((doc) => doc.title),
+      ["A", "B"],
+    );
     for (const doc of many) assertEquals(doc, await notes.getById(doc._id));
   });
 });
@@ -269,6 +291,8 @@ test("collection insertOneReturning and insertManyReturning: return what getById
 test("collection insertOneReturning: rejects a document insertOne would reject", async () => {
   await withCountedDatabase(async (db) => {
     const notes = await collection(db, "notes", NoteSchema);
-    await assertRejects(() => notes.insertOneReturning({ title: "No date" } as never));
+    await assertRejects(() =>
+      notes.insertOneReturning({ title: "No date" } as never),
+    );
   });
 });
