@@ -267,3 +267,40 @@ test("scenario world: anchored multi-model instances are kept and completed, the
     3,
   );
 });
+
+const LINKS_V2 = migrationDefinition(
+  "2026_02_01_0900_COLLAPSE1@collapse",
+  "collapse",
+  {
+    parent: LINKS,
+    schemas: LINKS.schemas,
+    migrate: (b) =>
+      b
+        .collection("links")
+        .transform({
+          up: (doc) => ({
+            ...doc,
+            handle: "same",
+            userId: "user:01j5zk3v8n2q4x6y8z0b1c3d5e",
+          }),
+          down: (doc) => doc,
+          irreversible: true,
+        })
+        .end()
+        .compile(),
+  },
+);
+
+test("scenario oracle: a replayed migration that breaks uniqueness or an owner reference is caught at the target step", async () => {
+  const { report } = await runScenario({
+    migrations: [LINKS, LINKS_V2],
+    scenario: {
+      name: "collapse",
+      birth: LINKS.id,
+      shape: { "+users": 4, links: 4 },
+    },
+  });
+  assert(!report.ok);
+  const kinds = report.violations.map((x) => x.kind).sort();
+  assertEquals(kinds, ["owner_unresolved", "unique_index"]);
+});
