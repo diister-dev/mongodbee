@@ -320,6 +320,7 @@ export function createPrivacyTransformer(
     ): unknown => {
       notes.push({ path: leaf.path, kind });
       if (leaf.optional) return DROP;
+      if (leaf.nullable) return null;
       notes.push({ path: leaf.path, kind: "generated_required" });
       return generate(leaf.schema, fakeSeed(leaf.path), leaf.path);
     };

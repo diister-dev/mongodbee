@@ -12,6 +12,7 @@ export interface WalkLeaf {
   readonly value: unknown;
   readonly schema: unknown;
   readonly optional: boolean;
+  readonly nullable: boolean;
   readonly doc: Record<string, unknown>;
 }
 
@@ -44,6 +45,21 @@ const WRAPPER_TYPES: ReadonlySet<string> = new Set([
   "exact_optional",
 ]);
 
+const OPTIONAL_WRAPPERS: ReadonlySet<string> = new Set([
+  "optional",
+  "nullish",
+  "undefinedable",
+  "exact_optional",
+]);
+
+const NULLABLE_WRAPPERS: ReadonlySet<string> = new Set(["nullable", "nullish"]);
+
+const PLAIN_OBJECT_TYPES: ReadonlySet<string> = new Set([
+  "object",
+  "loose_object",
+  "strict_object",
+]);
+
 const OBJECT_TYPES: ReadonlySet<string> = new Set([
   "object",
   "loose_object",
@@ -69,14 +85,47 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function unwrap(schema: unknown): {
   schema: Record<string, unknown>;
   optional: boolean;
+  nullable: boolean;
 } {
   let current = schema as Record<string, unknown>;
-  let optional = false;
+  const chain: string[] = [];
   while (current && WRAPPER_TYPES.has(current.type as string)) {
-    optional = true;
+    chain.push(current.type as string);
     current = current.wrapped as Record<string, unknown>;
   }
-  return { schema: current, optional };
+  let optional = false;
+  let nullable = false;
+  for (const type of chain.reverse()) {
+    if (OPTIONAL_WRAPPERS.has(type)) optional = true;
+    if (NULLABLE_WRAPPERS.has(type)) nullable = true;
+    if (type === "non_optional" || type === "non_nullish") optional = false;
+    if (type === "non_nullable" || type === "non_nullish") nullable = false;
+  }
+  return { schema: current, optional, nullable };
+}
+
+function mergeIntersect(
+  schema: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const entries: Record<string, unknown> = {};
+  for (const option of schema.options as unknown[]) {
+    const inner = unwrap(option).schema;
+    if (!inner || !PLAIN_OBJECT_TYPES.has(inner.type as string)) {
+      return undefined;
+    }
+    for (const [key, entry] of Object.entries(
+      inner.entries as Record<string, unknown>,
+    )) {
+      const existing = entries[key];
+      if (
+        existing === undefined ||
+        readPrivacyMetadata(existing).length === 0
+      ) {
+        entries[key] = entry;
+      }
+    }
+  }
+  return { type: "object", entries };
 }
 
 export function walkDocument(
@@ -98,7 +147,7 @@ export function walkDocument(
     key: string,
   ): unknown => {
     if (value === undefined) return undefined;
-    const { schema, optional } = unwrap(rawSchema);
+    const { schema, optional, nullable } = unwrap(rawSchema);
     if (value === null || schema === undefined) {
       return value === null
         ? null
@@ -109,6 +158,7 @@ export function walkDocument(
             value,
             schema: rawSchema,
             optional,
+            nullable,
             doc,
           });
     }
@@ -122,6 +172,7 @@ export function walkDocument(
         value,
         schema,
         optional,
+        nullable,
         doc,
       });
       return r === KEEP ? value : r;
@@ -144,16 +195,16 @@ export function walkDocument(
     }
     if (type === "array" && Array.isArray(value)) {
       const out: unknown[] = [];
-      for (const item of value) {
+      value.forEach((item, i) => {
         const r = visit(
           schema.item,
           item,
           [...path, "*"],
-          [...keys, String(out.length)],
+          [...keys, String(i)],
           key,
         );
         if (r !== DROP && r !== undefined) out.push(r);
-      }
+      });
       return out;
     }
     if (TUPLE_TYPES.has(type) && Array.isArray(value)) {
@@ -203,8 +254,13 @@ export function walkDocument(
         value,
         schema,
         optional,
+        nullable,
         doc,
       });
+    }
+    if (type === "intersect" && isPlainObject(value)) {
+      const merged = mergeIntersect(schema);
+      if (merged) return visit(merged, value, path, keys, key);
     }
     if (type === "lazy") {
       const getter = schema.getter as (input: unknown) => unknown;
@@ -217,6 +273,7 @@ export function walkDocument(
       value,
       schema,
       optional,
+      nullable,
       doc,
     });
     return r === KEEP ? value : r;
