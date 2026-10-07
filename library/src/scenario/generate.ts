@@ -40,6 +40,16 @@ import {
   resolveTargetKey,
   targetFields,
 } from "./state.ts";
+import { setValueAt, valueAt } from "./doc-path.ts";
+import { createDocLookup, mirrorExpectations } from "./mirror.ts";
+import {
+  partitionedDocs,
+  uniqueIndexesOf,
+  uniqueKeysOf,
+  type UniquePartition,
+} from "./unique.ts";
+
+const UNIQUE_ATTEMPTS = 64;
 
 export interface GenerateScenarioOptions {
   readonly schemas: SchemasDefinition;
@@ -97,12 +107,10 @@ function rank(target: PrivacyTarget): number {
 function orderedTargets(plan: PrivacyPlan): PrivacyTarget[] {
   const all = [...plan.targets.values()];
   const canonical = new Map(all.map((t, i) => [t.key, i]));
-  return all
-    .filter((t) => t.bucket !== "multiModels")
-    .sort((a, b) => {
-      const r = rank(a) - rank(b);
-      return r !== 0 ? r : canonical.get(a.key)! - canonical.get(b.key)!;
-    });
+  return all.sort((a, b) => {
+    const r = rank(a) - rank(b);
+    return r !== 0 ? r : canonical.get(a.key)! - canonical.get(b.key)!;
+  });
 }
 
 function countOf(count: SeedCount, context: SeedShapeContext): number {
@@ -119,6 +127,7 @@ export function generateScenarioState(
   const plan = buildPrivacyPlan({ schemas });
   const state = createEmptyDatabaseState();
   injectAnchors(state, scenario.anchors);
+  const lookup = createDocLookup(state, plan);
 
   const seed = scenario.seed ?? fnv1a32(scenario.name);
   const refDate = scenario.refDate ?? new Date(migrationTime(scenario.birth));
@@ -198,6 +207,20 @@ export function generateScenarioState(
     )?.path;
   };
 
+  const inScope = (
+    parentTarget: PrivacyTarget,
+    parent: Record<string, unknown>,
+    scope: string,
+  ): boolean => {
+    if (parentTarget.bucket === "scopedMultiCollections") {
+      return parent._scope === scope;
+    }
+    if (parentTarget.bucket === "multiModels") {
+      return state.multiModels[scope]?.content.includes(parent) ?? false;
+    }
+    return true;
+  };
+
   const batchesFor = (
     entry: SeedShapeEntry | undefined,
     scope: string | null,
@@ -211,10 +234,7 @@ export function generateScenarioState(
     }
     const parentTarget = targetOf(entry.per);
     const parents = docsOf(state, parentTarget).filter(
-      (p) =>
-        scope === null ||
-        parentTarget.bucket !== "scopedMultiCollections" ||
-        p._scope === scope,
+      (p) => scope === null || inScope(parentTarget, p, scope),
     );
     return parents.map((parent) => ({
       scope,
@@ -266,6 +286,15 @@ export function generateScenarioState(
           typeof doc[path] === "string"
         ) {
           doc[path] = parent._id;
+        }
+      }
+      for (const { path, candidates } of mirrorExpectations(
+        target,
+        doc,
+        lookup,
+      )) {
+        if (valueAt(doc, path) !== undefined) {
+          setValueAt(doc, path, candidates[0]);
         }
       }
       const finalize = finalizers.get(target.key);
@@ -333,36 +362,73 @@ export function generateScenarioState(
     return n;
   };
 
+  const contentOf = (
+    target: PrivacyTarget,
+    scope: string | null,
+  ): Record<string, unknown>[] =>
+    target.bucket === "multiModels"
+      ? state.multiModels[scope!].content
+      : bucketContent(state, target);
+
+  const partitionOf = (
+    target: PrivacyTarget,
+    scope: string | null,
+  ): UniquePartition =>
+    target.bucket === "multiModels"
+      ? { instance: scope!, scope: "" }
+      : { instance: "", scope: scope ?? "" };
+
   const generateBatches = (
     target: PrivacyTarget,
     fields: SchemaContent,
     minted: readonly Minted[],
   ): void => {
-    const content = bucketContent(state, target);
+    const unique = uniqueIndexesOf(fields);
+    const taken = new Set(
+      partitionedDocs(state, target).flatMap(({ doc, partition }) =>
+        uniqueKeysOf(unique, doc, partition),
+      ),
+    );
     for (const { batch, ids } of minted) {
       if (batch.count === 0) continue;
+      const content = contentOf(target, batch.scope);
+      const partition = partitionOf(target, batch.scope);
       for (let i = 0; i < batch.count; i++) {
-        const doc = generateDoc(
-          target,
-          fields,
-          {
-            bucket: target.bucket,
-            collection: target.collection,
-            ...(target.type !== undefined && { type: target.type }),
-            scope: batch.scope,
-            ...(ids?.[i] !== undefined && { assignedId: ids[i] }),
-          },
-          batch.parent,
-          i,
-          nextOrdinal(target.key),
-          batch.count,
-        );
+        const ordinal = nextOrdinal(target.key);
+        const generate = () =>
+          generateDoc(
+            target,
+            fields,
+            {
+              bucket: target.bucket,
+              collection: target.collection,
+              ...(target.type !== undefined && { type: target.type }),
+              scope: batch.scope,
+              ...(ids?.[i] !== undefined && { assignedId: ids[i] }),
+            },
+            batch.parent,
+            i,
+            ordinal,
+            batch.count,
+          );
+        let doc = generate();
+        for (
+          let attempt = 1;
+          doc &&
+          attempt < UNIQUE_ATTEMPTS &&
+          uniqueKeysOf(unique, doc, partition).some((key) => taken.has(key));
+          attempt++
+        ) {
+          doc = generate();
+        }
         if (!doc) continue;
+        for (const key of uniqueKeysOf(unique, doc, partition)) taken.add(key);
         if (doc._id === undefined && ids?.[i] !== undefined) doc._id = ids[i];
         content.push({
           ...doc,
           ...(target.type !== undefined && { _type: target.type }),
-          ...(batch.scope !== null && { _scope: batch.scope }),
+          ...(batch.scope !== null &&
+            target.bucket !== "multiModels" && { _scope: batch.scope }),
         });
       }
     }
@@ -381,7 +447,6 @@ export function generateScenarioState(
   };
   const ordered = (() => {
     const base = orderedTargets(plan);
-    const index = new Map(base.map((t, i) => [t.key, i]));
     const out: PrivacyTarget[] = [];
     const placed = new Set<string>();
     const place = (target: PrivacyTarget, trail: Set<string>) => {
@@ -399,7 +464,6 @@ export function generateScenarioState(
       out.push(target);
     };
     for (const target of base) place(target, new Set());
-    void index;
     return out;
   })();
 
@@ -434,7 +498,39 @@ export function generateScenarioState(
     }
   };
 
+  const instancesOf = new Map<string, string[]>();
+  const realizeAllInstances = (): void => {
+    const models = new Set(
+      ordered
+        .filter((t) => t.bucket === "multiModels")
+        .map((t) => t.collection),
+    );
+    for (const model of models) {
+      const existing = Object.entries(state.multiModels)
+        .filter(([, instance]) => instance.modelType === model)
+        .map(([name]) => name);
+      const taken = new Set(existing);
+      const pooled = session.pooledIds(model).filter((id) => !taken.has(id));
+      const wanted =
+        pooled.length > 0
+          ? pooled.length
+          : existing.length > 0
+            ? 0
+            : defaultScopes;
+      const names = session.realizeInstanceNames(model, wanted, taken);
+      for (const name of names) {
+        state.multiModels[name] = { modelType: model, content: [] };
+      }
+      instancesOf.set(model, [...existing, ...names]);
+    }
+  };
+
   const batchesOf = (target: PrivacyTarget): Batch[] => {
+    if (target.bucket === "multiModels") {
+      return (instancesOf.get(target.collection) ?? []).flatMap((name) =>
+        batchesFor(shape.get(target.key), name),
+      );
+    }
     if (target.bucket !== "scopedMultiCollections") {
       return batchesFor(shape.get(target.key), null);
     }
@@ -462,15 +558,14 @@ export function generateScenarioState(
   };
   const independent = ordered.filter((t) => dependsOn(t) === undefined);
   const minted = new Map<string, Minted[]>();
-  for (const target of independent.filter(
-    (t) => t.bucket !== "scopedMultiCollections",
-  )) {
+  const instanceBound = (t: PrivacyTarget): boolean =>
+    t.bucket === "scopedMultiCollections" || t.bucket === "multiModels";
+  for (const target of independent.filter((t) => !instanceBound(t))) {
     minted.set(target.key, mintBatches(target, batchesOf(target)));
   }
   realizeAllScopes();
-  for (const target of independent.filter(
-    (t) => t.bucket === "scopedMultiCollections",
-  )) {
+  realizeAllInstances();
+  for (const target of independent.filter(instanceBound)) {
     minted.set(target.key, mintBatches(target, batchesOf(target)));
   }
   for (const target of [...ordered].sort(scopedFirst)) {
