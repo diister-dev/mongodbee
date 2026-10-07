@@ -44,9 +44,10 @@ export function checkScenarioState(
 
     for (const doc of docs) {
       if (doc._id !== undefined || target.space !== "") {
-        const key = target.bucket === "scopedMultiCollections"
-          ? `${doc._scope}|${doc._id}`
-          : String(doc._id);
+        const key =
+          target.bucket === "scopedMultiCollections"
+            ? `${doc._scope}|${doc._id}`
+            : String(doc._id);
         if (seen.has(key)) duplicates++;
         seen.add(key);
       }

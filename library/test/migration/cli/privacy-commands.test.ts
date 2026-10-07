@@ -42,9 +42,9 @@ function migrationFile(
 import { migrationDefinition } from "${SRC}migration/definition.ts";
 import { users, expositions, ${participant}, refId } from "../lib.ts";
 ${parentFile ? `import parent from "./${parentFile}";` : ""}
-export default migrationDefinition(${JSON.stringify(id)}, ${
-    JSON.stringify(name)
-  }, {
+export default migrationDefinition(${JSON.stringify(id)}, ${JSON.stringify(
+    name,
+  )}, {
   parent: ${parentFile ? "parent" : "null"},
   schemas: {
     collections: { "+users": users, expositions },
@@ -59,11 +59,11 @@ async function writeProject(dir: string, dbName: string): Promise<void> {
   await mkdir(`${dir}/migrations`, { recursive: true });
   await writeFile(
     `${dir}/mongodbee.config.ts`,
-    `export default { database: { connection: { uri: ${
-      JSON.stringify(TEST_URI)
-    } }, name: ${
-      JSON.stringify(dbName)
-    } }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
+    `export default { database: { connection: { uri: ${JSON.stringify(
+      TEST_URI,
+    )} }, name: ${JSON.stringify(
+      dbName,
+    )} }, paths: { migrations: "./migrations", schemas: "./schemas.ts" } };`,
   );
   await writeFile(`${dir}/lib.ts`, SHARED);
   await writeFile(
@@ -99,9 +99,9 @@ export const schemas = {
 export const scenario = {
   name: "salon",
   birth: ${JSON.stringify(BIRTH)},
-  anchors: { collections: { "+users": [{ _id: ${
-      JSON.stringify(ADMIN)
-    }, email: "admin@diister.fr", firstname: "Admin", role: "admin" }] } },
+  anchors: { collections: { "+users": [{ _id: ${JSON.stringify(
+    ADMIN,
+  )}, email: "admin@diister.fr", firstname: "Admin", role: "admin" }] } },
   shape: { "+users": 9, expositions: 2, participant: { per: "scope", count: 5 } },
 };
 `,
@@ -109,9 +109,10 @@ export const scenario = {
 }
 
 function dbName(tag: string): string {
-  return `mongodbee_test_privacy_${tag}_${
-    crypto.randomUUID().replace(/-/g, "").slice(0, 8)
-  }`;
+  return `mongodbee_test_privacy_${tag}_${crypto
+    .randomUUID()
+    .replace(/-/g, "")
+    .slice(0, 8)}`;
 }
 
 test("cli: classify reports the plan of the project schemas and fails on classification errors", async () => {
@@ -200,7 +201,7 @@ test("cli: seed writes the world at the head and baselines the ledger, extract c
       const outUserIds = new Set(outUsers.map((u) => String(u._id)));
       const outExpoIds = new Set(
         (await out.collection("expositions").find({}).toArray()).map((e) =>
-          String(e._id)
+          String(e._id),
         ),
       );
       for (const p of outExpo) {

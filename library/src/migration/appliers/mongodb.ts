@@ -2570,9 +2570,7 @@ export function createMongodbApplier(
         await transformDocuments(
           operation.collectionName,
           filter,
-          repinScopedDiscriminators(
-            withScope(operation.up, siblings, context),
-          ),
+          repinScopedDiscriminators(withScope(operation.up, siblings, context)),
           operation.type,
         );
       },

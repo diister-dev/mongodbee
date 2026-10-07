@@ -39,18 +39,18 @@ export type PrivacyMetadata =
   | { readonly kind: "person"; readonly of: readonly string[] }
   | { readonly kind: "owner"; readonly of: readonly string[] }
   | {
-    readonly kind: "field";
-    readonly role: PrivacyRole;
-    readonly space?: string;
-    readonly treatment?: PrivacyTreatments;
-    readonly consistent?: PrivacyConsistency;
-    readonly relation?: "mention";
-  }
+      readonly kind: "field";
+      readonly role: PrivacyRole;
+      readonly space?: string;
+      readonly treatment?: PrivacyTreatments;
+      readonly consistent?: PrivacyConsistency;
+      readonly relation?: "mention";
+    }
   | {
-    readonly kind: "mirror";
-    readonly source: string;
-    readonly normalize?: PrivacyNormalize;
-  }
+      readonly kind: "mirror";
+      readonly source: string;
+      readonly normalize?: PrivacyNormalize;
+    }
   | { readonly kind: "exempt"; readonly reason: string }
   | { readonly kind: "dynamic" };
 
@@ -59,9 +59,12 @@ type Schema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
 type Tagged<T extends Schema> = v.SchemaWithPipe<
   readonly [
     T,
-    v.MetadataAction<v.InferOutput<T>, {
-      readonly [PRIVACY_SYMBOL]: PrivacyMetadata;
-    }>,
+    v.MetadataAction<
+      v.InferOutput<T>,
+      {
+        readonly [PRIVACY_SYMBOL]: PrivacyMetadata;
+      }
+    >,
   ]
 >;
 

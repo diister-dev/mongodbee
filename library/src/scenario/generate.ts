@@ -73,9 +73,9 @@ function injectAnchors(
     state.multiCollections[name] ??= { content: [] };
     state.multiCollections[name].content.push(...docs.map((d) => ({ ...d })));
   }
-  for (
-    const [name, docs] of Object.entries(anchors.scopedMultiCollections ?? {})
-  ) {
+  for (const [name, docs] of Object.entries(
+    anchors.scopedMultiCollections ?? {},
+  )) {
     state.scopedMultiCollections[name] ??= { content: [] };
     state.scopedMultiCollections[name].content.push(
       ...docs.map((d) => ({ ...d })),
@@ -126,15 +126,14 @@ export function generateScenarioState(
   const session = createCorrelationSession({
     schemas,
     seed,
-    ...(scenario.uncorrelatedSpaces !== undefined &&
-      { uncorrelatedSpaces: scenario.uncorrelatedSpaces }),
+    ...(scenario.uncorrelatedSpaces !== undefined && {
+      uncorrelatedSpaces: scenario.uncorrelatedSpaces,
+    }),
     mintId: (space, index, attempt) =>
-      `${space}:${
-        deterministicUlid(
-          `${seed}|${space}|${index}|${attempt}`,
-          refTime + index,
-        )
-      }`,
+      `${space}:${deterministicUlid(
+        `${seed}|${space}|${index}|${attempt}`,
+        refTime + index,
+      )}`,
   });
   session.harvest(state);
 
@@ -191,11 +190,11 @@ export function generateScenarioState(
     space: string,
   ): string | undefined => {
     const owned = target.owner.via.find((path) =>
-      target.paths.find((p) => p.path === path)?.spaces.includes(space)
+      target.paths.find((p) => p.path === path)?.spaces.includes(space),
     );
     if (owned) return owned;
-    return target.paths.find((p) =>
-      p.role === "reference" && p.spaces.includes(space)
+    return target.paths.find(
+      (p) => p.role === "reference" && p.spaces.includes(space),
     )?.path;
   };
 
@@ -211,9 +210,11 @@ export function generateScenarioState(
       return [{ scope, count: countOf(entry.count, { scope, random }) }];
     }
     const parentTarget = targetOf(entry.per);
-    const parents = docsOf(state, parentTarget).filter((p) =>
-      scope === null || parentTarget.bucket !== "scopedMultiCollections" ||
-      p._scope === scope
+    const parents = docsOf(state, parentTarget).filter(
+      (p) =>
+        scope === null ||
+        parentTarget.bucket !== "scopedMultiCollections" ||
+        p._scope === scope,
     );
     return parents.map((parent) => ({
       scope,
@@ -234,8 +235,9 @@ export function generateScenarioState(
     const base = session.docOptions(docTarget);
     const targetRules = rules.get(target.key);
     const resolve = (node: ResolveNode): unknown => {
-      (node.faker as { setDefaultRefDate?: (d: Date) => void })
-        .setDefaultRefDate?.(refDate);
+      (
+        node.faker as { setDefaultRefDate?: (d: Date) => void }
+      ).setDefaultRefDate?.(refDate);
       const rule = targetRules?.[node.path];
       if (rule) {
         const value = rule({
@@ -259,7 +261,8 @@ export function generateScenarioState(
         const parentSpace = String(parent._id).split(":")[0];
         const path = referencePath(target, parentSpace);
         if (
-          path !== undefined && !path.includes(".") &&
+          path !== undefined &&
+          !path.includes(".") &&
           typeof doc[path] === "string"
         ) {
           doc[path] = parent._id;
@@ -267,29 +270,26 @@ export function generateScenarioState(
       }
       const finalize = finalizers.get(target.key);
       if (!finalize) return doc;
-      const finalized = finalize({
-        ...world,
-        target: target.key,
-        scope: docTarget.scope,
-        parent,
-        index,
-        ordinal,
-        count,
-        doc,
-      }) ?? doc;
+      const finalized =
+        finalize({
+          ...world,
+          target: target.key,
+          scope: docTarget.scope,
+          parent,
+          index,
+          ordinal,
+          count,
+          doc,
+        }) ?? doc;
       const cleaned = sanitizeForMongoDB(finalized);
-      const parsed = v.safeParse(
-        v.object(fields as v.ObjectEntries),
-        cleaned,
-      );
+      const parsed = v.safeParse(v.object(fields as v.ObjectEntries), cleaned);
       if (!parsed.success) {
         const issue = parsed.issues[0];
         const where = issue.path?.map((p) => String(p.key)).join(".") ?? "";
         violations.push({
           kind: "generation",
           target: target.key,
-          message:
-            `finalize produced an invalid document at "${where}": ${issue.message}`,
+          message: `finalize produced an invalid document at "${where}": ${issue.message}`,
         });
         return undefined;
       }
@@ -315,12 +315,15 @@ export function generateScenarioState(
   ): Minted[] =>
     batches.map((batch) => ({
       batch,
-      ids: batch.count === 0 ? [] : session.mintIds({
-        bucket: target.bucket,
-        collection: target.collection,
-        ...(target.type !== undefined && { type: target.type }),
-        scopes: Array.from({ length: batch.count }, () => batch.scope),
-      }),
+      ids:
+        batch.count === 0
+          ? []
+          : session.mintIds({
+              bucket: target.bucket,
+              collection: target.collection,
+              ...(target.type !== undefined && { type: target.type }),
+              scopes: Array.from({ length: batch.count }, () => batch.scope),
+            }),
     }));
 
   const ordinals = new Map<string, number>();
@@ -368,7 +371,9 @@ export function generateScenarioState(
   const dependsOn = (target: PrivacyTarget): string | undefined => {
     const entry = shape.get(target.key);
     if (
-      entry === undefined || typeof entry !== "object" || entry.per === "scope"
+      entry === undefined ||
+      typeof entry !== "object" ||
+      entry.per === "scope"
     ) {
       return undefined;
     }
@@ -409,18 +414,20 @@ export function generateScenarioState(
     for (const collection of collections) {
       const scoped = schemas.scopedMultiCollections![collection];
       const scopeSpace = extractIdPrefix(scoped.scope);
-      const types = ordered.filter((t) =>
-        t.bucket === "scopedMultiCollections" && t.collection === collection
+      const types = ordered.filter(
+        (t) =>
+          t.bucket === "scopedMultiCollections" && t.collection === collection,
       );
       const singleton = types.find((t) => t.space === scopeSpace);
       singletonOf.set(collection, singleton);
       let scopes = [...session.pooledIds(scopeSpace)];
       if (scopes.length === 0) {
         const entry = singleton ? shape.get(singleton.key) : undefined;
-        const wanted = entry !== undefined &&
-            (typeof entry === "number" || typeof entry === "function")
-          ? countOf(entry, { scope: null, random })
-          : defaultScopes;
+        const wanted =
+          entry !== undefined &&
+          (typeof entry === "number" || typeof entry === "function")
+            ? countOf(entry, { scope: null, random })
+            : defaultScopes;
         scopes = session.realizeScopes(collection, scoped.scope, wanted);
       }
       scopesOf.set(collection, scopes);
@@ -436,42 +443,40 @@ export function generateScenarioState(
     return scopes.flatMap((scope) =>
       target === singleton
         ? [{ scope, count: 1 }]
-        : batchesFor(shape.get(target.key), scope)
+        : batchesFor(shape.get(target.key), scope),
     );
   };
 
   const scopedFirst = (a: PrivacyTarget, b: PrivacyTarget): number => {
-    const sa = a.bucket === "scopedMultiCollections" &&
-        singletonOf.get(a.collection) === a
-      ? 0
-      : 1;
-    const sb = b.bucket === "scopedMultiCollections" &&
-        singletonOf.get(b.collection) === b
-      ? 0
-      : 1;
+    const sa =
+      a.bucket === "scopedMultiCollections" &&
+      singletonOf.get(a.collection) === a
+        ? 0
+        : 1;
+    const sb =
+      b.bucket === "scopedMultiCollections" &&
+      singletonOf.get(b.collection) === b
+        ? 0
+        : 1;
     return sa - sb;
   };
   const independent = ordered.filter((t) => dependsOn(t) === undefined);
   const minted = new Map<string, Minted[]>();
-  for (
-    const target of independent.filter((t) =>
-      t.bucket !== "scopedMultiCollections"
-    )
-  ) {
+  for (const target of independent.filter(
+    (t) => t.bucket !== "scopedMultiCollections",
+  )) {
     minted.set(target.key, mintBatches(target, batchesOf(target)));
   }
   realizeAllScopes();
-  for (
-    const target of independent.filter((t) =>
-      t.bucket === "scopedMultiCollections"
-    )
-  ) {
+  for (const target of independent.filter(
+    (t) => t.bucket === "scopedMultiCollections",
+  )) {
     minted.set(target.key, mintBatches(target, batchesOf(target)));
   }
   for (const target of [...ordered].sort(scopedFirst)) {
     const fields = targetFields(schemas, target);
-    const batches = minted.get(target.key) ??
-      mintBatches(target, batchesOf(target));
+    const batches =
+      minted.get(target.key) ?? mintBatches(target, batchesOf(target));
     generateBatches(target, fields, batches);
   }
 

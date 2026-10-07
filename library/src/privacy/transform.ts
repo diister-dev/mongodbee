@@ -142,8 +142,9 @@ function sourceOf(
     case "multiModels":
       return schemas.multiModels?.[target.collection]?.[target.type ?? ""];
     case "scopedMultiCollections":
-      return schemas.scopedMultiCollections?.[target.collection]
-        ?.types[target.type ?? ""];
+      return schemas.scopedMultiCollections?.[target.collection]?.types[
+        target.type ?? ""
+      ];
   }
 }
 
@@ -171,36 +172,37 @@ export function schemaAtPath(fields: SchemaContent, path: string): unknown {
     if (!schema) return undefined;
     const type = schema.type as string;
     if (segment === "*") {
-      current = type === "array"
-        ? schema.item
-        : type === "record"
-        ? schema.value
-        : undefined;
+      current =
+        type === "array"
+          ? schema.item
+          : type === "record"
+            ? schema.value
+            : undefined;
       continue;
     }
     if (type === "union" || type === "variant") {
       const options = schema.options as Record<string, unknown>[];
       const option = options.find((o) => {
         const inner = unwrapSchema(o);
-        return inner &&
+        return (
+          inner &&
           (inner.entries as Record<string, unknown> | undefined)?.[segment] !==
-            undefined;
+            undefined
+        );
       });
       current = option
         ? (unwrapSchema(option)!.entries as Record<string, unknown>)[segment]
         : undefined;
       continue;
     }
-    current = (schema.entries as Record<string, unknown> | undefined)
-      ?.[segment];
+    current = (schema.entries as Record<string, unknown> | undefined)?.[
+      segment
+    ];
   }
   return unwrapSchema(current);
 }
 
-function getAt(
-  doc: Record<string, unknown>,
-  keys: readonly string[],
-): unknown {
+function getAt(doc: Record<string, unknown>, keys: readonly string[]): unknown {
   let current: unknown = doc;
   for (const key of keys) {
     if (current === null || typeof current !== "object") return undefined;
@@ -230,8 +232,8 @@ export function createPrivacyTransformer(
   ): { cls: PrivacyPath; schema: unknown; path: string } | undefined => {
     const [space, ...rest] = mirror.split(".");
     const path = rest.join(".");
-    const candidates = [...plan.targets.values()].filter((t) =>
-      t.space === space
+    const candidates = [...plan.targets.values()].filter(
+      (t) => t.space === space,
     );
     candidates.sort((a, b) => Number(b.person) - Number(a.person));
     for (const target of candidates) {
@@ -271,8 +273,8 @@ export function createPrivacyTransformer(
 
     const byPath = new Map(target.paths.map((p) => [p.path, p]));
     const notes: TransformNote[] = [];
-    const scope = context.scope ??
-      (typeof doc._scope === "string" ? doc._scope : "");
+    const scope =
+      context.scope ?? (typeof doc._scope === "string" ? doc._scope : "");
     const docId = typeof doc._id === "string" ? doc._id : "";
 
     const scopePart = (cls: PrivacyPath, path: string): string => {
@@ -298,8 +300,9 @@ export function createPrivacyTransformer(
     ): unknown => {
       try {
         const wrapped = v.object({ [key]: schema as v.GenericSchema });
-        const produced = createMockGenerator(wrapped, { faker: { seed } })
-          .generate() as Record<string, unknown>;
+        const produced = createMockGenerator(wrapped, {
+          faker: { seed },
+        }).generate() as Record<string, unknown>;
         return produced[key];
       } catch (error) {
         notes.push({
@@ -350,9 +353,8 @@ export function createPrivacyTransformer(
       if (root === undefined || !options.resolveDynamic) return undefined;
       const rootLength = root.split(".").length;
       const segments = leaf.path.split(".");
-      const unitLength = segments[rootLength] === "*"
-        ? rootLength + 1
-        : rootLength;
+      const unitLength =
+        segments[rootLength] === "*" ? rootLength + 1 : rootLength;
       const unitKeys = leaf.keys.slice(0, unitLength);
       const unitPath = unitKeys.join(".");
       let resolution = resolutions.get(unitPath);
@@ -382,17 +384,18 @@ export function createPrivacyTransformer(
       const override = resolveOverride(leaf);
       const cls: PrivacyPath = override
         ? {
-          ...found,
-          tier: "declared",
-          role: override.role ?? found.role,
-          ...(override.consistent !== undefined &&
-            { consistent: override.consistent }),
-          ...(override.space !== undefined && { space: override.space }),
-          treatment: {
-            ...defaultTreatments(override.role ?? found.role),
-            ...override.treatment,
-          },
-        }
+            ...found,
+            tier: "declared",
+            role: override.role ?? found.role,
+            ...(override.consistent !== undefined && {
+              consistent: override.consistent,
+            }),
+            ...(override.space !== undefined && { space: override.space }),
+            treatment: {
+              ...defaultTreatments(override.role ?? found.role),
+              ...override.treatment,
+            },
+          }
         : found;
       const schema = override?.schema ?? leaf.schema;
       if (!override && cls.tier === "dynamic") {

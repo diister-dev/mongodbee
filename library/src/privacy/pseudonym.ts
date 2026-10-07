@@ -65,6 +65,7 @@ export function looksLikeId(
   if (typeof value !== "string") return false;
   const match = ID_PATTERN.exec(value);
   if (!match) return false;
-  return spaces === undefined || spaces.length === 0 ||
-    spaces.includes(match[1]);
+  return (
+    spaces === undefined || spaces.length === 0 || spaces.includes(match[1])
+  );
 }

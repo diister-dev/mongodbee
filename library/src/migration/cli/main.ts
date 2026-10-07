@@ -125,9 +125,9 @@ ${yellow("COMMANDS:")}
   ${green("rollback")}  Rollback the last applied migration
   ${green("baseline")}  Record migrations as applied without running them
   ${green("classify")}  Report how the schemas classify personal data
-  ${
-    green("seed")
-  }      Generate a scenario world at a migration step and write it
+  ${green(
+    "seed",
+  )}      Generate a scenario world at a migration step and write it
   ${green("extract")}   Copy a database with personal data pseudonymised
   ${green("studio")}    Open a local, read-only database explorer
 

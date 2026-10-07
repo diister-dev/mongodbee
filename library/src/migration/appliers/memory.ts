@@ -632,7 +632,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           );
         }
         collection.content = collection.content.map((doc) =>
-          operation.up(doc, context)
+          operation.up(doc, context),
         );
         return state;
       },
@@ -647,7 +647,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           );
         }
         collection.content = collection.content.map((doc) =>
-          operation.down(doc, context)
+          operation.down(doc, context),
         );
         return state;
       },

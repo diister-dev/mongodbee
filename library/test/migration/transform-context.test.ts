@@ -30,35 +30,43 @@ const migration = migrationDefinition(
     parent: null,
     schemas: SCHEMAS,
     migrate: (b) =>
-      b.collection("things").transform({
-        up: (doc, ctx) => ({
-          ...doc,
-          versionId: ctx.newId(),
-          stampedAt: ctx.now(),
-        }),
-        down: (doc) => {
-          const { versionId: _v, stampedAt: _s, ...rest } = doc;
-          return rest;
-        },
-      }).end().compile(),
+      b
+        .collection("things")
+        .transform({
+          up: (doc, ctx) => ({
+            ...doc,
+            versionId: ctx.newId(),
+            stampedAt: ctx.now(),
+          }),
+          down: (doc) => {
+            const { versionId: _v, stampedAt: _s, ...rest } = doc;
+            return rest;
+          },
+        })
+        .end()
+        .compile(),
   },
 );
 
 function seeded() {
   const state = createEmptyDatabaseState();
   state.collections.things = {
-    content: [{ _id: "a", name: "one" }, { _id: "b", name: "two" }, {
-      _id: "c",
-      name: "three",
-    }],
+    content: [
+      { _id: "a", name: "one" },
+      { _id: "b", name: "two" },
+      {
+        _id: "c",
+        name: "three",
+      },
+    ],
   };
   return state;
 }
 
 async function applied() {
-  const operations =
-    migration.migrate(migrationBuilder({ schemas: migration.schemas }))
-      .operations;
+  const operations = migration.migrate(
+    migrationBuilder({ schemas: migration.schemas }),
+  ).operations;
   const applier = createMemoryApplier(migration);
   let state = seeded();
   for (const op of operations) state = await applier.applyOperation(state, op);
@@ -86,21 +94,25 @@ test("transform context: a transform that ignores the context still works", asyn
     parent: null,
     schemas: SCHEMAS,
     migrate: (b) =>
-      b.collection("things").transform({
-        up: (doc) => ({ ...doc, name: String(doc.name).toUpperCase() }),
-        down: (doc) => ({ ...doc, name: String(doc.name).toLowerCase() }),
-      }).end().compile(),
+      b
+        .collection("things")
+        .transform({
+          up: (doc) => ({ ...doc, name: String(doc.name).toUpperCase() }),
+          down: (doc) => ({ ...doc, name: String(doc.name).toLowerCase() }),
+        })
+        .end()
+        .compile(),
   });
-  const operations =
-    plain.migrate(migrationBuilder({ schemas: plain.schemas })).operations;
+  const operations = plain.migrate(
+    migrationBuilder({ schemas: plain.schemas }),
+  ).operations;
   const applier = createMemoryApplier(plain);
   let state = seeded();
   for (const op of operations) state = await applier.applyOperation(state, op);
-  assertEquals(state.collections.things.content.map((d) => d.name), [
-    "ONE",
-    "TWO",
-    "THREE",
-  ]);
+  assertEquals(
+    state.collections.things.content.map((d) => d.name),
+    ["ONE", "TWO", "THREE"],
+  );
 });
 
 test("transform context: the live context mints fresh ulids and reads the wall clock", () => {

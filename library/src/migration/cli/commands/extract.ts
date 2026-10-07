@@ -65,9 +65,10 @@ export interface ExtractSummary {
   readonly applied: readonly string[];
 }
 
-function resolveSecret(
-  raw: string | undefined,
-): { secret: string; discarded: boolean } {
+function resolveSecret(raw: string | undefined): {
+  secret: string;
+  discarded: boolean;
+} {
   if (raw === undefined || raw === "") {
     const bytes = crypto.getRandomValues(new Uint8Array(32));
     return {
@@ -122,12 +123,14 @@ export function transformState(
         out.collections[target.collection] = { content: transformed };
         break;
       case "multiCollections":
-        (out.multiCollections[target.collection] ??= { content: [] }).content
-          .push(...transformed);
+        (out.multiCollections[target.collection] ??= {
+          content: [],
+        }).content.push(...transformed);
         break;
       case "scopedMultiCollections":
-        (out.scopedMultiCollections[target.collection] ??= { content: [] })
-          .content.push(...transformed);
+        (out.scopedMultiCollections[target.collection] ??= {
+          content: [],
+        }).content.push(...transformed);
         break;
       case "multiModels":
         break;
@@ -143,8 +146,8 @@ export async function extractCommand(
   options: ExtractCommandOptions = {},
 ): Promise<void> {
   const dryRun = options.dryRun || options["dry-run"] || false;
-  const allowUnknown = options.allowUnknown || options["allow-unknown"] ||
-    false;
+  const allowUnknown =
+    options.allowUnknown || options["allow-unknown"] || false;
   const fromDb = options.fromDb || options["from-db"];
   const toDb = options.toDb || options["to-db"];
   const fromMigration = options.fromMigration || options["from-migration"];
@@ -154,7 +157,9 @@ export async function extractCommand(
 
   const cwd = options.cwd || process.cwd();
   const config = await loadConfig({ configPath: options.configPath, cwd });
-  const fromUri = options.from || config.database?.connection?.uri ||
+  const fromUri =
+    options.from ||
+    config.database?.connection?.uri ||
     "mongodb://localhost:27017";
   const sourceDb = fromDb || config.database?.name;
   if (!sourceDb) {
@@ -231,9 +236,10 @@ export async function extractCommand(
   await sourceClient.connect();
   let state: DatabaseState;
   try {
-    const sourceSchemas = replay.length > 0
-      ? resolveMigrationRef(chain, fromMigration!).schemas
-      : schemas;
+    const sourceSchemas =
+      replay.length > 0
+        ? resolveMigrationRef(chain, fromMigration!).schemas
+        : schemas;
     state = await readStateFromDatabase(
       sourceClient.db(sourceDb),
       sourceSchemas,
@@ -264,7 +270,8 @@ export async function extractCommand(
     console.log(JSON.stringify(summary, null, 2));
   } else {
     for (const [target, entry] of Object.entries(result.summary)) {
-      const notes = Object.entries(entry.notes).map(([k, n]) => `${k} ${n}`)
+      const notes = Object.entries(entry.notes)
+        .map(([k, n]) => `${k} ${n}`)
         .join(", ");
       console.log(
         `  ${target.padEnd(60)} ${String(entry.documents).padStart(7)}${

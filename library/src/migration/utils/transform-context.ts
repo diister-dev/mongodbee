@@ -1,8 +1,5 @@
 import { ulid } from "../../utils/ulid.ts";
-import type {
-  MigrationTransformContext,
-  TransformScope,
-} from "../types.ts";
+import type { MigrationTransformContext, TransformScope } from "../types.ts";
 import { fnv1a32 } from "./seed-id.ts";
 import { encodeUlidRandom, encodeUlidTime } from "../../utils/ulid-encode.ts";
 
@@ -29,8 +26,9 @@ function hashBytes(input: string): Uint8Array {
 }
 
 export function deterministicUlid(input: string, time: number): string {
-  return (encodeUlidTime(time) + encodeUlidRandom(hashBytes(input)))
-    .toLowerCase();
+  return (
+    encodeUlidTime(time) + encodeUlidRandom(hashBytes(input))
+  ).toLowerCase();
 }
 
 export function createDeterministicTransformContext(

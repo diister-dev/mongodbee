@@ -40,9 +40,9 @@ export async function writeStateToDatabase(
   for (const [name, { content }] of Object.entries(state.multiCollections)) {
     written[name] = await insertAll(db, name, content, batchSize);
   }
-  for (
-    const [name, { content }] of Object.entries(state.scopedMultiCollections)
-  ) {
+  for (const [name, { content }] of Object.entries(
+    state.scopedMultiCollections,
+  )) {
     written[name] = await insertAll(db, name, content, batchSize);
   }
   for (const [name, { content }] of Object.entries(state.multiModels)) {
@@ -62,7 +62,7 @@ export async function readStateFromDatabase(
 ): Promise<DatabaseState> {
   const state = createEmptyDatabaseState();
   const read = async (name: string, filter: Record<string, unknown> = {}) =>
-    await db.collection(name).find(filter).toArray() as Record<
+    (await db.collection(name).find(filter).toArray()) as Record<
       string,
       unknown
     >[];

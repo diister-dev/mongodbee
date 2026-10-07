@@ -14,15 +14,17 @@ export function docsOf(
     case "collections":
       return state.collections[target.collection]?.content ?? [];
     case "multiCollections":
-      return (state.multiCollections[target.collection]?.content ?? [])
-        .filter((d) => d._type === target.type);
+      return (state.multiCollections[target.collection]?.content ?? []).filter(
+        (d) => d._type === target.type,
+      );
     case "multiModels":
       return Object.values(state.multiModels)
         .filter((i) => i.modelType === target.collection)
         .flatMap((i) => i.content.filter((d) => d._type === target.type));
     case "scopedMultiCollections":
-      return (state.scopedMultiCollections[target.collection]?.content ?? [])
-        .filter((d) => d._type === target.type);
+      return (
+        state.scopedMultiCollections[target.collection]?.content ?? []
+      ).filter((d) => d._type === target.type);
   }
 }
 
@@ -51,8 +53,9 @@ export function resolveTargetKey(plan: PrivacyPlan, key: string): string {
   if (plan.targets.has(key)) return key;
   const matches = [...plan.targets.keys()].filter((k) => {
     const [, collection, type] = k.split("/");
-    return key === collection || key === `${collection}/${type}` ||
-      key === type;
+    return (
+      key === collection || key === `${collection}/${type}` || key === type
+    );
   });
   if (matches.length === 1) return matches[0];
   if (matches.length === 0) {
@@ -62,9 +65,9 @@ export function resolveTargetKey(plan: PrivacyPlan, key: string): string {
     if (bySpace.length === 1) return bySpace[0].key;
     if (bySpace.length > 1) {
       throw new Error(
-        `scenario: ambiguous target "${key}" (${
-          bySpace.map((t) => t.key).join(", ")
-        })`,
+        `scenario: ambiguous target "${key}" (${bySpace
+          .map((t) => t.key)
+          .join(", ")})`,
       );
     }
     throw new Error(`scenario: unknown target "${key}"`);

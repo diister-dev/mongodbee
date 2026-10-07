@@ -72,9 +72,9 @@ test("retrofit: each migration carries its own plan, older steps simply know les
   assertEquals(before.persons.size, 0);
   assertEquals(before.targets.get("collections/users/")!.owner.kind, "none");
   assertEquals(
-    before.targets.get("collections/users/")!.paths.find((p) =>
-      p.path === "email"
-    )!.tier,
+    before.targets
+      .get("collections/users/")!
+      .paths.find((p) => p.path === "email")!.tier,
     "unknown",
   );
 
@@ -82,9 +82,9 @@ test("retrofit: each migration carries its own plan, older steps simply know les
   assertEquals(after.persons.size, 1);
   assertEquals(after.targets.get("collections/users/")!.owner.kind, "self");
   assertEquals(
-    after.targets.get("collections/users/")!.paths.find((p) =>
-      p.path === "email"
-    )!.tier,
+    after.targets
+      .get("collections/users/")!
+      .paths.find((p) => p.path === "email")!.tier,
     "declared",
   );
   assertEquals(after.summary.unknown, 0);

@@ -92,26 +92,38 @@ const M2 = migrationDefinition("2026_02_01_0900_VERSN01@version", "version", {
   parent: M1,
   schemas: S2,
   migrate: (b) =>
-    b.scopedMultiCollection("+expo").type("participant").transform({
-      up: (doc, ctx) => ({ ...doc, versionId: ctx.newId() }),
-      down: (doc) => {
-        const { versionId: _v, ...rest } = doc;
-        return rest;
-      },
-    }).end().end().compile(),
+    b
+      .scopedMultiCollection("+expo")
+      .type("participant")
+      .transform({
+        up: (doc, ctx) => ({ ...doc, versionId: ctx.newId() }),
+        down: (doc) => {
+          const { versionId: _v, ...rest } = doc;
+          return rest;
+        },
+      })
+      .end()
+      .end()
+      .compile(),
 });
 const M3 = migrationDefinition("2026_03_01_0900_RENAM01@rename", "rename", {
   parent: M2,
   schemas: S3,
   migrate: (b) =>
-    b.scopedMultiCollection("+expo").type("scan_history").transform({
-      up: (doc) => {
-        const { label, ...rest } = doc;
-        return { ...rest, kind: label };
-      },
-      down: (doc) => doc,
-      irreversible: true,
-    }).end().end().compile(),
+    b
+      .scopedMultiCollection("+expo")
+      .type("scan_history")
+      .transform({
+        up: (doc) => {
+          const { label, ...rest } = doc;
+          return { ...rest, kind: label };
+        },
+        down: (doc) => doc,
+        irreversible: true,
+      })
+      .end()
+      .end()
+      .compile(),
 });
 const CHAIN = [M1, M2, M3];
 
@@ -123,12 +135,14 @@ const SALON_SCENARIO: SeedScenario = {
   birth: M1.id,
   anchors: {
     collections: {
-      "+users": [{
-        _id: ADMIN,
-        email: "admin@diister.fr",
-        firstname: "Admin",
-        role: "admin",
-      }],
+      "+users": [
+        {
+          _id: ADMIN,
+          email: "admin@diister.fr",
+          firstname: "Admin",
+          role: "admin",
+        },
+      ],
       expositions: [{ _id: SALON, name: "Salon Pro", createdBy: ADMIN }],
     },
   },
@@ -141,18 +155,21 @@ const SALON_SCENARIO: SeedScenario = {
   rules: {
     scan_history: {
       label: ({ faker }) =>
-        faker.helpers.weightedArrayElement([{ weight: 9, value: "business" }, {
-          weight: 1,
-          value: "security",
-        }]),
+        faker.helpers.weightedArrayElement([
+          { weight: 9, value: "business" },
+          {
+            weight: 1,
+            value: "security",
+          },
+        ]),
       at: () => SKIP,
     },
   },
   invariants: [
     ({ docs }) =>
-      docs("participant").filter((p) => !p.label).map((p) =>
-        `participant ${p._id} has no label`
-      ),
+      docs("participant")
+        .filter((p) => !p.label)
+        .map((p) => `participant ${p._id} has no label`),
   ],
 };
 
@@ -272,15 +289,17 @@ test("scenario: the oracle reports orphan owners and failed invariants", async (
     anchors: {
       ...SALON_SCENARIO.anchors,
       scopedMultiCollections: {
-        "+expo": [{
-          _id: "scan_history:01j5zk9a1b2c3d4e5f6g7h8j9k",
-          _type: "scan_history",
-          _scope: SALON,
-          participantId: "participant:01j5zk9a1b2c3d4e5f6g7h8j00",
-          scannedBy: ADMIN,
-          label: "business",
-          at: new Date("2026-01-02T10:00:00.000Z"),
-        }],
+        "+expo": [
+          {
+            _id: "scan_history:01j5zk9a1b2c3d4e5f6g7h8j9k",
+            _type: "scan_history",
+            _scope: SALON,
+            participantId: "participant:01j5zk9a1b2c3d4e5f6g7h8j00",
+            scannedBy: ADMIN,
+            label: "business",
+            at: new Date("2026-01-02T10:00:00.000Z"),
+          },
+        ],
       },
     },
     invariants: [() => ["every world needs at least one violation"]],
@@ -292,8 +311,9 @@ test("scenario: the oracle reports orphan owners and failed invariants", async (
   });
   assert(!report.ok);
   assert(
-    report.violations.some((x) =>
-      x.kind === "owner_unresolved" && x.message.startsWith("participantId")
+    report.violations.some(
+      (x) =>
+        x.kind === "owner_unresolved" && x.message.startsWith("participantId"),
     ),
   );
   assert(report.violations.some((x) => x.kind === "invariant"));
@@ -376,9 +396,9 @@ test("scenario: a global document can reference a space that only exists inside 
   });
   assert(report.ok, JSON.stringify(report.violations));
   const flows = new Set(
-    state.scopedMultiCollections["+expo"].content.filter((d) =>
-      d._type === "flow"
-    ).map((d) => String(d._id)),
+    state.scopedMultiCollections["+expo"].content
+      .filter((d) => d._type === "flow")
+      .map((d) => String(d._id)),
   );
   assert(flows.size >= 2);
   for (const link of state.collections["+invitation_links"].content) {
@@ -433,9 +453,9 @@ test("scenario: finalize sees the whole document, after sees the whole world, in
           ...doc,
           closedAt: chance(0.5)
             ? dateBetween(
-              doc.openedAt as Date,
-              new Date((doc.openedAt as Date).getTime() + 86_400_000),
-            )
+                doc.openedAt as Date,
+                new Date((doc.openedAt as Date).getTime() + 86_400_000),
+              )
             : undefined,
         }),
       },
@@ -445,7 +465,10 @@ test("scenario: finalize sees the whole document, after sees the whole world, in
     },
   });
   assert(report.ok, JSON.stringify(report.violations));
-  assertEquals(state.collections["+roles"].content.map((r) => r.name), names);
+  assertEquals(
+    state.collections["+roles"].content.map((r) => r.name),
+    names,
+  );
   const tickets = state.collections.tickets.content;
   assertEquals(tickets.length, 12);
   for (const t of tickets) {
@@ -537,13 +560,19 @@ test("scenario: ordinal counts across batches, singletons come first, undefined 
   assert(report.ok, JSON.stringify(report.violations));
   const docs = state.scopedMultiCollections["+expo"].content;
   assertEquals(
-    docs.filter((d) => d._type === "information").map((d) => d.title).sort(),
+    docs
+      .filter((d) => d._type === "information")
+      .map((d) => d.title)
+      .sort(),
     [...titles].sort(),
   );
   const programs = docs.filter((d) => d._type === "program");
   assertEquals(programs.length, 6);
   for (const p of programs) {
-    assert(titles.some((t) => String(p.title).startsWith(t)), String(p.title));
+    assert(
+      titles.some((t) => String(p.title).startsWith(t)),
+      String(p.title),
+    );
     assert(!("note" in p), "undefined keys must be stripped");
   }
 });

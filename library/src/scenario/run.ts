@@ -32,10 +32,12 @@ export async function applyMigrationsInMemory(
   let state = initial;
   const applied: string[] = [];
   for (const migration of migrations) {
-    const operations = migration.migrate(migrationBuilder({
-      schemas: migration.schemas,
-      parentSchemas: migration.parent?.schemas,
-    })).operations;
+    const operations = migration.migrate(
+      migrationBuilder({
+        schemas: migration.schemas,
+        parentSchemas: migration.parent?.schemas,
+      }),
+    ).operations;
     const applier = createMemoryApplier(migration);
     for (const operation of operations) {
       state = await applier.applyOperation(state, operation);
@@ -46,8 +48,10 @@ export async function applyMigrationsInMemory(
 }
 
 function isBlocking(violation: ScenarioViolation): boolean {
-  return violation.kind !== "correlation" ||
-    !violation.message.includes("is minted by");
+  return (
+    violation.kind !== "correlation" ||
+    !violation.message.includes("is minted by")
+  );
 }
 
 export async function runScenario(
@@ -61,9 +65,8 @@ export async function runScenario(
       `scenario "${scenario.name}": birth migration "${scenario.birth}" is not in the chain`,
     );
   }
-  const atIndex = options.at === undefined
-    ? migrations.length - 1
-    : ids.indexOf(options.at);
+  const atIndex =
+    options.at === undefined ? migrations.length - 1 : ids.indexOf(options.at);
   if (atIndex < 0) {
     throw new Error(
       `scenario "${scenario.name}": migration "${options.at}" is not in the chain`,
@@ -81,10 +84,12 @@ export async function runScenario(
   const generation = generateScenarioState({
     schemas: birth.schemas,
     scenario,
-    ...(options.defaultCount !== undefined &&
-      { defaultCount: options.defaultCount }),
-    ...(options.defaultScopes !== undefined &&
-      { defaultScopes: options.defaultScopes }),
+    ...(options.defaultCount !== undefined && {
+      defaultCount: options.defaultCount,
+    }),
+    ...(options.defaultScopes !== undefined && {
+      defaultScopes: options.defaultScopes,
+    }),
   });
   const replay = await applyMigrationsInMemory(
     generation.state,
@@ -149,9 +154,9 @@ export function renderScenarioReport(report: ScenarioReport): string {
     );
     for (const violation of report.violations) {
       lines.push(
-        `  ${
-          violation.kind.padEnd(20)
-        } ${violation.target}\n      ${violation.message}`,
+        `  ${violation.kind.padEnd(
+          20,
+        )} ${violation.target}\n      ${violation.message}`,
       );
     }
   }

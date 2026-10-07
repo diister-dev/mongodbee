@@ -38,7 +38,8 @@ export async function loadScenarioModule(
     | SeedScenario
     | undefined;
   if (
-    !scenario || typeof scenario.name !== "string" ||
+    !scenario ||
+    typeof scenario.name !== "string" ||
     typeof scenario.birth !== "string"
   ) {
     throw new Error(
@@ -94,7 +95,9 @@ export async function seedCommand(
     return;
   }
 
-  const uri = options.uri || config.database?.connection?.uri ||
+  const uri =
+    options.uri ||
+    config.database?.connection?.uri ||
     "mongodb://localhost:27017";
   const dbName = options.db || config.database?.name || "myapp";
   const client = new MongoClient(uri);

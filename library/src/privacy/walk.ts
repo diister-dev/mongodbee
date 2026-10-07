@@ -66,9 +66,10 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return proto === Object.prototype || proto === null;
 }
 
-function unwrap(
-  schema: unknown,
-): { schema: Record<string, unknown>; optional: boolean } {
+function unwrap(schema: unknown): {
+  schema: Record<string, unknown>;
+  optional: boolean;
+} {
   let current = schema as Record<string, unknown>;
   let optional = false;
   while (current && WRAPPER_TYPES.has(current.type as string)) {
@@ -99,15 +100,17 @@ export function walkDocument(
     if (value === undefined) return undefined;
     const { schema, optional } = unwrap(rawSchema);
     if (value === null || schema === undefined) {
-      return value === null ? null : handler({
-        path: path.join("."),
-        keys,
-        key,
-        value,
-        schema: rawSchema,
-        optional,
-        doc,
-      });
+      return value === null
+        ? null
+        : handler({
+            path: path.join("."),
+            keys,
+            key,
+            value,
+            schema: rawSchema,
+            optional,
+            doc,
+          });
     }
     const type = schema.type as string;
 
@@ -128,8 +131,8 @@ export function walkDocument(
       const entries = schema.entries as Record<string, unknown>;
       const out: Record<string, unknown> = {};
       for (const [k, entry] of Object.entries(value)) {
-        const entrySchema = entries[k] ??
-          (type === "object_with_rest" ? schema.rest : undefined);
+        const entrySchema =
+          entries[k] ?? (type === "object_with_rest" ? schema.rest : undefined);
         if (entrySchema === undefined) {
           notes.push({ path: [...path, k].join("."), kind: "unknown_key" });
           continue;
@@ -142,10 +145,13 @@ export function walkDocument(
     if (type === "array" && Array.isArray(value)) {
       const out: unknown[] = [];
       for (const item of value) {
-        const r = visit(schema.item, item, [...path, "*"], [
-          ...keys,
-          String(out.length),
-        ], key);
+        const r = visit(
+          schema.item,
+          item,
+          [...path, "*"],
+          [...keys, String(out.length)],
+          key,
+        );
         if (r !== DROP && r !== undefined) out.push(r);
       }
       return out;
@@ -154,8 +160,8 @@ export function walkDocument(
       const items = schema.items as unknown[];
       const out: unknown[] = [];
       value.forEach((item, i) => {
-        const itemSchema = items[i] ??
-          (type === "tuple_with_rest" ? schema.rest : undefined);
+        const itemSchema =
+          items[i] ?? (type === "tuple_with_rest" ? schema.rest : undefined);
         if (itemSchema === undefined) {
           notes.push({
             path: [...path, String(i)].join("."),
@@ -163,10 +169,13 @@ export function walkDocument(
           });
           return;
         }
-        const r = visit(itemSchema, item, [...path, String(i)], [
-          ...keys,
+        const r = visit(
+          itemSchema,
+          item,
+          [...path, String(i)],
+          [...keys, String(i)],
           String(i),
-        ], String(i));
+        );
         if (r !== DROP && r !== undefined) out.push(r);
       });
       return out;

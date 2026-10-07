@@ -348,9 +348,9 @@ interface Draft {
 function classifyLeaf(leaf: Leaf): Draft {
   const s = readSignals(leaf.actions);
   const last = <K extends PrivacyMetadata["kind"]>(kind: K) => {
-    const found = s.metadata.filter((
-      m,
-    ): m is Extract<PrivacyMetadata, { kind: K }> => m.kind === kind);
+    const found = s.metadata.filter(
+      (m): m is Extract<PrivacyMetadata, { kind: K }> => m.kind === kind,
+    );
     return found.length > 0 ? found[found.length - 1] : undefined;
   };
   if (last("dynamic")) {
@@ -408,12 +408,14 @@ function classifyLeaf(leaf: Leaf): Draft {
       spaces: [],
       uniqueOnly: !s.email,
       note: [s.email ? "v.email" : null, s.unique ? "unique index" : null]
-        .filter(Boolean).join(", "),
+        .filter(Boolean)
+        .join(", "),
     };
   }
-  const allTechnical = s.types.size > 0 &&
-    [...s.types].every((t) =>
-      TECHNICAL_TYPES.has(t) || (t === "string" && s.dateAction)
+  const allTechnical =
+    s.types.size > 0 &&
+    [...s.types].every(
+      (t) => TECHNICAL_TYPES.has(t) || (t === "string" && s.dateAction),
     );
   if (allTechnical) {
     return {
@@ -445,9 +447,10 @@ function treatments(
   tier: PrivacyTier,
   overrides: PrivacyTreatments | undefined,
 ): Record<PrivacyDirection, PrivacyTreatment> {
-  const base = tier === "unknown" || tier === "dynamic"
-    ? DEFAULT_TREATMENTS.unknown
-    : DEFAULT_TREATMENTS[role];
+  const base =
+    tier === "unknown" || tier === "dynamic"
+      ? DEFAULT_TREATMENTS.unknown
+      : DEFAULT_TREATMENTS[role];
   return { ...base, ...overrides };
 }
 
@@ -473,7 +476,7 @@ function classifyLeaves(collected: Leaves): Draft[] {
   return collected.leaves.map((leaf) => {
     const draft = classifyLeaf(leaf);
     const root = collected.dynamicRoots.find((r) =>
-      draft.path.startsWith(`${r}.`)
+      draft.path.startsWith(`${r}.`),
     );
     if (root === undefined) return draft;
     draft.dynamicRoot = root;
@@ -513,9 +516,10 @@ function enumerateTargets(schemas: SchemasDefinition): RawTarget[] {
       collection,
       type,
       space: targetIdSpace(fields._id, autoKey),
-      idMetadata: fields._id === undefined
-        ? []
-        : readSignals(collectActions(fields._id)).metadata,
+      idMetadata:
+        fields._id === undefined
+          ? []
+          : readSignals(collectActions(fields._id)).metadata,
       drafts: classifyLeaves(collectLeaves(fields)),
     });
   };
@@ -532,9 +536,9 @@ function enumerateTargets(schemas: SchemasDefinition): RawTarget[] {
       add("multiModels", model, type, fields, type);
     }
   }
-  for (
-    const [name, scoped] of Object.entries(schemas.scopedMultiCollections ?? {})
-  ) {
+  for (const [name, scoped] of Object.entries(
+    schemas.scopedMultiCollections ?? {},
+  )) {
     for (const [type, fields] of Object.entries(scoped.types)) {
       add("scopedMultiCollections", name, type, fields, type);
     }
@@ -581,8 +585,7 @@ export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
         findings.push({
           level: "error",
           target: person.target,
-          message:
-            `person space "${person.space}" delegates to "${space}", which is not a person space`,
+          message: `person space "${person.space}" delegates to "${space}", which is not a person space`,
         });
       }
     }
@@ -610,26 +613,26 @@ export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
   const resolveOwner = (target: RawTarget): PrivacyOwner => {
     const person = persons.get(target.space);
     const isPerson = person !== undefined && person.target === target.key;
-    const references = target.drafts.filter((d) =>
-      d.role === "reference" && !d.declaredMention
+    const references = target.drafts.filter(
+      (d) => d.role === "reference" && !d.declaredMention,
     );
     const personRefs = references.filter((d) =>
-      d.spaces.some((s) => persons.has(s))
+      d.spaces.some((s) => persons.has(s)),
     );
 
     if (isPerson) {
       const via: string[] = [];
       for (const space of person.delegatesTo) {
-        const hits = references.filter((d) =>
-          d.spaces.includes(space) &&
-          d.spaces.every((x) => person.delegatesTo.includes(x))
+        const hits = references.filter(
+          (d) =>
+            d.spaces.includes(space) &&
+            d.spaces.every((x) => person.delegatesTo.includes(x)),
         );
         if (hits.length === 0) {
           findings.push({
             level: "error",
             target: target.key,
-            message:
-              `delegation to "${space}" declared but no field references that space`,
+            message: `delegation to "${space}" declared but no field references that space`,
           });
         }
         via.push(...hits.map((d) => d.path));
@@ -667,17 +670,15 @@ export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
             findings.push({
               level: "error",
               target: target.key,
-              message:
-                `owner "${entry}" declared but no field references that space`,
+              message: `owner "${entry}" declared but no field references that space`,
             });
           } else {
             findings.push({
               level: "error",
               target: target.key,
-              message:
-                `owner "${entry}" is referenced by ${hits.length} fields (${
-                  hits.map((h) => h.path).join(", ")
-                }); declare the path instead of the space`,
+              message: `owner "${entry}" is referenced by ${hits.length} fields (${hits
+                .map((h) => h.path)
+                .join(", ")}); declare the path instead of the space`,
             });
           }
           continue;
@@ -688,8 +689,7 @@ export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
             level: "error",
             target: target.key,
             path: entry,
-            message:
-              `owner "${entry}" is neither a known space nor a reference field of this document`,
+            message: `owner "${entry}" is neither a known space nor a reference field of this document`,
           });
           continue;
         }
@@ -714,9 +714,9 @@ export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
     findings.push({
       level: "warning",
       target: target.key,
-      message: `${personRefs.length} fields reference person spaces (${
-        personRefs.map((d) => `${d.path}: ${d.spaces.join("|")}`).join(", ")
-      }); declare the owner with personal(_id, { of })`,
+      message: `${personRefs.length} fields reference person spaces (${personRefs
+        .map((d) => `${d.path}: ${d.spaces.join("|")}`)
+        .join(", ")}); declare the owner with personal(_id, { of })`,
     });
     return { kind: "ambiguous", spaces: [], via: [], chain: [] };
   };
@@ -734,9 +734,9 @@ export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
     if (!ownerKey) return null;
     const owner = owners.get(ownerKey);
     if (!owner || owner.spaces.length === 0) return null;
-    const tails = owner.spaces.map((s) => chainOf(s, seen)).filter((
-      c,
-    ): c is readonly string[] => c !== null);
+    const tails = owner.spaces
+      .map((s) => chainOf(s, seen))
+      .filter((c): c is readonly string[] => c !== null);
     if (tails.length === 0) return null;
     return [space, ...tails[0]];
   };
@@ -797,7 +797,9 @@ export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
           d.tier = "unknown";
           d.note = `${d.role} signal in a document without owner`;
         } else if (
-          d.tier === "unknown" || d.tier === "inferred" || d.tier === "dynamic"
+          d.tier === "unknown" ||
+          d.tier === "inferred" ||
+          d.tier === "dynamic"
         ) {
           d.tier = "none";
           d.role = "none";
@@ -815,10 +817,9 @@ export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
         findings.push({
           level: "warning",
           target: target.key,
-          message:
-            `${strong.length} personal signal(s) in a document without owner (${
-              strong.map((p) => p.path).join(", ")
-            }); declare an owner or notPersonal(_id, reason)`,
+          message: `${strong.length} personal signal(s) in a document without owner (${strong
+            .map((p) => p.path)
+            .join(", ")}); declare an owner or notPersonal(_id, reason)`,
         });
       }
     }
@@ -831,8 +832,7 @@ export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
           level: "warning",
           target: target.key,
           path: p.path,
-          message:
-            `mirrorOf "${p.mirrorOf}" points at unknown space "${space}"`,
+          message: `mirrorOf "${p.mirrorOf}" points at unknown space "${space}"`,
         });
       }
     }

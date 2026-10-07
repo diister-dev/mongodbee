@@ -73,14 +73,16 @@ const SCHEMAS = {
               accountlessIdentityId: refId("accountless_identity"),
             }),
           ]),
-          fields: dynamic(v.record(
-            v.string(),
-            v.object({
-              t: v.string(),
-              v: v.unknown(),
-              o: v.optional(v.picklist(["flow", "dashboard"])),
-            }),
-          )),
+          fields: dynamic(
+            v.record(
+              v.string(),
+              v.object({
+                t: v.string(),
+                v: v.unknown(),
+                o: v.optional(v.picklist(["flow", "dashboard"])),
+              }),
+            ),
+          ),
           birthday: personal(DateSchema, { role: "quasi" }),
           invitedBy: v.optional(refId("participant")),
         },
@@ -260,8 +262,8 @@ test("fail-closed: a required unknown value is replaced by a valid generated one
     fields: { company: { t: "text", v: "Corp" } },
     birthday: new Date("1990-06-17T00:00:00.000Z"),
   });
-  const company =
-    (doc.fields as Record<string, Record<string, unknown>>).company;
+  const company = (doc.fields as Record<string, Record<string, unknown>>)
+    .company;
   assertNotEquals(company.t, "text");
   assert(kinds(notes, "generated_required").includes("fields.*.t"));
   assert(kinds(notes, "unresolved").includes("fields.*.t"));

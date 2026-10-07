@@ -30,9 +30,9 @@ function pathOf(plan: PrivacyPlan, key: string, path: string) {
   const found = target.paths.find((p) => p.path === path);
   assert(
     found,
-    `path ${path} missing in ${key} (have ${
-      target.paths.map((p) => p.path).join(", ")
-    })`,
+    `path ${path} missing in ${key} (have ${target.paths
+      .map((p) => p.path)
+      .join(", ")})`,
   );
   return found;
 }
@@ -52,8 +52,8 @@ test("messaging: a document about two persons is ambiguous until both owners are
   const target = undeclared.targets.get("collections/messages/")!;
   assertEquals(target.owner.kind, "ambiguous");
   assert(
-    undeclared.findings.some((f) =>
-      f.level === "warning" && f.target === target.key
+    undeclared.findings.some(
+      (f) => f.level === "warning" && f.target === target.key,
     ),
   );
   assertEquals(pathOf(undeclared, target.key, "body").tier, "declared");
@@ -139,8 +139,8 @@ test("delegation to a space that is not a person is an error", () => {
     },
   });
   assert(
-    plan.findings.some((f) =>
-      f.level === "error" && f.message.includes("not a person space")
+    plan.findings.some(
+      (f) => f.level === "error" && f.message.includes("not a person space"),
     ),
   );
 });
@@ -178,8 +178,8 @@ test("marketplace: ownership chains through a non-person space only when declare
     "drop",
   );
   assert(
-    bare.findings.some((f) =>
-      f.level === "warning" && f.target === shipment.key
+    bare.findings.some(
+      (f) => f.level === "warning" && f.target === shipment.key,
     ),
   );
 
@@ -222,8 +222,8 @@ test("owner declared on a space that no field references is an error", () => {
     },
   });
   assert(
-    plan.findings.some((f) =>
-      f.level === "error" && f.message.includes("no field references")
+    plan.findings.some(
+      (f) => f.level === "error" && f.message.includes("no field references"),
     ),
   );
 });
@@ -371,7 +371,10 @@ test("exposition: persons, delegation, inference and declared owners across a sc
   assertEquals(information.owner.kind, "inferred");
   assertEquals(information.owner.via, ["createdBy"]);
 
-  assertEquals(plan.findings.filter((f) => f.level === "error"), []);
+  assertEquals(
+    plan.findings.filter((f) => f.level === "error"),
+    [],
+  );
   assert(plan.summary.unknown >= 4);
 });
 
@@ -396,8 +399,8 @@ test("embedded persons: direct identifiers in a document without owner are repor
   assertStringIncludes(name.note ?? "", "without owner");
   assertEquals(pathOf(plan, programs.key, "title").tier, "none");
   assert(
-    plan.findings.some((f) =>
-      f.level === "warning" && f.target === programs.key
+    plan.findings.some(
+      (f) => f.level === "warning" && f.target === programs.key,
     ),
   );
 });
@@ -423,7 +426,10 @@ test("exempt document: typed identifiers become none, person references stay men
     pathOf(plan, entreprises.key, "createdBy").treatment.extract,
     "remap",
   );
-  assertEquals(plan.findings.filter((f) => f.level !== "info"), []);
+  assertEquals(
+    plan.findings.filter((f) => f.level !== "info"),
+    [],
+  );
 });
 
 test("derived values: mirrors and recomputed fields never keep the original", () => {
@@ -444,11 +450,10 @@ test("derived values: mirrors and recomputed fields never keep the original", ()
   });
   const users = "collections/users/";
   const lower = pathOf(plan, users, "emailLower");
-  assertEquals([lower.role, lower.mirrorOf, lower.normalize], [
-    "derived",
-    "user.email",
-    "lowercase",
-  ]);
+  assertEquals(
+    [lower.role, lower.mirrorOf, lower.normalize],
+    ["derived", "user.email", "lowercase"],
+  );
   assertEquals(lower.treatment.extract, "recompute");
   assertEquals(
     pathOf(plan, users, "searchTokens").treatment.extract,
@@ -579,7 +584,10 @@ test("authorship: mention() removes a reference from owner inference without los
     pathOf(plan, target.key, "createdBy").treatment.extract,
     "remap",
   );
-  assertEquals(plan.findings.filter((f) => f.level === "warning"), []);
+  assertEquals(
+    plan.findings.filter((f) => f.level === "warning"),
+    [],
+  );
 
   const onlyAuthors = buildPrivacyPlan({
     schemas: {
@@ -617,11 +625,11 @@ test("wrappers: an optional boolean or picklist is technical, the wrapper is not
   });
   for (const path of ["marketingConsent", "locale", "statusChangedAt"]) {
     const p = pathOf(plan, "collections/users/", path);
-    assertEquals([p.tier, p.role, p.treatment.extract], [
-      "inferred",
-      "technical",
-      "keep",
-    ], path);
+    assertEquals(
+      [p.tier, p.role, p.treatment.extract],
+      ["inferred", "technical", "keep"],
+      path,
+    );
   }
 });
 
@@ -633,14 +641,16 @@ test("dynamic: a data-driven subtree is delegated to a resolver, its static sign
         forms: {
           _id: personal(dbId("form"), { of: "user" }),
           userId: refId("user"),
-          fields: dynamic(v.record(
-            v.string(),
-            v.object({
-              t: v.string(),
-              v: v.unknown(),
-              o: v.optional(v.picklist(["flow", "dashboard"])),
-            }),
-          )),
+          fields: dynamic(
+            v.record(
+              v.string(),
+              v.object({
+                t: v.string(),
+                v: v.unknown(),
+                o: v.optional(v.picklist(["flow", "dashboard"])),
+              }),
+            ),
+          ),
         },
       },
     },
@@ -648,21 +658,19 @@ test("dynamic: a data-driven subtree is delegated to a resolver, its static sign
   const root = pathOf(plan, "collections/forms/", "fields");
   assertEquals([root.tier, root.role], ["declared", "dynamic"]);
   const value = pathOf(plan, "collections/forms/", "fields.*.v");
-  assertEquals([value.tier, value.dynamicRoot, value.treatment.extract], [
-    "dynamic",
-    "fields",
-    "drop",
-  ]);
+  assertEquals(
+    [value.tier, value.dynamicRoot, value.treatment.extract],
+    ["dynamic", "fields", "drop"],
+  );
   assertEquals(
     pathOf(plan, "collections/forms/", "fields.*.t").tier,
     "dynamic",
   );
   const origin = pathOf(plan, "collections/forms/", "fields.*.o");
-  assertEquals([origin.tier, origin.role, origin.dynamicRoot], [
-    "inferred",
-    "technical",
-    "fields",
-  ]);
+  assertEquals(
+    [origin.tier, origin.role, origin.dynamicRoot],
+    ["inferred", "technical", "fields"],
+  );
   assertEquals(plan.summary.dynamic, 2);
   assertEquals(plan.summary.unknown, 0);
 });

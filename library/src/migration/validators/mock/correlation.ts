@@ -377,13 +377,14 @@ function createIdPools() {
   ): string | undefined {
     const scoped = scope !== null ? listOf(space, scope) : [];
     const global = listOf(space, null);
-    const list = scoped.length > 0
-      ? scoped
-      : global.length > 0
-      ? global
-      : scope === null
-      ? anyScope(space)
-      : [];
+    const list =
+      scoped.length > 0
+        ? scoped
+        : global.length > 0
+          ? global
+          : scope === null
+            ? anyScope(space)
+            : [];
     if (list.length === 0) return undefined;
     return list[pickIndex(list.length)];
   }
