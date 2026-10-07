@@ -119,6 +119,8 @@ export interface PrivacyTransformer {
 const ISO_PATTERN =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
 const WRAPPER_TYPES: ReadonlySet<string> = new Set([
   "optional",
   "nullable",
@@ -260,6 +262,12 @@ export function createPrivacyTransformer(
       const t = Date.parse(value);
       if (!Number.isNaN(t)) return new Date(t + shift).toISOString();
     }
+    if (typeof value === "string" && DATE_ONLY_PATTERN.test(value)) {
+      const t = Date.parse(value);
+      if (!Number.isNaN(t)) {
+        return new Date(t + shift).toISOString().slice(0, 10);
+      }
+    }
     return value;
   };
 
@@ -346,6 +354,9 @@ export function createPrivacyTransformer(
       if (shifted instanceof Date) return monthStart(shifted);
       if (typeof shifted === "string" && ISO_PATTERN.test(shifted)) {
         return monthStart(new Date(Date.parse(shifted))).toISOString();
+      }
+      if (typeof shifted === "string" && DATE_ONLY_PATTERN.test(shifted)) {
+        return `${shifted.slice(0, 7)}-01`;
       }
       if (typeof shifted === "number") {
         if (shifted === 0) return 0;

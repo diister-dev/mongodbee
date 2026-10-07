@@ -276,3 +276,20 @@ test("mirror: a copy next to a scoped source follows the scope of its own docume
   });
   assertNotEquals(fakeEmails[0], fakeEmails[1]);
 });
+
+test("dates: date-only strings follow the time shift and collapse to the first of the month when quasi-identifying", () => {
+  const { doc, notes } = transformOne(
+    {
+      day: v.pipe(v.string(), v.isoDate()),
+      birth: personal(v.pipe(v.string(), v.isoDate()), { role: "quasi" }),
+    },
+    { day: "2026-03-10", birth: "1990-07-23" },
+    { timeShiftMs: 30 * 86_400_000 },
+  );
+  assertEquals(doc.day, "2026-04-09");
+  assertEquals(doc.birth, "1990-08-01");
+  assertEquals(
+    notes.filter((n) => n.kind === "invalid" || n.kind === "dropped"),
+    [],
+  );
+});
