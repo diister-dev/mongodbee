@@ -26,7 +26,7 @@ Deux sources, un puits. Le gain qui n'existe pas aujourd'hui : faire tourner la 
 |---|---|
 | [01-cadre-juridique.md](01-cadre-juridique.md) | Ce que le RGPD, les lignes directrices EDPB 01/2025, le G29, la CNIL et la CJUE demandent, lu à la source, et ce que chaque exigence implique pour un outil de schéma. |
 | [02-metadonnees-de-schema.md](02-metadonnees-de-schema.md) | Le vocabulaire de métadonnées proposé : ce que le schéma sait déjà, les axes à ajouter, comment ils servent à la fois le seeding et la classification, et les forks à trancher. |
-| [03-cas-d-usage.md](03-cas-d-usage.md) | Le cas Diivento mesuré : annoter, geler par une migration, lancer `classify` et `extract`, ce qui est gardé, faux ou supprimé, et les limites rencontrées. |
+| [03-cas-d-usage.md](03-cas-d-usage.md) | Un cas réel mesuré : annoter, geler par une migration, lancer `classify` et `extract`, ce qui est gardé, faux ou supprimé, et les limites rencontrées. |
 
 ## Les décisions déjà prises ailleurs et réutilisées ici
 

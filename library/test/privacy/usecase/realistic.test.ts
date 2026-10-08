@@ -25,7 +25,7 @@ const TEST_URI =
 const FIXTURE = new URL("./fixture.ts", import.meta.url).href;
 const SRC = new URL("../../../src/", import.meta.url).href;
 const BIRTH = "2026_01_01_0900_DIIVLIKE1@birth";
-const SECRET = "diivento-like-secret";
+const SECRET = "usecase-secret";
 const SHIFT_DAYS = 30;
 
 const tag = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
@@ -218,7 +218,7 @@ function personalValues(d: Dump): Set<string> {
 const SLOW = { timeout: 600_000 };
 
 test({
-  name: "usecase: the Diivento-like schemas classify without error under the strict posture",
+  name: "usecase: the realistic schemas classify without error under the strict posture",
   ...SLOW,
   fn: async () => {
     const plan = buildPrivacyPlan({ schemas: SCHEMAS, posture: "strict" });
