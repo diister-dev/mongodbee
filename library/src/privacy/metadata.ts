@@ -51,7 +51,11 @@ export type PrivacyMetadata =
       readonly source: string;
       readonly normalize?: PrivacyNormalize;
     }
-  | { readonly kind: "exempt"; readonly reason: string }
+  | {
+      readonly kind: "exempt";
+      readonly reason: string;
+      readonly strict?: "keep";
+    }
   | { readonly kind: "dynamic" };
 
 type Schema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>;
@@ -123,11 +127,20 @@ export function personal<T extends Schema>(
   return tag(schema, metadata);
 }
 
+export interface NotPersonalOptions {
+  readonly strict?: "keep";
+}
+
 export function notPersonal<T extends Schema>(
   schema: T,
   reason: string,
+  options: NotPersonalOptions = {},
 ): Tagged<T> {
-  return tag(schema, { kind: "exempt", reason });
+  return tag(schema, {
+    kind: "exempt",
+    reason,
+    ...(options.strict !== undefined && { strict: options.strict }),
+  });
 }
 
 export function mention<T extends Schema>(schema: T): Tagged<T> {

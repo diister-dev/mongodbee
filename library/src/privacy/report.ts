@@ -20,7 +20,7 @@ function ownerLine(target: PrivacyTarget): string {
         ? `person, delegates to ${target.delegatesTo.join(" | ")}`
         : "person";
     case "exempt":
-      return `not personal (${o.reason ?? ""})`;
+      return `not personal (${o.reason ?? ""}${o.strictKeep ? ", strict: keep" : ""})`;
     case "none":
       return "no owner";
     case "ambiguous":
