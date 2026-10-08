@@ -156,11 +156,11 @@ test({
           organizationIds: [membership?.organizationId],
           membershipCount: 1,
         });
-        assertNotEquals(
-          (stored?._computed as { organizationIds: string[] }).organizationIds,
-          [organizationId],
-        );
-        assertEquals((stored?._computed as { _rev: number })._rev, 4);
+        const computed = stored?._computed as
+          | { organizationIds: string[]; _rev: number }
+          | undefined;
+        assertNotEquals(computed?.organizationIds, [organizationId]);
+        assertEquals(computed?._rev, 4);
       } finally {
         await client.db(source).dropDatabase();
         await client.db(target).dropDatabase();

@@ -6,6 +6,7 @@ import {
   assertRejects,
   assertStringIncludes,
 } from "../../+assert.ts";
+import { writeFile } from "node:fs/promises";
 import process from "node:process";
 import { withTempDir } from "./shared.ts";
 import { MongoClient } from "../../../src/mongodb.ts";
@@ -32,6 +33,7 @@ import {
   populateSource,
   rawCollection,
   REAL,
+  SCHEMAS_SOURCE,
   type SourceWorld,
   TEST_URI,
   withProject,
@@ -602,7 +604,10 @@ e2e(
           json: true,
         }),
       );
-      assertEquals(JSON.parse(output).scope.scope, remapId(SECRET, scope));
+      assertEquals(
+        JSON.parse(output).scope.scope,
+        remapId(SECRET, scope, defaultTimeShiftMs(SECRET)),
+      );
       assert(!output.includes(scope.split(":")[1]));
     });
   },
@@ -643,15 +648,44 @@ e2e(
 );
 
 e2e(
-  "extract: data that breaks its own schemas is reported in the summary and only written with --allow-violations",
+  "extract: data that breaks its own schemas is refused before any write unless --allow-violations",
   async () => {
-    await withSourceAndTarget(async ({ dir, client, source }) => {
-      await rawCollection(client.db(source), "users").insertOne({
-        _id: `user:${newId()}`,
-        email: REAL.emails[0].toUpperCase(),
-        firstname: "Brokenreal",
-        role: "member",
+    await withTempDir(async (dir) => {
+      await writeProject(dir);
+      const source = dbName("src");
+      const target = dbName("dst");
+      const client = new MongoClient(TEST_URI);
+      await client.connect();
+      await writeFile(
+        `${dir}/schemas.ts`,
+        SCHEMAS_SOURCE.replace(
+          "collections: {\n    users: {",
+          `collections: {
+    weird: {
+      _id: dbId("weird"),
+      code: personal(v.pipe(v.string(), v.minLength(5), v.maxLength(3)), { role: "direct" }),
+    },
+    users: {`,
+        ),
+      );
+      await rawCollection(client.db(source), "weird").insertOne({
+        _id: `weird:${newId()}`,
+        code: "real-code",
       });
+      const refused = await captureOutput(() =>
+        extractCommand({
+          cwd: dir,
+          fromDb: source,
+          toDb: target,
+          secret: SECRET,
+          json: true,
+        }),
+      );
+      assert(refused.error instanceof Error);
+      assertStringIncludes(refused.error.message, "--allow-violations");
+      assert(!refused.error.message.includes("real-code"));
+      assertEquals(await client.db(target).listCollections().toArray(), []);
+
       const preview = await captureOutput(() =>
         extractCommand({
           cwd: dir,
@@ -665,11 +699,14 @@ e2e(
       assertEquals(preview.error, undefined);
       const summary = JSON.parse(preview.output);
       assertEquals(summary.violationsAllowed, true);
-      assertEquals(
-        summary.violations.map((v: { kind: string }) => v.kind),
-        ["unique_index"],
+      assert(
+        summary.violations.some(
+          (v: { kind: string }) => v.kind === "invalid_document",
+        ),
       );
-      assert(!preview.combined.includes("Brokenreal"));
+      assert(!preview.combined.includes("real-code"));
+      await client.db(source).dropDatabase();
+      await client.close();
     });
   },
 );
