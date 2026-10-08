@@ -1151,6 +1151,7 @@ async function runStrictCli(json: boolean, target: string, source: string) {
         fromDb: source,
         ...(json ? { dryRun: true } : { toDb: target }),
         secret: CLI_SECRET,
+        allowViolations: true,
         json,
       });
     });
@@ -1493,6 +1494,7 @@ test({
           fromDb: source,
           dryRun: true,
           scope: EXPOSITION_ID,
+          allowViolations: true,
           json: true,
         });
       });

@@ -120,6 +120,7 @@ const REPORTED_VIOLATIONS: ReadonlySet<ScenarioViolation["kind"]> = new Set([
   "invalid_document",
   "unique_index",
   "mirror_mismatch",
+  "unique_unchecked",
 ]);
 
 const BLOCKING_VIOLATIONS: ReadonlySet<ScenarioViolation["kind"]> = new Set([

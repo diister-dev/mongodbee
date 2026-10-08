@@ -9,6 +9,7 @@ import {
 import process from "node:process";
 import { withTempDir } from "./shared.ts";
 import { MongoClient } from "../../../src/mongodb.ts";
+import { newId } from "../../../src/ids.ts";
 import { classifyCommand } from "../../../src/migration/cli/commands/classify.ts";
 import { extractCommand } from "../../../src/migration/cli/commands/extract.ts";
 import {
@@ -267,50 +268,48 @@ e2e(
 e2e(
   "extract: a pseudonym collision fails loudly, names the index, leaves nothing behind and prints no real value",
   async () => {
-    await withSourceAndTarget(
-      async ({ dir, client, source, target, world }) => {
-        const twin = "ALICE.REAL@acme-corp.example";
-        await rawCollection(client.db(source), "users").insertOne({
-          _id: `user:${world.userIds[0].slice(5, -1)}z`,
-          email: twin,
-          firstname: "Alicetwin",
-          role: "member",
-        });
-        const gated = await captureOutput(() =>
-          extractCommand({
-            cwd: dir,
-            fromDb: source,
-            toDb: target,
-            secret: SECRET,
-          }),
-        );
-        assert(gated.error instanceof Error);
-        assertStringIncludes(gated.error.message, "unique_index");
-        assertEquals(await client.db(target).listCollections().toArray(), []);
+    await withSourceAndTarget(async ({ dir, client, source, target }) => {
+      const twin = "ALICE.REAL@acme-corp.example";
+      await rawCollection(client.db(source), "users").insertOne({
+        _id: `user:${newId()}`,
+        email: twin,
+        firstname: "Alicetwin",
+        role: "member",
+      });
+      const gated = await captureOutput(() =>
+        extractCommand({
+          cwd: dir,
+          fromDb: source,
+          toDb: target,
+          secret: SECRET,
+        }),
+      );
+      assert(gated.error instanceof Error);
+      assertStringIncludes(gated.error.message, "unique_index");
+      assertEquals(await client.db(target).listCollections().toArray(), []);
 
-        const { error, combined: output } = await captureOutput(() =>
-          extractCommand({
-            cwd: dir,
-            fromDb: source,
-            toDb: target,
-            secret: SECRET,
-            allowViolations: true,
-          }),
-        );
-        assert(error instanceof Error);
-        assertStringIncludes(error.message, "users");
-        assertStringIncludes(error.message, "duplicate");
-        for (const real of [...REAL.emails, twin, "Alicetwin"]) {
-          assert(!error.message.includes(real), "error leaks a real value");
-          assert(!output.includes(real), "output leaks a real value");
-        }
-        assertEquals(
-          await client.db(target).listCollections().toArray(),
-          [],
-          "a failed extract must not leave a half-written database",
-        );
-      },
-    );
+      const { error, combined: output } = await captureOutput(() =>
+        extractCommand({
+          cwd: dir,
+          fromDb: source,
+          toDb: target,
+          secret: SECRET,
+          allowViolations: true,
+        }),
+      );
+      assert(error instanceof Error);
+      assertStringIncludes(error.message, "users");
+      assertStringIncludes(error.message, "duplicate");
+      for (const real of [...REAL.emails, twin, "Alicetwin"]) {
+        assert(!error.message.includes(real), "error leaks a real value");
+        assert(!output.includes(real), "output leaks a real value");
+      }
+      assertEquals(
+        await client.db(target).listCollections().toArray(),
+        [],
+        "a failed extract must not leave a half-written database",
+      );
+    });
   },
 );
 
@@ -659,9 +658,9 @@ e2e(
 e2e(
   "extract: data that breaks its own schemas is reported in the summary and only written with --allow-violations",
   async () => {
-    await withSourceAndTarget(async ({ dir, client, source, world }) => {
+    await withSourceAndTarget(async ({ dir, client, source }) => {
       await rawCollection(client.db(source), "users").insertOne({
-        _id: `user:${world.userIds[0].slice(5, -1)}z`,
+        _id: `user:${newId()}`,
         email: REAL.emails[0].toUpperCase(),
         firstname: "Brokenreal",
         role: "member",
