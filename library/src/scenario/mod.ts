@@ -37,10 +37,15 @@ export {
   applyMigrationsInMemory,
   checkScenarioWorld,
   type CheckScenarioWorldOptions,
+  addOnDemand,
   generateScenarioAtBirth,
+  generateScenarioStage,
+  hasScenarioStage,
   isBlockingViolation,
+  mergeScenarioViolations,
   renderScenarioReport,
   type ScenarioBirth,
+  type ScenarioStageResult,
   type ReplayResult,
   runScenario,
   type RunScenarioOptions,
@@ -53,11 +58,15 @@ export {
 export { docsOf, isMetadataDocument, resolveTargetKey } from "./state.ts";
 export { SKIP } from "@diister/valibot-mock";
 export {
+  applyStateDelta,
   countCollections,
   type PopulateDatabaseOptions,
   populateDatabase,
   readStateFromDatabase,
   type ReadStateOptions,
+  snapshotState,
+  type StateDelta,
+  type StateSnapshot,
   type WriteStateOptions,
   writeStateToDatabase,
 } from "./mongo.ts";

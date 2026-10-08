@@ -72,6 +72,7 @@ const V2 = `{ collections: { items: ${ITEMS_V2}, archive_v2: { _id: dbId("archiv
 interface ProjectOptions {
   readonly withBroken?: boolean;
   readonly scenarioShape?: string;
+  readonly scenarioStages?: string;
 }
 
 async function writeProject(
@@ -112,7 +113,7 @@ export const schemas = ${V2};
     `export const scenario = { name: "seed-at", birth: ${JSON.stringify(BIRTH)}, shape: ${
       options.scenarioShape ??
       "{ items: 4, archive: 3, expositions: 2, badge: 3 }"
-    } };`,
+    }${options.scenarioStages ? `, stages: ${options.scenarioStages}` : ""} };`,
   );
 }
 
@@ -434,6 +435,54 @@ test({
       assert(stdout.includes("MIGRATE OPTIONS"), stdout);
       assert(!stdout.includes("Applying migrations"), stdout);
       assertEquals(await collectionNames(db), []);
+    });
+  },
+});
+
+test({
+  name: "seed: a stage adds data at its migration, identically with replay=memory and replay=mongo",
+  timeout: 240_000,
+  fn: async () => {
+    const stages = `{ ${JSON.stringify(MOVE)}: { shape: { archive_v2: 2 } } }`;
+    await withProject({ scenarioStages: stages }, async (dir, db) => {
+      await seedCommand({
+        cwd: dir,
+        scenario: "./scenario.ts",
+        at: MOVE,
+        json: true,
+      });
+      const memory = await dataSnapshot(db);
+      await db.dropDatabase();
+      await seedCommand({
+        cwd: dir,
+        scenario: "./scenario.ts",
+        at: MOVE,
+        replay: "mongo",
+        json: true,
+      });
+      const mongo = await dataSnapshot(db);
+      assertEquals(
+        memory.archive_v2.length,
+        5,
+        "3 renamed at MOVE plus 2 from the stage",
+      );
+      assertEquals(mongo, memory);
+    });
+    await withProject({ scenarioStages: stages }, async (dir, db) => {
+      await seedCommand({
+        cwd: dir,
+        scenario: "./scenario.ts",
+        at: BIRTH,
+        replay: "mongo",
+        json: true,
+      });
+      const birthOnly = await dataSnapshot(db);
+      assertEquals(
+        birthOnly.archive.length,
+        3,
+        "a stage after --at is not applied",
+      );
+      assert(!("archive_v2" in birthOnly));
     });
   },
 });

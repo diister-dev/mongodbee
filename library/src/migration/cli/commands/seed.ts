@@ -13,13 +13,19 @@ import { migrateCommand } from "./migrate.ts";
 import { pathToFileUrl } from "../../utils/platform.ts";
 import { resolveMigrationRef } from "../utils/resolve-ref.ts";
 import {
+  addOnDemand,
+  applyStateDelta,
   checkScenarioWorld,
   generateScenarioAtBirth,
+  generateScenarioStage,
+  hasScenarioStage,
+  mergeScenarioViolations,
   populateDatabase,
   readStateFromDatabase,
   recomputeComputedFields,
   renderScenarioReport,
   runScenario,
+  snapshotState,
   type ScenarioBirth,
   type ScenarioReport,
   type SeedScenario,
@@ -294,18 +300,36 @@ export async function seedCommand(
       }
       let total = Object.values(written).reduce((a, b) => a + b, 0);
       if (birth) {
-        if (birth.pending.length > 0) {
-          await withStdoutOnStderr(options.json === true, () =>
+        const violations = [...birth.violations];
+        const onDemand: Record<string, number> = { ...birth.onDemand };
+        const migrateTo = (target: string) =>
+          withStdoutOnStderr(options.json === true, () =>
             migrateCommand({
               cwd,
               configPath: options.configPath,
               force: true,
-              target: at,
+              target,
               connectionUri: uri,
               databaseName: dbName,
             }),
           );
+        let reached = birth.birth.id;
+        for (const migration of birth.pending) {
+          if (!hasScenarioStage(scenario, migration.id)) continue;
+          await migrateTo(migration.id);
+          reached = migration.id;
+          const current = await readStateFromDatabase(db, migration.schemas);
+          const before = snapshotState(current);
+          const staged = await generateScenarioStage({
+            scenario,
+            migration,
+            state: current,
+          });
+          await applyStateDelta(db, before, staged.state);
+          mergeScenarioViolations(violations, staged.violations);
+          addOnDemand(onDemand, staged.onDemand);
         }
+        if (reached !== at) await migrateTo(at);
         const state = await readStateFromDatabase(db, birth.at.schemas);
         const report = checkScenarioWorld({
           scenario,
@@ -313,7 +337,8 @@ export async function seedCommand(
           at: birth.at,
           applied: birth.pending.map((m) => m.id),
           state,
-          generationViolations: birth.violations,
+          generationViolations: violations,
+          onDemand,
         });
         printReport(report);
         refuseViolations(report);

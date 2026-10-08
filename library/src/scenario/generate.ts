@@ -70,8 +70,6 @@ import {
 
 const UNIQUE_ATTEMPTS = 64;
 const ON_DEMAND_COUNT = 1;
-const DRAFT_DRAW_FINDING = "Correlated draw found no";
-const SHARED_MINTER_FINDING = "is minted by";
 const BUCKET_ORDER: Record<keyof DatabaseState, number> = {
   collections: 0,
   multiCollections: 1,
@@ -986,9 +984,9 @@ function keepFinding(
   schemas: SchemasDefinition,
   plan: PrivacyPlan,
 ): boolean {
-  if (finding.message.startsWith(DRAFT_DRAW_FINDING)) return false;
+  if (finding.correlation === "empty_pool") return false;
   if (
-    finding.message.includes(SHARED_MINTER_FINDING) ||
+    finding.correlation === "contested_space" ||
     finding.space === undefined
   ) {
     return true;

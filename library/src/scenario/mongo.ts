@@ -248,3 +248,74 @@ export async function countCollections(db: Db): Promise<number> {
   const existing = await listCollectionNames(db);
   return [...existing].filter((name) => !name.startsWith("system.")).length;
 }
+
+export interface StateDelta {
+  readonly inserted: number;
+  readonly replaced: number;
+}
+
+export type StateSnapshot = ReadonlyMap<string, ReadonlyMap<string, string>>;
+
+function keyOf(doc: Record<string, unknown>): string {
+  return JSON.stringify(doc._id);
+}
+
+function bucketsOf(
+  state: DatabaseState,
+): [string, readonly Record<string, unknown>[]][] {
+  const entries: [string, readonly Record<string, unknown>[]][] = [];
+  for (const bucket of WRITE_BUCKETS) {
+    for (const [name, { content }] of Object.entries(state[bucket])) {
+      entries.push([name, content]);
+    }
+  }
+  for (const [name, { content }] of Object.entries(state.multiModels)) {
+    entries.push([`model:${name}`, content]);
+  }
+  return entries;
+}
+
+export function snapshotState(state: DatabaseState): StateSnapshot {
+  return new Map(
+    bucketsOf(state).map(([name, docs]) => [
+      name,
+      new Map(docs.map((doc) => [keyOf(doc), JSON.stringify(doc)])),
+    ]),
+  );
+}
+
+export async function applyStateDelta(
+  db: Db,
+  before: StateSnapshot,
+  after: DatabaseState,
+  options: WriteStateOptions = {},
+): Promise<StateDelta> {
+  const batchSize = options.batchSize ?? 500;
+  let inserted = 0;
+  let replaced = 0;
+  for (const [entry, docs] of bucketsOf(after)) {
+    const known = before.get(entry);
+    const name = entry.startsWith("model:") ? entry.slice(6) : entry;
+    if (known === undefined && entry.startsWith("model:")) {
+      throw new Error(
+        `a stage created the multi-model instance "${name}"; --replay mongo only adds documents to instances the migrations created`,
+      );
+    }
+    const fresh: Record<string, unknown>[] = [];
+    for (const doc of docs) {
+      const prior = known?.get(keyOf(doc));
+      if (prior === undefined) {
+        fresh.push(doc);
+      } else if (prior !== JSON.stringify(doc)) {
+        await db
+          .collection(name)
+          .replaceOne({ _id: doc._id as never }, sanitizeKeepingComputed(doc), {
+            bypassDocumentValidation: true,
+          });
+        replaced++;
+      }
+    }
+    inserted += await insertAll(db, name, fresh, batchSize);
+  }
+  return { inserted, replaced };
+}
