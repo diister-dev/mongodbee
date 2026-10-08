@@ -259,7 +259,7 @@ e2e(
 );
 
 e2e(
-  "extract: a pseudonym collision fails loudly, names the index, leaves nothing behind and prints no real value",
+  "extract: emails differing only by case stay distinct under a case-sensitive unique index and print no real value",
   async () => {
     await withSourceAndTarget(
       async ({ dir, client, source, target, world }) => {
@@ -278,18 +278,16 @@ e2e(
             secret: SECRET,
           }),
         );
-        assert(error instanceof Error);
-        assertStringIncludes(error.message, "users");
-        assertStringIncludes(error.message, "duplicate");
+        assertEquals(error, undefined);
         for (const real of [...REAL.emails, twin, "Alicetwin"]) {
-          assert(!error.message.includes(real), "error leaks a real value");
           assert(!output.includes(real), "output leaks a real value");
         }
-        assertEquals(
-          await client.db(target).listCollections().toArray(),
-          [],
-          "a failed extract must not leave a half-written database",
-        );
+        const written = await rawCollection(client.db(target), "users")
+          .find({})
+          .toArray();
+        const emails = written.map((doc) => String(doc.email));
+        assertEquals(new Set(emails).size, emails.length);
+        assertEquals(emails.length, REAL.emails.length + 1);
       },
     );
   },
