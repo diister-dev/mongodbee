@@ -108,8 +108,6 @@ test({
 });
 
 test({
-  // TODO(privacy): V2, deepMap returns Date objects untouched; shift them (and ISO strings) like keepValue does
-  ignore: true,
   name: "V2 Date objects inside an untyped payload are shifted like typed dates in strict",
   fn: () => {
     const schemas = {
@@ -139,8 +137,6 @@ test({
 });
 
 test({
-  // TODO(privacy): V3, deepMap keeps numbers verbatim; apply the strict number rule of strictify (fake in person-owned documents) inside untyped payloads
-  ignore: true,
   name: "V3 numbers inside an untyped payload of a person document are faked like typed numbers in strict",
   fn: () => {
     const schemas = {
@@ -173,8 +169,6 @@ test({
 });
 
 test({
-  // TODO(privacy): V4, deepMap only remaps prefixed strings; remap ObjectId values with remapObjectId
-  ignore: true,
   name: "V4 an ObjectId reference inside an untyped payload is remapped like the _id it points at",
   fn: () => {
     const target = new ObjectId("65f000000000000000000001");
@@ -340,8 +334,6 @@ test({
 });
 
 test({
-  // TODO(privacy): V11, remapValue only remaps prefixed ids; route unprefixed strings through remapUid and numbers through numericId of the referenced target
-  ignore: true,
   name: "V11 a declared remap of an unprefixed _id (number or bare string) joins the remapped _id it points at",
   fn: () => {
     const remap = <T>(schema: T) =>
@@ -483,7 +475,6 @@ test({
 });
 
 test({
-  // TODO(privacy): V15, strictKeep downgrades certain-tier signals (email action) silently; keep only inferred/unknown tiers, or report a finding
   ignore: true,
   name: "V15 a strict-keep configuration document does not keep a field whose schema certainly holds an email",
   fn: () => {
@@ -569,8 +560,6 @@ test({
 });
 
 test({
-  // TODO(privacy): V13, identifier() pins only an _id declared as vocabulary; read the scope schema of the scoped collection and pin a picklist _scope, and validate _scope in checkScenarioState
-  ignore: true,
   name: "V13 a scoped collection whose scope is a picklist keeps its _scope inside the picklist",
   fn: () => {
     const schemas = {
@@ -642,8 +631,6 @@ test({
 });
 
 test({
-  // TODO(privacy): V18, deepMap returns every non-plain object (Binary, Decimal128, UUID, Long) untouched; under a faking treatment replace them by a same-type fake (or drop them), never copy
-  ignore: true,
   name: "V18 binary and decimal values inside an untyped payload do not survive a strict extract",
   fn: () => {
     const schemas = {
@@ -672,8 +659,6 @@ test({
 });
 
 test({
-  // TODO(privacy): V19, mapKey remaps a key only under an id-typed key schema or a dynamic root, while deepMap remaps any minted prefix; remap minted-prefix keys of v.record(v.string(), …) too
-  ignore: true,
   name: "V19 a v.record(v.string()) keyed by ids of a minted space is rekeyed by the remapped ids",
   fn: () => {
     const schemas = {
@@ -743,8 +728,6 @@ test({
 });
 
 test({
-  // TODO(privacy): V22, looksPersonalKey counts 8 digits in an ISO day and fakes the key; map temporal keys through shiftDate (mapTemporal) before the personal-key test
-  ignore: true,
   name: "V22 a record keyed by ISO days is rekeyed by the shifted days, like the dates it indexes",
   fn: () => {
     const schemas = {

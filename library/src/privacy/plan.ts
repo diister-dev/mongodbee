@@ -593,9 +593,13 @@ function strictify(draft: Draft, owned: boolean): void {
   }
 }
 
+function isPersonalSignal(d: Draft): boolean {
+  return d.tier === "declared" || (d.tier === "certain" && !d.uniqueOnly);
+}
+
 function adjustForOwner(d: Draft, owner: PrivacyOwner, strict: boolean): void {
   const ownerKind = owner.kind;
-  if (strict && owner.strictKeep && d.tier !== "declared") {
+  if (strict && owner.strictKeep && !isPersonalSignal(d)) {
     d.tier = "none";
     d.role = "none";
     d.note = "kept by notPersonal(strict: keep)";
@@ -961,6 +965,19 @@ export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
           d.relation = "relation";
         }
       } else if (!d.computed) {
+        if (
+          strict &&
+          owner.strictKeep &&
+          d.tier === "certain" &&
+          !d.uniqueOnly
+        ) {
+          findings.push({
+            level: "warning",
+            target: target.key,
+            path: d.path,
+            message: `${d.note ?? "personal signal"} in a notPersonal(strict: keep) document: treated as personal, not kept`,
+          });
+        }
         adjustForOwner(d, owner, strict);
       }
       const done = finalise(d);

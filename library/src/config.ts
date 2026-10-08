@@ -1,3 +1,5 @@
+import type { PrivacyConfig } from "./migration/config/types.ts";
+
 /**
  * Simple configuration type for MongoDBee migrations
  * Inspired by Drizzle's configuration style
@@ -33,6 +35,9 @@ export type MongodbeeConfig = {
      */
     schemaManagement?: "auto" | "managed";
   };
+
+  /** Hooks of the privacy commands: dynamic classification and computed recompute */
+  privacy?: PrivacyConfig;
 };
 
 /**

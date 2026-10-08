@@ -97,6 +97,7 @@ export function renderPrivacyReport(plan: PrivacyPlan): string {
   if (plan.posture === "strict") {
     lines.push(
       "posture     strict: undeclared values are faked, not kept or dropped",
+      "            untyped payloads keep their shape: ids remapped, dates shifted, strings (and numbers of person documents) faked, binary values dropped",
       "",
     );
   }

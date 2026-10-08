@@ -1,4 +1,5 @@
 import { test } from "../../+harness.ts";
+import { defineConfig } from "../../../src/config.ts";
 import { assertEquals } from "../../+assert.ts";
 import * as v from "../../../src/schema.ts";
 import { dbId, refId } from "../../../src/ids.ts";
@@ -45,7 +46,7 @@ function transform(key: string, doc: Record<string, unknown>) {
 }
 
 test({
-  name: "usecase gap: an id inside an untyped permission payload is remapped, not faked",
+  name: "usecase: an id inside an untyped permission payload is remapped, not faked",
   fn: () => {
     const out = transform("collections/roles/", {
       _id: ROLE,
@@ -80,5 +81,12 @@ test({
       name: "Visiteur Salon Pro",
     });
     assertEquals(out.name, "Visiteur Salon Pro");
+    assertEquals(out._id, remapId(SECRET, "flow:01j5zk3v8n2q4x6y8z0b1c3d5e"));
   },
+});
+
+test("usecase: defineConfig accepts the privacy hooks the extract reads", () => {
+  const resolveDynamic = () => ({});
+  const config = defineConfig({ privacy: { resolveDynamic } });
+  assertEquals(config.privacy?.resolveDynamic, resolveDynamic);
 });

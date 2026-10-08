@@ -100,8 +100,6 @@ const STRENGTH_ONE = `{
 }`;
 
 test({
-  // TODO(privacy): V6, unique-keys folds only case for collation strength <= 2 while strength 1 also folds accents; fold diacritics for strength 1 (or treat it as unchecked)
-  ignore: true,
   name: "V6 extract: --dry-run passes where extract then fails on a unique index the in-memory check folds differently, and the failure leaves no collection behind",
   timeout: 60_000,
   fn: async () => {
