@@ -134,8 +134,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C3, transform isUnique() only reads field-level withIndex; it must also read indexesOf(source) unique composites like plan.ts does
-  ignore: true,
   name: "C3 unique: a field covered by a defineType unique composite is made distinct or reported",
   fn: () => {
     const CODE = personal(v.pipe(v.string(), v.regex(/^[ab]$/)), {
@@ -165,8 +163,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C4, a unique index alone on a technical type (picklist/literal/number/date/boolean) must not promote the path to direct+pseudonym
-  ignore: true,
   name: "C4 strict: a unique picklist discriminator keeps its value",
   fn: () => {
     const schemas = {
@@ -261,8 +257,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C7, walk picks the first union option that safeParses; v.object strips unknown keys so a wider later option is never chosen and its fields are dropped
-  ignore: true,
   name: "C7 walk: a union of objects keeps the fields of the option that actually matches",
   fn: () => {
     const schemas = {
@@ -383,8 +377,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C14, walk removes a DROPped tuple item instead of leaving a hole (undefined/null), so later items shift position
-  ignore: true,
   name: "C14 walk: dropping a tuple item keeps the positions of the items after it",
   fn: () => {
     const schemas = {
@@ -408,8 +400,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C15, walk returns the raw handler result on the no-variant and schema-less branches; map KEEP to the value there too
-  ignore: true,
   name: "C15 walk: KEEP on a value matching no union option keeps the value, not the symbol",
   fn: async () => {
     const { walkDocument, KEEP } = await import("../../src/privacy/walk.ts");
@@ -454,4 +444,25 @@ test({
     };
     assertEquals(run(values), run([...values].reverse()));
   },
+});
+
+test("C4 plan: a unique string in an exempt document is kept under personal posture and pseudonymised under strict", () => {
+  const schemas = {
+    collections: {
+      "+security": {
+        _id: notPersonal(dbId("security"), "platform keys"),
+        publicRef: withIndex(v.string(), { unique: true }),
+        version: withIndex(v.number(), { unique: true }),
+      },
+      "+users": { _id: personId("user") },
+    },
+  };
+  const treatment = (posture: PrivacyPosture, path: string) =>
+    transformerFor(schemas, posture)
+      .plan.targets.get("collections/+security/")
+      ?.paths.find((p) => p.path === path)?.treatment.extract;
+  assertEquals(treatment("personal", "publicRef"), "keep");
+  assertEquals(treatment("strict", "publicRef"), "pseudonym");
+  assertEquals(treatment("personal", "version"), "keep");
+  assertEquals(treatment("strict", "version"), "keep");
 });

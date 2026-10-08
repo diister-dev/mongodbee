@@ -53,6 +53,7 @@ export async function applyMigrationsInMemory(
 }
 
 function isBlocking(violation: ScenarioViolation): boolean {
+  if (violation.kind === "unique_unchecked") return false;
   return (
     violation.kind !== "correlation" ||
     !violation.message.includes("is minted by")

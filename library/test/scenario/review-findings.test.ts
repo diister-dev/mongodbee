@@ -30,8 +30,6 @@ const BIRTH = migrationDefinition("2026_01_01_0900_BIRTH01@birth", "birth", {
 });
 
 test({
-  // TODO(privacy): C16, scenario/unique.ts uniqueIndexesOf only reads field-level withIndex; read indexesOf(source) composites in generate (retry) and oracle (violation)
-  ignore: true,
   name: "C16 scenario: a defineType unique composite is honoured by the generator or flagged by the oracle",
   fn: async () => {
     const run = await runScenario({

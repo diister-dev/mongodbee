@@ -5,9 +5,19 @@ import type {
   SchemasDefinition,
 } from "../migration/types.ts";
 import { COMPUTED_ROOT } from "../computed-guard.ts";
-import { fieldsOf as fieldsOfSource, indexesOf } from "../type-definition.ts";
+import { fieldsOf as fieldsOfSource } from "../type-definition.ts";
 import { extractIdPrefix } from "../migration/utils/seed-id.ts";
-import { INDEX_SYMBOL } from "../indexes.ts";
+import {
+  OBJECT_TYPES,
+  TUPLE_TYPES,
+  UNION_TYPES,
+  WRAPPER_TYPES,
+} from "./schema-shape.ts";
+import {
+  type UniqueKey,
+  uniqueKeysOf,
+  uniqueMembership,
+} from "./unique-keys.ts";
 import {
   collectActions,
   PRIVACY_SYMBOL,
@@ -117,33 +127,6 @@ const BUCKET_ORDER: Record<keyof DatabaseState, number> = {
   multiModels: 2,
   scopedMultiCollections: 3,
 };
-
-const WRAPPER_TYPES: ReadonlySet<string> = new Set([
-  "optional",
-  "nullable",
-  "nullish",
-  "non_optional",
-  "non_nullable",
-  "non_nullish",
-  "undefinedable",
-  "exact_optional",
-]);
-
-const OBJECT_TYPES: ReadonlySet<string> = new Set([
-  "object",
-  "loose_object",
-  "strict_object",
-  "object_with_rest",
-]);
-
-const TUPLE_TYPES: ReadonlySet<string> = new Set([
-  "tuple",
-  "loose_tuple",
-  "strict_tuple",
-  "tuple_with_rest",
-]);
-
-const UNION_TYPES: ReadonlySet<string> = new Set(["union", "variant"]);
 
 const CONTAINER_TYPES: ReadonlySet<string> = new Set([
   ...OBJECT_TYPES,
@@ -312,7 +295,6 @@ function collectLeaves(fields: SchemaContent): Leaves {
 interface Signals {
   readonly spaces: readonly string[];
   readonly email: boolean;
-  readonly unique: boolean;
   readonly dateAction: boolean;
   readonly metadata: readonly PrivacyMetadata[];
   readonly types: ReadonlySet<string>;
@@ -324,7 +306,6 @@ function readSignals(actions: readonly unknown[]): Signals {
   const types = new Set<string>();
   const metadata: PrivacyMetadata[] = [];
   let email = false;
-  let unique = false;
   let dateAction = false;
   let picklist: string[] | null = null;
   for (const action of actions) {
@@ -343,8 +324,6 @@ function readSignals(actions: readonly unknown[]): Signals {
     }
     if (a.type === "metadata") {
       const meta = a.metadata as Record<PropertyKey, unknown> | undefined;
-      const index = meta?.[INDEX_SYMBOL] as { unique?: boolean } | undefined;
-      if (index?.unique) unique = true;
       const privacy = meta?.[PRIVACY_SYMBOL] as PrivacyMetadata | undefined;
       if (privacy) metadata.push(privacy);
     }
@@ -352,7 +331,6 @@ function readSignals(actions: readonly unknown[]): Signals {
   return {
     spaces: [...spaces],
     email,
-    unique,
     dateAction,
     metadata,
     types,
@@ -384,10 +362,9 @@ interface Draft {
 function classifyActions(
   path: string,
   actions: readonly unknown[],
-  compositeUnique: boolean,
+  unique: boolean,
 ): Draft {
   const s = readSignals(actions);
-  const unique = s.unique || compositeUnique;
   const last = <K extends PrivacyMetadata["kind"]>(kind: K) => {
     const found = s.metadata.filter(
       (m): m is Extract<PrivacyMetadata, { kind: K }> => m.kind === kind,
@@ -441,7 +418,12 @@ function classifyActions(
       overrides: field.treatment,
     };
   }
-  if (s.email || unique) {
+  const allTechnical =
+    s.types.size > 0 &&
+    [...s.types].every(
+      (t) => TECHNICAL_TYPES.has(t) || (t === "string" && s.dateAction),
+    );
+  if (s.email || (unique && !allTechnical)) {
     return {
       path,
       tier: "certain",
@@ -453,11 +435,6 @@ function classifyActions(
         .join(", "),
     };
   }
-  const allTechnical =
-    s.types.size > 0 &&
-    [...s.types].every(
-      (t) => TECHNICAL_TYPES.has(t) || (t === "string" && s.dateAction),
-    );
   if (allTechnical) {
     return {
       path,
@@ -466,7 +443,7 @@ function classifyActions(
       spaces: [],
       values: s.picklist ?? undefined,
       numeric: s.types.has("number") || s.types.has("bigint"),
-      note: [...s.types].join("|"),
+      note: [...s.types, ...(unique ? ["unique index"] : [])].join("|"),
     };
   }
   return {
@@ -529,7 +506,7 @@ function mergeVariants(drafts: readonly Draft[]): Draft {
   };
 }
 
-function classifyLeaf(leaf: Leaf, uniqueKeys: ReadonlySet<string>): Draft {
+function classifyLeaf(leaf: Leaf, uniqueKeys: readonly UniqueKey[]): Draft {
   if (leaf.computed) {
     return {
       path: leaf.path,
@@ -540,15 +517,9 @@ function classifyLeaf(leaf: Leaf, uniqueKeys: ReadonlySet<string>): Draft {
       note: "computed field, recomputed from its source",
     };
   }
-  const key = leaf.path
-    .split(".")
-    .filter((segment) => segment !== "*")
-    .join(".");
-  const compositeUnique = uniqueKeys.has(key);
+  const unique = uniqueMembership(uniqueKeys, leaf.path).unique;
   return mergeVariants(
-    leaf.variants.map((actions) =>
-      classifyActions(leaf.path, actions, compositeUnique),
-    ),
+    leaf.variants.map((actions) => classifyActions(leaf.path, actions, unique)),
   );
 }
 
@@ -655,7 +626,7 @@ function finalise(draft: Draft): PrivacyPath {
 
 function classifyLeaves(
   collected: Leaves,
-  uniqueKeys: ReadonlySet<string>,
+  uniqueKeys: readonly UniqueKey[],
 ): Draft[] {
   return collected.leaves.map((leaf) => {
     const draft = classifyLeaf(leaf, uniqueKeys);
@@ -696,11 +667,7 @@ function enumerateTargets(schemas: SchemasDefinition): RawTarget[] {
   ) => {
     const fields = fieldsOfSource(source);
     const collected = collectLeaves(fields);
-    const uniqueKeys = new Set(
-      indexesOf(source).flatMap((index) =>
-        index.unique ? Object.keys(index.key) : [],
-      ),
-    );
+    const uniqueKeys = uniqueKeysOf(source);
     out.push({
       key: targetKey(bucket, collection, type),
       bucket,
