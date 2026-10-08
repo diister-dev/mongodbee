@@ -205,8 +205,6 @@ test({
 });
 
 test({
-  // TODO(privacy): V5, the unique registry is global and first-come across multi-model instances, and instances come in listCollections order; sort instance names, or partition the registry per instance
-  ignore: true,
   name: "V5 the fakes of a multi-model instance do not depend on the order instances are listed in",
   fn: () => {
     const schemas = {

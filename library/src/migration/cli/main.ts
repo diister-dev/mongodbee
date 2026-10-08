@@ -221,10 +221,12 @@ ${yellow("EXTRACT OPTIONS:")}
   --scope           Only extract this scope of the scoped collections; unscoped
                     collections are still copied whole (listed in the summary)
   --allow-unknown   Proceed with UNKNOWN paths (they are dropped)
-  --allow-violations Write even when the extracted data breaks its schemas
-                    (invalid, unique_index, mirror_mismatch); default: refuse
-  --force           Write into a non-empty target database (existing data is kept;
-                    colliding documents fail the extract)
+  --allow-violations Write even when the extracted documents break their schemas
+                    (invalid_document, mirror_mismatch); default: refuse. Data
+                    that breaks a unique index or repeats an _id is never
+                    written, the index would reject it
+  --force           Allow other collections in the target; a collection the
+                    schemas manage is refused when it already holds documents
   --dry-run         Read and transform without writing
   --json            Print the summary as JSON
   Config hook       privacy: { resolveDynamic, recompute? } in mongodbee.config.ts

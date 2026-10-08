@@ -9,7 +9,7 @@ import {
 } from "../../../src/migration/discovery.ts";
 import { detectInstancesNeedingCatchUp } from "../../../src/migration/catch-up.ts";
 import { MongoClient } from "../../../src/mongodb.ts";
-import { assertEquals } from "../../+assert.ts";
+import { assert, assertEquals } from "../../+assert.ts";
 import { test } from "../../+harness.ts";
 import { withTempDir } from "./shared.ts";
 
@@ -164,8 +164,6 @@ const MULTI_MODEL = `{
 }`;
 
 test({
-  // TODO(privacy): V7, the in-memory replay does not append the replayed ids to each instance's _migrations; record them (shifted appliedAt) before writing
-  ignore: true,
   name: "V7 extract: a source behind the head replays in memory but its multi-model instances keep the source ledger, so the target asks for a catch-up",
   timeout: 60_000,
   fn: async () => {
@@ -223,8 +221,6 @@ test({
 });
 
 test({
-  // TODO(privacy): V8, --force rollback drops created collections and inserted ids but not the validators and indexes applied to pre-existing collections; snapshot and restore them, or refuse --force with existing schema collections
-  ignore: true,
   name: "V8 extract --force: a failed write leaves the pre-existing collection's indexes as they were",
   timeout: 60_000,
   fn: async () => {
@@ -370,9 +366,7 @@ const PLAIN_UNIQUE = `{
 }`;
 
 test({
-  // TODO(privacy): V20, --allow-violations lets unique_index through the gate but populateDatabase creates the unique index before inserting, so the write fails; create unique indexes after the data under --allow-violations, or stop listing unique_index as allowable
-  ignore: true,
-  name: "V20 extract --allow-violations writes data that breaks a unique index, as its help says",
+  name: "V20 extract --allow-violations never writes data that breaks a unique index, and says so before writing anything",
   timeout: 60_000,
   fn: async () => {
     await withTempDir(async (dir) => {
@@ -400,7 +394,9 @@ test({
         } catch (error) {
           message = error instanceof Error ? error.message : String(error);
         }
-        assertEquals(message, undefined);
+        assert(message?.includes("unique index"), String(message));
+        assert(message?.includes("even with --allow-violations"));
+        assertEquals(await client.db(target).listCollections().toArray(), []);
       });
     });
   },

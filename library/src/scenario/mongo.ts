@@ -11,18 +11,14 @@ import {
 } from "../migration/types.ts";
 import { discoverMultiCollectionInstances } from "../migration/multicollection-registry.ts";
 
-export type InsertedIds = Map<string, unknown[]>;
-
 export interface WriteStateOptions {
   readonly batchSize?: number;
-  readonly inserted?: InsertedIds;
 }
 
 const DUPLICATE_KEY = 11000;
 const DUPLICATE_INDEX_PATTERN = /index: (\S+) dup key/;
 
 interface BulkWriteFailure {
-  readonly index?: number;
   readonly code?: number;
   readonly errmsg?: string;
 }
@@ -69,13 +65,8 @@ async function insertAll(
   collection: string,
   docs: readonly Record<string, unknown>[],
   batchSize: number,
-  inserted?: InsertedIds,
 ): Promise<number> {
   if (docs.length === 0) return 0;
-  const log = (ids: unknown[]) => {
-    if (inserted)
-      inserted.set(collection, [...(inserted.get(collection) ?? []), ...ids]);
-  };
   const target = db.collection(collection);
   for (let i = 0; i < docs.length; i += batchSize) {
     const batch = docs.slice(i, i + batchSize);
@@ -84,12 +75,9 @@ async function insertAll(
         ordered: false,
         bypassDocumentValidation: true,
       });
-      log(batch.map((d) => d._id));
     } catch (error) {
       const failures = bulkWriteFailures(error);
       if (failures === undefined) throw error;
-      const rejected = new Set(failures.map((f) => f.index));
-      log(batch.filter((_, index) => !rejected.has(index)).map((d) => d._id));
       throw new Error(
         describeBulkWriteFailure(collection, batch.length, failures),
         { cause: error },
@@ -115,23 +103,11 @@ export async function writeStateToDatabase(
   const written: Record<string, number> = {};
   for (const bucket of WRITE_BUCKETS) {
     for (const [name, { content }] of Object.entries(state[bucket])) {
-      written[name] = await insertAll(
-        db,
-        name,
-        content,
-        batchSize,
-        options.inserted,
-      );
+      written[name] = await insertAll(db, name, content, batchSize);
     }
   }
   for (const [name, { content }] of Object.entries(state.multiModels)) {
-    written[name] = await insertAll(
-      db,
-      name,
-      content,
-      batchSize,
-      options.inserted,
-    );
+    written[name] = await insertAll(db, name, content, batchSize);
   }
   return written;
 }
@@ -152,19 +128,35 @@ export async function populateDatabase(
 ): Promise<Record<string, number>> {
   const batchSize = options.batchSize ?? 500;
   const { schemas } = options.migration;
+  const managed = new Set([
+    ...WRITE_BUCKETS.flatMap((bucket) => [
+      ...Object.keys(schemas[bucket] ?? {}),
+      ...Object.keys(state[bucket]),
+    ]),
+    ...Object.keys(state.multiModels),
+  ]);
   const existing = await listCollectionNames(db);
+  const clashing = [...managed].filter((name) => existing.has(name));
+  const occupied: string[] = [];
+  for (const name of clashing) {
+    if ((await db.collection(name).countDocuments({}, { limit: 1 })) > 0) {
+      occupied.push(name);
+    }
+  }
+  if (occupied.length > 0) {
+    throw new Error(
+      `The target already holds documents in the collection(s) ${occupied.join(", ")} that the schemas manage; extract and seed never write into them, a failed write could not restore their validators and indexes`,
+    );
+  }
+  for (const name of clashing) await db.collection(name).drop();
   const created: string[] = [];
-  const inserted: InsertedIds = new Map();
   const create = async (name: string) => {
-    if (existing.has(name) || created.includes(name)) return;
+    if (created.includes(name)) return;
     await db.createCollection(name);
     created.push(name);
   };
   try {
-    for (const bucket of WRITE_BUCKETS) {
-      for (const name of Object.keys(schemas[bucket] ?? {})) await create(name);
-      for (const name of Object.keys(state[bucket])) await create(name);
-    }
+    for (const name of managed) await create(name);
     const remaining = createEmptyDatabaseState();
     Object.assign(remaining, {
       collections: state.collections,
@@ -172,13 +164,11 @@ export async function populateDatabase(
       scopedMultiCollections: state.scopedMultiCollections,
     });
     for (const [name, instance] of Object.entries(state.multiModels)) {
-      await create(name);
       await insertAll(
         db,
         name,
         instance.content.filter(isMetadataDocument),
         batchSize,
-        inserted,
       );
       remaining.multiModels[name] = {
         ...instance,
@@ -188,15 +178,8 @@ export async function populateDatabase(
     await createMongodbApplier(db, options.migration, {
       currentMigrationId: "",
     }).applyMigration([], "up");
-    return await writeStateToDatabase(db, remaining, { batchSize, inserted });
+    return await writeStateToDatabase(db, remaining, { batchSize });
   } catch (error) {
-    for (const [name, ids] of inserted) {
-      if (created.includes(name)) continue;
-      await db
-        .collection(name)
-        .deleteMany({ _id: { $in: ids } } as never)
-        .catch(() => false);
-    }
     for (const name of created) {
       await db
         .collection(name)

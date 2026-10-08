@@ -7,6 +7,7 @@ import { computedTopology } from "../../../src/computed-topology.ts";
 import { checkComputed } from "../../../src/computed-apply.ts";
 import { newId } from "../../../src/ids.ts";
 import { extractCommand } from "../../../src/migration/cli/commands/extract.ts";
+import { ObjectId } from "mongodb";
 import { MongoClient } from "../../../src/mongodb.ts";
 import { withTempDir } from "./shared.ts";
 
@@ -242,6 +243,65 @@ test({
         await client.db(target).dropDatabase();
         await client.close();
       }
+    });
+  },
+});
+
+const OBJECT_ID_SCHEMAS = `
+import * as v from "${SRC}schema.ts";
+import { ObjectId } from "mongodb";
+import { personal, personId } from "${SRC}privacy/mod.ts";
+export const schemas = {
+  collections: {
+    users: {
+      _id: personId("user"),
+      email: personal(v.pipe(v.string(), v.email()), { role: "direct" }),
+      token: personal(v.instance(ObjectId), { role: "direct" }),
+    },
+  },
+};
+`;
+
+test({
+  name: "extract: a generator warning is printed once, not once per document",
+  timeout: 90_000,
+  fn: async () => {
+    await withTempDir(async (dir) => {
+      await writeProject(dir, OBJECT_ID_SCHEMAS);
+      const { source } = names("warn");
+      const client = new MongoClient(TEST_URI);
+      await client.connect();
+      const warnings: string[] = [];
+      const original = console.warn;
+      try {
+        await client
+          .db(source)
+          .collection<Raw>("users")
+          .insertMany(
+            Array.from({ length: 5 }, (_, index) => ({
+              _id: `user:${newId()}`,
+              email: `warn${index}@acme-corp.example`,
+              token: new ObjectId(),
+            })),
+          );
+        console.warn = (...args: unknown[]) => {
+          warnings.push(args.map(String).join(" "));
+        };
+        await extractCommand({
+          cwd: dir,
+          fromDb: source,
+          dryRun: true,
+          secret: "hooks-secret",
+          allowViolations: true,
+          json: true,
+        });
+      } finally {
+        console.warn = original;
+        await client.db(source).dropDatabase();
+        await client.close();
+      }
+      const handlers = warnings.filter((w) => w.includes("No handler"));
+      assert(handlers.length <= 1, `${handlers.length} identical warnings`);
     });
   },
 });

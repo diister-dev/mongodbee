@@ -11,6 +11,7 @@ import { resolveMigrationRef } from "../utils/resolve-ref.ts";
 import { parsePosture } from "./classify.ts";
 import { COMPUTED_REVISION, COMPUTED_ROOT } from "../../../computed-guard.ts";
 import { MULTI_COLLECTION_INFO_TYPE } from "../../multicollection-registry.ts";
+import { getCurrentVersion } from "../../utils/package-info.ts";
 import { isRecord } from "../../../utils/guards.ts";
 import { migrationDefinition } from "../../definition.ts";
 import { getAppliedMigrationIds, markMigrationAsAdopted } from "../../state.ts";
@@ -92,6 +93,7 @@ export interface ExtractSummary {
 export interface TransformStateOptions {
   readonly schemas: SchemasDefinition;
   readonly remapInstanceName: (name: string) => string;
+  readonly replayedMigrations?: readonly string[];
 }
 
 export function keepComputedRevision({
@@ -121,10 +123,14 @@ const REPORTED_VIOLATIONS: ReadonlySet<ScenarioViolation["kind"]> = new Set([
   "unique_unchecked",
 ]);
 
-const BLOCKING_VIOLATIONS: ReadonlySet<ScenarioViolation["kind"]> = new Set([
+const ALLOWABLE_VIOLATIONS: ReadonlySet<ScenarioViolation["kind"]> = new Set([
   "invalid_document",
-  "unique_index",
   "mirror_mismatch",
+]);
+
+const UNWRITABLE_VIOLATIONS: ReadonlySet<ScenarioViolation["kind"]> = new Set([
+  "unique_index",
+  "duplicate_id",
 ]);
 
 function resolveSecret(raw: string | undefined): {
@@ -169,6 +175,7 @@ function shiftedDate(value: unknown, shiftMs: number): unknown {
 function sanitiseMetadata(
   doc: Record<string, unknown>,
   shiftMs: number,
+  replayed: readonly string[],
 ): Record<string, unknown> {
   if (doc._type === MULTI_COLLECTION_INFO_TYPE) {
     return {
@@ -181,15 +188,28 @@ function sanitiseMetadata(
   const operations = Array.isArray(doc.appliedMigrations)
     ? doc.appliedMigrations.filter(isRecord)
     : [];
+  const known = new Set(operations.map((operation) => operation.id));
+  const appended = replayed
+    .filter((id) => !known.has(id))
+    .map((id) => ({
+      id,
+      operation: "applied",
+      appliedAt: shiftedDate(new Date(), shiftMs),
+      status: "success",
+      mongodbeeVersion: getCurrentVersion(),
+    }));
   return {
     _id: doc._id,
     _type: doc._type,
     fromMigrationId: doc.fromMigrationId,
     mongodbeeVersion: doc.mongodbeeVersion,
-    appliedMigrations: operations.map(({ error: _error, ...operation }) => ({
-      ...operation,
-      appliedAt: shiftedDate(operation.appliedAt, shiftMs),
-    })),
+    appliedMigrations: [
+      ...operations.map(({ error: _error, ...operation }) => ({
+        ...operation,
+        appliedAt: shiftedDate(operation.appliedAt, shiftMs),
+      })),
+      ...appended,
+    ],
   };
 }
 
@@ -234,9 +254,70 @@ async function resolveSourceStep(
   return index >= 0 && index < chain.length - 1 ? chain[index] : undefined;
 }
 
+function withWarningsOnce<T>(work: () => T): T {
+  const original = console.warn;
+  const seen = new Set<string>();
+  console.warn = (...args: unknown[]) => {
+    const message = args.map(String).join(" ");
+    if (seen.has(message)) return;
+    seen.add(message);
+    original(...args);
+  };
+  try {
+    return work();
+  } finally {
+    console.warn = original;
+  }
+}
+
+function physicalDuplicateIds(state: DatabaseState): ScenarioViolation[] {
+  const violations: ScenarioViolation[] = [];
+  const buckets = [
+    ["collections", state.collections],
+    ["multiCollections", state.multiCollections],
+    ["scopedMultiCollections", state.scopedMultiCollections],
+  ] as const;
+  const check = (
+    target: string,
+    content: readonly Record<string, unknown>[],
+  ) => {
+    const seen = new Set<string>();
+    let duplicates = 0;
+    for (const doc of content) {
+      if (doc._id === undefined) continue;
+      const key = `${typeof doc._id}:${String(doc._id)}`;
+      if (seen.has(key)) duplicates++;
+      seen.add(key);
+    }
+    if (duplicates > 0) {
+      violations.push({
+        kind: "duplicate_id",
+        target,
+        message: `${duplicates} duplicate _id in the physical collection`,
+        count: duplicates,
+      });
+    }
+  };
+  for (const [bucket, collections] of buckets) {
+    for (const [name, { content }] of Object.entries(collections)) {
+      check(`${bucket}/${name}`, content);
+    }
+  }
+  for (const [name, { content }] of Object.entries(state.multiModels)) {
+    check(`multiModels/${name}`, content);
+  }
+  return violations;
+}
+
 async function serverIdentity(client: MongoClient): Promise<string> {
   const hello = await client.db("admin").command({ hello: 1 });
-  return String(hello.primary ?? hello.me);
+  if (typeof (hello.primary ?? hello.me) === "string") {
+    return hello.primary ?? hello.me;
+  }
+  return client.options.hosts
+    .map((host) => `${host.host ?? host.socketPath}:${host.port ?? 27017}`)
+    .join(",")
+    .replace(/127\.0\.0\.1|\[::1\]/g, "localhost");
 }
 
 async function assertTargetIsNotSource(
@@ -353,7 +434,11 @@ export function transformState(
     if (metadata.length > 0) {
       (out.multiCollections[name] ??= { content: [] }).content.push(
         ...metadata.map((doc) =>
-          sanitiseMetadata(doc, transformer.timeShiftMs),
+          sanitiseMetadata(
+            doc,
+            transformer.timeShiftMs,
+            options.replayedMigrations ?? [],
+          ),
         ),
       );
     }
@@ -364,11 +449,19 @@ export function transformState(
     countSkipped("scopedMultiCollections", name, content);
   }
 
-  for (const [name, instance] of Object.entries(state.multiModels)) {
+  for (const [name, instance] of Object.entries(state.multiModels).sort(
+    ([a], [b]) => (a < b ? -1 : a > b ? 1 : 0),
+  )) {
     countSkipped("multiModels", instance.modelType, instance.content);
     const content: Record<string, unknown>[] = instance.content
       .filter(isMetadataDocument)
-      .map((doc) => sanitiseMetadata(doc, transformer.timeShiftMs));
+      .map((doc) =>
+        sanitiseMetadata(
+          doc,
+          transformer.timeShiftMs,
+          options.replayedMigrations ?? [],
+        ),
+      );
     for (const target of plan.targets.values()) {
       if (
         target.bucket !== "multiModels" ||
@@ -562,15 +655,25 @@ export async function extractCommand(
           : custom;
       },
     });
-    const result = transformState(replayed.state, plan, transformer, {
-      schemas,
-      remapInstanceName: transformer.remapId,
-    });
-    const violations = checkScenarioState({
-      state: result.state,
-      schemas,
-      plan,
-    }).filter((violation) => REPORTED_VIOLATIONS.has(violation.kind));
+    const result = withWarningsOnce(() =>
+      transformState(replayed.state, plan, transformer, {
+        schemas,
+        remapInstanceName: transformer.remapId,
+        replayedMigrations: replayed.applied,
+      }),
+    );
+    const violations = [
+      ...checkScenarioState({
+        state: result.state,
+        schemas,
+        plan,
+      }).filter(
+        (violation) =>
+          violation.kind !== "duplicate_id" &&
+          REPORTED_VIOLATIONS.has(violation.kind),
+      ),
+      ...physicalDuplicateIds(result.state),
+    ];
     const summary: ExtractSummary = {
       targets: result.summary,
       posture: plan.posture,
@@ -640,11 +743,23 @@ export async function extractCommand(
       (total, entry) => total + (entry.notes.invalid ?? 0),
       0,
     );
-    const blocking = violations.filter((v) => BLOCKING_VIOLATIONS.has(v.kind));
-    if ((invalidNotes > 0 || blocking.length > 0) && !allowViolations) {
+    const describe = (v: ScenarioViolation) =>
+      `${v.kind} ${v.count ?? 1} (${v.target})`;
+    const unwritable = violations.filter((v) =>
+      UNWRITABLE_VIOLATIONS.has(v.kind),
+    );
+    if (unwritable.length > 0) {
+      throw new Error(
+        `The extracted data cannot be written, the unique index or _id would reject it, even with --allow-violations (${unwritable.map(describe).join(", ")}); nothing was written`,
+      );
+    }
+    const allowable = violations.filter((v) =>
+      ALLOWABLE_VIOLATIONS.has(v.kind),
+    );
+    if ((invalidNotes > 0 || allowable.length > 0) && !allowViolations) {
       const kinds = [
         ...(invalidNotes > 0 ? [`invalid ${invalidNotes}`] : []),
-        ...blocking.map((v) => `${v.kind} ${v.count ?? 1} (${v.target})`),
+        ...allowable.map(describe),
       ];
       throw new Error(
         `The extracted data breaks its own schemas (${kinds.join(", ")}); nothing was written. Fix the classification or pass --allow-violations`,
