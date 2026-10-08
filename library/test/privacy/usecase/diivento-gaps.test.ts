@@ -1,4 +1,5 @@
 import { test } from "../../+harness.ts";
+import { defineConfig } from "../../../src/config.ts";
 import { assertEquals } from "../../+assert.ts";
 import * as v from "../../../src/schema.ts";
 import { dbId, refId } from "../../../src/ids.ts";
@@ -81,4 +82,10 @@ test({
     });
     assertEquals(out.name, "Visiteur Salon Pro");
   },
+});
+
+test("usecase: defineConfig accepts the privacy hooks the extract reads", () => {
+  const resolveDynamic = () => ({});
+  const config = defineConfig({ privacy: { resolveDynamic } });
+  assertEquals(config.privacy?.resolveDynamic, resolveDynamic);
 });
