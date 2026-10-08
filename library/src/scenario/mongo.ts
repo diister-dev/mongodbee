@@ -9,7 +9,11 @@ import {
   type MigrationDefinition,
   type SchemasDefinition,
 } from "../migration/types.ts";
-import { discoverMultiCollectionInstances } from "../migration/multicollection-registry.ts";
+import {
+  createMultiCollectionInfo,
+  discoverMultiCollectionInstances,
+  MULTI_COLLECTION_INFO_TYPE,
+} from "../migration/multicollection-registry.ts";
 
 export interface WriteStateOptions {
   readonly batchSize?: number;
@@ -114,6 +118,11 @@ export async function writeStateToDatabase(
 
 export interface PopulateDatabaseOptions extends WriteStateOptions {
   readonly migration: MigrationDefinition;
+  /**
+   * Migration recorded as the creation point of a multi-model instance that
+   * carries no `_information` marker in the state (default: `migration`).
+   */
+  readonly instanceOrigin?: string;
 }
 
 async function listCollectionNames(db: Db): Promise<Set<string>> {
@@ -164,12 +173,17 @@ export async function populateDatabase(
       scopedMultiCollections: state.scopedMultiCollections,
     });
     for (const [name, instance] of Object.entries(state.multiModels)) {
-      await insertAll(
-        db,
-        name,
-        instance.content.filter(isMetadataDocument),
-        batchSize,
-      );
+      const metadata = instance.content.filter(isMetadataDocument);
+      if (metadata.some((doc) => doc._type === MULTI_COLLECTION_INFO_TYPE)) {
+        await insertAll(db, name, metadata, batchSize);
+      } else {
+        await createMultiCollectionInfo(
+          db,
+          name,
+          instance.modelType,
+          options.instanceOrigin ?? options.migration.id,
+        );
+      }
       remaining.multiModels[name] = {
         ...instance,
         content: instance.content.filter((doc) => !isMetadataDocument(doc)),

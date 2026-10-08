@@ -202,9 +202,18 @@ ${yellow("SEED OPTIONS:")}
   --scenario        Scenario module exporting "scenario" (required)
   --at              Migration step to seed at (default: the last one)
   --uri, --db       Target database (default: the configured one); must be empty
-  --dry-run         Generate and check the world without writing
-  --force           Write even if the oracle fails or the database is not empty
+                    unless --allow-non-empty
+  --replay          memory | mongo (default: memory). memory replays the
+                    migrations after the scenario's birth in memory and writes
+                    the world at --at; mongo writes it at its birth, then runs
+                    the real migrate up to --at on the database (irreversible
+                    migrations included) and checks what it produced
+  --allow-violations Write even when the oracle reports blocking violations
+  --allow-non-empty Write next to other collections; refused when a collection
+                    the schemas manage already exists or a migration ledger does
+  --dry-run         Generate and check the world without writing (memory only)
   --json            Print the report as JSON
+  A failed seed removes every collection it created, ledger included
 
 ${yellow("EXTRACT OPTIONS:")}
   --from, --from-db Source connection URI and database name (default: the configured ones)
@@ -268,6 +277,7 @@ async function main(): Promise<void> {
       "json",
       "allow-unknown",
       "allow-violations",
+      "allow-non-empty",
       "skip-privilege-check",
       "write",
     ],
@@ -283,6 +293,7 @@ async function main(): Promise<void> {
       "mode",
       "target",
       "scenario",
+      "replay",
       "at",
       "uri",
       "db",
@@ -314,7 +325,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (args.help && args._.length === 0) {
+  if (args.help) {
     showHelp();
     return;
   }

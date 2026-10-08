@@ -101,6 +101,10 @@ export interface MigrateCommandOptions {
    * simulation, 0 to 1. Same rules as `check --retention`.
    */
   retention?: number;
+  /** Connection string overriding the configured one (programmatic callers). */
+  connectionUri?: string;
+  /** Database name overriding the configured one (programmatic callers). */
+  databaseName?: string;
 }
 
 /**
@@ -162,8 +166,10 @@ export async function migrateCommand(
       config.paths?.migrations || "./migrations",
     );
     const connectionUri =
-      config.database?.connection?.uri || "mongodb://localhost:27017";
-    const dbName = config.database?.name || "myapp";
+      options.connectionUri ||
+      config.database?.connection?.uri ||
+      "mongodb://localhost:27017";
+    const dbName = options.databaseName || config.database?.name || "myapp";
 
     console.log(dim(`Migrations directory: ${migrationsDir}`));
     console.log(dim(`Database: ${dbName}`));
