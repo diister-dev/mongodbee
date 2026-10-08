@@ -375,8 +375,6 @@ test({
 });
 
 test({
-  // TODO(privacy): V12, numericId keeps one registry per target while types share the physical _id index; key the registry by physical collection, and make duplicate_id per collection and blocking
-  ignore: true,
   name: "V12 numeric _ids of two types sharing one physical collection stay distinct",
   fn: () => {
     const schemas = {

@@ -3,7 +3,11 @@ import * as v from "../../src/schema.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import { createEmptyDatabaseState } from "../../src/migration/types.ts";
 import { MongoClient } from "../../src/mongodb.ts";
-import { populateDatabase } from "../../src/scenario/mod.ts";
+import { buildPrivacyPlan } from "../../src/privacy/mod.ts";
+import {
+  checkScenarioState,
+  populateDatabase,
+} from "../../src/scenario/mod.ts";
 import { assert, assertEquals, assertRejects } from "../+assert.ts";
 import { test } from "../+harness.ts";
 
@@ -76,4 +80,34 @@ test({
       await client.close();
     }
   },
+});
+
+test("oracle: two types sharing one physical collection must not repeat an _id", () => {
+  const schemas = {
+    multiCollections: {
+      events: {
+        a: { _id: v.number(), label: v.string() },
+        b: { _id: v.number(), label: v.string() },
+      },
+    },
+  };
+  const state = createEmptyDatabaseState();
+  state.multiCollections.events = {
+    content: [
+      { _id: 1, _type: "a", label: "x" },
+      { _id: 1, _type: "b", label: "y" },
+      { _id: 2, _type: "b", label: "z" },
+    ],
+  };
+  const violations = checkScenarioState({
+    state,
+    schemas: schemas as never,
+    plan: buildPrivacyPlan({ schemas: schemas as never }),
+  });
+  assertEquals(
+    violations
+      .filter((violation) => violation.kind === "duplicate_id")
+      .map((violation) => violation.count),
+    [1],
+  );
 });

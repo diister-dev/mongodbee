@@ -23,6 +23,7 @@ export function checkScenarioState(
   const violations: ScenarioViolation[] = [];
   const ids = new Map<string, Set<string>>();
   const owned = new Set<string>();
+  const seenByCollection = new Map<string, Set<string>>();
   const lookup = createDocLookup(state, plan);
 
   for (const target of plan.targets.values()) {
@@ -41,7 +42,9 @@ export function checkScenarioState(
     const docs = docsOf(state, target);
     if (docs.length === 0) continue;
     const byPath = new Map(target.paths.map((p) => [p.path, p]));
-    const seen = new Set<string>();
+    const physical = `${target.bucket}/${target.collection}`;
+    const seen = seenByCollection.get(physical) ?? new Set<string>();
+    seenByCollection.set(physical, seen);
     let duplicates = 0;
     let invalid = 0;
     let mirrored = 0;
@@ -53,7 +56,7 @@ export function checkScenarioState(
         const key =
           target.bucket === "scopedMultiCollections"
             ? `${doc._scope}|${doc._id}`
-            : String(doc._id);
+            : `${typeof doc._id}:${String(doc._id)}`;
         if (seen.has(key)) duplicates++;
         seen.add(key);
       }
