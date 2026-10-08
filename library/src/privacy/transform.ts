@@ -28,6 +28,7 @@ import {
   remapId,
   remapObjectId,
 } from "./pseudonym.ts";
+import { setValueAt, valueAt } from "../scenario/doc-path.ts";
 import { unwrapSchema } from "./schema-shape.ts";
 import {
   sourceOfTarget,
@@ -104,7 +105,8 @@ export type TransformNoteKind =
   | "invalid"
   | "collision"
   | "mismatch"
-  | "numeric_id";
+  | "numeric_id"
+  | "mirror_unresolved";
 
 export interface TransformNote {
   readonly path: string;
@@ -396,6 +398,30 @@ export function createPrivacyTransformer(
     return unique;
   };
 
+  const strongest = (a: UniqueMode, b: UniqueMode): UniqueMode =>
+    a === "exact" || b === "exact"
+      ? "exact"
+      : a === "insensitive" || b === "insensitive"
+        ? "insensitive"
+        : false;
+
+  const spaceModes = new Map<string, UniqueMode>();
+
+  const spaceUniqueMode = (space: string): UniqueMode => {
+    const cached = spaceModes.get(space);
+    if (cached !== undefined) return cached;
+    let mode: UniqueMode = false;
+    for (const target of plan.targets.values()) {
+      for (const path of target.paths) {
+        if (path.space === space && path.mirrorOf === undefined) {
+          mode = strongest(mode, uniqueModeOf(target, path.path));
+        }
+      }
+    }
+    spaceModes.set(space, mode);
+    return mode;
+  };
+
   const spaceSchemas = new Map<string, unknown>();
 
   const canonicalSchemaOf = (space: string, local: unknown): unknown => {
@@ -612,36 +638,25 @@ export function createPrivacyTransformer(
       key: string | undefined,
       sourceScope?: string,
     ): unknown => {
+      const owner = spaceOf(cls);
       const message = valueMessage(cls, path, leaf.value, sourceScope);
       const raw = rawOf(leaf.value);
-      if (cls.space !== undefined) {
-        const canonicalSchema = canonicalSchemaOf(cls.space, schema);
-        const produced = produce(
-          cls.space,
-          message,
-          unique,
-          canonicalSchema,
-          leaf.path,
-          cls.space,
-          raw,
-        );
-        if (produced === DROP || v.is(schema as v.GenericSchema, produced)) {
-          return produced;
-        }
-        notes.push({ path: leaf.path, kind: "mismatch" });
-        return produce(
-          cls.space,
-          `${message}|local`,
-          unique,
-          schema,
-          leaf.path,
-          key,
-          raw,
-        );
-      }
-      return produce(
-        spaceOf(cls),
+      const produced = produce(
+        owner,
         message,
+        unique,
+        cls.space === undefined ? schema : canonicalSchemaOf(cls.space, schema),
+        leaf.path,
+        cls.space ?? key,
+        raw,
+      );
+      if (produced === DROP || v.is(schema as v.GenericSchema, produced)) {
+        return produced;
+      }
+      notes.push({ path: leaf.path, kind: "mismatch" });
+      return produce(
+        owner,
+        `${message}|local`,
         unique,
         schema,
         leaf.path,
@@ -813,13 +828,23 @@ export function createPrivacyTransformer(
           case "generalise":
             copy = generalise(leaf);
             break;
+          case "drop":
+          case "exclude":
+            copy = dropOrGenerate(leaf, "dropped");
+            break;
+          case "opaque":
+            copy = dropOrGenerate(leaf, "opaque");
+            break;
+          case "recompute":
+            copy = dropOrGenerate(leaf, "recompute_missing");
+            break;
           default:
             copy = pseudonymise(
               source.cls,
               source.path,
               leaf,
               source.schema,
-              source.unique,
+              false,
               source.path.split(".").pop(),
               source.scoped ? scope : "",
             );
@@ -845,15 +870,19 @@ export function createPrivacyTransformer(
           return keepValue(leaf, schema);
         case "remap":
           return remapValue(cls, leaf, schema);
-        case "pseudonym":
+        case "pseudonym": {
+          const local = override ? false : isUnique(targetKey, leaf.path);
           return pseudonymise(
             cls,
             leaf.path,
             leaf,
             schema,
-            override ? false : isUnique(targetKey, leaf.path),
+            cls.space === undefined
+              ? local
+              : strongest(local, spaceUniqueMode(cls.space)),
             undefined,
           );
+        }
         case "fake":
           return fakeValue(leaf, schema);
         case "generalise":
@@ -1003,6 +1032,18 @@ export function createPrivacyTransformer(
     const mappedScope = identifier(_scope, "_scope");
     if (mappedScope !== undefined) out._scope = mappedScope;
     if (_type !== undefined) out._type = _type;
+
+    for (const cls of target.paths) {
+      if (cls.mirrorOf === undefined || cls.path.includes("*")) continue;
+      const [space, ...rest] = cls.mirrorOf.split(".");
+      const sourcePath = rest.join(".");
+      if (target.space !== space || !byPath.has(sourcePath)) continue;
+      if (valueAt(doc, cls.path) === undefined) continue;
+      const copied = valueAt(out, sourcePath);
+      if (copied !== undefined) {
+        setValueAt(out, cls.path, applyNormalize(copied, cls.normalize));
+      }
+    }
 
     if (validate) {
       const parsed = v.safeParse(v.object(fields as v.ObjectEntries), out);

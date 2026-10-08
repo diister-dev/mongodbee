@@ -4,7 +4,7 @@ import type {
   PrivacyPlan,
   PrivacyTarget,
 } from "../privacy/plan.ts";
-import { valueAt } from "./doc-path.ts";
+import { setValueAt, valueAt } from "./doc-path.ts";
 import { docsOf } from "./state.ts";
 
 export type DocLookup = (
@@ -52,7 +52,20 @@ export interface MirrorExpectation {
   readonly candidates: readonly unknown[];
 }
 
-function referencePathsTo(target: PrivacyTarget, space: string): string[] {
+export function sourceInSameDocument(
+  target: PrivacyTarget,
+  space: string,
+  sourcePath: string,
+): boolean {
+  return (
+    target.space === space && target.paths.some((p) => p.path === sourcePath)
+  );
+}
+
+export function referencePathsTo(
+  target: PrivacyTarget,
+  space: string,
+): string[] {
   const references = target.paths.filter(
     (p) =>
       p.role === "reference" &&
@@ -75,6 +88,16 @@ export function mirrorExpectations(
     if (cls.mirrorOf === undefined || cls.path.includes("*")) continue;
     const [space, ...rest] = cls.mirrorOf.split(".");
     const sourcePath = rest.join(".");
+    if (sourceInSameDocument(target, space, sourcePath)) {
+      const own = valueAt(doc, sourcePath);
+      if (own !== undefined) {
+        expectations.push({
+          path: cls.path,
+          candidates: [normalizeMirrored(own, cls.normalize)],
+        });
+      }
+      continue;
+    }
     const candidates: unknown[] = [];
     for (const refPath of referencePathsTo(target, space)) {
       const id = valueAt(doc, refPath);
@@ -90,4 +113,51 @@ export function mirrorExpectations(
     }
   }
   return expectations;
+}
+
+export interface TransformedDocument {
+  readonly target: PrivacyTarget;
+  readonly input: Record<string, unknown>;
+  readonly output: Record<string, unknown>;
+}
+
+export function hasCrossDocumentMirror(target: PrivacyTarget): boolean {
+  return target.paths.some((cls) => {
+    if (cls.mirrorOf === undefined || cls.path.includes("*")) return false;
+    const [space, ...rest] = cls.mirrorOf.split(".");
+    return !sourceInSameDocument(target, space, rest.join("."));
+  });
+}
+
+export function copyMirrorsFromSources(
+  state: DatabaseState,
+  plan: PrivacyPlan,
+  documents: readonly TransformedDocument[],
+): Map<string, number> {
+  const lookup = createDocLookup(state, plan);
+  const unresolved = new Map<string, number>();
+  for (const { target, input, output } of documents) {
+    for (const cls of target.paths) {
+      if (cls.mirrorOf === undefined || cls.path.includes("*")) continue;
+      const [space, ...rest] = cls.mirrorOf.split(".");
+      const sourcePath = rest.join(".");
+      if (sourceInSameDocument(target, space, sourcePath)) continue;
+      if (valueAt(input, cls.path) === undefined) continue;
+      let source: Record<string, unknown> | undefined;
+      for (const refPath of referencePathsTo(target, space)) {
+        const id = valueAt(output, refPath);
+        source = typeof id === "string" ? lookup(space, id) : undefined;
+        if (source) break;
+      }
+      if (!source) {
+        unresolved.set(target.key, (unresolved.get(target.key) ?? 0) + 1);
+        continue;
+      }
+      const copied = valueAt(source, sourcePath);
+      if (copied !== undefined) {
+        setValueAt(output, cls.path, normalizeMirrored(copied, cls.normalize));
+      }
+    }
+  }
+  return unresolved;
 }

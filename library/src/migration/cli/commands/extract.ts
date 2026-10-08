@@ -27,13 +27,16 @@ import {
 import {
   applyMigrationsInMemory,
   checkScenarioState,
+  copyMirrorsFromSources,
   countCollections,
+  hasCrossDocumentMirror,
   recomputeComputedFields,
   docsOf,
   isMetadataDocument,
   populateDatabase,
   readStateFromDatabase,
   type ScenarioViolation,
+  type TransformedDocument,
 } from "../../../scenario/mod.ts";
 import {
   createEmptyDatabaseState,
@@ -304,6 +307,7 @@ export function transformState(
     summary[key] = { documents: entry.documents + documents, notes: merged };
   };
 
+  const mirrored: TransformedDocument[] = [];
   const transformDocs = (
     targetKey: string,
     docs: readonly Record<string, unknown>[],
@@ -311,6 +315,8 @@ export function transformState(
   ): Record<string, unknown>[] => {
     const notes: Partial<Record<TransformNoteKind, number>> = {};
     const transformed: Record<string, unknown>[] = [];
+    const target = plan.targets.get(targetKey);
+    const mirrors = target !== undefined && hasCrossDocumentMirror(target);
     for (const doc of docs) {
       const result = transformer.transform(
         targetKey,
@@ -321,6 +327,7 @@ export function transformState(
         notes[note.kind] = (notes[note.kind] ?? 0) + 1;
       }
       transformed.push(result.doc);
+      if (mirrors) mirrored.push({ target, input: doc, output: result.doc });
     }
     if (docs.length > 0) record(targetKey, notes, docs.length);
     return transformed;
@@ -388,6 +395,9 @@ export function transformState(
       modelType: instance.modelType,
       content,
     };
+  }
+  for (const [key, count] of copyMirrorsFromSources(out, plan, mirrored)) {
+    record(key, { mirror_unresolved: count }, 0);
   }
   recomputeComputedFields(out, options.schemas);
   return { state: out, summary, skipped };

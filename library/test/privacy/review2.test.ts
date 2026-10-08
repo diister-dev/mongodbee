@@ -59,8 +59,6 @@ const ulid = (n: number) =>
   `01j5zk3v8n2q4x6y8z0b1c3d${String(n).padStart(2, "0")}`;
 
 test({
-  // TODO(privacy): V1, a non-unique leaf looks the fake up by message while an exact unique leaf stores it under message|raw; key assigned by message|raw for every leaf of a space
-  ignore: true,
   name: "V1 a non-unique leaf sharing a space with an exact unique leaf follows the retried fake of its own value",
   fn: () => {
     const email = (unique: boolean) => {
@@ -272,8 +270,6 @@ function mirrorViolations(
 }
 
 test({
-  // TODO(privacy): V9, a mirror takes its own document scope; take the scope of the referenced source document, or copy mirrors from the transformed source in a second pass
-  ignore: true,
   name: "V9 a mirror in an unscoped collection of a value owned by a multi-model instance copies the source fake",
   fn: () => {
     const schemas = {
@@ -314,8 +310,6 @@ test({
 });
 
 test({
-  // TODO(privacy): V10, scopePart under transaction keys on the mirror's docId; mirrors must key on the source document, or be copied from the transformed source
-  ignore: true,
   name: "V10 --consistency transaction keeps mirrors aligned with their source",
   fn: () => {
     const schemas = {
@@ -448,8 +442,6 @@ test("guard: a fake depends only on the secret and the source, not on what the p
 });
 
 test({
-  // TODO(privacy): V14, a normalized mirror replays the source under the mirror's raw value, which misses the exact-unique identity; copy the transformed source value, then normalize it; the oracle does not check same-document mirrors
-  ignore: true,
   name: "V14 a lowercase mirror of a mixed-case value under a case-sensitive unique index copies the source fake",
   fn: () => {
     const schemas = {
@@ -528,8 +520,6 @@ test({
 });
 
 test({
-  // TODO(privacy): V16, the mirror switch sends a fake source through pseudonymise (value-keyed) while the source used fakeValue (doc-keyed); copy the transformed source value
-  ignore: true,
   name: "V16 under strict a mirror of a string the posture fakes copies the source fake",
   fn: () => {
     const schemas = {
@@ -602,8 +592,6 @@ test({
 });
 
 test({
-  // TODO(privacy): V17, unique pseudonyms without a space share the identity value|<role>||value across fields, so assigned hands one field's fake (built from its schema) to another; key ownerless identities by target and path
-  ignore: true,
   name: "V17 two unique fields of the same role holding the same value each get a fake valid for their own schema",
   fn: () => {
     const schemas = {
@@ -705,8 +693,6 @@ test({
 });
 
 test({
-  // TODO(privacy): V21, the mirror switch sends every treatment other than keep/remap/generalise through pseudonymise, so a drop/opaque/recompute source still yields a value-keyed pseudonym; replay drop and opaque (dropOrGenerate) and recompute like the source
-  ignore: true,
   name: "V21 a mirror of a sensitive value that the source drops is dropped too, not pseudonymised",
   fn: () => {
     const schemas = {
@@ -775,4 +761,135 @@ test({
       .slice(0, 10);
     assertEquals(Object.keys(stat.scansByDay as object), [shifted]);
   },
+});
+
+test("V14 the oracle reports a mirror that differs from its source in the same document", () => {
+  const schemas = {
+    collections: {
+      "+users": {
+        _id: personId("user"),
+        email: personal(v.pipe(v.string(), v.email()), { role: "direct" }),
+        emailLower: mirrorOf(v.string(), "user.email", {
+          normalize: "lowercase",
+        }),
+      },
+    },
+  } as never as SchemasDefinition;
+  const plan = buildPrivacyPlan({ schemas, posture: "strict" });
+  const state = stateWith({
+    "+users": [
+      {
+        _id: `user:${ulid(1)}`,
+        email: "Jean@acme.fr",
+        emailLower: "paul@acme.fr",
+      },
+    ],
+  });
+  assertEquals(
+    checkScenarioState({ state, schemas, plan }).map((v) => v.kind),
+    ["mirror_mismatch"],
+  );
+});
+
+test("V1 a non-unique leaf processed before the unique leaf of its space still ends on the same fake", () => {
+  const email = (unique: boolean) => {
+    const s = personal(v.pipe(v.string(), v.email()), {
+      role: "direct",
+      space: "email",
+      consistent: "person",
+    });
+    return unique ? withIndex(s, { unique: true }) : s;
+  };
+  const schemas = {
+    collections: {
+      mails: {
+        _id: personal(dbId("mail"), { of: "user" }),
+        userId: refId("user"),
+        to: email(false),
+      },
+      "+users": { _id: personId("user"), email: email(true) },
+    },
+  } as never as SchemasDefinition;
+  const users = [
+    "Jean.Dupont@acme.fr",
+    "jean.dupont@acme.fr",
+    "paul@acme.fr",
+  ].map((address, i) => ({ _id: `user:${ulid(i + 1)}`, email: address }));
+  const mails = users.map((u, i) => ({
+    _id: `mail:${ulid(10 + i)}`,
+    userId: u._id,
+    to: u.email,
+  }));
+  const out = run(schemas, stateWith({ "+users": users, mails })).state
+    .collections;
+  const fakeOf = new Map(out["+users"].content.map((u) => [u._id, u.email]));
+  assertEquals(new Set(fakeOf.values()).size, 3);
+  for (const mail of out.mails.content) {
+    assertEquals(mail.to, fakeOf.get(mail.userId as string));
+  }
+});
+
+test("V14 a unique lowercase mirror of case-distinct sources stays distinct without the registry", () => {
+  const schemas = {
+    collections: {
+      "+users": {
+        _id: personId("user"),
+        email: withIndex(
+          personal(v.pipe(v.string(), v.email()), { role: "direct" }),
+          { unique: true },
+        ),
+        emailLower: withIndex(
+          mirrorOf(v.string(), "user.email", { normalize: "lowercase" }),
+          { unique: true },
+        ),
+      },
+    },
+  } as never as SchemasDefinition;
+  const state = stateWith({
+    "+users": ["Bob@acme.fr", "bob@acme.fr"].map((email, i) => ({
+      _id: `user:${ulid(i + 1)}`,
+      email,
+      emailLower: email.toLowerCase(),
+    })),
+  });
+  const { plan, state: out } = run(schemas, state);
+  const lowers = out.collections["+users"].content.map((u) => u.emailLower);
+  assertEquals(new Set(lowers).size, 2);
+  assertEquals(
+    checkScenarioState({ state: out, schemas, plan }).map((v) => v.kind),
+    [],
+  );
+});
+
+test("mirrors: a mirror whose source document cannot be found keeps the value-keyed fallback and is counted", () => {
+  const schemas = {
+    collections: {
+      "+users": {
+        _id: personId("user"),
+        email: personal(v.pipe(v.string(), v.email()), { role: "direct" }),
+      },
+      mails: {
+        _id: personal(dbId("mail"), { of: "user" }),
+        userId: refId("user"),
+        to: mirrorOf(v.string(), "user.email"),
+      },
+    },
+  } as never as SchemasDefinition;
+  const { state, summary } = run(
+    schemas,
+    stateWith({
+      "+users": [],
+      mails: [
+        {
+          _id: `mail:${ulid(2)}`,
+          userId: `user:${ulid(9)}`,
+          to: "jean@acme.fr",
+        },
+      ],
+    }),
+  );
+  const mail = state.collections.mails.content[0];
+  assertNotEquals(mail.to, "jean@acme.fr");
+  assertEquals(typeof mail.to, "string");
+  assertEquals(summary["collections/mails/"].notes.mirror_unresolved, 1);
 });

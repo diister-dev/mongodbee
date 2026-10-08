@@ -35,6 +35,11 @@ export {
   runScenario,
   type RunScenarioOptions,
 } from "./run.ts";
+export {
+  copyMirrorsFromSources,
+  hasCrossDocumentMirror,
+  type TransformedDocument,
+} from "./mirror.ts";
 export { docsOf, isMetadataDocument, resolveTargetKey } from "./state.ts";
 export { SKIP } from "@diister/valibot-mock";
 export {
