@@ -52,17 +52,21 @@ export async function applyMigrationsInMemory(
   return { state, applied };
 }
 
-function isBlocking(violation: ScenarioViolation): boolean {
-  if (violation.kind === "unique_unchecked") return false;
-  return (
-    violation.kind !== "correlation" ||
-    !violation.message.includes("is minted by")
-  );
+export function isBlockingViolation(violation: ScenarioViolation): boolean {
+  return violation.blocking ?? violation.kind !== "unique_unchecked";
 }
 
-export async function runScenario(
+export interface ScenarioBirth {
+  readonly birth: MigrationDefinition;
+  readonly at: MigrationDefinition;
+  readonly pending: readonly MigrationDefinition[];
+  readonly state: DatabaseState;
+  readonly violations: readonly ScenarioViolation[];
+}
+
+export async function generateScenarioAtBirth(
   options: RunScenarioOptions,
-): Promise<ScenarioRunResult> {
+): Promise<ScenarioBirth> {
   const { migrations, scenario } = options;
   const ids = migrations.map((m) => m.id);
   const birthIndex = ids.indexOf(scenario.birth);
@@ -102,18 +106,31 @@ export async function runScenario(
       defaultScopes: options.defaultScopes,
     }),
   });
-  const replay = await applyMigrationsInMemory(
-    generation.state,
-    migrations.slice(birthIndex + 1, atIndex + 1),
-  );
-  const state = replay.state;
-  const applied = replay.applied;
+  return {
+    birth,
+    at: migrations[atIndex],
+    pending: migrations.slice(birthIndex + 1, atIndex + 1),
+    state: generation.state,
+    violations: generation.violations,
+  };
+}
 
-  const at = migrations[atIndex];
-  recomputeComputedFields(state, at.schemas);
+export interface CheckScenarioWorldOptions {
+  readonly scenario: SeedScenario;
+  readonly birth: MigrationDefinition;
+  readonly at: MigrationDefinition;
+  readonly applied: readonly string[];
+  readonly state: DatabaseState;
+  readonly generationViolations: readonly ScenarioViolation[];
+}
+
+export function checkScenarioWorld(
+  options: CheckScenarioWorldOptions,
+): ScenarioReport {
+  const { scenario, at, state } = options;
   const plan = buildPrivacyPlan({ schemas: at.schemas });
   const violations = [
-    ...generation.violations,
+    ...options.generationViolations,
     ...checkScenarioState({
       state,
       schemas: at.schemas,
@@ -126,15 +143,32 @@ export async function runScenario(
     const n = docsOf(state, target).length;
     if (n > 0) generated[target.key] = n;
   }
-  const report: ScenarioReport = {
+  return {
     scenario: scenario.name,
-    birth: birth.id,
+    birth: options.birth.id,
     at: at.id,
-    applied,
+    applied: options.applied,
     generated,
     violations,
-    ok: violations.every((v) => !isBlocking(v)),
+    ok: violations.every((v) => !isBlockingViolation(v)),
   };
+}
+
+export async function runScenario(
+  options: RunScenarioOptions,
+): Promise<ScenarioRunResult> {
+  const world = await generateScenarioAtBirth(options);
+  const replay = await applyMigrationsInMemory(world.state, world.pending);
+  const state = replay.state;
+  recomputeComputedFields(state, world.at.schemas);
+  const report = checkScenarioWorld({
+    scenario: options.scenario,
+    birth: world.birth,
+    at: world.at,
+    applied: replay.applied,
+    state,
+    generationViolations: world.violations,
+  });
   return { state, report };
 }
 
@@ -154,7 +188,7 @@ export function renderScenarioReport(report: ScenarioReport): string {
     lines.push(`  ${target.padEnd(60)} ${String(count).padStart(7)}`);
   }
   lines.push("");
-  const blocking = report.violations.filter(isBlocking);
+  const blocking = report.violations.filter(isBlockingViolation);
   const notes = report.violations.length - blocking.length;
   if (blocking.length === 0) {
     lines.push(`oracle      ok${notes > 0 ? ` (${notes} note(s))` : ""}`);

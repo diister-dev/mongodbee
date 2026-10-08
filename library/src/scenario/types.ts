@@ -116,6 +116,7 @@ export interface ScenarioViolation {
   readonly target: string;
   readonly message: string;
   readonly count?: number;
+  readonly blocking?: boolean;
 }
 
 export interface ScenarioReport {

@@ -30,7 +30,12 @@ export { recomputeComputedFields } from "./computed.ts";
 export { type CheckScenarioOptions, checkScenarioState } from "./oracle.ts";
 export {
   applyMigrationsInMemory,
+  checkScenarioWorld,
+  type CheckScenarioWorldOptions,
+  generateScenarioAtBirth,
+  isBlockingViolation,
   renderScenarioReport,
+  type ScenarioBirth,
   type ReplayResult,
   runScenario,
   type RunScenarioOptions,

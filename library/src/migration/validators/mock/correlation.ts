@@ -281,6 +281,7 @@ function buildCorrelationPlan(
         bucket: target.bucket,
         collection: target.collection,
         kind: "correlation",
+        correlation: "contested_space",
         space,
         message:
           `Identifier space "${space}" is minted by ${keys.length} targets (${keys.join(
@@ -298,6 +299,7 @@ function buildCorrelationPlan(
       bucket: sighting.bucket,
       collection: sighting.collection,
       kind: "correlation",
+      correlation: "unminted_space",
       space,
       message:
         `Identifier space "${space}" is referenced (e.g. field "${sighting.path}" ` +
@@ -672,6 +674,7 @@ export function createCorrelationSession(
       bucket: target.bucket,
       collection: target.collection,
       kind: "correlation",
+      correlation: "empty_pool",
       space,
       message:
         `Correlated draw found no "${space}" id for ${target.bucket} ` +

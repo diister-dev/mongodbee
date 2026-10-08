@@ -600,6 +600,7 @@ export function generateScenarioState(
       kind: "correlation" as const,
       target: `${f.bucket}/${f.collection}/${f.modelType ?? ""}`,
       message: f.message,
+      blocking: f.correlation !== "contested_space",
     })),
   );
   return { state, plan, violations };
