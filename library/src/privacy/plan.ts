@@ -136,6 +136,7 @@ const CONTAINER_TYPES: ReadonlySet<string> = new Set([
   "array",
   "record",
   "intersect",
+  "lazy",
 ]);
 
 const TECHNICAL_TYPES: ReadonlySet<string> = new Set([
@@ -219,6 +220,8 @@ function collectLeaves(fields: SchemaContent): Leaves {
     branches.set(branch, [...(branches.get(branch) ?? []), ...actions]);
   };
 
+  const expanding = new Set<unknown>();
+
   const visit = (
     schema: unknown,
     path: readonly string[],
@@ -270,6 +273,19 @@ function collectLeaves(fields: SchemaContent): Leaves {
       for (const [i, option] of (node.options as unknown[]).entries()) {
         visit(option, path, [], `${branch}${joined}#${i}/`);
       }
+    } else if (type === "lazy") {
+      const getter = node.getter as (input: unknown) => unknown;
+      if (expanding.has(getter)) return;
+      let expanded: unknown;
+      try {
+        expanded = getter(undefined);
+      } catch {
+        push(joined, branch, actions);
+        return;
+      }
+      expanding.add(getter);
+      visit(expanded, path, [], branch);
+      expanding.delete(getter);
     } else {
       for (const option of node.options as unknown[]) {
         visit(option, path, [], branch);

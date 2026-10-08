@@ -796,3 +796,88 @@ test("notPersonal strict keep: a certain personal signal keeps its treatment and
     ["notify"],
   );
 });
+
+type Condition =
+  | { type: "always" }
+  | { type: "equals"; key: string; value: string | number }
+  | { type: "and"; conditions: Condition[] }
+  | { type: "not"; condition: Condition };
+
+const ConditionSchema: v.GenericSchema<Condition> = v.lazy(() =>
+  v.variant("type", [
+    v.object({ type: v.literal("always") }),
+    v.object({
+      type: v.literal("equals"),
+      key: v.string(),
+      value: v.union([v.string(), v.number()]),
+    }),
+    v.object({ type: v.literal("and"), conditions: v.array(ConditionSchema) }),
+    v.object({ type: v.literal("not"), condition: ConditionSchema }),
+  ]),
+);
+
+const FLOW_SCHEMAS = {
+  collections: {
+    users: { _id: personId("user"), email: Email },
+    flows: {
+      _id: notPersonal(dbId("flow"), "flow configuration", { strict: "keep" }),
+      edges: v.array(
+        v.object({
+          id: v.string(),
+          data: v.object({ condition: ConditionSchema }),
+        }),
+      ),
+    },
+  },
+} as unknown as SchemasDefinition;
+
+const NESTED_CONDITION: Condition = {
+  type: "and",
+  conditions: [
+    { type: "equals", key: "visitor.kind", value: "pro" },
+    {
+      type: "not",
+      condition: { type: "equals", key: "visitor.country", value: "FR" },
+    },
+    {
+      type: "and",
+      conditions: [{ type: "equals", key: "deep.key", value: 3 }],
+    },
+  ],
+};
+
+test("lazy: a recursive schema is planned once at the path where it is first entered", () => {
+  const p = buildPrivacyPlan({ schemas: FLOW_SCHEMAS, posture: "strict" });
+  assertEquals(
+    pathNames(p, "collections/flows/").filter((n) => n.includes("condition")),
+    [
+      "edges.*.data.condition.key",
+      "edges.*.data.condition.type",
+      "edges.*.data.condition.value",
+    ],
+  );
+});
+
+test("lazy: the walk maps a re-entered recursive schema onto the first expansion, so nothing is unclassified", () => {
+  for (const posture of ["strict", "personal"] as const) {
+    const p = buildPrivacyPlan({ schemas: FLOW_SCHEMAS, posture });
+    const doc = {
+      _id: "flow:01j5zk3v8n2q4x6y8z0b1c3d5e",
+      edges: [{ id: "e1", data: { condition: NESTED_CONDITION } }],
+    };
+    const out = createPrivacyTransformer({
+      plan: p,
+      schemas: FLOW_SCHEMAS,
+      secret: "s",
+    }).transform("collections/flows/", doc);
+    assertEquals(
+      out.notes.filter((n) => n.kind === "unclassified"),
+      [],
+    );
+    assertEquals(
+      (out.doc.edges as { data: { condition: Condition } }[])[0].data.condition,
+      NESTED_CONDITION,
+      posture,
+    );
+  }
+});

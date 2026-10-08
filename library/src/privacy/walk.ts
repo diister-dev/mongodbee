@@ -147,6 +147,8 @@ export function walkDocument(
       ? options.mapKey({ path: path.join("."), keys, key, schema })
       : key;
 
+  const lazyEntries = new Map<unknown, readonly string[]>();
+
   const visit = (
     rawSchema: unknown,
     value: unknown,
@@ -290,7 +292,16 @@ export function walkDocument(
     }
     if (type === "lazy") {
       const getter = schema.getter as (input: unknown) => unknown;
-      return visit(getter(value), value, path, keys, key);
+      const outer = lazyEntries.get(getter);
+      if (outer !== undefined) {
+        return visit(getter(value), value, outer, keys, key);
+      }
+      lazyEntries.set(getter, path);
+      try {
+        return visit(getter(value), value, path, keys, key);
+      } finally {
+        lazyEntries.delete(getter);
+      }
     }
     const r = handler({
       path: path.join("."),
