@@ -703,3 +703,76 @@ test({
     );
   },
 });
+
+test({
+  // TODO(privacy): V21, the mirror switch sends every treatment other than keep/remap/generalise through pseudonymise, so a drop/opaque/recompute source still yields a value-keyed pseudonym; replay drop and opaque (dropOrGenerate) and recompute like the source
+  ignore: true,
+  name: "V21 a mirror of a sensitive value that the source drops is dropped too, not pseudonymised",
+  fn: () => {
+    const schemas = {
+      collections: {
+        "+users": {
+          _id: personId("user"),
+          diagnosis: v.optional(personal(v.string(), { role: "sensitive" })),
+        },
+        visits: {
+          _id: personal(dbId("visit"), { of: "user" }),
+          userId: refId("user"),
+          diagnosis: v.optional(mirrorOf(v.string(), "user.diagnosis")),
+        },
+      },
+    } as never as SchemasDefinition;
+    const ids = [`user:${ulid(1)}`, `user:${ulid(2)}`];
+    const { state } = run(
+      schemas,
+      stateWith({
+        "+users": ids.map((_id) => ({ _id, diagnosis: "diabète de type 2" })),
+        visits: ids.map((userId, i) => ({
+          _id: `visit:${ulid(10 + i)}`,
+          userId,
+          diagnosis: "diabète de type 2",
+        })),
+      }),
+    );
+    assertEquals(
+      {
+        users: state.collections["+users"].content.map((u) => u.diagnosis),
+        visits: state.collections.visits.content.map((d) => d.diagnosis),
+      },
+      { users: [undefined, undefined], visits: [undefined, undefined] },
+    );
+  },
+});
+
+test({
+  // TODO(privacy): V22, looksPersonalKey counts 8 digits in an ISO day and fakes the key; map temporal keys through shiftDate (mapTemporal) before the personal-key test
+  ignore: true,
+  name: "V22 a record keyed by ISO days is rekeyed by the shifted days, like the dates it indexes",
+  fn: () => {
+    const schemas = {
+      collections: {
+        "+users": { _id: personId("user") },
+        stats: {
+          _id: refId("stat"),
+          day: v.date(),
+          scansByDay: v.record(v.string(), v.number()),
+        },
+      },
+    } as never as SchemasDefinition;
+    const day = new Date("2026-05-04T00:00:00.000Z");
+    const { state, transformer } = run(
+      schemas,
+      stateWith({
+        "+users": [{ _id: `user:${ulid(1)}` }],
+        stats: [
+          { _id: `stat:${ulid(2)}`, day, scansByDay: { "2026-05-04": 12 } },
+        ],
+      }),
+    );
+    const stat = state.collections.stats.content[0];
+    const shifted = new Date(day.getTime() + transformer.timeShiftMs)
+      .toISOString()
+      .slice(0, 10);
+    assertEquals(Object.keys(stat.scansByDay as object), [shifted]);
+  },
+});
