@@ -485,7 +485,6 @@ test({
 });
 
 test({
-  // TODO(privacy): V15, strictKeep downgrades certain-tier signals (email action) silently; keep only inferred/unknown tiers, or report a finding
   ignore: true,
   name: "V15 a strict-keep configuration document does not keep a field whose schema certainly holds an email",
   fn: () => {

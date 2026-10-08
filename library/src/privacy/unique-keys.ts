@@ -13,6 +13,7 @@ export interface UniqueKey {
   readonly paths: readonly string[];
   readonly global: boolean;
   readonly caseInsensitive: boolean;
+  readonly accentInsensitive?: boolean;
   readonly partialFilter?: PartialFilter;
 }
 
@@ -29,6 +30,7 @@ export interface UniqueTarget {
 }
 
 const CASE_INSENSITIVE_STRENGTH = 2;
+const ACCENT_INSENSITIVE_STRENGTH = 1;
 const DEFAULT_STRENGTH = 3;
 
 const NOT_UNIQUE: UniqueMembership = {
@@ -37,14 +39,25 @@ const NOT_UNIQUE: UniqueMembership = {
   caseInsensitive: false,
 };
 
-function isCaseInsensitive(
+function strengthOf(
   collation: { strength?: number } | undefined,
   insensitive: boolean | undefined,
-): boolean {
-  const strength =
+): number {
+  return (
     collation?.strength ??
-    (insensitive ? CASE_INSENSITIVE_STRENGTH : DEFAULT_STRENGTH);
-  return strength <= CASE_INSENSITIVE_STRENGTH;
+    (insensitive ? CASE_INSENSITIVE_STRENGTH : DEFAULT_STRENGTH)
+  );
+}
+
+function foldFlags(
+  collation: { strength?: number } | undefined,
+  insensitive: boolean | undefined,
+) {
+  const strength = strengthOf(collation, insensitive);
+  return {
+    caseInsensitive: strength <= CASE_INSENSITIVE_STRENGTH,
+    accentInsensitive: strength <= ACCENT_INSENSITIVE_STRENGTH,
+  };
 }
 
 const cache = new WeakMap<object, readonly UniqueKey[]>();
@@ -61,10 +74,7 @@ export function uniqueKeysOf(source: TypeSource): readonly UniqueKey[] {
     keys.push({
       paths: [path],
       global: metadata.global === true,
-      caseInsensitive: isCaseInsensitive(
-        metadata.collation,
-        metadata.insensitive,
-      ),
+      ...foldFlags(metadata.collation, metadata.insensitive),
       ...(metadata.partialFilterExpression !== undefined && {
         partialFilter: metadata.partialFilterExpression,
       }),
@@ -75,7 +85,7 @@ export function uniqueKeysOf(source: TypeSource): readonly UniqueKey[] {
     keys.push({
       paths: Object.keys(index.key),
       global: index.global === true,
-      caseInsensitive: isCaseInsensitive(index.collation, index.insensitive),
+      ...foldFlags(index.collation, index.insensitive),
       ...(index.partialFilterExpression !== undefined && {
         partialFilter: index.partialFilterExpression,
       }),
@@ -239,11 +249,18 @@ export type UniqueEntries =
   | { readonly covered: false }
   | { readonly covered: undefined };
 
-function foldValue(value: unknown, caseInsensitive: boolean): string {
+const COMBINING_MARKS = /\p{M}/gu;
+
+function foldValue(value: unknown, key: UniqueKey): string {
   if (value === undefined || value === null) return "null";
   if (value instanceof Date) return JSON.stringify(value.toISOString());
-  if (typeof value === "string" && caseInsensitive) {
-    return JSON.stringify(value.toLowerCase());
+  if (typeof value === "string" && key.caseInsensitive) {
+    const lowered = value.toLowerCase();
+    return JSON.stringify(
+      key.accentInsensitive
+        ? lowered.normalize("NFD").replace(COMBINING_MARKS, "")
+        : lowered,
+    );
   }
   return JSON.stringify(value) ?? String(value);
 }
@@ -264,7 +281,7 @@ export function uniqueEntriesOf(
   for (const path of key.paths) {
     const values = valuesAt(doc, path);
     const folded = (values.length === 0 ? [null] : values).map((value) =>
-      foldValue(value, key.caseInsensitive),
+      foldValue(value, key),
     );
     tuples = tuples.flatMap((tuple) => folded.map((f) => [...tuple, f]));
   }
