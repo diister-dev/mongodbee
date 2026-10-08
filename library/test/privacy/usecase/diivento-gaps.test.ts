@@ -19,14 +19,16 @@ const SCHEMAS = {
     users: { _id: personId("user"), email: v.pipe(v.string(), v.email()) },
     organizations: { _id: refId("expo_organization"), displayName: v.string() },
     roles: {
-      _id: notPersonal(refId("expo_organization_role"), "role configuration"),
+      _id: notPersonal(refId("expo_organization_role"), "role configuration", {
+        strict: "keep",
+      }),
       organizationId: refId("expo_organization"),
       permissions: v.array(
         v.object({ key: v.string(), value: v.optional(v.any()) }),
       ),
     },
     flows: {
-      _id: notPersonal(dbId("flow"), "flow configuration"),
+      _id: notPersonal(dbId("flow"), "flow configuration", { strict: "keep" }),
       name: v.string(),
     },
   },
@@ -73,9 +75,7 @@ test({
 });
 
 test({
-  // TODO(plan): under the strict posture notPersonal(_id, reason) does not exempt the document's strings, so every configuration type (flows, badge templates, roles) must be annotated field by field
-  name: "usecase gap: a document declared not personal keeps its strings under the strict posture",
-  ignore: true,
+  name: "usecase gap: a document declared not personal with strict keep keeps its strings under the strict posture",
   fn: () => {
     const out = transform("collections/flows/", {
       _id: "flow:01j5zk3v8n2q4x6y8z0b1c3d5e",

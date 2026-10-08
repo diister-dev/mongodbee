@@ -706,3 +706,69 @@ test("unique composite index: its fields are unique signals like a single unique
   );
   assertEquals(pathOf(p, "collections/memberships/", "label").tier, "unknown");
 });
+
+const KEEP_SCHEMAS = {
+  collections: {
+    users: { _id: personId("user"), email: Email },
+    flows: {
+      _id: notPersonal(dbId("flow"), "flow configuration", { strict: "keep" }),
+      name: v.string(),
+      payload: v.unknown(),
+      enabled: v.boolean(),
+      createdAt: v.date(),
+      owner: refId("user"),
+      contact: personal(v.string(), { role: "direct" }),
+      slugLower: mirrorOf(v.string(), "user.email"),
+      steps: dynamic(v.record(v.string(), v.object({ label: v.string() }))),
+    },
+    audit: {
+      _id: notPersonal(dbId("audit"), "audit log"),
+      message: v.string(),
+    },
+  },
+} as unknown as SchemasDefinition;
+
+test("notPersonal strict keep: every undeclared leaf of the document is kept under strict, explicit declarations keep their treatment", () => {
+  const p = buildPrivacyPlan({ schemas: KEEP_SCHEMAS, posture: "strict" });
+  for (const path of [
+    "name",
+    "payload",
+    "enabled",
+    "createdAt",
+    "steps.*.label",
+  ]) {
+    const found = pathOf(p, "collections/flows/", path);
+    assertEquals(
+      [found.treatment.extract, found.byPosture],
+      ["keep", undefined],
+      path,
+    );
+  }
+  assertEquals(
+    pathOf(p, "collections/flows/", "name").note,
+    "kept by notPersonal(strict: keep)",
+  );
+  assertEquals(extractOf(p, "collections/flows/", "owner"), "remap");
+  assertEquals(extractOf(p, "collections/flows/", "contact"), "pseudonym");
+  assertEquals(pathOf(p, "collections/flows/", "slugLower").role, "derived");
+  assertEquals(pathOf(p, "collections/flows/", "steps").role, "dynamic");
+  assertEquals(p.targets.get("collections/flows/")!.owner.strictKeep, true);
+});
+
+test("notPersonal strict keep: a plain notPersonal still fakes its strings under strict", () => {
+  const p = buildPrivacyPlan({ schemas: KEEP_SCHEMAS, posture: "strict" });
+  assertEquals(extractOf(p, "collections/audit/", "message"), "fake");
+});
+
+test("notPersonal strict keep: the personal posture is unchanged and the report shows the kept paths", () => {
+  const personalPlan = buildPrivacyPlan({ schemas: KEEP_SCHEMAS });
+  assertEquals(extractOf(personalPlan, "collections/flows/", "name"), "keep");
+  const report = renderPrivacyReport(
+    buildPrivacyPlan({ schemas: KEEP_SCHEMAS, posture: "strict" }),
+  );
+  const section = report.slice(report.indexOf("kept in clear on extract"));
+  assert(
+    /\n {4}name\s+none\s+kept by notPersonal\(strict: keep\)/.test(section),
+  );
+  assert(report.includes("not personal (flow configuration, strict: keep)"));
+});

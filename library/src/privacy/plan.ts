@@ -73,6 +73,7 @@ export interface PrivacyOwner {
   readonly via: readonly string[];
   readonly chain: readonly string[];
   readonly reason?: string;
+  readonly strictKeep?: true;
 }
 
 export interface PrivacyTarget {
@@ -592,12 +593,13 @@ function strictify(draft: Draft, owned: boolean): void {
   }
 }
 
-function adjustForOwner(
-  d: Draft,
-  ownerKind: PrivacyOwnerKind,
-  strict: boolean,
-): void {
-  if (strict) {
+function adjustForOwner(d: Draft, owner: PrivacyOwner, strict: boolean): void {
+  const ownerKind = owner.kind;
+  if (strict && owner.strictKeep && d.tier !== "declared") {
+    d.tier = "none";
+    d.role = "none";
+    d.note = "kept by notPersonal(strict: keep)";
+  } else if (strict) {
     strictify(d, OWNED_KINDS.has(ownerKind));
   } else if (ownerKind === "exempt") {
     d.tier = "none";
@@ -826,6 +828,7 @@ export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
         via: [],
         chain: [],
         reason: exempt.reason,
+        ...(exempt.strict === "keep" && { strictKeep: true as const }),
       };
     }
 
@@ -958,7 +961,7 @@ export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
           d.relation = "relation";
         }
       } else if (!d.computed) {
-        adjustForOwner(d, owner.kind, strict);
+        adjustForOwner(d, owner, strict);
       }
       const done = finalise(d);
       summary[done.tier] += 1;
