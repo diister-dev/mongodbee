@@ -21,6 +21,7 @@ import { getIrreversibleOperations } from "../builder.ts";
 import {
   migrationComputedField,
   parentDeclaresComputed,
+  withComputedRevisionBumped,
   withComputedValue,
   withoutComputedValue,
 } from "../computed-operation.ts";
@@ -1607,7 +1608,9 @@ export function createMemoryApplier(migration: MigrationDefinition) {
         );
         coll.content = coll.content.map((doc) =>
           doc._type === operation.documentType
-            ? withComputedValue(doc, field.name, truth.get(String(doc._id)))
+            ? withComputedRevisionBumped(
+                withComputedValue(doc, field.name, truth.get(String(doc._id))),
+              )
             : doc,
         );
         return state;
