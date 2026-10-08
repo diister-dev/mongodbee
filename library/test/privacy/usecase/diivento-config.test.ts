@@ -46,7 +46,7 @@ function transform(key: string, doc: Record<string, unknown>) {
 }
 
 test({
-  name: "usecase gap: an id inside an untyped permission payload is remapped, not faked",
+  name: "usecase: an id inside an untyped permission payload is remapped, not faked",
   fn: () => {
     const out = transform("collections/roles/", {
       _id: ROLE,
@@ -81,6 +81,7 @@ test({
       name: "Visiteur Salon Pro",
     });
     assertEquals(out.name, "Visiteur Salon Pro");
+    assertEquals(out._id, remapId(SECRET, "flow:01j5zk3v8n2q4x6y8z0b1c3d5e"));
   },
 });
 
