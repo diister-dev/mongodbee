@@ -1,4 +1,4 @@
-import { ObjectId } from "mongodb";
+import { Binary, Decimal128, ObjectId } from "mongodb";
 import { test } from "../+harness.ts";
 import { assertEquals, assertNotEquals } from "../+assert.ts";
 import * as v from "../../src/schema.ts";
@@ -567,5 +567,139 @@ test({
       out.collections.expositions.content[0].name,
     );
     assertEquals(mirrorViolations(schemas, state), []);
+  },
+});
+
+test({
+  // TODO(privacy): V13, identifier() pins only an _id declared as vocabulary; read the scope schema of the scoped collection and pin a picklist _scope, and validate _scope in checkScenarioState
+  ignore: true,
+  name: "V13 a scoped collection whose scope is a picklist keeps its _scope inside the picklist",
+  fn: () => {
+    const schemas = {
+      collections: { "+users": { _id: personId("user") } },
+      scopedMultiCollections: {
+        content: {
+          scope: v.picklist(["fr", "en"]),
+          types: { page: { _id: refId("page"), title: v.string() } },
+        },
+      },
+    } as never as SchemasDefinition;
+    const state = stateWith({ "+users": [{ _id: `user:${ulid(1)}` }] });
+    state.scopedMultiCollections.content = {
+      content: [
+        {
+          _id: `page:${ulid(2)}`,
+          _type: "page",
+          _scope: "fr",
+          title: "Accueil",
+        },
+      ],
+    };
+    const page = run(schemas, state).state.scopedMultiCollections.content
+      .content[0];
+    assertEquals(page._scope, "fr");
+  },
+});
+
+test({
+  // TODO(privacy): V17, unique pseudonyms without a space share the identity value|<role>||value across fields, so assigned hands one field's fake (built from its schema) to another; key ownerless identities by target and path
+  ignore: true,
+  name: "V17 two unique fields of the same role holding the same value each get a fake valid for their own schema",
+  fn: () => {
+    const schemas = {
+      collections: {
+        "+users": {
+          _id: personId("user"),
+          email: withIndex(
+            personal(v.pipe(v.string(), v.email()), {
+              role: "direct",
+              consistent: "person",
+            }),
+            { unique: true },
+          ),
+          handle: withIndex(
+            personal(v.pipe(v.string(), v.maxLength(8)), {
+              role: "direct",
+              consistent: "person",
+            }),
+            { unique: true },
+          ),
+        },
+      },
+    } as never as SchemasDefinition;
+    const { notes } = createPrivacyTransformer({
+      plan: buildPrivacyPlan({ schemas, posture: "strict" }),
+      schemas,
+      secret: SECRET,
+    }).transform("collections/+users/", {
+      _id: `user:${ulid(1)}`,
+      email: "a@b.fr",
+      handle: "a@b.fr",
+    });
+    assertEquals(
+      notes.filter((n) => n.kind === "invalid"),
+      [],
+    );
+  },
+});
+
+test({
+  // TODO(privacy): V18, deepMap returns every non-plain object (Binary, Decimal128, UUID, Long) untouched; under a faking treatment replace them by a same-type fake (or drop them), never copy
+  ignore: true,
+  name: "V18 binary and decimal values inside an untyped payload do not survive a strict extract",
+  fn: () => {
+    const schemas = {
+      collections: { "+users": { _id: personId("user"), payload: v.any() } },
+    } as never as SchemasDefinition;
+    const photo = new Binary(Buffer.from("JPEG of Jean Dupont"));
+    const iban = Decimal128.fromString("76300040000123456789012345");
+    const { state } = run(
+      schemas,
+      stateWith({
+        "+users": [{ _id: `user:${ulid(1)}`, payload: { photo, iban } }],
+      }),
+    );
+    const payload = state.collections["+users"].content[0].payload as Record<
+      string,
+      unknown
+    >;
+    assertEquals(
+      {
+        photo: String(payload.photo) === String(photo),
+        iban: String(payload.iban) === String(iban),
+      },
+      { photo: false, iban: false },
+    );
+  },
+});
+
+test({
+  // TODO(privacy): V19, mapKey remaps a key only under an id-typed key schema or a dynamic root, while deepMap remaps any minted prefix; remap minted-prefix keys of v.record(v.string(), …) too
+  ignore: true,
+  name: "V19 a v.record(v.string()) keyed by ids of a minted space is rekeyed by the remapped ids",
+  fn: () => {
+    const schemas = {
+      collections: {
+        "+users": {
+          _id: personId("user"),
+          scoreByUser: v.record(v.string(), v.boolean()),
+        },
+      },
+    } as never as SchemasDefinition;
+    const ids = [`user:${ulid(1)}`, `user:${ulid(2)}`];
+    const { state, transformer } = run(
+      schemas,
+      stateWith({
+        "+users": ids.map((_id, i) => ({
+          _id,
+          scoreByUser: { [ids[1 - i]]: true },
+        })),
+      }),
+    );
+    const users = state.collections["+users"].content;
+    assertEquals(
+      users.map((u) => Object.keys(u.scoreByUser as object)),
+      [[transformer.remapId(ids[1])], [transformer.remapId(ids[0])]],
+    );
   },
 });

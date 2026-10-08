@@ -358,3 +358,50 @@ test({
     });
   },
 });
+
+const PLAIN_UNIQUE = `{
+  collections: {
+    users: { _id: personId("user"), login: personal(v.string(), { role: "direct" }) },
+    tags: {
+      _id: notPersonal(dbId("tag"), "vocabulary", { strict: "keep" }),
+      label: withIndex(v.string(), { unique: true }),
+    },
+  },
+}`;
+
+test({
+  // TODO(privacy): V20, --allow-violations lets unique_index through the gate but populateDatabase creates the unique index before inserting, so the write fails; create unique indexes after the data under --allow-violations, or stop listing unique_index as allowable
+  ignore: true,
+  name: "V20 extract --allow-violations writes data that breaks a unique index, as its help says",
+  timeout: 60_000,
+  fn: async () => {
+    await withTempDir(async (dir) => {
+      await writeProject(dir, PLAIN_UNIQUE);
+      await withWorld(async ({ client, source, target }) => {
+        const src = client.db(source);
+        await src
+          .collection<Raw>("users")
+          .insertOne({ _id: `user:${newId()}`, login: "alice" });
+        await src.collection<Raw>("tags").insertMany([
+          { _id: `tag:${newId()}`, label: "Cafe" },
+          { _id: `tag:${newId()}`, label: "Cafe" },
+        ]);
+        await markMigrationAsAdopted(src, BIRTH, "step");
+        let message: string | undefined;
+        try {
+          await extractCommand({
+            cwd: dir,
+            fromDb: source,
+            toDb: target,
+            secret: "r2",
+            json: true,
+            allowViolations: true,
+          });
+        } catch (error) {
+          message = error instanceof Error ? error.message : String(error);
+        }
+        assertEquals(message, undefined);
+      });
+    });
+  },
+});
