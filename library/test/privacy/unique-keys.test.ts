@@ -73,6 +73,24 @@ test("unique keys: case-insensitive keys fold, others do not", () => {
   assertEquals(entry("Bob", true) === entry("bob", true), true);
 });
 
+test("unique keys: collation strength 1 folds accents too, strength 2 only case", () => {
+  const entry = (login: string, strength: number) => {
+    const r = uniqueEntriesOf(
+      {
+        paths: ["login"],
+        global: false,
+        caseInsensitive: strength <= 2,
+        accentInsensitive: strength <= 1,
+      },
+      { login },
+      PARTITION,
+    );
+    return r.covered ? r.entries[0] : undefined;
+  };
+  assertEquals(entry("Café", 1) === entry("cafe", 1), true);
+  assertEquals(entry("Café", 2) === entry("cafe", 2), false);
+});
+
 test("unique keys: simple partial filters are evaluated, unknown operators stay unknown", () => {
   assertEquals(
     matchesPartialFilter({ type: "badge" }, { type: "badge" }),

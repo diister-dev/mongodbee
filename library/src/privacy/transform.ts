@@ -27,10 +27,12 @@ import {
   type PrivacySecret,
   remapId,
   remapObjectId,
+  remapUid,
 } from "./pseudonym.ts";
 import { setValueAt, valueAt } from "../scenario/doc-path.ts";
 import { unwrapSchema } from "./schema-shape.ts";
 import {
+  indexPath,
   sourceOfTarget,
   uniqueKeysOfTarget,
   uniqueMembership,
@@ -150,6 +152,13 @@ const KEY_VOCABULARY_TYPES: ReadonlySet<string> = new Set([
   "enum",
 ]);
 
+const OWNED_KINDS: ReadonlySet<string> = new Set([
+  "self",
+  "declared",
+  "inferred",
+  "ambiguous",
+]);
+
 const ID_SHAPE = /^([a-zA-Z0-9_-]+):(.+)$/;
 
 function isUntyped(schema: unknown): boolean {
@@ -245,7 +254,12 @@ export function schemaAtPath(fields: SchemaContent, path: string): unknown {
   return unwrapSchema(rawSchemaAtPath(fields, path));
 }
 
-type UniqueMode = false | "insensitive" | "exact";
+interface UniqueKind {
+  readonly exact: boolean;
+  readonly global: boolean;
+}
+
+type UniqueMode = false | UniqueKind;
 
 type SeededGenerator = (seed: number) => unknown;
 
@@ -379,12 +393,14 @@ export function createPrivacyTransformer(
   const uniquePaths = new Map<string, UniqueMode>();
 
   const uniqueModeOf = (target: PrivacyTarget, path: string): UniqueMode => {
-    const membership = uniqueMembership(
-      uniqueKeysOfTarget(schemas, target),
-      path,
-    );
+    const keys = uniqueKeysOfTarget(schemas, target);
+    const membership = uniqueMembership(keys, path);
     if (!membership.unique) return false;
-    return membership.caseInsensitive ? "insensitive" : "exact";
+    const at = indexPath(path);
+    return {
+      exact: !membership.caseInsensitive,
+      global: keys.some((key) => key.global && key.paths.includes(at)),
+    };
   };
 
   const isUnique = (targetKey: string, path: string): UniqueMode => {
@@ -502,6 +518,9 @@ export function createPrivacyTransformer(
     const notes: TransformNote[] = [];
     const scope =
       context.scope ?? (typeof doc._scope === "string" ? doc._scope : "");
+    const partitioned =
+      target.bucket === "multiModels" ||
+      target.bucket === "scopedMultiCollections";
     const docId = isObjectId(doc._id)
       ? doc._id.toHexString()
       : typeof doc._id === "string"
@@ -554,19 +573,22 @@ export function createPrivacyTransformer(
       key?: string,
       raw?: string,
     ): unknown => {
+      const partition =
+        unique && !unique.global && partitioned ? `|scope|${scope}` : "";
       const identity =
-        unique === "exact" && raw !== undefined
-          ? `${message}|raw|${raw}`
-          : message;
+        unique && unique.exact && raw !== undefined
+          ? `${message}|raw|${raw}${partition}`
+          : `${message}${partition}`;
       const known = assigned.get(identity);
       if (known !== undefined) return known;
       if (!unique) {
         return generate(schema, hmacSeed(secret, message), path, key);
       }
-      let taken = owners.get(ownerSpace);
+      const ownerKey = `${ownerSpace}${partition}`;
+      let taken = owners.get(ownerKey);
       if (!taken) {
         taken = new Map();
-        owners.set(ownerSpace, taken);
+        owners.set(ownerKey, taken);
       }
       let produced: unknown = DROP;
       for (let attempt = 0; attempt < MAX_COLLISION_ATTEMPTS; attempt++) {
@@ -580,6 +602,41 @@ export function createPrivacyTransformer(
         if (holder === undefined || holder === identity) {
           taken.set(foldFake(produced), identity);
           assigned.set(identity, produced);
+          return produced;
+        }
+      }
+      notes.push({ path, kind: "collision" });
+      return produced;
+    };
+
+    const numericId = (value: number, path: string): number | undefined => {
+      if (!Number.isSafeInteger(value)) {
+        notes.push({ path, kind: "dropped" });
+        return undefined;
+      }
+      notes.push({ path, kind: "numeric_id" });
+      const message = `numid|${value}`;
+      const known = assigned.get(message);
+      if (typeof known === "number") return known;
+      const digits = Math.min(MAX_SAFE_DIGITS, String(Math.abs(value)).length);
+      const low = digits === 1 ? 0 : 10 ** (digits - 1);
+      const span = BigInt(10 ** digits - low);
+      const sign = value < 0 ? -1 : 1;
+      let taken = owners.get("numid");
+      if (!taken) {
+        taken = new Map();
+        owners.set("numid", taken);
+      }
+      let produced = value;
+      for (let attempt = 0; attempt < MAX_COLLISION_ATTEMPTS; attempt++) {
+        const bytes = hmacBytes(secret, `${message}|${attempt}`);
+        let n = 0n;
+        for (const byte of bytes.subarray(0, 8)) n = (n << 8n) | BigInt(byte);
+        produced = sign * (low + Number(n % span));
+        const holder = taken.get(String(produced));
+        if (holder === undefined || holder === message) {
+          taken.set(String(produced), message);
+          assigned.set(message, produced);
           return produced;
         }
       }
@@ -686,6 +743,15 @@ export function createPrivacyTransformer(
       if (isObjectId(leaf.value)) {
         return remapObjectId(secret, leaf.value, shift);
       }
+      if (typeof leaf.value === "number" && Number.isSafeInteger(leaf.value)) {
+        return plan.posture === "strict"
+          ? numericId(leaf.value, leaf.path)
+          : leaf.value;
+      }
+      if (typeof leaf.value === "string") {
+        const bare = remapUid(secret, leaf.value, shift);
+        if (v.is(schema as v.GenericSchema, bare)) return bare;
+      }
       const expectsId = extractIdPrefix(schema) !== "";
       if (expectsId) notes.push({ path: leaf.path, kind: "mismatch" });
       return produce(
@@ -711,6 +777,31 @@ export function createPrivacyTransformer(
       return typeof text === "string" ? text : "x";
     };
 
+    const fakeNumber = (value: number, message: string): number => {
+      const bytes = hmacBytes(secret, message);
+      let n = 0n;
+      for (const byte of bytes.subarray(0, 8)) n = (n << 8n) | BigInt(byte);
+      const sign = value < 0 ? -1 : 1;
+      if (Number.isSafeInteger(value)) {
+        const digits = Math.min(
+          MAX_SAFE_DIGITS,
+          String(Math.abs(value)).length,
+        );
+        const low = digits === 1 ? 0 : 10 ** (digits - 1);
+        return sign * (low + Number(n % BigInt(10 ** digits - low)));
+      }
+      const magnitude =
+        10 ** Math.max(0, Math.floor(Math.log10(Math.abs(value))) + 1);
+      return (
+        (sign *
+          Math.round((Number(n % 1_000_000n) / 1_000_000) * magnitude * 100)) /
+        100
+      );
+    };
+
+    const fakeNumbers =
+      plan.posture === "strict" && OWNED_KINDS.has(target.owner.kind);
+
     const deepMap = (
       value: unknown,
       fakeStrings: boolean,
@@ -725,8 +816,17 @@ export function createPrivacyTransformer(
           ? fakeText(`deep|${targetKey}|${path}|${canonical(value)}`, path)
           : shiftDate(value);
       }
+      if (typeof value === "number") {
+        return fakeStrings && fakeNumbers
+          ? fakeNumber(value, `deepnum|${targetKey}|${path}|${value}`)
+          : value;
+      }
+      if (value instanceof Date) return shiftDate(value);
+      if (isObjectId(value)) return remapObjectId(secret, value, shift);
       if (Array.isArray(value)) {
-        return value.map((item) => deepMap(item, fakeStrings, path));
+        return value
+          .map((item) => deepMap(item, fakeStrings, path))
+          .filter((item) => item !== undefined);
       }
       if (isPlainObject(value)) {
         const out: Record<string, unknown> = {};
@@ -740,9 +840,14 @@ export function createPrivacyTransformer(
               : personal
                 ? fakeText(`deepkey|${targetKey}|${path}|${key}`, path)
                 : key;
-          out[mapped] = deepMap(item, fakeStrings, path);
+          const item2 = deepMap(item, fakeStrings, path);
+          if (item2 !== undefined) out[mapped] = item2;
         }
         return out;
+      }
+      if (typeof value === "object" && value !== null && fakeStrings) {
+        notes.push({ path, kind: "dropped" });
+        return undefined;
       }
       return value;
     };
@@ -934,7 +1039,13 @@ export function createPrivacyTransformer(
       if (schema !== undefined && keyIsVocabulary(schema)) return key;
       const idKey =
         dynamicRoot || (schema !== undefined && extractIdPrefix(schema) !== "");
-      if (idKey && looksLikeId(key)) return remapId(secret, key, shift);
+      const keyPrefix = ID_SHAPE.exec(key)?.[1];
+      const mintedKey = keyPrefix !== undefined && mintedSpaces.has(keyPrefix);
+      if ((idKey || mintedKey) && looksLikeId(key)) {
+        return remapId(secret, key, shift);
+      }
+      const day = mapTemporal(key, (wall) => wall + shift);
+      if (day !== undefined) return day;
       const personalSchema =
         schema !== undefined &&
         (readPrivacyMetadata(schema).length > 0 ||
@@ -955,7 +1066,7 @@ export function createPrivacyTransformer(
       const mapped = produce(
         `key|${targetKey}|${path}`,
         `key|${targetKey}|${path}|${key}`,
-        "exact",
+        { exact: true, global: true },
         schema ?? v.string(),
         path,
         "key",
@@ -970,45 +1081,15 @@ export function createPrivacyTransformer(
     notes.push(...walked.notes);
 
     const out: Record<string, unknown> = { ...walked.doc };
-    const numericId = (value: number, path: string): number | undefined => {
-      if (!Number.isSafeInteger(value)) {
-        notes.push({ path, kind: "dropped" });
-        return undefined;
-      }
-      notes.push({ path, kind: "numeric_id" });
-      const message = `numid|${targetKey}|${value}`;
-      const known = assigned.get(message);
-      if (typeof known === "number") return known;
-      const digits = Math.min(MAX_SAFE_DIGITS, String(Math.abs(value)).length);
-      const low = digits === 1 ? 0 : 10 ** (digits - 1);
-      const span = BigInt(10 ** digits - low);
-      const sign = value < 0 ? -1 : 1;
-      let taken = owners.get(`numid|${targetKey}`);
-      if (!taken) {
-        taken = new Map();
-        owners.set(`numid|${targetKey}`, taken);
-      }
-      let produced = value;
-      for (let attempt = 0; attempt < MAX_COLLISION_ATTEMPTS; attempt++) {
-        const bytes = hmacBytes(secret, `${message}|${attempt}`);
-        let n = 0n;
-        for (const byte of bytes.subarray(0, 8)) n = (n << 8n) | BigInt(byte);
-        produced = sign * (low + Number(n % span));
-        const holder = taken.get(String(produced));
-        if (holder === undefined || holder === message) {
-          taken.set(String(produced), message);
-          assigned.set(message, produced);
-          return produced;
-        }
-      }
-      notes.push({ path, kind: "collision" });
-      return produced;
-    };
-
     const identifier = (value: unknown, path: string): unknown => {
       if (typeof value === "string") {
-        const pinned =
-          Object.hasOwn(fields, path) && keyIsVocabulary(fields[path]);
+        const pinSchema =
+          path === "_scope" && target.bucket === "scopedMultiCollections"
+            ? schemas.scopedMultiCollections?.[target.collection]?.scope
+            : Object.hasOwn(fields, path)
+              ? fields[path]
+              : undefined;
+        const pinned = pinSchema !== undefined && keyIsVocabulary(pinSchema);
         return pinned ? value : remapId(secret, value, shift);
       }
       if (isObjectId(value)) return remapObjectId(secret, value, shift);

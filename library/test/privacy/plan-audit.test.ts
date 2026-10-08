@@ -772,3 +772,27 @@ test("notPersonal strict keep: the personal posture is unchanged and the report 
   );
   assert(report.includes("not personal (flow configuration, strict: keep)"));
 });
+
+test("notPersonal strict keep: a certain personal signal keeps its treatment and is reported", () => {
+  const p = buildPrivacyPlan({
+    schemas: {
+      collections: {
+        users: { _id: personId("user"), email: Email },
+        flows: {
+          _id: notPersonal(dbId("flow"), "configuration", { strict: "keep" }),
+          notify: v.pipe(v.string(), v.email()),
+          code: withIndex(v.string(), { unique: true }),
+          label: v.string(),
+        },
+      },
+    } as unknown as SchemasDefinition,
+    posture: "strict",
+  });
+  assertEquals(extractOf(p, "collections/flows/", "notify"), "pseudonym");
+  assertEquals(extractOf(p, "collections/flows/", "code"), "keep");
+  assertEquals(extractOf(p, "collections/flows/", "label"), "keep");
+  assertEquals(
+    p.findings.filter((f) => f.level === "warning").map((f) => f.path),
+    ["notify"],
+  );
+});
