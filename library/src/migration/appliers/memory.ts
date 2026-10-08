@@ -528,7 +528,11 @@ export function createMemoryApplier(migration: MigrationDefinition) {
         }
         const source = PHYSICAL_BUCKETS.find((bucket) => state[bucket][name]);
         if (!source) {
-          throw new Error(`Collection ${name} does not exist`);
+          state.multiModels[name] = {
+            modelType: operation.modelType,
+            content: [],
+          };
+          return state;
         }
         state.multiModels[name] = {
           modelType: operation.modelType,

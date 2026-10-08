@@ -65,6 +65,21 @@ export interface ScenarioBirth {
   readonly onDemand: Readonly<Record<string, number>>;
 }
 
+function declareSchemaCollections(
+  state: DatabaseState,
+  schemas: MigrationDefinition["schemas"],
+): void {
+  for (const name of Object.keys(schemas.collections ?? {})) {
+    state.collections[name] ??= { content: [] };
+  }
+  for (const name of Object.keys(schemas.multiCollections ?? {})) {
+    state.multiCollections[name] ??= { content: [] };
+  }
+  for (const name of Object.keys(schemas.scopedMultiCollections ?? {})) {
+    state.scopedMultiCollections[name] ??= { content: [] };
+  }
+}
+
 export async function generateScenarioAtBirth(
   options: RunScenarioOptions,
 ): Promise<ScenarioBirth> {
@@ -125,6 +140,7 @@ export async function generateScenarioAtBirth(
       defaultCount: options.defaultCount,
     }),
   });
+  declareSchemaCollections(generation.state, birth.schemas);
   return {
     birth,
     at: migrations[atIndex],
@@ -163,6 +179,7 @@ export async function generateScenarioStage(options: {
     initial: options.state,
     stage: options.migration.id,
   });
+  declareSchemaCollections(staged.state, options.migration.schemas);
   return {
     state: staged.state,
     violations: staged.violations,

@@ -425,7 +425,7 @@ test("parity markMultiModelType: a multi-collection becomes an instance its next
   );
 });
 
-test("parity markMultiModelType: a missing collection fails on both sides", async () => {
+test("parity markMultiModelType: a missing collection is created as an empty instance on both sides", async () => {
   const schemas = {
     collections: {},
     multiModels: {
@@ -438,7 +438,7 @@ test("parity markMultiModelType: a missing collection fails on both sides", asyn
     (b) => b.markMultiModelType("exposition:Z", "exposition").end(),
     {},
   );
-  assertEquals(outcome.threw, true);
+  assertEquals(outcome.threw, false);
 });
 
 test("parity where: null matches a missing field, a scalar matches an array element", async () => {

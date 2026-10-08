@@ -1095,14 +1095,11 @@ export function createMongodbApplier(
       apply: async (operation) => {
         const collection = primaryCollection(db, operation.collectionName);
 
-        if (
-          opts.strictValidation &&
-          !(await collectionExists(operation.collectionName))
-        ) {
-          // throw new Error(`Collection ${operation.collectionName} does not exist`);
+        if (!(await collectionExists(operation.collectionName))) {
           log.warn(
             `Collection ${operation.collectionName} does not exist, creating it first.`,
           );
+          await db.createCollection(operation.collectionName);
         }
 
         const existing = await collection.findOne({
