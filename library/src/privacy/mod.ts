@@ -86,3 +86,11 @@ export {
   type TransformNoteKind,
   type TransformResult,
 } from "./transform.ts";
+
+export {
+  describeValueJoin,
+  detectValueJoins,
+  type PossibleValueJoin,
+  type ValueJoinEnd,
+  type ValueJoinOptions,
+} from "./value-joins.ts";

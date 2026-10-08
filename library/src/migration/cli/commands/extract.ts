@@ -17,6 +17,9 @@ import { getAppliedMigrationIds, markMigrationAsAdopted } from "../../state.ts";
 import {
   buildPrivacyPlan,
   createPrivacyTransformer,
+  describeValueJoin,
+  detectValueJoins,
+  type PossibleValueJoin,
   type PrivacyConsistency,
   type PrivacyPlan,
   type PrivacyPosture,
@@ -78,6 +81,7 @@ export interface ExtractSummary {
     }
   >;
   readonly posture: PrivacyPosture;
+  readonly possibleValueJoins: readonly PossibleValueJoin[];
   readonly scope?: {
     readonly scope: string;
     readonly copiedWhole: readonly string[];
@@ -571,9 +575,11 @@ export async function extractCommand(
       schemas,
       plan,
     }).filter((violation) => REPORTED_VIOLATIONS.has(violation.kind));
+    const possibleValueJoins = detectValueJoins(replayed.state, plan);
     const summary: ExtractSummary = {
       targets: result.summary,
       posture: plan.posture,
+      possibleValueJoins,
       ...(options.scope !== undefined && {
         scope: {
           scope: transformer.remapId(options.scope),
@@ -626,6 +632,9 @@ export async function extractCommand(
             `  ! ${collection}: documents of undeclared _type not copied (${detail})`,
           ),
         );
+      }
+      for (const join of possibleValueJoins) {
+        console.log(yellow(`  ! ${describeValueJoin(join)}`));
       }
       for (const violation of violations) {
         console.log(yellow(`  ! ${violation.target}: ${violation.message}`));
