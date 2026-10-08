@@ -43,9 +43,7 @@ function transform(key: string, doc: Record<string, unknown>) {
 }
 
 test({
-  // TODO(plan): a strict extract fakes every id-shaped string inside v.any()/v.unknown(); remap values whose prefix is a minted space so Diivento permission grants keep pointing at their organization
   name: "usecase gap: an id inside an untyped permission payload is remapped, not faked",
-  ignore: true,
   fn: () => {
     const out = transform("collections/roles/", {
       _id: ROLE,

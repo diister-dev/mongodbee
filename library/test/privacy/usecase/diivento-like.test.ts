@@ -303,9 +303,7 @@ test({
 });
 
 test({
-  // TODO(transform): a pseudonym in a declared space is generated from the leaf key and local schema, so participant.fields.firstname.v ("v", v.string()) never equals +users.firstname ("firstname", NameSchema) for the same person
   name: "usecase: names coincide between a person and its participant fields",
-  ignore: true,
   ...SLOW,
   fn: async () => {
     await prepare();

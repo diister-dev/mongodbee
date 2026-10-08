@@ -148,6 +148,21 @@ const KEY_VOCABULARY_TYPES: ReadonlySet<string> = new Set([
   "enum",
 ]);
 
+const ID_SHAPE = /^([a-zA-Z0-9_-]+):(.+)$/;
+
+function isUntyped(schema: unknown): boolean {
+  const type = (schema as { type?: string } | undefined)?.type;
+  return type === "any" || type === "unknown";
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
 function looksPersonalKey(key: string): boolean {
   return key.includes("@") || key.replace(/\D/g, "").length >= MIN_PHONE_DIGITS;
 }
@@ -381,6 +396,37 @@ export function createPrivacyTransformer(
     return unique;
   };
 
+  const spaceSchemas = new Map<string, unknown>();
+
+  const canonicalSchemaOf = (space: string, local: unknown): unknown => {
+    if (spaceSchemas.has(space)) return spaceSchemas.get(space);
+    let found: unknown;
+    const targets = [...plan.targets.values()].sort(
+      (a, b) => Number(b.person) - Number(a.person),
+    );
+    search: for (const target of targets) {
+      const targetFields = fieldsOf(schemas, target);
+      if (!targetFields) continue;
+      for (const path of target.paths) {
+        if (
+          path.space === space &&
+          path.mirrorOf === undefined &&
+          path.treatment.extract === "pseudonym"
+        ) {
+          found = schemaAtPath(targetFields, path.path);
+          if (found !== undefined) break search;
+        }
+      }
+    }
+    found ??= local;
+    spaceSchemas.set(space, found);
+    return found;
+  };
+
+  const mintedSpaces: ReadonlySet<string> = new Set(
+    [...plan.targets.values()].map((t) => t.space).filter((s) => s !== ""),
+  );
+
   const assigned = new Map<string, unknown>();
   const owners = new Map<string, Map<string, string>>();
 
@@ -557,6 +603,53 @@ export function createPrivacyTransformer(
       return dropOrGenerate(leaf, "dropped");
     };
 
+    const pseudonymise = (
+      cls: PrivacyPath,
+      path: string,
+      leaf: WalkLeaf,
+      schema: unknown,
+      unique: UniqueMode,
+      key: string | undefined,
+      sourceScope?: string,
+    ): unknown => {
+      const message = valueMessage(cls, path, leaf.value, sourceScope);
+      const raw = rawOf(leaf.value);
+      if (cls.space !== undefined) {
+        const canonicalSchema = canonicalSchemaOf(cls.space, schema);
+        const produced = produce(
+          cls.space,
+          message,
+          unique,
+          canonicalSchema,
+          leaf.path,
+          cls.space,
+          raw,
+        );
+        if (produced === DROP || v.is(schema as v.GenericSchema, produced)) {
+          return produced;
+        }
+        notes.push({ path: leaf.path, kind: "mismatch" });
+        return produce(
+          cls.space,
+          `${message}|local`,
+          unique,
+          schema,
+          leaf.path,
+          key,
+          raw,
+        );
+      }
+      return produce(
+        spaceOf(cls),
+        message,
+        unique,
+        schema,
+        leaf.path,
+        key,
+        raw,
+      );
+    };
+
     const rawOf = (value: unknown): string =>
       typeof value === "string" ? value : canonical(value);
 
@@ -591,6 +684,52 @@ export function createPrivacyTransformer(
         schema,
         leaf.path,
       );
+    };
+
+    const fakeText = (message: string, path: string): string => {
+      const text = generate(
+        v.string(),
+        hmacSeed(secret, message),
+        path,
+        "text",
+      );
+      return typeof text === "string" ? text : "x";
+    };
+
+    const deepMap = (
+      value: unknown,
+      fakeStrings: boolean,
+      path: string,
+    ): unknown => {
+      if (typeof value === "string") {
+        const prefix = ID_SHAPE.exec(value)?.[1];
+        if (prefix !== undefined && mintedSpaces.has(prefix)) {
+          return remapId(secret, value, shift);
+        }
+        return fakeStrings
+          ? fakeText(`deep|${targetKey}|${path}|${canonical(value)}`, path)
+          : shiftDate(value);
+      }
+      if (Array.isArray(value)) {
+        return value.map((item) => deepMap(item, fakeStrings, path));
+      }
+      if (isPlainObject(value)) {
+        const out: Record<string, unknown> = {};
+        for (const [key, item] of Object.entries(value)) {
+          const prefix = ID_SHAPE.exec(key)?.[1];
+          const personal =
+            fakeStrings && plan.posture === "strict" && looksPersonalKey(key);
+          const mapped =
+            prefix !== undefined && mintedSpaces.has(prefix)
+              ? remapId(secret, key, shift)
+              : personal
+                ? fakeText(`deepkey|${targetKey}|${path}|${key}`, path)
+                : key;
+          out[mapped] = deepMap(item, fakeStrings, path);
+        }
+        return out;
+      }
+      return value;
     };
 
     const dynamicRoots = target.paths
@@ -675,22 +814,30 @@ export function createPrivacyTransformer(
             copy = generalise(leaf);
             break;
           default:
-            copy = produce(
-              spaceOf(source.cls),
-              valueMessage(
-                source.cls,
-                source.path,
-                leaf.value,
-                source.scoped ? scope : "",
-              ),
-              source.unique,
+            copy = pseudonymise(
+              source.cls,
+              source.path,
+              leaf,
               source.schema,
-              leaf.path,
+              source.unique,
               source.path.split(".").pop(),
-              rawOf(leaf.value),
+              source.scoped ? scope : "",
             );
         }
         return copy === DROP ? DROP : applyNormalize(copy, cls.normalize);
+      }
+      const wholesale = cls.treatment.extract;
+      const exempt = cls.role === "none" && cls.tier === "declared";
+      if (
+        (isUntyped(schema) || exempt) &&
+        (wholesale === "keep" ||
+          wholesale === "include" ||
+          wholesale === "fake") &&
+        (typeof leaf.value === "string" ||
+          Array.isArray(leaf.value) ||
+          isPlainObject(leaf.value))
+      ) {
+        return deepMap(leaf.value, wholesale === "fake" && !exempt, leaf.path);
       }
       switch (cls.treatment.extract) {
         case "keep":
@@ -699,14 +846,13 @@ export function createPrivacyTransformer(
         case "remap":
           return remapValue(cls, leaf, schema);
         case "pseudonym":
-          return produce(
-            spaceOf(cls),
-            valueMessage(cls, leaf.path, leaf.value),
-            override ? false : isUnique(targetKey, leaf.path),
-            schema,
+          return pseudonymise(
+            cls,
             leaf.path,
+            leaf,
+            schema,
+            override ? false : isUnique(targetKey, leaf.path),
             undefined,
-            rawOf(leaf.value),
           );
         case "fake":
           return fakeValue(leaf, schema);
