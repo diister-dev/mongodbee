@@ -25,6 +25,7 @@
  */
 
 import * as v from "../../schema.ts";
+import type { PrivacyTransformerOptions } from "../../privacy/transform.ts";
 
 /**
  * Database connection configuration
@@ -321,6 +322,30 @@ const MigrationConfigSchema: v.ObjectSchema<
  *
  * Controls CLI behavior and output formatting.
  */
+type ResolveDynamic = NonNullable<PrivacyTransformerOptions["resolveDynamic"]>;
+type Recompute = NonNullable<PrivacyTransformerOptions["recompute"]>;
+
+const PrivacyConfigSchema: v.ObjectSchema<
+  {
+    readonly resolveDynamic: v.OptionalSchema<
+      v.CustomSchema<ResolveDynamic, undefined>,
+      undefined
+    >;
+    readonly recompute: v.OptionalSchema<
+      v.CustomSchema<Recompute, undefined>,
+      undefined
+    >;
+  },
+  undefined
+> = v.object({
+  resolveDynamic: v.optional(
+    v.custom<ResolveDynamic>((value) => typeof value === "function"),
+  ),
+  recompute: v.optional(
+    v.custom<Recompute>((value) => typeof value === "function"),
+  ),
+});
+
 const CliConfigSchema: v.ObjectSchema<
   {
     readonly colors: v.OptionalSchema<v.BooleanSchema<undefined>, undefined>;
@@ -367,6 +392,7 @@ export const MigrationSystemConfigSchema: v.ObjectSchema<
       undefined
     >;
     readonly cli: v.OptionalSchema<typeof CliConfigSchema, undefined>;
+    readonly privacy: v.OptionalSchema<typeof PrivacyConfigSchema, undefined>;
     readonly environments: v.OptionalSchema<
       v.RecordSchema<
         v.StringSchema<undefined>,
@@ -410,6 +436,9 @@ export const MigrationSystemConfigSchema: v.ObjectSchema<
   /** CLI-specific settings */
   cli: v.optional(CliConfigSchema),
 
+  /** Hooks of the privacy commands: dynamic classification and computed recompute */
+  privacy: v.optional(PrivacyConfigSchema),
+
   /** Custom environment-specific overrides */
   environments: v.optional(
     v.record(
@@ -430,6 +459,7 @@ export const MigrationSystemConfigSchema: v.ObjectSchema<
 export type DatabaseConfig = v.InferInput<typeof DatabaseConfigSchema>;
 export type PathsConfig = v.InferInput<typeof PathsConfigSchema>;
 export type MigrationConfig = v.InferInput<typeof MigrationConfigSchema>;
+export type PrivacyConfig = v.InferInput<typeof PrivacyConfigSchema>;
 export type CliConfig = v.InferInput<typeof CliConfigSchema>;
 export type MigrationSystemConfig = v.InferInput<
   typeof MigrationSystemConfigSchema

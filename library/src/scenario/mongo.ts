@@ -1,5 +1,6 @@
 import type { Db } from "../mongodb.ts";
 import { isMetadataDocument } from "./state.ts";
+import { COMPUTED_ROOT } from "../computed-guard.ts";
 import { sanitizeForMongoDB } from "../sanitizer.ts";
 import { createMongodbApplier } from "../migration/appliers/mongodb.ts";
 import {
@@ -53,6 +54,16 @@ function describeBulkWriteFailure(
   return `Writing "${collection}" failed: ${parts.join(", ")}`;
 }
 
+function sanitizeKeepingComputed(
+  doc: Record<string, unknown>,
+): Record<string, unknown> {
+  const { [COMPUTED_ROOT]: computed, ...rest } = doc;
+  const clean = sanitizeForMongoDB(rest);
+  return computed === undefined
+    ? clean
+    : { ...clean, [COMPUTED_ROOT]: computed };
+}
+
 async function insertAll(
   db: Db,
   collection: string,
@@ -69,10 +80,10 @@ async function insertAll(
   for (let i = 0; i < docs.length; i += batchSize) {
     const batch = docs.slice(i, i + batchSize);
     try {
-      await target.insertMany(
-        batch.map((d) => sanitizeForMongoDB(d)),
-        { ordered: false, bypassDocumentValidation: true },
-      );
+      await target.insertMany(batch.map(sanitizeKeepingComputed), {
+        ordered: false,
+        bypassDocumentValidation: true,
+      });
       log(batch.map((d) => d._id));
     } catch (error) {
       const failures = bulkWriteFailures(error);

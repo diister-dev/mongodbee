@@ -40,6 +40,7 @@ export interface WalkResult {
 
 export interface WalkKey {
   readonly path: string;
+  readonly keys: readonly string[];
   readonly key: string;
   readonly schema: unknown;
 }
@@ -138,11 +139,12 @@ export function walkDocument(
 
   const mapKey = (
     path: readonly string[],
+    keys: readonly string[],
     key: string,
     schema: unknown,
   ): string =>
     options.mapKey
-      ? options.mapKey({ path: path.join("."), key, schema })
+      ? options.mapKey({ path: path.join("."), keys, key, schema })
       : key;
 
   const visit = (
@@ -210,7 +212,7 @@ export function walkDocument(
           k,
         );
         if (r !== DROP && r !== undefined) {
-          out[declared ? k : mapKey(path, k, undefined)] = r;
+          out[declared ? k : mapKey(path, keys, k, undefined)] = r;
         }
       }
       return out;
@@ -261,7 +263,7 @@ export function walkDocument(
       for (const [k, entry] of Object.entries(value)) {
         const r = visit(schema.value, entry, [...path, "*"], [...keys, k], k);
         if (r !== DROP && r !== undefined) {
-          out[mapKey(path, k, schema.key)] = r;
+          out[mapKey(path, keys, k, schema.key)] = r;
         }
       }
       return out;

@@ -1,11 +1,7 @@
 import * as v from "../schema.ts";
 import { createMockGenerator, SKIP } from "@diister/valibot-mock";
 import { extractIdPrefix } from "../migration/utils/seed-id.ts";
-import type {
-  SchemaContent,
-  SchemasDefinition,
-  TypeSource,
-} from "../migration/types.ts";
+import type { SchemaContent, SchemasDefinition } from "../migration/types.ts";
 import { fieldsOf as fieldsOfSource } from "../type-definition.ts";
 import {
   defaultTreatments,
@@ -16,6 +12,7 @@ import {
 import {
   collectActions,
   type PrivacyConsistency,
+  readPrivacyMetadata,
   type PrivacyNormalize,
   type PrivacyRole,
   type PrivacyTreatments,
@@ -23,6 +20,7 @@ import {
 import {
   canonical,
   defaultTimeShiftMs,
+  hmacBytes,
   hmacSeed,
   isObjectId,
   looksLikeId,
@@ -31,7 +29,11 @@ import {
   remapObjectId,
 } from "./pseudonym.ts";
 import { unwrapSchema } from "./schema-shape.ts";
-import { uniqueKeysOfTarget, uniqueMembership } from "./unique-keys.ts";
+import {
+  sourceOfTarget,
+  uniqueKeysOfTarget,
+  uniqueMembership,
+} from "./unique-keys.ts";
 import {
   DROP,
   walkDocument,
@@ -101,7 +103,8 @@ export type TransformNoteKind =
   | "input_invalid"
   | "invalid"
   | "collision"
-  | "mismatch";
+  | "mismatch"
+  | "numeric_id";
 
 export interface TransformNote {
   readonly path: string;
@@ -119,6 +122,8 @@ export interface TransformContext {
 }
 
 export interface PrivacyTransformer {
+  readonly timeShiftMs: number;
+  remapId(id: string): string;
   transform(
     targetKey: string,
     doc: Record<string, unknown>,
@@ -128,6 +133,12 @@ export interface PrivacyTransformer {
 
 const MAX_COLLISION_ATTEMPTS = 32;
 
+const MAX_SAFE_DIGITS = 15;
+
+const MIN_PHONE_DIGITS = 8;
+
+const DYNAMIC_KEY = "$key";
+
 const TEMPORAL_PATTERN =
   /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2})(?::(\d{2})(?:\.(\d+))?)?)?(Z|[+-]\d{2}:\d{2})?$/;
 
@@ -136,6 +147,10 @@ const KEY_VOCABULARY_TYPES: ReadonlySet<string> = new Set([
   "literal",
   "enum",
 ]);
+
+function looksPersonalKey(key: string): boolean {
+  return key.includes("@") || key.replace(/\D/g, "").length >= MIN_PHONE_DIGITS;
+}
 
 function mapTemporal(
   value: string,
@@ -161,29 +176,11 @@ function mapTemporal(
   return out + (zone ?? "");
 }
 
-function sourceOf(
-  schemas: SchemasDefinition,
-  target: PrivacyTarget,
-): TypeSource | undefined {
-  switch (target.bucket) {
-    case "collections":
-      return schemas.collections?.[target.collection];
-    case "multiCollections":
-      return schemas.multiCollections?.[target.collection]?.[target.type ?? ""];
-    case "multiModels":
-      return schemas.multiModels?.[target.collection]?.[target.type ?? ""];
-    case "scopedMultiCollections":
-      return schemas.scopedMultiCollections?.[target.collection]?.types[
-        target.type ?? ""
-      ];
-  }
-}
-
 export function fieldsOf(
   schemas: SchemasDefinition,
   target: PrivacyTarget,
 ): SchemaContent | undefined {
-  const source = sourceOf(schemas, target);
+  const source = sourceOfTarget(schemas, target);
   return source === undefined ? undefined : fieldsOfSource(source);
 }
 
@@ -230,6 +227,8 @@ function rawSchemaAtPath(fields: SchemaContent, path: string): unknown {
 export function schemaAtPath(fields: SchemaContent, path: string): unknown {
   return unwrapSchema(rawSchemaAtPath(fields, path));
 }
+
+type UniqueMode = false | "insensitive" | "exact";
 
 type SeededGenerator = (seed: number) => unknown;
 
@@ -325,7 +324,7 @@ export function createPrivacyTransformer(
     readonly schema: unknown;
     readonly path: string;
     readonly scoped: boolean;
-    readonly unique: boolean;
+    readonly unique: UniqueMode;
   }
 
   const sources = new Map<string, MirrorSource | undefined>();
@@ -348,9 +347,10 @@ export function createPrivacyTransformer(
           cls,
           schema: unwrapSchema(raw),
           path,
-          scoped: target.bucket === "scopedMultiCollections",
-          unique: uniqueMembership(uniqueKeysOfTarget(schemas, target), path)
-            .unique,
+          scoped:
+            target.bucket === "scopedMultiCollections" ||
+            target.bucket === "multiModels",
+          unique: uniqueModeOf(target, path),
         };
         break;
       }
@@ -359,16 +359,23 @@ export function createPrivacyTransformer(
     return found;
   };
 
-  const uniquePaths = new Map<string, boolean>();
+  const uniquePaths = new Map<string, UniqueMode>();
 
-  const isUnique = (targetKey: string, path: string): boolean => {
+  const uniqueModeOf = (target: PrivacyTarget, path: string): UniqueMode => {
+    const membership = uniqueMembership(
+      uniqueKeysOfTarget(schemas, target),
+      path,
+    );
+    if (!membership.unique) return false;
+    return membership.caseInsensitive ? "insensitive" : "exact";
+  };
+
+  const isUnique = (targetKey: string, path: string): UniqueMode => {
     const id = `${targetKey}|${path}`;
     let unique = uniquePaths.get(id);
     if (unique === undefined) {
       const target = plan.targets.get(targetKey);
-      unique =
-        target !== undefined &&
-        uniqueMembership(uniqueKeysOfTarget(schemas, target), path).unique;
+      unique = target === undefined ? false : uniqueModeOf(target, path);
       uniquePaths.set(id, unique);
     }
     return unique;
@@ -469,15 +476,21 @@ export function createPrivacyTransformer(
     const produce = (
       ownerSpace: string,
       message: string,
-      unique: boolean,
+      unique: UniqueMode,
       schema: unknown,
       path: string,
       key?: string,
+      raw?: string,
     ): unknown => {
-      const known = assigned.get(message);
+      const identity =
+        unique === "exact" && raw !== undefined
+          ? `${message}|raw|${raw}`
+          : message;
+      const known = assigned.get(identity);
       if (known !== undefined) return known;
-      if (!unique)
+      if (!unique) {
         return generate(schema, hmacSeed(secret, message), path, key);
+      }
       let taken = owners.get(ownerSpace);
       if (!taken) {
         taken = new Map();
@@ -492,9 +505,9 @@ export function createPrivacyTransformer(
         produced = generate(schema, seed, path, key);
         if (produced === DROP) return DROP;
         const holder = taken.get(foldFake(produced));
-        if (holder === undefined || holder === message) {
-          taken.set(foldFake(produced), message);
-          assigned.set(message, produced);
+        if (holder === undefined || holder === identity) {
+          taken.set(foldFake(produced), identity);
+          assigned.set(identity, produced);
           return produced;
         }
       }
@@ -508,7 +521,7 @@ export function createPrivacyTransformer(
     const fakeValue = (leaf: WalkLeaf, schema: unknown = leaf.schema) =>
       produce(
         `fake|${targetKey}|${leaf.path}`,
-        fakeMessage(leaf.path),
+        fakeMessage(leaf.keys.join(".")),
         isUnique(targetKey, leaf.path),
         schema,
         leaf.path,
@@ -542,6 +555,42 @@ export function createPrivacyTransformer(
         return Math.round(value / magnitude) * magnitude;
       }
       return dropOrGenerate(leaf, "dropped");
+    };
+
+    const rawOf = (value: unknown): string =>
+      typeof value === "string" ? value : canonical(value);
+
+    const keepValue = (leaf: WalkLeaf, schema: unknown): unknown => {
+      const kept = shiftDate(leaf.value);
+      return v.is(schema as v.GenericSchema, kept)
+        ? kept
+        : dropOrGenerate(leaf, "mismatch");
+    };
+
+    const remapValue = (
+      cls: PrivacyPath,
+      leaf: WalkLeaf,
+      schema: unknown,
+    ): unknown => {
+      if (looksLikeId(leaf.value, cls.spaces)) {
+        return remapId(secret, leaf.value, shift);
+      }
+      if (isObjectId(leaf.value)) {
+        return remapObjectId(secret, leaf.value, shift);
+      }
+      const expectsId = extractIdPrefix(schema) !== "";
+      if (expectsId) notes.push({ path: leaf.path, kind: "mismatch" });
+      return produce(
+        expectsId ? spaceOf(cls) : "direct",
+        valueMessage(
+          expectsId ? cls : { ...cls, space: "direct" },
+          leaf.path,
+          leaf.value,
+        ),
+        false,
+        schema,
+        leaf.path,
+      );
     };
 
     const dynamicRoots = target.paths
@@ -613,59 +662,51 @@ export function createPrivacyTransformer(
         if (!source || source.schema === undefined) {
           return dropOrGenerate(leaf, "dropped");
         }
-        const generated = produce(
-          spaceOf(source.cls),
-          valueMessage(
-            source.cls,
-            source.path,
-            leaf.value,
-            source.scoped ? scope : "",
-          ),
-          source.unique,
-          source.schema,
-          leaf.path,
-          source.path.split(".").pop(),
-        );
-        return generated === DROP
-          ? DROP
-          : applyNormalize(generated, cls.normalize);
+        let copy: unknown;
+        switch (source.cls.treatment.extract) {
+          case "keep":
+          case "include":
+            copy = keepValue(leaf, source.schema);
+            break;
+          case "remap":
+            copy = remapValue(source.cls, leaf, source.schema);
+            break;
+          case "generalise":
+            copy = generalise(leaf);
+            break;
+          default:
+            copy = produce(
+              spaceOf(source.cls),
+              valueMessage(
+                source.cls,
+                source.path,
+                leaf.value,
+                source.scoped ? scope : "",
+              ),
+              source.unique,
+              source.schema,
+              leaf.path,
+              source.path.split(".").pop(),
+              rawOf(leaf.value),
+            );
+        }
+        return copy === DROP ? DROP : applyNormalize(copy, cls.normalize);
       }
       switch (cls.treatment.extract) {
         case "keep":
-        case "include": {
-          const kept = shiftDate(leaf.value);
-          return v.is(schema as v.GenericSchema, kept)
-            ? kept
-            : dropOrGenerate(leaf, "mismatch");
-        }
-        case "remap": {
-          if (looksLikeId(leaf.value)) {
-            return remapId(secret, leaf.value, shift);
-          }
-          if (isObjectId(leaf.value)) {
-            return remapObjectId(secret, leaf.value, shift);
-          }
-          const expectsId = extractIdPrefix(schema) !== "";
-          if (expectsId) notes.push({ path: leaf.path, kind: "mismatch" });
-          return produce(
-            expectsId ? spaceOf(cls) : "direct",
-            valueMessage(
-              expectsId ? cls : { ...cls, space: "direct" },
-              leaf.path,
-              leaf.value,
-            ),
-            false,
-            schema,
-            leaf.path,
-          );
-        }
+        case "include":
+          return keepValue(leaf, schema);
+        case "remap":
+          return remapValue(cls, leaf, schema);
         case "pseudonym":
           return produce(
             spaceOf(cls),
             valueMessage(cls, leaf.path, leaf.value),
-            !override && isUnique(targetKey, leaf.path),
+            override ? false : isUnique(targetKey, leaf.path),
             schema,
             leaf.path,
+            undefined,
+            rawOf(leaf.value),
           );
         case "fake":
           return fakeValue(leaf, schema);
@@ -711,25 +752,39 @@ export function createPrivacyTransformer(
           KEY_VOCABULARY_TYPES.has((a as { type: string }).type),
       );
 
-    const mapKey = ({ path, key, schema }: WalkKey): string => {
-      if (dynamicRoots.some((r) => path === r || path.startsWith(`${r}.`))) {
-        return key;
-      }
+    const mapKey = ({ path, keys, key, schema }: WalkKey): string => {
+      const dynamicRoot = dynamicRoots.some(
+        (r) => path === r || path.startsWith(`${r}.`),
+      );
       if (schema !== undefined && keyIsVocabulary(schema)) return key;
-      if (
+      const idKey =
+        dynamicRoot || (schema !== undefined && extractIdPrefix(schema) !== "");
+      if (idKey && looksLikeId(key)) return remapId(secret, key, shift);
+      const personalSchema =
         schema !== undefined &&
-        extractIdPrefix(schema) !== "" &&
-        looksLikeId(key)
-      ) {
-        return remapId(secret, key, shift);
+        (readPrivacyMetadata(schema).length > 0 ||
+          collectActions(schema).some(
+            (a) => (a as { type?: string }).type === "email",
+          ));
+      let forcedKeep = false;
+      if (dynamicRoot) {
+        const resolution = resolutions.get([...keys, key].join("."));
+        forcedKeep =
+          resolution !== undefined &&
+          resolution !== SKIP_DYNAMIC &&
+          resolution[DYNAMIC_KEY]?.treatment?.extract === "keep";
       }
+      const personalValue =
+        plan.posture === "strict" && !forcedKeep && looksPersonalKey(key);
+      if (!personalSchema && !personalValue) return key;
       const mapped = produce(
         `key|${targetKey}|${path}`,
         `key|${targetKey}|${path}|${key}`,
-        true,
+        "exact",
         schema ?? v.string(),
         path,
         "key",
+        key,
       );
       return typeof mapped === "string"
         ? mapped
@@ -740,9 +795,51 @@ export function createPrivacyTransformer(
     notes.push(...walked.notes);
 
     const out: Record<string, unknown> = { ...walked.doc };
+    const numericId = (value: number, path: string): number | undefined => {
+      if (!Number.isSafeInteger(value)) {
+        notes.push({ path, kind: "dropped" });
+        return undefined;
+      }
+      notes.push({ path, kind: "numeric_id" });
+      const message = `numid|${targetKey}|${value}`;
+      const known = assigned.get(message);
+      if (typeof known === "number") return known;
+      const digits = Math.min(MAX_SAFE_DIGITS, String(Math.abs(value)).length);
+      const low = digits === 1 ? 0 : 10 ** (digits - 1);
+      const span = BigInt(10 ** digits - low);
+      const sign = value < 0 ? -1 : 1;
+      let taken = owners.get(`numid|${targetKey}`);
+      if (!taken) {
+        taken = new Map();
+        owners.set(`numid|${targetKey}`, taken);
+      }
+      let produced = value;
+      for (let attempt = 0; attempt < MAX_COLLISION_ATTEMPTS; attempt++) {
+        const bytes = hmacBytes(secret, `${message}|${attempt}`);
+        let n = 0n;
+        for (const byte of bytes.subarray(0, 8)) n = (n << 8n) | BigInt(byte);
+        produced = sign * (low + Number(n % span));
+        const holder = taken.get(String(produced));
+        if (holder === undefined || holder === message) {
+          taken.set(String(produced), message);
+          assigned.set(message, produced);
+          return produced;
+        }
+      }
+      notes.push({ path, kind: "collision" });
+      return produced;
+    };
+
     const identifier = (value: unknown, path: string): unknown => {
-      if (typeof value === "string") return remapId(secret, value, shift);
+      if (typeof value === "string") {
+        const pinned =
+          Object.hasOwn(fields, path) && keyIsVocabulary(fields[path]);
+        return pinned ? value : remapId(secret, value, shift);
+      }
       if (isObjectId(value)) return remapObjectId(secret, value, shift);
+      if (typeof value === "number" && plan.posture === "strict") {
+        return numericId(value, path);
+      }
       if (
         value === undefined ||
         value === null ||
@@ -777,5 +874,9 @@ export function createPrivacyTransformer(
     return { doc: out, notes };
   }
 
-  return { transform };
+  return {
+    timeShiftMs: shift,
+    remapId: (id) => remapId(secret, id, shift),
+    transform,
+  };
 }

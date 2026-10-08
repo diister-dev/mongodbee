@@ -227,6 +227,11 @@ ${yellow("EXTRACT OPTIONS:")}
                     colliding documents fail the extract)
   --dry-run         Read and transform without writing
   --json            Print the summary as JSON
+  Config hook       privacy: { resolveDynamic, recompute? } in mongodbee.config.ts
+                    classifies dynamic subtrees from their data (resolveDynamic)
+                    and recomputes derived values (recompute); both return the
+                    SKIP_DYNAMIC / SKIP_RECOMPUTE symbols of
+                    @diister/mongodbee/privacy to defer to the default
 
 ${yellow("SYNC OPTIONS:")}
   --force           Sync even if pending migrations exist (not recommended)

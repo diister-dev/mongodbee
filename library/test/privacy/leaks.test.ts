@@ -19,7 +19,6 @@ import {
   personId,
   type PrivacyConsistency,
   type PrivacyTransformerOptions,
-  remapId,
   type TransformNote,
 } from "../../src/privacy/mod.ts";
 import {
@@ -119,9 +118,7 @@ function extract(
     transformer,
     ...transformState(state, plan, transformer, {
       schemas,
-      timeShiftMs: options.timeShiftMs ?? 0,
-      remapInstanceName: (name) =>
-        remapId(SECRET, name, options.timeShiftMs ?? 0),
+      remapInstanceName: transformer.remapId,
     }),
   };
 }
@@ -1256,10 +1253,8 @@ test({
   },
 });
 
-// TODO(privacy): R1, unblocked by extract passing timeShiftMs only when --shift-days is given
 test({
   name: "leak R1 (strict cli): without --shift-days the CLI passes a zero shift, so ids and dates keep their real time",
-  ignore: true,
   timeout: 60_000,
   fn: async () => {
     const run = await strictCli();
@@ -1277,10 +1272,8 @@ test({
   },
 });
 
-// TODO(privacy): R3, unblocked by remap checking the id prefix against the declared spaces
 test({
   name: "leak R3 (strict cli): a reference holding a foreign prefix keeps that prefix in clear",
-  ignore: true,
   timeout: 60_000,
   fn: async () => {
     const run = await strictCli();
@@ -1297,10 +1290,8 @@ test({
   },
 });
 
-// TODO(privacy): R5, unblocked by R1: extract must hand transformState the default strict time shift
 test({
   name: "leak R5 (strict cli): multi-model metadata keeps the real instance creation and migration times",
-  ignore: true,
   timeout: 60_000,
   fn: async () => {
     const run = await strictCli();
@@ -1308,10 +1299,8 @@ test({
   },
 });
 
-// TODO(privacy): R6 (T12), unblocked by mapping dynamic keys once the resolver has read them
 test({
   name: "leak R6 (strict cli): the keys of a dynamic record stay in clear",
-  ignore: true,
   timeout: 60_000,
   fn: async () => {
     const run = await strictCli();
@@ -1319,10 +1308,8 @@ test({
   },
 });
 
-// TODO(privacy): R7, unblocked by a decision on numbers in unowned documents under the strict posture
 test({
   name: "leak R7 (strict cli): a number in an unowned document is kept exactly, even when it is a phone",
-  ignore: true,
   timeout: 60_000,
   fn: async () => {
     const run = await strictCli();
@@ -1330,10 +1317,8 @@ test({
   },
 });
 
-// TODO(privacy): R2, unblocked by remapping or refusing a numeric _id
 test({
   name: "leak R2: a numeric _id is copied as is",
-  ignore: true,
   fn: () => {
     const schemas: SchemasDefinition = {
       collections: {
@@ -1385,7 +1370,10 @@ test("guard: record keys are faked distinctly and consistently, never the origin
     collections: {
       "+users": {
         ...USERS,
-        scoreByContact: v.record(v.string(), v.number()),
+        scoreByContact: v.record(
+          personal(v.string(), { role: "direct" }),
+          v.number(),
+        ),
       },
     },
   };

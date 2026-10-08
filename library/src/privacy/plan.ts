@@ -558,6 +558,18 @@ function fakedByPosture(draft: Draft, why: string): void {
   draft.note = `strict posture: ${why}`;
 }
 
+const PERSONAL_KEY_NAME =
+  /phone|tel|mobile|fax|siret|siren|vat|iban|zip|postal|birth/i;
+
+function leafName(path: string): string {
+  return (
+    path
+      .split(".")
+      .filter((segment) => segment !== "*")
+      .pop() ?? path
+  );
+}
+
 function strictify(draft: Draft, owned: boolean): void {
   if (draft.overrides?.extract !== undefined) return;
   if (draft.mirrorOf !== undefined || draft.role === "dynamic") return;
@@ -565,6 +577,8 @@ function strictify(draft: Draft, owned: boolean): void {
   if (draft.tier === "inferred" && draft.role === "technical") {
     if (owned && draft.numeric) {
       fakedByPosture(draft, "number in a person-owned document");
+    } else if (draft.numeric && PERSONAL_KEY_NAME.test(leafName(draft.path))) {
+      fakedByPosture(draft, "personal key name");
     }
     return;
   }
@@ -968,10 +982,10 @@ export function buildPrivacyPlan(options: PrivacyPlanOptions): PrivacyPlan {
 
     for (const root of target.personalKeys) {
       findings.push({
-        level: "warning",
+        level: "info",
         target: target.key,
         path: root,
-        message: `record keys of "${root}" carry personal data and are copied verbatim`,
+        message: `record keys of "${root}" carry personal data and are pseudonymised`,
       });
     }
 

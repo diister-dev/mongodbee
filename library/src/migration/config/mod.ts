@@ -34,6 +34,7 @@ export type {
   EnvironmentConfig,
   MigrationConfig,
   MigrationSystemConfig,
+  PrivacyConfig,
   PathsConfig,
 } from "./types.ts";
 

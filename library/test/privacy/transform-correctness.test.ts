@@ -527,3 +527,141 @@ test("walk: rest keys and tuple rest items are walked under the * path the plan 
   );
   assert(!JSON.stringify(doc).includes("Ornans"));
 });
+
+test("shift: the transformer exposes its effective shift and remaps ids with it", () => {
+  const schemas = {
+    collections: { "+users": { _id: personId("user") } },
+  } as never;
+  const plan = buildPrivacyPlan({ schemas, posture: "strict" });
+  const transformer = createPrivacyTransformer({
+    plan,
+    schemas,
+    secret: "s3cret",
+  });
+  assertEquals(transformer.timeShiftMs, defaultTimeShiftMs("s3cret"));
+  assertEquals(
+    transformer.remapId(USER_ID),
+    transformer.transform(TARGET, { _id: USER_ID }).doc._id,
+  );
+});
+
+test("remap: a reference whose prefix is not a declared space is faked, not kept", () => {
+  const { doc, notes } = transformOne(
+    { manager: refId("user") },
+    { manager: "quixotique:42" },
+  );
+  assert(v.is(refId("user"), doc.manager));
+  assertEquals(String(doc.manager).includes("quixotique"), false);
+  assertEquals(
+    notes.filter((n) => n.kind === "mismatch").map((n) => n.path),
+    ["manager"],
+  );
+});
+
+test("strict: a number whose key name looks personal is faked, a counter is kept", () => {
+  const schemas = {
+    collections: {
+      "+users": { _id: personId("user") },
+      companies: {
+        _id: dbId("company"),
+        phone: v.number(),
+        capacity: v.number(),
+      },
+    },
+  } as never;
+  const plan = buildPrivacyPlan({ schemas, posture: "strict" });
+  const { doc } = createPrivacyTransformer({
+    plan,
+    schemas,
+    secret: "s3cret",
+  }).transform("collections/companies/", {
+    _id: "company:01j5zk3v8n2q4x6y8z0b1c3d5e",
+    phone: 33612345678,
+    capacity: 250,
+  });
+  assertNotEquals(doc.phone, 33612345678);
+  assertEquals(doc.capacity, 250);
+});
+
+test("ids: a numeric _id is remapped injectively under the strict posture and noted", () => {
+  const schemas = {
+    collections: {
+      "+users": { _id: personId("user") },
+      cards: { _id: v.number(), label: v.string() },
+    },
+  } as never;
+  const transformer = createPrivacyTransformer({
+    plan: buildPrivacyPlan({ schemas, posture: "strict" }),
+    schemas,
+    secret: "s3cret",
+  });
+  const ids = [33612345678, 33612345679, 7].map((_id) =>
+    transformer.transform("collections/cards/", { _id, label: "x" }),
+  );
+  const mapped = ids.map((r) => r.doc._id as number);
+  assertEquals(new Set(mapped).size, 3);
+  assertEquals(
+    mapped.map((n) => String(n).length),
+    [11, 11, 1],
+  );
+  assert(!mapped.includes(33612345678));
+  assert(ids.every((r) => r.notes.some((n) => n.kind === "numeric_id")));
+});
+
+test("record keys: a plain key is kept, and under strict only an email- or phone-looking one is pseudonymised", () => {
+  const schemas = {
+    collections: {
+      "+users": {
+        _id: personId("user"),
+        counters: v.record(v.string(), v.number()),
+      },
+    },
+  } as never;
+  const counters = { fr: 1, "a@b.fr": 2, "+33 6 12 34 56 78": 3 };
+  const run = (posture: "personal" | "strict") =>
+    Object.keys(
+      createPrivacyTransformer({
+        plan: buildPrivacyPlan({ schemas, posture }),
+        schemas,
+        secret: "s3cret",
+      }).transform(TARGET, { _id: USER_ID, counters }).doc.counters as object,
+    );
+  assertEquals(run("personal"), Object.keys(counters));
+  const strict = run("strict");
+  assertEquals(strict.length, 3);
+  assertEquals(strict.includes("fr"), true);
+  assertEquals(strict.includes("a@b.fr"), false);
+  assertEquals(strict.includes("+33 6 12 34 56 78"), false);
+});
+
+test("collisions: values differing only by case get distinct fakes under a case-sensitive unique index, and one fake when the index folds case", () => {
+  const login = (insensitive: boolean) => ({
+    collections: {
+      "+users": {
+        _id: personId("user"),
+        login: withIndex(personal(v.string(), { role: "direct" }), {
+          unique: true,
+          insensitive,
+        }),
+      },
+    },
+  });
+  for (const insensitive of [false, true]) {
+    const schemas = login(insensitive) as never;
+    const transformer = createPrivacyTransformer({
+      plan: buildPrivacyPlan({ schemas }),
+      schemas,
+      secret: "s3cret",
+    });
+    const fakes = ["Bob", "bob"].map(
+      (value) =>
+        transformer.transform(TARGET, { _id: USER_ID, login: value }).doc
+          .login as string,
+    );
+    assertEquals(
+      new Set(fakes.map((f) => f.toLowerCase())).size,
+      insensitive ? 1 : 2,
+      `insensitive=${insensitive}`,
+    );
+  }
+});

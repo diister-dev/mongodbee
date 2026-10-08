@@ -23,7 +23,7 @@ import {
   discoverMultiCollectionInstances,
   getMultiCollectionMigrations,
 } from "../../../src/migration/multicollection-registry.ts";
-import { remapId } from "../../../src/privacy/pseudonym.ts";
+import { defaultTimeShiftMs, remapId } from "../../../src/privacy/pseudonym.ts";
 import type { SchemasDefinition } from "../../../src/migration/types.ts";
 import { findDanglingReferences } from "./referential-integrity.ts";
 import {
@@ -115,7 +115,7 @@ e2e(
         });
         const out = client.db(target);
         const expectedNames = world.instanceNames.map((n) =>
-          remapId(SECRET, n),
+          remapId(SECRET, n, defaultTimeShiftMs(SECRET)),
         );
         const names = await discoverMultiCollectionInstances(out, "exposition");
         assertEquals(names, [...expectedNames].sort());
@@ -266,50 +266,37 @@ e2e(
 );
 
 e2e(
-  "extract: a pseudonym collision fails loudly, names the index, leaves nothing behind and prints no real value",
+  "extract: emails differing only by case stay distinct under a case-sensitive unique index and print no real value",
   async () => {
-    await withSourceAndTarget(async ({ dir, client, source, target }) => {
-      const twin = "ALICE.REAL@acme-corp.example";
-      await rawCollection(client.db(source), "users").insertOne({
-        _id: `user:${newId()}`,
-        email: twin,
-        firstname: "Alicetwin",
-        role: "member",
-      });
-      const gated = await captureOutput(() =>
-        extractCommand({
-          cwd: dir,
-          fromDb: source,
-          toDb: target,
-          secret: SECRET,
-        }),
-      );
-      assert(gated.error instanceof Error);
-      assertStringIncludes(gated.error.message, "unique_index");
-      assertEquals(await client.db(target).listCollections().toArray(), []);
-
-      const { error, combined: output } = await captureOutput(() =>
-        extractCommand({
-          cwd: dir,
-          fromDb: source,
-          toDb: target,
-          secret: SECRET,
-          allowViolations: true,
-        }),
-      );
-      assert(error instanceof Error);
-      assertStringIncludes(error.message, "users");
-      assertStringIncludes(error.message, "duplicate");
-      for (const real of [...REAL.emails, twin, "Alicetwin"]) {
-        assert(!error.message.includes(real), "error leaks a real value");
-        assert(!output.includes(real), "output leaks a real value");
-      }
-      assertEquals(
-        await client.db(target).listCollections().toArray(),
-        [],
-        "a failed extract must not leave a half-written database",
-      );
-    });
+    await withSourceAndTarget(
+      async ({ dir, client, source, target, world }) => {
+        const twin = "ALICE.REAL@acme-corp.example";
+        await rawCollection(client.db(source), "users").insertOne({
+          _id: `user:${world.userIds[0].slice(5, -1)}z`,
+          email: twin,
+          firstname: "Alicetwin",
+          role: "member",
+        });
+        const { error, combined: output } = await captureOutput(() =>
+          extractCommand({
+            cwd: dir,
+            fromDb: source,
+            toDb: target,
+            secret: SECRET,
+          }),
+        );
+        assertEquals(error, undefined);
+        for (const real of [...REAL.emails, twin, "Alicetwin"]) {
+          assert(!output.includes(real), "output leaks a real value");
+        }
+        const written = await rawCollection(client.db(target), "users")
+          .find({})
+          .toArray();
+        const emails = written.map((doc) => String(doc.email));
+        assertEquals(new Set(emails).size, emails.length);
+        assertEquals(emails.length, REAL.emails.length + 1);
+      },
+    );
   },
 );
 

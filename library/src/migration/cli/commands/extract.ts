@@ -21,7 +21,6 @@ import {
   type PrivacyPlan,
   type PrivacyPosture,
   type RecomputeContext,
-  remapId,
   SKIP_RECOMPUTE,
   type TransformNoteKind,
 } from "../../../privacy/mod.ts";
@@ -92,7 +91,6 @@ export interface ExtractSummary {
 
 export interface TransformStateOptions {
   readonly schemas: SchemasDefinition;
-  readonly timeShiftMs: number;
   readonly remapInstanceName: (name: string) => string;
 }
 
@@ -354,7 +352,9 @@ export function transformState(
     const metadata = content.filter(isMetadataDocument);
     if (metadata.length > 0) {
       (out.multiCollections[name] ??= { content: [] }).content.push(
-        ...metadata.map((doc) => sanitiseMetadata(doc, options.timeShiftMs)),
+        ...metadata.map((doc) =>
+          sanitiseMetadata(doc, transformer.timeShiftMs),
+        ),
       );
     }
   }
@@ -368,7 +368,7 @@ export function transformState(
     countSkipped("multiModels", instance.modelType, instance.content);
     const content: Record<string, unknown>[] = instance.content
       .filter(isMetadataDocument)
-      .map((doc) => sanitiseMetadata(doc, options.timeShiftMs));
+      .map((doc) => sanitiseMetadata(doc, transformer.timeShiftMs));
     for (const target of plan.targets.values()) {
       if (
         target.bucket !== "multiModels" ||
@@ -405,8 +405,11 @@ export async function extractCommand(
   const toDb = options.toDb || options["to-db"];
   const fromMigration = options.fromMigration || options["from-migration"];
   const shiftDaysRaw = options.shiftDays ?? options["shift-days"];
-  const shiftDays = shiftDaysRaw === undefined ? 0 : Number(shiftDaysRaw);
-  if (Number.isNaN(shiftDays)) throw new Error("--shift-days must be a number");
+  const shiftDays =
+    shiftDaysRaw === undefined ? undefined : Number(shiftDaysRaw);
+  if (shiftDays !== undefined && Number.isNaN(shiftDays)) {
+    throw new Error("--shift-days must be a number");
+  }
 
   const cwd = options.cwd || process.cwd();
   const config = await loadConfig({ configPath: options.configPath, cwd });
@@ -469,6 +472,13 @@ export async function extractCommand(
     console.error(
       yellow(
         "Warning: --secret was given as a literal, visible in process lists and shell history; prefer --secret env:NAME",
+      ),
+    );
+  }
+  if (plan.posture === "strict" && shiftDays === 0) {
+    console.error(
+      yellow(
+        "Warning: --shift-days 0 keeps every creation time and date as in the source; omit the option to use the strict default shift",
       ),
     );
   }
@@ -536,19 +546,25 @@ export async function extractCommand(
     );
     const replayed = await replayWithoutValues(state, replay);
 
-    const shiftMs = shiftDays * 86_400_000;
     const transformer = createPrivacyTransformer({
       plan,
       schemas,
       secret,
       consistency,
-      timeShiftMs: shiftMs,
-      recompute: keepComputedRevision,
+      ...(shiftDays !== undefined && { timeShiftMs: shiftDays * 86_400_000 }),
+      ...(config.privacy?.resolveDynamic && {
+        resolveDynamic: config.privacy.resolveDynamic,
+      }),
+      recompute: (context) => {
+        const custom = config.privacy?.recompute?.(context);
+        return custom === undefined || custom === SKIP_RECOMPUTE
+          ? keepComputedRevision(context)
+          : custom;
+      },
     });
     const result = transformState(replayed.state, plan, transformer, {
       schemas,
-      timeShiftMs: shiftMs,
-      remapInstanceName: (name) => remapId(secret, name, shiftMs),
+      remapInstanceName: transformer.remapId,
     });
     const violations = checkScenarioState({
       state: result.state,
@@ -560,7 +576,7 @@ export async function extractCommand(
       posture: plan.posture,
       ...(options.scope !== undefined && {
         scope: {
-          scope: remapId(secret, options.scope, shiftMs),
+          scope: transformer.remapId(options.scope),
           copiedWhole: [
             ...Object.keys(replayed.state.collections),
             ...Object.keys(replayed.state.multiCollections),

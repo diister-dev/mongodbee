@@ -136,8 +136,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C2, unique pseudonyms must fold case; the C9 half is covered by test/scenario/populate.test.ts
-  ignore: true,
   name: "C2+C9 extract: logins differing only by case extract cleanly, and a failed write leaves the target empty",
   timeout: 60_000,
   fn: async () => {
@@ -186,8 +184,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C12, extract passes timeShiftMs = 0 when --shift-days is absent, so the strict posture's secret-derived shift never applies (leak L12 via the CLI); pass undefined unless --shift-days is given
-  ignore: true,
   name: "C12 extract: the strict default posture shifts ulid timestamps like the library does",
   timeout: 60_000,
   fn: async () => {
