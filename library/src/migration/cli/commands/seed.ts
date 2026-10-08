@@ -9,7 +9,7 @@ import { markMigrationAsAdopted } from "../../state.ts";
 import { pathToFileUrl } from "../../utils/platform.ts";
 import { resolveMigrationRef } from "../utils/resolve-ref.ts";
 import {
-  countDocuments,
+  countCollections,
   renderScenarioReport,
   runScenario,
   type SeedScenario,
@@ -104,10 +104,10 @@ export async function seedCommand(
   await client.connect();
   try {
     const db = client.db(dbName);
-    const existing = await countDocuments(db);
+    const existing = await countCollections(db);
     if (existing > 0 && !options.force) {
       throw new Error(
-        `Database "${dbName}" already holds ${existing} document(s); seed only writes into an empty database (or pass --force)`,
+        `Database "${dbName}" already holds ${existing} collection(s); seed only writes into an empty database (or pass --force)`,
       );
     }
     const atIndex = chain.findIndex((m) => m.id === at);

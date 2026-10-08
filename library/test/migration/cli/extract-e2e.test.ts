@@ -9,8 +9,12 @@ import {
 import process from "node:process";
 import { withTempDir } from "./shared.ts";
 import { MongoClient } from "../../../src/mongodb.ts";
+import { classifyCommand } from "../../../src/migration/cli/commands/classify.ts";
 import { extractCommand } from "../../../src/migration/cli/commands/extract.ts";
-import { getAppliedMigrationIds } from "../../../src/migration/state.ts";
+import {
+  getAppliedMigrationIds,
+  markMigrationAsAdopted,
+} from "../../../src/migration/state.ts";
 import { buildPrivacyPlan } from "../../../src/privacy/mod.ts";
 import { defineModel } from "../../../src/multi-collection-model.ts";
 import { multiCollection } from "../../../src/multi-collection.ts";
@@ -272,12 +276,25 @@ e2e(
           firstname: "Alicetwin",
           role: "member",
         });
+        const gated = await captureOutput(() =>
+          extractCommand({
+            cwd: dir,
+            fromDb: source,
+            toDb: target,
+            secret: SECRET,
+          }),
+        );
+        assert(gated.error instanceof Error);
+        assertStringIncludes(gated.error.message, "unique_index");
+        assertEquals(await client.db(target).listCollections().toArray(), []);
+
         const { error, combined: output } = await captureOutput(() =>
           extractCommand({
             cwd: dir,
             fromDb: source,
             toDb: target,
             secret: SECRET,
+            allowViolations: true,
           }),
         );
         assert(error instanceof Error);
@@ -635,6 +652,82 @@ e2e(
         await client.db(target).dropDatabase();
         await client.close();
       }
+    });
+  },
+);
+
+e2e(
+  "extract: data that breaks its own schemas is reported in the summary and only written with --allow-violations",
+  async () => {
+    await withSourceAndTarget(async ({ dir, client, source, world }) => {
+      await rawCollection(client.db(source), "users").insertOne({
+        _id: `user:${world.userIds[0].slice(5, -1)}z`,
+        email: REAL.emails[0].toUpperCase(),
+        firstname: "Brokenreal",
+        role: "member",
+      });
+      const preview = await captureOutput(() =>
+        extractCommand({
+          cwd: dir,
+          fromDb: source,
+          dryRun: true,
+          secret: SECRET,
+          allowViolations: true,
+          json: true,
+        }),
+      );
+      assertEquals(preview.error, undefined);
+      const summary = JSON.parse(preview.output);
+      assertEquals(summary.violationsAllowed, true);
+      assertEquals(
+        summary.violations.map((v: { kind: string }) => v.kind),
+        ["unique_index"],
+      );
+      assert(!preview.combined.includes("Brokenreal"));
+    });
+  },
+);
+
+e2e(
+  "extract: a source ledger the local chain does not know is refused, a ledger at the head is read as is",
+  async () => {
+    await withSourceAndTarget(async ({ dir, client, source, target }) => {
+      await markMigrationAsAdopted(
+        client.db(source),
+        "2030_01_01_0000_FUTURE01@future",
+        "future",
+      );
+      const refused = await captureOutput(() =>
+        extractCommand({
+          cwd: dir,
+          fromDb: source,
+          toDb: target,
+          secret: SECRET,
+          json: true,
+        }),
+      );
+      assert(refused.error instanceof Error);
+      assertStringIncludes(refused.error.message, "FUTURE01");
+      assertEquals(await client.db(target).listCollections().toArray(), []);
+    });
+  },
+);
+
+e2e(
+  "classify: previews exactly what extract uses, the head migration schemas under the strict posture",
+  async () => {
+    await withProject(async (dir) => {
+      const plans: Record<string, unknown>[] = [];
+      const { output } = await captureOutput(() =>
+        classifyCommand({ cwd: dir, json: true }),
+      );
+      plans.push(JSON.parse(output));
+      const viaAt = await captureOutput(() =>
+        classifyCommand({ cwd: dir, at: BIRTH, json: true }),
+      );
+      plans.push(JSON.parse(viaAt.output));
+      assertEquals(plans[0], plans[1]);
+      assertEquals(plans[0].posture, "strict");
     });
   },
 );

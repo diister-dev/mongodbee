@@ -10,14 +10,18 @@ import {
 } from "../migration/types.ts";
 import { discoverMultiCollectionInstances } from "../migration/multicollection-registry.ts";
 
+export type InsertedIds = Map<string, unknown[]>;
+
 export interface WriteStateOptions {
   readonly batchSize?: number;
+  readonly inserted?: InsertedIds;
 }
 
 const DUPLICATE_KEY = 11000;
 const DUPLICATE_INDEX_PATTERN = /index: (\S+) dup key/;
 
 interface BulkWriteFailure {
+  readonly index?: number;
   readonly code?: number;
   readonly errmsg?: string;
 }
@@ -54,8 +58,13 @@ async function insertAll(
   collection: string,
   docs: readonly Record<string, unknown>[],
   batchSize: number,
+  inserted?: InsertedIds,
 ): Promise<number> {
   if (docs.length === 0) return 0;
+  const log = (ids: unknown[]) => {
+    if (inserted)
+      inserted.set(collection, [...(inserted.get(collection) ?? []), ...ids]);
+  };
   const target = db.collection(collection);
   for (let i = 0; i < docs.length; i += batchSize) {
     const batch = docs.slice(i, i + batchSize);
@@ -64,9 +73,12 @@ async function insertAll(
         batch.map((d) => sanitizeForMongoDB(d)),
         { ordered: false, bypassDocumentValidation: true },
       );
+      log(batch.map((d) => d._id));
     } catch (error) {
       const failures = bulkWriteFailures(error);
       if (failures === undefined) throw error;
+      const rejected = new Set(failures.map((f) => f.index));
+      log(batch.filter((_, index) => !rejected.has(index)).map((d) => d._id));
       throw new Error(
         describeBulkWriteFailure(collection, batch.length, failures),
         { cause: error },
@@ -92,11 +104,23 @@ export async function writeStateToDatabase(
   const written: Record<string, number> = {};
   for (const bucket of WRITE_BUCKETS) {
     for (const [name, { content }] of Object.entries(state[bucket])) {
-      written[name] = await insertAll(db, name, content, batchSize);
+      written[name] = await insertAll(
+        db,
+        name,
+        content,
+        batchSize,
+        options.inserted,
+      );
     }
   }
   for (const [name, { content }] of Object.entries(state.multiModels)) {
-    written[name] = await insertAll(db, name, content, batchSize);
+    written[name] = await insertAll(
+      db,
+      name,
+      content,
+      batchSize,
+      options.inserted,
+    );
   }
   return written;
 }
@@ -119,6 +143,7 @@ export async function populateDatabase(
   const { schemas } = options.migration;
   const existing = await listCollectionNames(db);
   const created: string[] = [];
+  const inserted: InsertedIds = new Map();
   const create = async (name: string) => {
     if (existing.has(name) || created.includes(name)) return;
     await db.createCollection(name);
@@ -142,6 +167,7 @@ export async function populateDatabase(
         name,
         instance.content.filter(isMetadataDocument),
         batchSize,
+        inserted,
       );
       remaining.multiModels[name] = {
         ...instance,
@@ -151,8 +177,15 @@ export async function populateDatabase(
     await createMongodbApplier(db, options.migration, {
       currentMigrationId: "",
     }).applyMigration([], "up");
-    return await writeStateToDatabase(db, remaining, { batchSize });
+    return await writeStateToDatabase(db, remaining, { batchSize, inserted });
   } catch (error) {
+    for (const [name, ids] of inserted) {
+      if (created.includes(name)) continue;
+      await db
+        .collection(name)
+        .deleteMany({ _id: { $in: ids } } as never)
+        .catch(() => false);
+    }
     for (const name of created) {
       await db
         .collection(name)
@@ -174,10 +207,11 @@ export async function readStateFromDatabase(
 ): Promise<DatabaseState> {
   const state = createEmptyDatabaseState();
   const read = async (name: string, filter: Record<string, unknown> = {}) =>
-    (await db.collection(name).find(filter).toArray()) as Record<
-      string,
-      unknown
-    >[];
+    (await db
+      .collection(name)
+      .find(filter)
+      .sort({ _id: 1 })
+      .toArray()) as Record<string, unknown>[];
 
   for (const name of Object.keys(schemas.collections ?? {})) {
     state.collections[name] = { content: await read(name) };
@@ -202,12 +236,7 @@ export async function readStateFromDatabase(
   return state;
 }
 
-export async function countDocuments(db: Db): Promise<number> {
-  const existing = await db.listCollections({}, { nameOnly: true }).toArray();
-  let total = 0;
-  for (const info of existing) {
-    if (info.name.startsWith("system.")) continue;
-    total += await db.collection(info.name).estimatedDocumentCount();
-  }
-  return total;
+export async function countCollections(db: Db): Promise<number> {
+  const existing = await listCollectionNames(db);
+  return [...existing].filter((name) => !name.startsWith("system.")).length;
 }

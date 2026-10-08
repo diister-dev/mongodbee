@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import process from "node:process";
 import { test } from "../../+harness.ts";
 import { assert, assertEquals, assertRejects } from "../../+assert.ts";
@@ -126,6 +126,7 @@ test("cli: classify reports the plan of the project schemas and fails on classif
   });
   await withTempDir(async (dir) => {
     await writeProject(dir, dbName("classify"));
+    await rm(`${dir}/migrations`, { recursive: true });
     await writeFile(
       `${dir}/schemas.ts`,
       `
@@ -142,7 +143,8 @@ export const schemas = { collections: { users: { _id: dbId("user"), email: v.pip
 });
 
 test("cli: classify takes a posture and refuses an unknown one", async () => {
-  assertEquals(parsePosture(undefined), "personal");
+  assertEquals(parsePosture(undefined), "strict");
+  assertEquals(parsePosture("personal"), "personal");
   assertEquals(parsePosture("strict"), "strict");
   await withTempDir(async (dir) => {
     await writeProject(dir, dbName("classify"));

@@ -193,7 +193,9 @@ ${yellow("STUDIO OPTIONS:")}
   --write           Allow editing, creating and deleting documents (loopback only)
 
 ${yellow("CLASSIFY OPTIONS:")}
-  --at              Classify the schemas frozen in this migration instead of schemas.ts
+  --at              Classify the schemas frozen in this migration (default: the
+                    last one, as extract does; schemas.ts when there is none)
+  --posture         strict | personal (default: strict, as extract)
   --json            Print the plan as JSON
 
 ${yellow("SEED OPTIONS:")}
@@ -219,6 +221,8 @@ ${yellow("EXTRACT OPTIONS:")}
   --scope           Only extract this scope of the scoped collections; unscoped
                     collections are still copied whole (listed in the summary)
   --allow-unknown   Proceed with UNKNOWN paths (they are dropped)
+  --allow-violations Write even when the extracted data breaks its schemas
+                    (invalid, unique_index, mirror_mismatch); default: refuse
   --force           Write into a non-empty target database (existing data is kept;
                     colliding documents fail the extract)
   --dry-run         Read and transform without writing
@@ -256,6 +260,7 @@ async function main(): Promise<void> {
       "progress",
       "json",
       "allow-unknown",
+      "allow-violations",
       "skip-privilege-check",
       "write",
     ],

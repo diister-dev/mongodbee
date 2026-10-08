@@ -57,8 +57,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C17, runScenario/seed never recompute computed fields: the generator fills the computed root with mock values; call recomputeComputedFields(state, at.schemas) after replay
-  ignore: true,
   name: "C17 scenario: seeded computed fields equal the truth of the seeded sources",
   fn: async () => {
     const { from } = await import("../../src/computed.ts");

@@ -85,8 +85,6 @@ function names() {
 type Raw = { _id: string; [key: string]: unknown };
 
 test({
-  // TODO(privacy): C8, extract must read the source ledger and default --from-migration to its last applied id (or refuse when it is behind the chain head)
-  ignore: true,
   name: "C8 extract: a source behind the chain head is replayed, not baselined at head with old-shaped documents",
   timeout: 60_000,
   fn: async () => {
@@ -138,7 +136,7 @@ test({
 });
 
 test({
-  // TODO(privacy): C2+C9, unique pseudonyms fold case (C2); populateDatabase must also undo inserts into collections that pre-existed empty
+  // TODO(privacy): C2, unique pseudonyms must fold case; the C9 half is covered by test/scenario/populate.test.ts
   ignore: true,
   name: "C2+C9 extract: logins differing only by case extract cleanly, and a failed write leaves the target empty",
   timeout: 60_000,
@@ -165,6 +163,7 @@ test({
             toDb: target,
             secret: "review-secret",
             json: true,
+            force: true,
           });
         } catch (e) {
           error = e;

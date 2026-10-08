@@ -1,3 +1,4 @@
+import { recomputeComputedFields } from "./computed.ts";
 import {
   createEmptyDatabaseState,
   type DatabaseState,
@@ -108,6 +109,7 @@ export async function runScenario(
   const applied = replay.applied;
 
   const at = migrations[atIndex];
+  recomputeComputedFields(state, at.schemas);
   const plan = buildPrivacyPlan({ schemas: at.schemas });
   const violations = [
     ...generation.violations,

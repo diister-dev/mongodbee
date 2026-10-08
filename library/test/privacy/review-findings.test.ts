@@ -374,6 +374,7 @@ test({
     state.multiModels[EXPO] = { modelType: "exposition", content: [] };
     const out = transformState(state, plan, transformer, {
       schemas: schemas as never,
+      timeShiftMs: 0,
       remapInstanceName: (name) => remapId("s3cret", name),
     });
     const ref = out.state.collections["+users"].content[0].expositionId;

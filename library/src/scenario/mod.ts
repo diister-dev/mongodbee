@@ -38,7 +38,7 @@ export {
 export { docsOf, isMetadataDocument, resolveTargetKey } from "./state.ts";
 export { SKIP } from "@diister/valibot-mock";
 export {
-  countDocuments,
+  countCollections,
   type PopulateDatabaseOptions,
   populateDatabase,
   readStateFromDatabase,

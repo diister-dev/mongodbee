@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import process from "node:process";
 import { blue, bold, dim, red } from "../../../utils/colors.ts";
 import * as path from "node:path";
@@ -24,7 +25,7 @@ export interface ClassifyCommandOptions {
 
 export function parsePosture(raw: string | undefined): PrivacyPosture {
   if (raw === undefined || raw === "personal" || raw === "strict") {
-    return raw ?? "personal";
+    return raw ?? "strict";
   }
   throw new Error(`--posture must be personal or strict, got "${raw}"`);
 }
@@ -46,19 +47,22 @@ export async function loadSchemasAt(
   config: { paths?: { migrations?: string; schemas?: string } },
   at: string | undefined,
 ): Promise<{ schemas: SchemasDefinition; label: string }> {
-  if (at === undefined) {
+  const migrationsDir = path.resolve(
+    cwd,
+    config.paths?.migrations || "./migrations",
+  );
+  const chain = buildMigrationChain(
+    existsSync(migrationsDir) ? await loadAllMigrations(migrationsDir) : [],
+  );
+  if (at === undefined && chain.length === 0) {
     const schemaPath = path.resolve(
       cwd,
       config.paths?.schemas || "./schemas.ts",
     );
     return { schemas: await loadProjectSchema(schemaPath), label: schemaPath };
   }
-  const migrationsDir = path.resolve(
-    cwd,
-    config.paths?.migrations || "./migrations",
-  );
-  const chain = buildMigrationChain(await loadAllMigrations(migrationsDir));
-  const migration = resolveMigrationRef(chain, at);
+  const migration =
+    at === undefined ? chain[chain.length - 1] : resolveMigrationRef(chain, at);
   return { schemas: migration.schemas, label: `migration ${migration.id}` };
 }
 

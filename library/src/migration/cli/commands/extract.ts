@@ -3,7 +3,7 @@ import process from "node:process";
 import { blue, bold, dim, green, red, yellow } from "../../../utils/colors.ts";
 import * as path from "node:path";
 
-import { MongoClient } from "../../../mongodb.ts";
+import { type Db, MongoClient } from "../../../mongodb.ts";
 import { loadConfig } from "../../config/loader.ts";
 import { buildMigrationChain, loadAllMigrations } from "../../discovery.ts";
 import { loadProjectSchema } from "../../schema-validation.ts";
@@ -28,7 +28,7 @@ import {
 import {
   applyMigrationsInMemory,
   checkScenarioState,
-  countDocuments,
+  countCollections,
   recomputeComputedFields,
   docsOf,
   isMetadataDocument,
@@ -63,6 +63,8 @@ export interface ExtractCommandOptions {
   "allow-unknown"?: boolean;
   allowUnknown?: boolean;
   force?: boolean;
+  allowViolations?: boolean;
+  "allow-violations"?: boolean;
   dryRun?: boolean;
   "dry-run"?: boolean;
   json?: boolean;
@@ -83,6 +85,7 @@ export interface ExtractSummary {
   };
   readonly skipped: Record<string, Record<string, number>>;
   readonly violations: readonly ScenarioViolation[];
+  readonly violationsAllowed: boolean;
   readonly secretDiscarded: boolean;
   readonly applied: readonly string[];
 }
@@ -114,6 +117,15 @@ const REPORTED_VIOLATIONS: ReadonlySet<ScenarioViolation["kind"]> = new Set([
   "dangling_reference",
   "owner_unresolved",
   "duplicate_id",
+  "invalid_document",
+  "unique_index",
+  "mirror_mismatch",
+]);
+
+const BLOCKING_VIOLATIONS: ReadonlySet<ScenarioViolation["kind"]> = new Set([
+  "invalid_document",
+  "unique_index",
+  "mirror_mismatch",
 ]);
 
 function resolveSecret(raw: string | undefined): {
@@ -200,6 +212,27 @@ async function replayWithoutValues(
     }
   }
   return { state: current, applied };
+}
+
+async function resolveSourceStep(
+  chain: readonly MigrationDefinition[],
+  explicit: string | undefined,
+  sourceDb: Db,
+): Promise<MigrationDefinition | undefined> {
+  if (chain.length === 0) return undefined;
+  if (explicit) return resolveMigrationRef(chain, explicit);
+  const applied = await getAppliedMigrationIds(sourceDb);
+  const known = new Set(chain.map((m) => m.id));
+  const foreign = applied.filter((id) => !known.has(id));
+  if (foreign.length > 0) {
+    throw new Error(
+      `The source ledger holds ${foreign.length} migration(s) the local chain does not know (${foreign.join(", ")}); extract needs the migrations the source was built with`,
+    );
+  }
+  const index = Math.max(
+    ...applied.map((id) => chain.findIndex((m) => m.id === id)),
+  );
+  return index >= 0 && index < chain.length - 1 ? chain[index] : undefined;
 }
 
 async function serverIdentity(client: MongoClient): Promise<string> {
@@ -363,6 +396,8 @@ export async function extractCommand(
   options: ExtractCommandOptions = {},
 ): Promise<void> {
   const dryRun = options.dryRun || options["dry-run"] || false;
+  const allowViolations =
+    options.allowViolations || options["allow-violations"] || false;
   const allowUnknown =
     options.allowUnknown || options["allow-unknown"] || false;
   const fromDb = options.fromDb || options["from-db"];
@@ -402,16 +437,10 @@ export async function extractCommand(
     existsSync(migrationsDir) ? await loadAllMigrations(migrationsDir) : [],
   );
   let schemas: SchemasDefinition;
-  let replay: readonly MigrationDefinition[] = [];
   let head: MigrationDefinition | undefined;
   if (chain.length > 0) {
     head = chain[chain.length - 1];
     schemas = head.schemas;
-    if (fromMigration) {
-      const from = resolveMigrationRef(chain, fromMigration);
-      const fromIndex = chain.findIndex((m) => m.id === from.id);
-      replay = chain.slice(fromIndex + 1);
-    }
   } else {
     schemas = await loadProjectSchema(
       path.resolve(cwd, config.paths?.schemas || "./schemas.ts"),
@@ -420,7 +449,7 @@ export async function extractCommand(
 
   const plan = buildPrivacyPlan({
     schemas,
-    posture: parsePosture(options.posture ?? "strict"),
+    posture: parsePosture(options.posture),
   });
   const errors = plan.findings.filter((f) => f.level === "error");
   if (errors.length > 0) {
@@ -473,18 +502,30 @@ export async function extractCommand(
         sourceDb,
         toDb!,
       );
-      const existing = await countDocuments(targetClient.db(toDb!));
+      const existing = await countCollections(targetClient.db(toDb!));
       if (existing > 0 && !options.force) {
         throw new Error(
-          `Database "${toDb}" already holds ${existing} document(s); extract only writes into an empty database (or pass --force)`,
+          `Database "${toDb}" already holds ${existing} collection(s); extract only writes into a database without collections (or pass --force)`,
         );
       }
     }
 
-    const sourceSchemas =
-      replay.length > 0
-        ? resolveMigrationRef(chain, fromMigration!).schemas
-        : schemas;
+    const sourceStep = await resolveSourceStep(
+      chain,
+      fromMigration,
+      sourceClient.db(sourceDb),
+    );
+    const replay = sourceStep
+      ? chain.slice(chain.findIndex((m) => m.id === sourceStep.id) + 1)
+      : [];
+    if (!options.json && replay.length > 0) {
+      console.log(
+        dim(
+          `Source ledger at ${sourceStep!.id}: replaying ${replay.length} migration(s) in memory`,
+        ),
+      );
+    }
+    const sourceSchemas = sourceStep ? sourceStep.schemas : schemas;
     const state = await readStateFromDatabase(
       sourceClient.db(sourceDb),
       sourceSchemas,
@@ -533,6 +574,7 @@ export async function extractCommand(
       }),
       skipped: result.skipped,
       violations,
+      violationsAllowed: allowViolations,
       secretDiscarded: discarded,
       applied: replayed.applied,
     };
@@ -577,6 +619,20 @@ export async function extractCommand(
       (total, entry) => total + (entry.notes.collision ?? 0),
       0,
     );
+    const invalidNotes = Object.values(result.summary).reduce(
+      (total, entry) => total + (entry.notes.invalid ?? 0),
+      0,
+    );
+    const blocking = violations.filter((v) => BLOCKING_VIOLATIONS.has(v.kind));
+    if ((invalidNotes > 0 || blocking.length > 0) && !allowViolations) {
+      const kinds = [
+        ...(invalidNotes > 0 ? [`invalid ${invalidNotes}`] : []),
+        ...blocking.map((v) => `${v.kind} ${v.count ?? 1} (${v.target})`),
+      ];
+      throw new Error(
+        `The extracted data breaks its own schemas (${kinds.join(", ")}); nothing was written. Fix the classification or pass --allow-violations`,
+      );
+    }
     if (collisions > 0) {
       throw new Error(
         `${collisions} unique value(s) could not be made distinct by the pseudonymisation; nothing was written`,
