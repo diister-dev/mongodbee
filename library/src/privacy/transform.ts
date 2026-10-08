@@ -415,11 +415,11 @@ export function createPrivacyTransformer(
   };
 
   const strongest = (a: UniqueMode, b: UniqueMode): UniqueMode =>
-    a === "exact" || b === "exact"
-      ? "exact"
-      : a === "insensitive" || b === "insensitive"
-        ? "insensitive"
-        : false;
+    a === false
+      ? b
+      : b === false
+        ? a
+        : { exact: a.exact || b.exact, global: a.global || b.global };
 
   const spaceModes = new Map<string, UniqueMode>();
 
@@ -430,7 +430,9 @@ export function createPrivacyTransformer(
     for (const target of plan.targets.values()) {
       for (const path of target.paths) {
         if (path.space === space && path.mirrorOf === undefined) {
-          mode = strongest(mode, uniqueModeOf(target, path.path));
+          const local = uniqueModeOf(target, path.path);
+          if (local)
+            mode = strongest(mode, { exact: local.exact, global: true });
         }
       }
     }

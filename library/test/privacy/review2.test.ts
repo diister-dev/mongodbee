@@ -467,7 +467,6 @@ test({
 });
 
 test({
-  ignore: true,
   name: "V15 a strict-keep configuration document does not keep a field whose schema certainly holds an email",
   fn: () => {
     const schemas = {
@@ -873,4 +872,55 @@ test("mirrors: a mirror whose source document cannot be found keeps the value-ke
   assertNotEquals(mail.to, "jean@acme.fr");
   assertEquals(typeof mail.to, "string");
   assertEquals(summary["collections/mails/"].notes.mirror_unresolved, 1);
+});
+
+test("V1 a scoped leaf of a space shares the identity of the unscoped unique leaf", () => {
+  const email = personal(v.pipe(v.string(), v.email()), {
+    role: "direct",
+    space: "email",
+    consistent: "person",
+  });
+  const schemas = {
+    collections: {
+      "+users": {
+        _id: personId("user"),
+        email: withIndex(email, { unique: true }),
+      },
+    },
+    scopedMultiCollections: {
+      expo: {
+        scope: refId("exposition"),
+        types: {
+          identity: {
+            _id: personal(dbId("identity"), { of: "user" }),
+            userId: refId("user"),
+            email,
+          },
+        },
+      },
+    },
+  } as never as SchemasDefinition;
+  const users = ["Jean.Dupont@acme.fr", "jean.dupont@acme.fr"].map(
+    (address, i) => ({
+      _id: `user:${ulid(i + 1)}`,
+      email: address,
+    }),
+  );
+  const state = stateWith({ "+users": users });
+  state.scopedMultiCollections.expo = {
+    content: users.map((u, i) => ({
+      _id: `identity:${ulid(10 + i)}`,
+      _type: "identity",
+      _scope: `exposition:${ulid(20)}`,
+      userId: u._id,
+      email: u.email,
+    })),
+  };
+  const out = run(schemas, state).state;
+  const fakeOf = new Map(
+    out.collections["+users"].content.map((u) => [u._id, u.email]),
+  );
+  for (const identity of out.scopedMultiCollections.expo.content) {
+    assertEquals(identity.email, fakeOf.get(identity.userId as string));
+  }
 });
