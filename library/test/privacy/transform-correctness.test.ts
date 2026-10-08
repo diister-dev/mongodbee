@@ -12,6 +12,7 @@ import {
   type DynamicResolution,
   isUlid,
   mirrorOf,
+  notPersonal,
   personal,
   personId,
   remapId,
@@ -664,4 +665,90 @@ test("collisions: values differing only by case get distinct fakes under a case-
       `insensitive=${insensitive}`,
     );
   }
+});
+
+const ORG_ID = "organization:01j5zk3v8n2q4x6y8z0b1c3d5f";
+
+test("untyped payloads: ids of minted spaces are remapped deeply, other strings are faked under strict and kept in a strict-keep document", () => {
+  const schemas = {
+    collections: {
+      "+users": { _id: personId("user") },
+      organizations: { _id: refId("organization"), displayName: v.string() },
+      roles: {
+        _id: dbId("role"),
+        grants: v.array(
+          v.object({ key: v.string(), value: v.optional(v.any()) }),
+        ),
+      },
+      flows: {
+        _id: notPersonal(dbId("flow"), "flow configuration", {
+          strict: "keep",
+        }),
+        payload: v.any(),
+      },
+    },
+  } as never;
+  const payload = {
+    with: { memberships: { organizationId: ORG_ID, label: "Salon Pro" } },
+    "expositions.read": [ORG_ID, 3],
+  };
+  const transformer = createPrivacyTransformer({
+    plan: buildPrivacyPlan({ schemas, posture: "strict" }),
+    schemas,
+    secret: "s3cret",
+    timeShiftMs: 0,
+  });
+  const remapped = transformer.remapId(ORG_ID);
+  const faked = transformer.transform("collections/roles/", {
+    _id: "role:01j5zk3v8n2q4x6y8z0b1c3d5e",
+    grants: [{ key: "k", value: payload }],
+  }).doc.grants as { value: typeof payload }[];
+  assertEquals(faked[0].value.with.memberships.organizationId, remapped);
+  assertNotEquals(faked[0].value.with.memberships.label, "Salon Pro");
+  assertEquals(faked[0].value["expositions.read"], [remapped, 3]);
+  const kept = transformer.transform("collections/flows/", {
+    _id: "flow:01j5zk3v8n2q4x6y8z0b1c3d5e",
+    payload,
+  }).doc.payload as typeof payload;
+  assertEquals(kept.with.memberships.organizationId, remapped);
+  assertEquals(kept.with.memberships.label, "Salon Pro");
+});
+
+test("spaces: a declared space gives one fake across leaves whatever their key or local schema", () => {
+  const name = (space: string) =>
+    personal(v.pipe(v.string(), v.minLength(1)), {
+      role: "direct",
+      space,
+      consistent: "person",
+    });
+  const schemas = {
+    collections: {
+      "+users": { _id: personId("user"), firstname: name("firstname") },
+      cards: {
+        _id: personal(dbId("card"), { of: "user" }),
+        userId: refId("user"),
+        holder: personal(v.string(), {
+          role: "direct",
+          space: "firstname",
+          consistent: "person",
+        }),
+      },
+    },
+  } as never;
+  const transformer = createPrivacyTransformer({
+    plan: buildPrivacyPlan({ schemas }),
+    schemas,
+    secret: "s3cret",
+  });
+  const user = transformer.transform(TARGET, {
+    _id: USER_ID,
+    firstname: "Zebulon",
+  }).doc;
+  const card = transformer.transform("collections/cards/", {
+    _id: "card:01j5zk3v8n2q4x6y8z0b1c3d5e",
+    userId: USER_ID,
+    holder: "Zebulon",
+  }).doc;
+  assertEquals(card.holder, user.firstname);
+  assertNotEquals(card.holder, "Zebulon");
 });
