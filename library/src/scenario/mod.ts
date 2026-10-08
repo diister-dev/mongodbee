@@ -7,10 +7,13 @@ export type {
   SeedAfterContext,
   SeedAnchors,
   SeedCount,
+  SeedDeferredFinalize,
   SeedFinalize,
   SeedFinalizeContext,
+  SeedFinalizeEntry,
   SeedInvariant,
   SeedInvariantContext,
+  SeedLayer,
   SeedRandom,
   SeedRule,
   SeedRuleContext,
@@ -19,7 +22,9 @@ export type {
   SeedShape,
   SeedShapeContext,
   SeedShapeEntry,
+  SeedStage,
   SeedWorld,
+  SeedWorldQuery,
 } from "./types.ts";
 export {
   type GenerateScenarioOptions,
