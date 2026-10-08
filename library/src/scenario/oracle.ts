@@ -6,7 +6,8 @@ import type { ScenarioViolation, SeedInvariant } from "./types.ts";
 import { docsOf, fieldsOfTarget, resolveTargetKey } from "./state.ts";
 import { createDocLookup, mirrorExpectations } from "./mirror.ts";
 import { valueAt } from "./doc-path.ts";
-import { partitionedDocs, uniqueIndexesOf, uniqueKeysOf } from "./unique.ts";
+import { partitionedDocs } from "./unique.ts";
+import { uniqueEntriesOf, uniqueKeysOfTarget } from "../privacy/unique-keys.ts";
 
 export interface CheckScenarioOptions {
   readonly state: DatabaseState;
@@ -96,14 +97,20 @@ export function checkScenarioState(
         count: duplicates,
       });
     }
-    const unique = uniqueIndexesOf(fields);
+    const unique = uniqueKeysOfTarget(schemas, target);
     if (unique.length > 0) {
-      const keys = new Set<string>();
+      const seen = new Set<string>();
       let collisions = 0;
+      let unchecked = 0;
       for (const { doc, partition } of partitionedDocs(state, target)) {
-        for (const key of uniqueKeysOf(unique, doc, partition)) {
-          if (keys.has(key)) collisions++;
-          keys.add(key);
+        for (const key of unique) {
+          const result = uniqueEntriesOf(key, doc, partition);
+          if (result.covered === undefined) unchecked++;
+          if (result.covered !== true) continue;
+          for (const entry of result.entries) {
+            if (seen.has(entry)) collisions++;
+            seen.add(entry);
+          }
         }
       }
       if (collisions > 0) {
@@ -112,6 +119,14 @@ export function checkScenarioState(
           target: target.key,
           message: `${collisions} value(s) break a unique index`,
           count: collisions,
+        });
+      }
+      if (unchecked > 0) {
+        violations.push({
+          kind: "unique_unchecked",
+          target: target.key,
+          message: `${unchecked} document(s) under a unique index whose partial filter cannot be evaluated; uniqueness not checked`,
+          count: unchecked,
         });
       }
     }

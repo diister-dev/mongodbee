@@ -1,12 +1,7 @@
 import * as v from "../schema.ts";
 import { createMockGenerator, SKIP } from "@diister/valibot-mock";
-import { INDEX_SYMBOL } from "../indexes.ts";
 import { extractIdPrefix } from "../migration/utils/seed-id.ts";
-import type {
-  SchemaContent,
-  SchemasDefinition,
-  TypeSource,
-} from "../migration/types.ts";
+import type { SchemaContent, SchemasDefinition } from "../migration/types.ts";
 import { fieldsOf as fieldsOfSource } from "../type-definition.ts";
 import {
   defaultTreatments,
@@ -34,6 +29,11 @@ import {
   remapObjectId,
 } from "./pseudonym.ts";
 import { unwrapSchema } from "./schema-shape.ts";
+import {
+  sourceOfTarget,
+  uniqueKeysOfTarget,
+  uniqueMembership,
+} from "./unique-keys.ts";
 import {
   DROP,
   walkDocument,
@@ -176,29 +176,11 @@ function mapTemporal(
   return out + (zone ?? "");
 }
 
-function sourceOf(
-  schemas: SchemasDefinition,
-  target: PrivacyTarget,
-): TypeSource | undefined {
-  switch (target.bucket) {
-    case "collections":
-      return schemas.collections?.[target.collection];
-    case "multiCollections":
-      return schemas.multiCollections?.[target.collection]?.[target.type ?? ""];
-    case "multiModels":
-      return schemas.multiModels?.[target.collection]?.[target.type ?? ""];
-    case "scopedMultiCollections":
-      return schemas.scopedMultiCollections?.[target.collection]?.types[
-        target.type ?? ""
-      ];
-  }
-}
-
 export function fieldsOf(
   schemas: SchemasDefinition,
   target: PrivacyTarget,
 ): SchemaContent | undefined {
-  const source = sourceOf(schemas, target);
+  const source = sourceOfTarget(schemas, target);
   return source === undefined ? undefined : fieldsOfSource(source);
 }
 
@@ -247,24 +229,6 @@ export function schemaAtPath(fields: SchemaContent, path: string): unknown {
 }
 
 type UniqueMode = false | "insensitive" | "exact";
-
-const CASE_INSENSITIVE_STRENGTH = 2;
-
-function uniqueModeOf(schema: unknown): UniqueMode {
-  let mode: UniqueMode = false;
-  for (const action of collectActions(schema)) {
-    const metadata = (action as { metadata?: Record<PropertyKey, unknown> })
-      .metadata;
-    const index = metadata?.[INDEX_SYMBOL] as
-      | { unique?: boolean; collation?: { strength?: number } }
-      | undefined;
-    if (index?.unique !== true) continue;
-    const strength = index.collation?.strength ?? 3;
-    if (strength <= CASE_INSENSITIVE_STRENGTH) return "insensitive";
-    mode = "exact";
-  }
-  return mode;
-}
 
 type SeededGenerator = (seed: number) => unknown;
 
@@ -386,7 +350,7 @@ export function createPrivacyTransformer(
           scoped:
             target.bucket === "scopedMultiCollections" ||
             target.bucket === "multiModels",
-          unique: uniqueModeOf(raw),
+          unique: uniqueModeOf(target, path),
         };
         break;
       }
@@ -397,15 +361,21 @@ export function createPrivacyTransformer(
 
   const uniquePaths = new Map<string, UniqueMode>();
 
-  const isUnique = (
-    targetKey: string,
-    fields: SchemaContent,
-    path: string,
-  ): UniqueMode => {
+  const uniqueModeOf = (target: PrivacyTarget, path: string): UniqueMode => {
+    const membership = uniqueMembership(
+      uniqueKeysOfTarget(schemas, target),
+      path,
+    );
+    if (!membership.unique) return false;
+    return membership.caseInsensitive ? "insensitive" : "exact";
+  };
+
+  const isUnique = (targetKey: string, path: string): UniqueMode => {
     const id = `${targetKey}|${path}`;
     let unique = uniquePaths.get(id);
     if (unique === undefined) {
-      unique = uniqueModeOf(rawSchemaAtPath(fields, path));
+      const target = plan.targets.get(targetKey);
+      unique = target === undefined ? false : uniqueModeOf(target, path);
       uniquePaths.set(id, unique);
     }
     return unique;
@@ -552,7 +522,7 @@ export function createPrivacyTransformer(
       produce(
         `fake|${targetKey}|${leaf.path}`,
         fakeMessage(leaf.keys.join(".")),
-        isUnique(targetKey, fields, leaf.path),
+        isUnique(targetKey, leaf.path),
         schema,
         leaf.path,
       );
@@ -732,7 +702,7 @@ export function createPrivacyTransformer(
           return produce(
             spaceOf(cls),
             valueMessage(cls, leaf.path, leaf.value),
-            override ? false : isUnique(targetKey, fields, leaf.path),
+            override ? false : isUnique(targetKey, leaf.path),
             schema,
             leaf.path,
             undefined,

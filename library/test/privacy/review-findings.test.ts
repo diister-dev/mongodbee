@@ -126,8 +126,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C3, transform isUnique() only reads field-level withIndex; it must also read indexesOf(source) unique composites like plan.ts does
-  ignore: true,
   name: "C3 unique: a field covered by a defineType unique composite is made distinct or reported",
   fn: () => {
     const CODE = personal(v.pipe(v.string(), v.regex(/^[ab]$/)), {
@@ -157,8 +155,6 @@ test({
 });
 
 test({
-  // TODO(privacy): C4, a unique index alone on a technical type (picklist/literal/number/date/boolean) must not promote the path to direct+pseudonym
-  ignore: true,
   name: "C4 strict: a unique picklist discriminator keeps its value",
   fn: () => {
     const schemas = {
@@ -429,4 +425,25 @@ test({
     };
     assertEquals(run(values), run([...values].reverse()));
   },
+});
+
+test("C4 plan: a unique string in an exempt document is kept under personal posture and pseudonymised under strict", () => {
+  const schemas = {
+    collections: {
+      "+security": {
+        _id: notPersonal(dbId("security"), "platform keys"),
+        publicRef: withIndex(v.string(), { unique: true }),
+        version: withIndex(v.number(), { unique: true }),
+      },
+      "+users": { _id: personId("user") },
+    },
+  };
+  const treatment = (posture: PrivacyPosture, path: string) =>
+    transformerFor(schemas, posture)
+      .plan.targets.get("collections/+security/")
+      ?.paths.find((p) => p.path === path)?.treatment.extract;
+  assertEquals(treatment("personal", "publicRef"), "keep");
+  assertEquals(treatment("strict", "publicRef"), "pseudonym");
+  assertEquals(treatment("personal", "version"), "keep");
+  assertEquals(treatment("strict", "version"), "keep");
 });
