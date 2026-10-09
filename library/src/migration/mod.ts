@@ -65,11 +65,13 @@ export type {
   // Operation types
   MigrationRule,
   MigrationState,
+  MigrationTransformContext,
   // Schema types
   SchemasDefinition,
   SeedCollectionRule,
   TransformCollectionRule,
   TransformRule,
+  TransformScope,
 } from "./types.ts";
 
 // Builder system

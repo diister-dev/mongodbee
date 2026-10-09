@@ -20,6 +20,9 @@ import { initCommand } from "./commands/init.ts";
 import { checkCommand } from "./commands/check.ts";
 import { syncCommand } from "./commands/sync.ts";
 import { baselineCommand } from "./commands/baseline.ts";
+import { classifyCommand } from "./commands/classify.ts";
+import { seedCommand } from "./commands/seed.ts";
+import { extractCommand } from "./commands/extract.ts";
 import { studioEntry } from "./commands/studio-entry.ts";
 
 import { VERSION } from "../../version.ts";
@@ -80,6 +83,21 @@ const commands = [
     handler: historyCommand,
   },
   {
+    name: "classify",
+    description: "Report how the schemas classify personal data",
+    handler: classifyCommand,
+  },
+  {
+    name: "seed",
+    description: "Generate a scenario world at a migration step and write it",
+    handler: seedCommand,
+  },
+  {
+    name: "extract",
+    description: "Copy a database with personal data pseudonymised",
+    handler: extractCommand,
+  },
+  {
     name: "studio",
     description: "Open a local, read-only database explorer",
     handler: studioEntry,
@@ -106,6 +124,11 @@ ${yellow("COMMANDS:")}
   ${green("history")}   Show migration operation history
   ${green("rollback")}  Rollback the last applied migration
   ${green("baseline")}  Record migrations as applied without running them
+  ${green("classify")}  Report how the schemas classify personal data
+  ${green(
+    "seed",
+  )}      Generate a scenario world at a migration step and write it
+  ${green("extract")}   Copy a database with personal data pseudonymised
   ${green("studio")}    Open a local, read-only database explorer
 
 ${yellow("GLOBAL OPTIONS:")}
@@ -169,6 +192,49 @@ ${yellow("STUDIO OPTIONS:")}
   --schemas         Schemas file (schemas.ts)
   --write           Allow editing, creating and deleting documents (loopback only)
 
+${yellow("CLASSIFY OPTIONS:")}
+  --at              Classify the schemas frozen in this migration (default: the
+                    last one, as extract does; schemas.ts when there is none)
+  --posture         strict | personal (default: strict, as extract)
+  --json            Print the plan as JSON
+
+${yellow("SEED OPTIONS:")}
+  --scenario        Scenario module exporting "scenario" (required)
+  --at              Migration step to seed at (default: the last one)
+  --uri, --db       Target database (default: the configured one); must be empty
+  --dry-run         Generate and check the world without writing
+  --force           Write even if the oracle fails or the database is not empty
+  --json            Print the report as JSON
+
+${yellow("EXTRACT OPTIONS:")}
+  --from, --from-db Source connection URI and database name (default: the configured ones)
+  --to, --to-db     Target connection URI and database name; must be empty
+                    unless --force, and never the source itself
+  --from-migration  Migration the source is at; later ones are replayed in memory first
+  --secret          Pseudonymisation secret: env:NAME is read from the environment
+                    (recommended); a literal value is visible in ps and shell
+                    history. Default: random, discarded
+  --consistency     person | relationship | transaction (default: relationship)
+  --posture         strict | personal (default: strict): strict fakes every value
+                    the schemas do not declare, personal keeps what is not personal
+  --shift-days      Shift every date and ulid timestamp by N days
+  --scope           Only extract this scope of the scoped collections; unscoped
+                    collections are still copied whole (listed in the summary)
+  --allow-unknown   Proceed with UNKNOWN paths (they are dropped)
+  --allow-violations Write even when the extracted documents break their schemas
+                    (invalid_document, mirror_mismatch); default: refuse. Data
+                    that breaks a unique index or repeats an _id is never
+                    written, the index would reject it
+  --force           Allow other collections in the target; a collection the
+                    schemas manage is refused when it already holds documents
+  --dry-run         Read and transform without writing
+  --json            Print the summary as JSON
+  Config hook       privacy: { resolveDynamic, recompute? } in mongodbee.config.ts
+                    classifies dynamic subtrees from their data (resolveDynamic)
+                    and recomputes derived values (recompute); both return the
+                    SKIP_DYNAMIC / SKIP_RECOMPUTE symbols of
+                    @diister/mongodbee/privacy to defer to the default
+
 ${yellow("SYNC OPTIONS:")}
   --force           Sync even if pending migrations exist (not recommended)
   --verbose         Show detailed schema information
@@ -199,6 +265,9 @@ async function main(): Promise<void> {
       "check-indexes",
       "validate",
       "progress",
+      "json",
+      "allow-unknown",
+      "allow-violations",
       "skip-privilege-check",
       "write",
     ],
@@ -213,10 +282,22 @@ async function main(): Promise<void> {
       "name",
       "mode",
       "target",
-      "host",
-      "project",
+      "scenario",
+      "at",
       "uri",
       "db",
+      "from",
+      "from-db",
+      "to",
+      "to-db",
+      "secret",
+      "consistency",
+      "posture",
+      "shift-days",
+      "scope",
+      "from-migration",
+      "host",
+      "project",
       "migrations",
       "schemas",
     ],

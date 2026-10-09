@@ -55,6 +55,7 @@ import type {
   SchemasDefinition,
   ScopedMultiCollectionBuilder,
   ScopedMultiCollectionTypeBuilder,
+  MigrationTransformContext,
   SeedCollectionRule,
   TransformCollectionRule,
 } from "./types.ts";
@@ -67,10 +68,15 @@ import { computedTopology } from "../computed-topology.ts";
  * call sites.
  */
 function erased<T, U>(
-  fn: (doc: T) => U,
-): (doc: Record<string, unknown>) => Record<string, unknown> {
-  return fn as (doc: Record<string, unknown>) => Record<string, unknown>;
+  fn: (doc: T, context: MigrationTransformContext) => U,
+): ErasedTransform {
+  return fn as ErasedTransform;
 }
+
+type ErasedTransform = (
+  doc: Record<string, unknown>,
+  context: MigrationTransformContext,
+) => Record<string, unknown>;
 
 function fieldsOrUndefined<I extends TypeInput>(
   source: I | undefined,

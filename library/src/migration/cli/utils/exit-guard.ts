@@ -5,6 +5,7 @@
  */
 
 import process from "node:process";
+import { setTimeout } from "node:timers";
 
 /**
  * How long a finished command may keep the process alive before it is ended.
