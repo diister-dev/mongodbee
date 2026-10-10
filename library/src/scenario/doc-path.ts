@@ -23,3 +23,20 @@ export function setValueAt(
     (current as Record<string, unknown>)[last] = value;
   }
 }
+
+export function placeValueAt(
+  doc: Record<string, unknown>,
+  path: string,
+  value: unknown,
+): void {
+  const keys = path.split(".");
+  const last = keys.pop()!;
+  let current = doc;
+  for (const key of keys) {
+    const next = current[key];
+    if (next === undefined) current[key] = {};
+    else if (next === null || typeof next !== "object") return;
+    current = current[key] as Record<string, unknown>;
+  }
+  current[last] = value;
+}

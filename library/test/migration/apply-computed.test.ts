@@ -1,5 +1,5 @@
 import { test } from "../+harness.ts";
-import { assertEquals, assertThrows } from "../+assert.ts";
+import { assert, assertEquals, assertThrows } from "../+assert.ts";
 import { withDatabase } from "../+shared.ts";
 import { migrationDefinition } from "../../src/migration/definition.ts";
 import { migrationBuilder } from "../../src/migration/builder.ts";
@@ -259,4 +259,47 @@ test("applyComputed (mongodb): matches the simulation, has no sibling cap, and r
       .toArray();
     assertEquals(reverted.length, 0);
   });
+});
+
+test("applyComputed: the simulation bumps each subject's revision like the mongodb applier", async () => {
+  const revisions = (docs: readonly Record<string, unknown>[]) =>
+    Object.fromEntries(
+      docs
+        .filter((doc) => doc._type === "participant")
+        .map((doc) => [
+          String(doc._id),
+          (doc._computed as { _rev?: number } | undefined)?._rev,
+        ])
+        .sort(([a], [b]) => String(a).localeCompare(String(b))),
+    );
+  const seed = seedMigration(false);
+  const compute = computeMigration(seed);
+
+  const state = createEmptyDatabaseState();
+  await createMemoryApplier(seed).applyMigration(
+    state,
+    operationsOf(seed),
+    "up",
+  );
+  await createMemoryApplier(compute).applyMigration(
+    state,
+    operationsOf(compute),
+    "up",
+  );
+  const simulated = revisions(state.scopedMultiCollections.expo.content);
+
+  await withDatabase("apply-computed-revision", async (db) => {
+    await createMongodbApplier(db, seed, {
+      currentMigrationId: seed.id,
+    }).applyMigration(operationsOf(seed), "up");
+    await createMongodbApplier(db, compute, {
+      currentMigrationId: compute.id,
+    }).applyMigration(operationsOf(compute), "up");
+    const docs = (await db
+      .collection("expo")
+      .find({} as never)
+      .toArray()) as Record<string, unknown>[];
+    assertEquals(simulated, revisions(docs));
+  });
+  assert(Object.values(simulated).every((revision) => revision === 1));
 });

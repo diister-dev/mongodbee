@@ -52,17 +52,37 @@ export async function applyMigrationsInMemory(
   return { state, applied };
 }
 
-function isBlocking(violation: ScenarioViolation): boolean {
-  if (violation.kind === "unique_unchecked") return false;
-  return (
-    violation.kind !== "correlation" ||
-    !violation.message.includes("is minted by")
-  );
+export function isBlockingViolation(violation: ScenarioViolation): boolean {
+  return violation.blocking ?? violation.kind !== "unique_unchecked";
 }
 
-export async function runScenario(
+export interface ScenarioBirth {
+  readonly birth: MigrationDefinition;
+  readonly at: MigrationDefinition;
+  readonly pending: readonly MigrationDefinition[];
+  readonly state: DatabaseState;
+  readonly violations: readonly ScenarioViolation[];
+  readonly onDemand: Readonly<Record<string, number>>;
+}
+
+function declareSchemaCollections(
+  state: DatabaseState,
+  schemas: MigrationDefinition["schemas"],
+): void {
+  for (const name of Object.keys(schemas.collections ?? {})) {
+    state.collections[name] ??= { content: [] };
+  }
+  for (const name of Object.keys(schemas.multiCollections ?? {})) {
+    state.multiCollections[name] ??= { content: [] };
+  }
+  for (const name of Object.keys(schemas.scopedMultiCollections ?? {})) {
+    state.scopedMultiCollections[name] ??= { content: [] };
+  }
+}
+
+export async function generateScenarioAtBirth(
   options: RunScenarioOptions,
-): Promise<ScenarioRunResult> {
+): Promise<ScenarioBirth> {
   const { migrations, scenario } = options;
   const ids = migrations.map((m) => m.id);
   const birthIndex = ids.indexOf(scenario.birth);
@@ -86,34 +106,128 @@ export async function runScenario(
     );
   }
 
+  const stages = scenario.stages ?? {};
+  for (const stage of Object.keys(stages)) {
+    const stageIndex = ids.indexOf(stage);
+    if (stageIndex < 0) {
+      throw new Error(
+        `scenario "${scenario.name}": stage "${stage}" is not in the chain`,
+      );
+    }
+    if (stageIndex <= birthIndex) {
+      throw new Error(
+        `scenario "${scenario.name}": stage "${stage}" must come after the birth migration "${scenario.birth}"`,
+      );
+    }
+  }
+
   const birth = migrations[birthIndex];
   const lineage = await applyMigrationsInMemory(
     createEmptyDatabaseState(),
     migrations.slice(0, birthIndex + 1),
   );
-  const generation = generateScenarioState({
-    schemas: birth.schemas,
+  const shared = {
     scenario,
+    ...(options.defaultScopes !== undefined && {
+      defaultScopes: options.defaultScopes,
+    }),
+  };
+  const generation = await generateScenarioState({
+    ...shared,
+    schemas: birth.schemas,
     initial: lineage.state,
     ...(options.defaultCount !== undefined && {
       defaultCount: options.defaultCount,
     }),
+  });
+  declareSchemaCollections(generation.state, birth.schemas);
+  return {
+    birth,
+    at: migrations[atIndex],
+    pending: migrations.slice(birthIndex + 1, atIndex + 1),
+    state: generation.state,
+    violations: generation.violations,
+    onDemand: generation.onDemand,
+  };
+}
+
+export interface ScenarioStageResult {
+  readonly state: DatabaseState;
+  readonly violations: readonly ScenarioViolation[];
+  readonly onDemand: Readonly<Record<string, number>>;
+}
+
+export function hasScenarioStage(
+  scenario: SeedScenario,
+  migrationId: string,
+): boolean {
+  return Object.hasOwn(scenario.stages ?? {}, migrationId);
+}
+
+export async function generateScenarioStage(options: {
+  readonly scenario: SeedScenario;
+  readonly migration: MigrationDefinition;
+  readonly state: DatabaseState;
+  readonly defaultScopes?: number;
+}): Promise<ScenarioStageResult> {
+  const staged = await generateScenarioState({
+    scenario: options.scenario,
     ...(options.defaultScopes !== undefined && {
       defaultScopes: options.defaultScopes,
     }),
+    schemas: options.migration.schemas,
+    initial: options.state,
+    stage: options.migration.id,
   });
-  const replay = await applyMigrationsInMemory(
-    generation.state,
-    migrations.slice(birthIndex + 1, atIndex + 1),
-  );
-  const state = replay.state;
-  const applied = replay.applied;
+  declareSchemaCollections(staged.state, options.migration.schemas);
+  return {
+    state: staged.state,
+    violations: staged.violations,
+    onDemand: staged.onDemand,
+  };
+}
 
-  const at = migrations[atIndex];
-  recomputeComputedFields(state, at.schemas);
+export function mergeScenarioViolations(
+  into: ScenarioViolation[],
+  more: readonly ScenarioViolation[],
+): void {
+  for (const violation of more) {
+    const repeated = into.some(
+      (seen) =>
+        seen.kind === violation.kind &&
+        seen.target === violation.target &&
+        seen.message === violation.message,
+    );
+    if (!repeated) into.push(violation);
+  }
+}
+
+export function addOnDemand(
+  into: Record<string, number>,
+  more: Readonly<Record<string, number>>,
+): void {
+  for (const [key, count] of Object.entries(more)) {
+    into[key] = (into[key] ?? 0) + count;
+  }
+}
+
+export interface CheckScenarioWorldOptions {
+  readonly scenario: SeedScenario;
+  readonly birth: MigrationDefinition;
+  readonly at: MigrationDefinition;
+  readonly applied: readonly string[];
+  readonly state: DatabaseState;
+  readonly generationViolations: readonly ScenarioViolation[];
+  readonly onDemand?: Readonly<Record<string, number>>;
+}
+
+export function checkScenarioWorld(
+  options: CheckScenarioWorldOptions,
+): ScenarioReport {
+  const { scenario, at, state } = options;
   const plan = buildPrivacyPlan({ schemas: at.schemas });
   const violations = [
-    ...generation.violations,
+    ...options.generationViolations,
     ...checkScenarioState({
       state,
       schemas: at.schemas,
@@ -126,15 +240,53 @@ export async function runScenario(
     const n = docsOf(state, target).length;
     if (n > 0) generated[target.key] = n;
   }
-  const report: ScenarioReport = {
+  return {
     scenario: scenario.name,
-    birth: birth.id,
+    birth: options.birth.id,
     at: at.id,
-    applied,
+    applied: options.applied,
     generated,
+    onDemand: { ...(options.onDemand ?? {}) },
     violations,
-    ok: violations.every((v) => !isBlocking(v)),
+    ok: violations.every((v) => !isBlockingViolation(v)),
   };
+}
+
+export async function runScenario(
+  options: RunScenarioOptions,
+): Promise<ScenarioRunResult> {
+  const world = await generateScenarioAtBirth(options);
+  let state = world.state;
+  const applied: string[] = [];
+  const violations = [...world.violations];
+  const onDemand: Record<string, number> = { ...world.onDemand };
+  for (const migration of world.pending) {
+    const step = await applyMigrationsInMemory(state, [migration]);
+    state = step.state;
+    applied.push(...step.applied);
+    if (!hasScenarioStage(options.scenario, migration.id)) continue;
+    const staged = await generateScenarioStage({
+      scenario: options.scenario,
+      migration,
+      state,
+      ...(options.defaultScopes !== undefined && {
+        defaultScopes: options.defaultScopes,
+      }),
+    });
+    state = staged.state;
+    mergeScenarioViolations(violations, staged.violations);
+    addOnDemand(onDemand, staged.onDemand);
+  }
+  recomputeComputedFields(state, world.at.schemas);
+  const report = checkScenarioWorld({
+    scenario: options.scenario,
+    birth: world.birth,
+    at: world.at,
+    applied,
+    state,
+    generationViolations: violations,
+    onDemand,
+  });
   return { state, report };
 }
 
@@ -153,8 +305,11 @@ export function renderScenarioReport(report: ScenarioReport): string {
   for (const [target, count] of Object.entries(report.generated)) {
     lines.push(`  ${target.padEnd(60)} ${String(count).padStart(7)}`);
   }
+  for (const [target, count] of Object.entries(report.onDemand)) {
+    lines.push(`  on demand   ${target} (${count})`);
+  }
   lines.push("");
-  const blocking = report.violations.filter(isBlocking);
+  const blocking = report.violations.filter(isBlockingViolation);
   const notes = report.violations.length - blocking.length;
   if (blocking.length === 0) {
     lines.push(`oracle      ok${notes > 0 ? ` (${notes} note(s))` : ""}`);

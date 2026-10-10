@@ -2,8 +2,10 @@ import type {
   DatabaseState,
   MigrationDefinition,
   MigrationRule,
+  SchemaContent,
   TransformScope,
 } from "../types.ts";
+import * as v from "valibot";
 import {
   extractIdPrefix,
   flowDocumentPrefix,
@@ -19,6 +21,7 @@ import { getIrreversibleOperations } from "../builder.ts";
 import {
   migrationComputedField,
   parentDeclaresComputed,
+  withComputedRevisionBumped,
   withComputedValue,
   withoutComputedValue,
 } from "../computed-operation.ts";
@@ -57,6 +60,80 @@ function resolveStateCollection(
     state.multiCollections[name] ??
     state.scopedMultiCollections[name]
   );
+}
+
+const PHYSICAL_BUCKETS = [
+  "collections",
+  "multiCollections",
+  "scopedMultiCollections",
+  "multiModels",
+] as const;
+
+/** The bucket holding a physical collection name, multi-model instances
+ *  included: the mongodb applier reads and drops collections by name alone. */
+function locatePhysical(
+  state: DatabaseState,
+  name: string,
+): { content: Record<string, unknown>[] } | undefined {
+  for (const bucket of PHYSICAL_BUCKETS) {
+    const found = state[bucket][name];
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function dropPhysical(state: DatabaseState, name: string): void {
+  for (const bucket of PHYSICAL_BUCKETS) delete state[bucket][name];
+}
+
+/** Insert-or-replace keyed on `_id`, like the mongodb applier's upserts. */
+function upsertById(
+  content: Record<string, unknown>[],
+  documents: readonly Record<string, unknown>[],
+): void {
+  const positions = new Map<string, number>();
+  content.forEach((doc, i) => {
+    positions.set(String(doc._id), i);
+  });
+  for (const doc of documents) {
+    const key = String(doc._id);
+    const at = positions.get(key);
+    if (at === undefined) {
+      positions.set(key, content.length);
+      content.push(doc);
+    } else {
+      content[at] = doc;
+    }
+  }
+}
+
+/** `replaceOne` semantics: a replacement without `_id` keeps the stored one,
+ *  and one carrying a different `_id` is refused (it is immutable). */
+function replacement(
+  original: Record<string, unknown>,
+  replaced: Record<string, unknown>,
+): Record<string, unknown> {
+  if (replaced._id === undefined) return { _id: original._id, ...replaced };
+  if (!valuesEqual(replaced._id, original._id)) {
+    throw new Error(
+      `Transform changed the immutable _id of document ${String(original._id)}`,
+    );
+  }
+  return replaced;
+}
+
+function parsedSeed(
+  schema: SchemaContent,
+  doc: Record<string, unknown>,
+  target: string,
+): Record<string, unknown> {
+  const value = v.safeParse(v.object(schema), doc);
+  if (!value.success) {
+    throw new Error(
+      `Seed document ${String(doc._id)} in ${target} does not match schema: ${JSON.stringify(value.issues)}`,
+    );
+  }
+  return value.output as Record<string, unknown>;
 }
 
 interface DedupePlan {
@@ -161,49 +238,94 @@ function compareValues(a: unknown, b: unknown): number | undefined {
   return undefined;
 }
 
+/** The values a dotted path reaches, walking into arrays the way MongoDB
+ *  does; a path that reaches nothing yields `[undefined]`. */
+function valuesAtPath(doc: Record<string, unknown>, path: string): unknown[] {
+  let current: unknown[] = [doc];
+  for (const part of path.split(".")) {
+    const next: unknown[] = [];
+    for (const value of current) {
+      if (Array.isArray(value) && !/^\d+$/.test(part)) {
+        for (const element of value) {
+          if (
+            element !== null &&
+            typeof element === "object" &&
+            !Array.isArray(element)
+          ) {
+            next.push((element as Record<string, unknown>)[part]);
+          }
+        }
+      } else if (value !== null && typeof value === "object") {
+        next.push((value as Record<string, unknown>)[part]);
+      }
+    }
+    current = next;
+  }
+  return current.length > 0 ? current : [undefined];
+}
+
+/** MongoDB equality: `null` also matches a missing field, and a scalar
+ *  matches an array holding it. */
+function equalityMatches(fieldValue: unknown, operand: unknown): boolean {
+  if (operand === null && fieldValue === undefined) return true;
+  if (valuesEqual(fieldValue, operand)) return true;
+  return (
+    Array.isArray(fieldValue) &&
+    fieldValue.some((element) => valuesEqual(element, operand))
+  );
+}
+
+function orderingMatches(
+  fieldValue: unknown,
+  operand: unknown,
+  accept: (comparison: number) => boolean,
+): boolean {
+  const elements = Array.isArray(fieldValue) ? fieldValue : [fieldValue];
+  return elements.some((element) => {
+    const c = compareValues(element, operand);
+    return c !== undefined && accept(c);
+  });
+}
+
+function requireArrayOperand(op: string, operand: unknown): unknown[] {
+  if (!Array.isArray(operand)) {
+    throw new Error(`Operator "${op}" needs an array operand`);
+  }
+  return operand;
+}
+
 /**
- * Apply a single field-level operator. THROWS on any `$`-operator the
- * simulation does not implement — failing loud rather than silently matching
- * nothing (which would let a dry-run disagree with production).
+ * Apply a single field-level operator to every value the path reaches. THROWS
+ * on any `$`-operator the simulation does not implement — failing loud rather
+ * than silently matching nothing (which would let a dry-run disagree with
+ * production).
  */
 function applyOperator(
-  fieldValue: unknown,
+  candidates: unknown[],
   op: string,
   operand: unknown,
 ): boolean {
+  const anyEqual = (value: unknown) =>
+    candidates.some((c) => equalityMatches(c, value));
   switch (op) {
     case "$eq":
-      return valuesEqual(fieldValue, operand);
+      return anyEqual(operand);
     case "$ne":
-      return !valuesEqual(fieldValue, operand);
+      return !anyEqual(operand);
     case "$in":
-      return (
-        Array.isArray(operand) &&
-        operand.some((o) => valuesEqual(fieldValue, o))
-      );
+      return requireArrayOperand(op, operand).some(anyEqual);
     case "$nin":
-      return (
-        Array.isArray(operand) &&
-        !operand.some((o) => valuesEqual(fieldValue, o))
-      );
-    case "$gt": {
-      const c = compareValues(fieldValue, operand);
-      return c !== undefined && c > 0;
-    }
-    case "$gte": {
-      const c = compareValues(fieldValue, operand);
-      return c !== undefined && c >= 0;
-    }
-    case "$lt": {
-      const c = compareValues(fieldValue, operand);
-      return c !== undefined && c < 0;
-    }
-    case "$lte": {
-      const c = compareValues(fieldValue, operand);
-      return c !== undefined && c <= 0;
-    }
+      return !requireArrayOperand(op, operand).some(anyEqual);
+    case "$gt":
+      return candidates.some((c) => orderingMatches(c, operand, (n) => n > 0));
+    case "$gte":
+      return candidates.some((c) => orderingMatches(c, operand, (n) => n >= 0));
+    case "$lt":
+      return candidates.some((c) => orderingMatches(c, operand, (n) => n < 0));
+    case "$lte":
+      return candidates.some((c) => orderingMatches(c, operand, (n) => n <= 0));
     case "$exists":
-      return (fieldValue !== undefined) === Boolean(operand);
+      return candidates.some((c) => c !== undefined) === Boolean(operand);
     default:
       throw new Error(
         `Operator "${op}" is not supported in simulation (memory applier). ` +
@@ -214,10 +336,12 @@ function applyOperator(
 
 /**
  * Match a document against an in-memory `where` filter with Mongo-like
- * semantics: nested dot-paths, and the common field operators ($eq, $ne, $in,
- * $nin, $gt, $gte, $lt, $lte, $exists). Any other `$`-operator — including a
- * top-level logical operator such as `$and`/`$or` — throws, so the simulation
- * never silently disagrees with what the real database would move or delete.
+ * semantics: nested dot-paths (through arrays), array-element and
+ * null-matches-missing equality, and the common field operators ($eq, $ne,
+ * $in, $nin, $gt, $gte, $lt, $lte, $exists). Any other `$`-operator —
+ * including a top-level logical operator such as `$and`/`$or` — throws, so
+ * the simulation never silently disagrees with what the real database would
+ * move or delete.
  */
 function matchesWhere(
   doc: Record<string, unknown>,
@@ -231,13 +355,13 @@ function matchesWhere(
           `Supported field operators: ${SUPPORTED_OPERATORS}.`,
       );
     }
-    const fieldValue = getFieldByPath(doc, key);
+    const candidates = valuesAtPath(doc, key);
     if (isOperatorExpression(condition)) {
       return Object.entries(condition).every(([op, operand]) =>
-        applyOperator(fieldValue, op, operand),
+        applyOperator(candidates, op, operand),
       );
     }
-    return valuesEqual(fieldValue, condition);
+    return applyOperator(candidates, "$eq", condition);
   });
 }
 
@@ -316,25 +440,21 @@ export function createMemoryApplier(migration: MigrationDefinition) {
     to: string,
     dropTarget: boolean,
   ): DatabaseState {
-    if (dropTarget) {
-      delete state.collections[to];
-      delete state.multiCollections[to];
-      delete state.multiModels[to];
-      delete state.scopedMultiCollections[to];
+    const source = PHYSICAL_BUCKETS.find((bucket) => state[bucket][from]);
+    if (!source) {
+      throw new Error(`Cannot rename: collection ${from} does not exist`);
     }
-    if (state.collections[from]) {
-      state.collections[to] = state.collections[from];
-      delete state.collections[from];
-    } else if (state.multiCollections[from]) {
-      state.multiCollections[to] = state.multiCollections[from];
-      delete state.multiCollections[from];
-    } else if (state.multiModels[from]) {
-      state.multiModels[to] = state.multiModels[from];
-      delete state.multiModels[from];
-    } else if (state.scopedMultiCollections[from]) {
-      state.scopedMultiCollections[to] = state.scopedMultiCollections[from];
-      delete state.scopedMultiCollections[from];
+    if (locatePhysical(state, to)) {
+      if (!dropTarget) {
+        throw new Error(
+          `Cannot rename ${from}: target collection ${to} already exists`,
+        );
+      }
+      dropPhysical(state, to);
     }
+    const bucket: Record<string, unknown> = state[source];
+    bucket[to] = bucket[from];
+    delete bucket[from];
     return state;
   }
 
@@ -352,7 +472,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
   } = {
     create_collection: {
       apply: (state, operation) => {
-        state.collections[operation.collectionName] = { content: [] };
+        state.collections[operation.collectionName] ??= { content: [] };
         return state;
       },
       reverse: (state, operation) => {
@@ -373,7 +493,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
     },
     create_multicollection: {
       apply: (state, operation) => {
-        state.multiCollections[operation.collectionName] = { content: [] };
+        state.multiCollections[operation.collectionName] ??= { content: [] };
         return state;
       },
       reverse: (state, operation) => {
@@ -396,14 +516,30 @@ export function createMemoryApplier(migration: MigrationDefinition) {
     },
     mark_as_multimodel: {
       apply: (state, operation) => {
-        const original = state.collections[operation.collectionName];
-        if (original) {
-          state.multiModels[operation.collectionName] = {
-            modelType: operation.modelType,
-            content: original.content,
-          };
-          delete state.collections[operation.collectionName];
+        const name = operation.collectionName;
+        if (state.multiModels[name]) {
+          throw new Error(
+            `Collection ${name} is already marked as multi-model`,
+          );
         }
+        if (!migration.schemas.multiModels?.[operation.modelType]) {
+          throw new Error(
+            `Model type ${operation.modelType} not found in migration schemas`,
+          );
+        }
+        const source = PHYSICAL_BUCKETS.find((bucket) => state[bucket][name]);
+        if (!source) {
+          state.multiModels[name] = {
+            modelType: operation.modelType,
+            content: [],
+          };
+          return state;
+        }
+        state.multiModels[name] = {
+          modelType: operation.modelType,
+          content: state[source][name].content,
+        };
+        delete state[source][name];
         return state;
       },
       reverse: (state, operation) => {
@@ -426,12 +562,18 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           );
         }
         const sig = operation.collectionName;
-        collection.content.push(
-          ...operation.documents.map((doc: unknown, i) => {
+        upsertById(
+          collection.content,
+          operation.documents.map((doc: unknown, i) => {
             const typedDoc = doc as Record<string, unknown>;
+            const _id = seedId(typedDoc, operation.schema._id, "", sig, i);
             return {
-              ...typedDoc,
-              _id: seedId(typedDoc, operation.schema._id, "", sig, i),
+              ...parsedSeed(
+                operation.schema,
+                { ...typedDoc, _id },
+                `collection "${operation.collectionName}"`,
+              ),
+              _id,
             };
           }),
         );
@@ -473,19 +615,27 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           );
         }
         const sig = `${operation.collectionName}:${operation.documentType}`;
-        multiCollection.content.push(
-          ...operation.documents.map((doc: unknown, i) => {
+        upsertById(
+          multiCollection.content,
+          operation.documents.map((doc: unknown, i) => {
             const typedDoc = doc as Record<string, unknown>;
+            const _id = seedId(
+              typedDoc,
+              operation.schema._id,
+              operation.documentType,
+              sig,
+              i,
+            );
             return {
-              ...typedDoc,
-              _id: seedId(
-                typedDoc,
-                operation.schema._id,
-                operation.documentType,
-                sig,
-                i,
+              ...parsedSeed(
+                {
+                  _type: v.literal(operation.documentType),
+                  ...operation.schema,
+                },
+                { ...typedDoc, _id, _type: operation.documentType },
+                `multi-collection "${operation.collectionName}" type "${operation.documentType}"`,
               ),
-              _type: operation.documentType,
+              _id,
             };
           }),
         );
@@ -526,19 +676,27 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           );
         }
         const sig = `${operation.collectionName}:${operation.modelType}:${operation.documentType}`;
-        multiCollection.content.push(
-          ...operation.documents.map((doc: unknown, i) => {
+        upsertById(
+          multiCollection.content,
+          operation.documents.map((doc: unknown, i) => {
             const typedDoc = doc as Record<string, unknown>;
+            const _id = seedId(
+              typedDoc,
+              operation.schema._id,
+              operation.documentType,
+              sig,
+              i,
+            );
             return {
-              ...typedDoc,
-              _id: seedId(
-                typedDoc,
-                operation.schema._id,
-                operation.documentType,
-                sig,
-                i,
+              ...parsedSeed(
+                {
+                  _type: v.literal(operation.documentType),
+                  ...operation.schema,
+                },
+                { ...typedDoc, _id, _type: operation.documentType },
+                `multi-model instance "${operation.collectionName}" type "${operation.documentType}"`,
               ),
-              _type: operation.documentType,
+              _id,
             };
           }),
         );
@@ -577,8 +735,9 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           state.multiModels,
         )) {
           if (instance.modelType === modelType) {
-            instance.content.push(
-              ...operation.documents.map((doc: unknown, i) => {
+            upsertById(
+              instance.content,
+              operation.documents.map((doc: unknown, i) => {
                 const typedDoc = doc as Record<string, unknown>;
                 return {
                   ...typedDoc,
@@ -632,7 +791,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           );
         }
         collection.content = collection.content.map((doc) =>
-          operation.up(doc, context),
+          replacement(doc, operation.up(doc, context)),
         );
         return state;
       },
@@ -647,7 +806,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           );
         }
         collection.content = collection.content.map((doc) =>
-          operation.down(doc, context),
+          replacement(doc, operation.down(doc, context)),
         );
         return state;
       },
@@ -663,7 +822,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
         }
         multiCollection.content = multiCollection.content.map((doc) => {
           if (doc._type === operation.documentType) {
-            return operation.up(doc as Record<string, unknown>, context);
+            return replacement(doc, operation.up(doc, context));
           }
           return doc;
         });
@@ -682,7 +841,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
         }
         multiCollection.content = multiCollection.content.map((doc) => {
           if (doc._type === operation.documentType) {
-            return operation.down(doc as Record<string, unknown>, context);
+            return replacement(doc, operation.down(doc, context));
           }
           return doc;
         });
@@ -699,7 +858,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
         }
         multiCollection.content = multiCollection.content.map((doc) => {
           if (doc._type === operation.documentType) {
-            return operation.up(doc as Record<string, unknown>, context);
+            return replacement(doc, operation.up(doc, context));
           }
           return doc;
         });
@@ -717,7 +876,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
         }
         multiCollection.content = multiCollection.content.map((doc) => {
           if (doc._type === operation.documentType) {
-            return operation.down(doc as Record<string, unknown>, context);
+            return replacement(doc, operation.down(doc, context));
           }
           return doc;
         });
@@ -733,7 +892,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           if (instance.modelType === modelType) {
             instance.content = instance.content.map((doc) => {
               if (doc._type === operation.documentType) {
-                return operation.up(doc as Record<string, unknown>, context);
+                return replacement(doc, operation.up(doc, context));
               }
               return doc;
             });
@@ -752,7 +911,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           if (instance.modelType === modelType) {
             instance.content = instance.content.map((doc) => {
               if (doc._type === operation.documentType) {
-                return operation.down(doc as Record<string, unknown>, context);
+                return replacement(doc, operation.down(doc, context));
               }
               return doc;
             });
@@ -781,16 +940,19 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           matchesWhere(doc, operation.from.where),
         );
 
-        for (const doc of matched) {
-          const mapped = operation.map({ ...doc }) as Record<string, unknown>;
-          mapped._id = flowTargetId(
-            flowDocumentPrefix(operation.targetIsTyped, prefix, mapped),
-            migrationId,
-            operation.from.collection,
-            String(doc._id),
-          );
-          tgt.content.push(mapped);
-        }
+        upsertById(
+          tgt.content,
+          matched.map((doc) => {
+            const mapped = operation.map({ ...doc }) as Record<string, unknown>;
+            mapped._id = flowTargetId(
+              flowDocumentPrefix(operation.targetIsTyped, prefix, mapped),
+              migrationId,
+              operation.from.collection,
+              String(doc._id),
+            );
+            return mapped;
+          }),
+        );
 
         if (operation.sourceDisposition === "consume") {
           src.content = src.content.filter(
@@ -859,11 +1021,10 @@ export function createMemoryApplier(migration: MigrationDefinition) {
        * catch-up) therefore requires `onConflict: "skip"` or `"merge"`.
        */
       apply: (state, operation) => {
-        const target = (state.scopedMultiCollections[
-          operation.into.collection
-        ] ??= {
-          content: [],
-        });
+        const into = operation.into.collection;
+        const target =
+          locatePhysical(state, into) ??
+          (state.scopedMultiCollections[into] = { content: [] });
 
         // Resolve the concrete source(s) and the docs each contributes. Each
         // source carries `dropWhole` — how to consume it when nothing was
@@ -886,7 +1047,8 @@ export function createMemoryApplier(migration: MigrationDefinition) {
         }[] = [];
         const from = operation.from;
         if (from.kind === "collection") {
-          const coll = state.collections[from.name];
+          const coll =
+            from.name === into ? undefined : locatePhysical(state, from.name);
           if (coll) {
             const items: Item[] = [];
             for (const doc of [...coll.content]) {
@@ -908,14 +1070,15 @@ export function createMemoryApplier(migration: MigrationDefinition) {
               // filtered subset (non-matching docs stay).
               dropWhole: from.where
                 ? undefined
-                : () => delete state.collections[from.name],
+                : () => dropPhysical(state, from.name),
             });
           }
         } else if (from.kind === "multiModelInstances") {
           for (const [instanceName, inst] of Object.entries(
             state.multiModels,
           )) {
-            if (inst.modelType !== from.model) continue;
+            if (inst.modelType !== from.model || instanceName === into)
+              continue;
             // Instances are named `<model>:<id>` — same rule the mongodb
             // applier gets from `discoverMultiCollectionInstances`. Without it
             // a bare `<model>` registry entry reads as an instance, and its
@@ -946,7 +1109,10 @@ export function createMemoryApplier(migration: MigrationDefinition) {
             });
           }
         } else {
-          const coll = state.multiCollections[from.collectionName];
+          const coll =
+            from.collectionName === into
+              ? undefined
+              : locatePhysical(state, from.collectionName);
           if (coll) {
             const items: Item[] = [];
             for (const doc of [...coll.content]) {
@@ -1343,7 +1509,7 @@ export function createMemoryApplier(migration: MigrationDefinition) {
     },
     create_scoped_multicollection: {
       apply: (state, operation) => {
-        state.scopedMultiCollections[operation.collectionName] = {
+        state.scopedMultiCollections[operation.collectionName] ??= {
           content: [],
         };
         return state;
@@ -1362,18 +1528,24 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           );
         }
         const sig = `${operation.collectionName}:${operation.scope}:${operation.documentType}`;
-        coll.content.push(
-          ...operation.documents.map((doc: unknown, i) => {
+        upsertById(
+          coll.content,
+          operation.documents.map((doc: unknown, i) => {
             const typedDoc = doc as Record<string, unknown>;
+            const _id = seedId(
+              typedDoc,
+              operation.schema._id,
+              operation.documentType,
+              sig,
+              i,
+            );
             return {
-              ...typedDoc,
-              _id: seedId(
-                typedDoc,
-                operation.schema._id,
-                operation.documentType,
-                sig,
-                i,
+              ...parsedSeed(
+                operation.schema,
+                { ...typedDoc, _id },
+                `scoped multi-collection "${operation.collectionName}" type "${operation.documentType}"`,
               ),
+              _id,
               _type: operation.documentType,
               _scope: operation.scope,
             };
@@ -1436,7 +1608,9 @@ export function createMemoryApplier(migration: MigrationDefinition) {
         );
         coll.content = coll.content.map((doc) =>
           doc._type === operation.documentType
-            ? withComputedValue(doc, field.name, truth.get(String(doc._id)))
+            ? withComputedRevisionBumped(
+                withComputedValue(doc, field.name, truth.get(String(doc._id))),
+              )
             : doc,
         );
         return state;

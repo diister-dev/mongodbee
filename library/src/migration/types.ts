@@ -1175,6 +1175,13 @@ export type MockGenerationFailure = {
 
   /** Identifier space a correlation finding concerns */
   space?: string;
+
+  /**
+   * Which correlation finding: a space several targets mint (resolved by a
+   * deterministic tie-break), a referenced space nothing mints, or a draw
+   * that found its pool empty.
+   */
+  correlation?: "contested_space" | "unminted_space" | "empty_pool";
 };
 
 /**

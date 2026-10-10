@@ -1,4 +1,4 @@
-import { COMPUTED_ROOT } from "../computed-guard.ts";
+import { COMPUTED_REVISION, COMPUTED_ROOT } from "../computed-guard.ts";
 import { type ComputedField, computedTopology } from "../computed-topology.ts";
 import { isRecord } from "../utils/guards.ts";
 import type { MigrationDefinition } from "./types.ts";
@@ -30,6 +30,18 @@ export function withComputedValue(
   return {
     ...document,
     [COMPUTED_ROOT]: { ...(isRecord(root) ? root : {}), [name]: value },
+  };
+}
+
+export function withComputedRevisionBumped(
+  document: Record<string, unknown>,
+): Record<string, unknown> {
+  const root = isRecord(document[COMPUTED_ROOT]) ? document[COMPUTED_ROOT] : {};
+  const revision =
+    typeof root[COMPUTED_REVISION] === "number" ? root[COMPUTED_REVISION] : 0;
+  return {
+    ...document,
+    [COMPUTED_ROOT]: { ...root, [COMPUTED_REVISION]: revision + 1 },
   };
 }
 

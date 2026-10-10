@@ -7,10 +7,13 @@ export type {
   SeedAfterContext,
   SeedAnchors,
   SeedCount,
+  SeedDeferredFinalize,
   SeedFinalize,
   SeedFinalizeContext,
+  SeedFinalizeEntry,
   SeedInvariant,
   SeedInvariantContext,
+  SeedLayer,
   SeedRandom,
   SeedRule,
   SeedRuleContext,
@@ -19,7 +22,9 @@ export type {
   SeedShape,
   SeedShapeContext,
   SeedShapeEntry,
+  SeedStage,
   SeedWorld,
+  SeedWorldQuery,
 } from "./types.ts";
 export {
   type GenerateScenarioOptions,
@@ -30,7 +35,17 @@ export { recomputeComputedFields } from "./computed.ts";
 export { type CheckScenarioOptions, checkScenarioState } from "./oracle.ts";
 export {
   applyMigrationsInMemory,
+  checkScenarioWorld,
+  type CheckScenarioWorldOptions,
+  addOnDemand,
+  generateScenarioAtBirth,
+  generateScenarioStage,
+  hasScenarioStage,
+  isBlockingViolation,
+  mergeScenarioViolations,
   renderScenarioReport,
+  type ScenarioBirth,
+  type ScenarioStageResult,
   type ReplayResult,
   runScenario,
   type RunScenarioOptions,
@@ -43,11 +58,15 @@ export {
 export { docsOf, isMetadataDocument, resolveTargetKey } from "./state.ts";
 export { SKIP } from "@diister/valibot-mock";
 export {
+  applyStateDelta,
   countCollections,
   type PopulateDatabaseOptions,
   populateDatabase,
   readStateFromDatabase,
   type ReadStateOptions,
+  snapshotState,
+  type StateDelta,
+  type StateSnapshot,
   type WriteStateOptions,
   writeStateToDatabase,
 } from "./mongo.ts";

@@ -7,7 +7,12 @@ import { docsOf, fieldsOfTarget, resolveTargetKey } from "./state.ts";
 import { createDocLookup, mirrorExpectations } from "./mirror.ts";
 import { valueAt } from "./doc-path.ts";
 import { partitionedDocs } from "./unique.ts";
-import { uniqueEntriesOf, uniqueKeysOfTarget } from "../privacy/unique-keys.ts";
+import {
+  indexPath,
+  uniqueEntriesOf,
+  uniqueKeysOfTarget,
+} from "../privacy/unique-keys.ts";
+import { type DocScope, globalIndexPaths, scopedDocs } from "./scope.ts";
 
 export interface CheckScenarioOptions {
   readonly state: DatabaseState;
@@ -16,12 +21,25 @@ export interface CheckScenarioOptions {
   readonly invariants?: readonly SeedInvariant[];
 }
 
+function outsideScope(
+  scope: DocScope,
+  targets: readonly (DocScope | undefined)[],
+): boolean {
+  const sameDimension = targets.filter(
+    (t) => t === undefined || t.dimension === scope.dimension,
+  );
+  return (
+    sameDimension.length > 0 &&
+    sameDimension.every((t) => t !== undefined && t.value !== scope.value)
+  );
+}
+
 export function checkScenarioState(
   options: CheckScenarioOptions,
 ): ScenarioViolation[] {
   const { state, schemas, plan } = options;
   const violations: ScenarioViolation[] = [];
-  const ids = new Map<string, Set<string>>();
+  const ids = new Map<string, Map<string, (DocScope | undefined)[]>>();
   const owned = new Set<string>();
   const seenByCollection = new Map<string, Set<string>>();
   const lookup = createDocLookup(state, plan);
@@ -29,18 +47,24 @@ export function checkScenarioState(
   for (const target of plan.targets.values()) {
     if (!target.space) continue;
     owned.add(target.space);
-    const set = ids.get(target.space) ?? new Set<string>();
-    for (const doc of docsOf(state, target)) {
-      if (typeof doc._id === "string") set.add(doc._id);
+    const located = ids.get(target.space) ?? new Map();
+    const spansScopes = globalIndexPaths(schemas, target).has("_id");
+    for (const { doc, scope } of scopedDocs(state, schemas, target)) {
+      if (typeof doc._id !== "string") continue;
+      const scopes = located.get(doc._id) ?? [];
+      scopes.push(spansScopes ? undefined : scope);
+      located.set(doc._id, scopes);
     }
-    ids.set(target.space, set);
+    ids.set(target.space, located);
   }
 
   for (const target of plan.targets.values()) {
     const fields = fieldsOfTarget(schemas, target);
     if (!fields) continue;
-    const docs = docsOf(state, target);
+    const located = scopedDocs(state, schemas, target);
+    const docs = located.map(({ doc }) => doc);
     if (docs.length === 0) continue;
+    const crossing = globalIndexPaths(schemas, target);
     const byPath = new Map(target.paths.map((p) => [p.path, p]));
     const physical = `${target.bucket}/${target.collection}`;
     const seen = seenByCollection.get(physical) ?? new Set<string>();
@@ -50,8 +74,9 @@ export function checkScenarioState(
     let mirrored = 0;
     const dangling = new Map<string, number>();
     const ownerMissing = new Map<string, number>();
+    const crossScope = new Map<string, number>();
 
-    for (const doc of docs) {
+    for (const { doc, scope } of located) {
       if (doc._id !== undefined || target.space !== "") {
         const key =
           target.bucket === "scopedMultiCollections"
@@ -84,7 +109,17 @@ export function checkScenarioState(
         }
         const space = leaf.value.split(":")[0];
         if (!cls.spaces.includes(space) || !owned.has(space)) return KEEP;
-        if (ids.get(space)?.has(leaf.value)) return KEEP;
+        const targetScopes = ids.get(space)?.get(leaf.value);
+        if (targetScopes) {
+          if (
+            scope !== undefined &&
+            !crossing.has(indexPath(leaf.path)) &&
+            outsideScope(scope, targetScopes)
+          ) {
+            crossScope.set(leaf.path, (crossScope.get(leaf.path) ?? 0) + 1);
+          }
+          return KEEP;
+        }
         const bucket = target.owner.via.includes(leaf.path)
           ? ownerMissing
           : dangling;
@@ -154,6 +189,14 @@ export function checkScenarioState(
         kind: "dangling_reference",
         target: target.key,
         message: `${path}: ${count} reference(s) point at no document`,
+        count,
+      });
+    }
+    for (const [path, count] of crossScope) {
+      violations.push({
+        kind: "cross_scope_reference",
+        target: target.key,
+        message: `${path}: ${count} reference(s) point at a document of another scope`,
         count,
       });
     }

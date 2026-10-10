@@ -34,11 +34,19 @@ export interface SeedRandom {
   dateBetween(from: Date | string, to: Date | string): Date;
 }
 
+export interface SeedWorldQuery {
+  readonly acrossScopes?: boolean;
+}
+
 export interface SeedWorld extends SeedRandom {
-  docs(target: string): readonly Record<string, unknown>[];
+  docs(
+    target: string,
+    query?: SeedWorldQuery,
+  ): readonly Record<string, unknown>[];
   pick(
     target: string,
     filter?: (doc: Record<string, unknown>) => boolean,
+    query?: SeedWorldQuery,
   ): Record<string, unknown> | undefined;
 }
 
@@ -65,13 +73,20 @@ export interface SeedFinalizeContext extends SeedWorld {
 
 export type SeedFinalize = (
   context: SeedFinalizeContext,
-) => Record<string, unknown> | void;
+) => Record<string, unknown> | void | Promise<Record<string, unknown> | void>;
+
+export interface SeedDeferredFinalize {
+  readonly deferred: true;
+  readonly run: SeedFinalize;
+}
+
+export type SeedFinalizeEntry = SeedFinalize | SeedDeferredFinalize;
 
 export interface SeedAfterContext extends SeedWorld {
   readonly state: DatabaseState;
 }
 
-export type SeedAfter = (context: SeedAfterContext) => void;
+export type SeedAfter = (context: SeedAfterContext) => void | Promise<void>;
 
 export type SeedRule = (context: SeedRuleContext) => unknown;
 
@@ -85,16 +100,23 @@ export interface SeedInvariantContext {
 
 export type SeedInvariant = (context: SeedInvariantContext) => string[];
 
-export interface SeedScenario {
-  readonly name: string;
-  readonly birth: string;
-  readonly seed?: number;
+export interface SeedLayer {
   readonly refDate?: Date;
   readonly anchors?: SeedAnchors;
   readonly shape?: SeedShape;
   readonly rules?: SeedRules;
-  readonly finalize?: Record<string, SeedFinalize>;
+  readonly finalize?: Record<string, SeedFinalizeEntry>;
   readonly after?: SeedAfter;
+}
+
+export type SeedStage = SeedLayer;
+
+export interface SeedScenario extends SeedLayer {
+  readonly name: string;
+  readonly birth: string;
+  readonly seed?: number;
+  readonly defaultCount?: number;
+  readonly stages?: Readonly<Record<string, SeedStage>>;
   readonly invariants?: readonly SeedInvariant[];
   readonly uncorrelatedSpaces?: readonly string[];
 }
@@ -104,6 +126,7 @@ export type ScenarioViolationKind =
   | "correlation"
   | "duplicate_id"
   | "dangling_reference"
+  | "cross_scope_reference"
   | "owner_unresolved"
   | "unique_index"
   | "unique_unchecked"
@@ -116,6 +139,7 @@ export interface ScenarioViolation {
   readonly target: string;
   readonly message: string;
   readonly count?: number;
+  readonly blocking?: boolean;
 }
 
 export interface ScenarioReport {
@@ -124,6 +148,7 @@ export interface ScenarioReport {
   readonly at: string;
   readonly applied: readonly string[];
   readonly generated: Readonly<Record<string, number>>;
+  readonly onDemand: Readonly<Record<string, number>>;
   readonly violations: readonly ScenarioViolation[];
   readonly ok: boolean;
 }
