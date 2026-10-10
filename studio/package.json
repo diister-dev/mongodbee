@@ -1,6 +1,6 @@
 {
   "name": "@diister/mongodbee-studio",
-  "version": "0.23.0-beta.40",
+  "version": "0.23.0-beta.41",
   "description": "A local database explorer for MongoDBee projects, opened with `mongodbee studio`",
   "license": "MIT",
   "type": "module",
@@ -35,7 +35,7 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "@diister/mongodbee": "0.23.0-beta.40",
+    "@diister/mongodbee": "0.23.0-beta.41",
     "mongodb": "7.7.0"
   },
   "devDependencies": {

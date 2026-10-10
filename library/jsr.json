@@ -1,6 +1,6 @@
 {
   "name": "@diister/mongodbee",
-  "version": "0.23.0-beta.40",
+  "version": "0.23.0-beta.41",
   "license": "MIT",
   "exports": {
     ".": "./mod.ts",
