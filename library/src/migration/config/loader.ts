@@ -32,9 +32,14 @@ import * as v from "../../schema.ts";
 import * as path from "node:path";
 import {
   DEFAULT_CONFIG,
+  FrozenImportsConfigSchema,
   type MigrationSystemConfig,
   MigrationSystemConfigSchema,
 } from "./types.ts";
+import {
+  DEFAULT_FROZEN_ALLOW,
+  type FrozenImportsPolicy,
+} from "../frozen-imports.ts";
 import { red } from "../../utils/colors.ts";
 import { pathToFileUrl } from "../utils/platform.ts";
 
@@ -306,6 +311,36 @@ export async function loadConfig(
   throw new Error(
     'No configuration file found. Run "mongodbee init" to create one.',
   );
+}
+
+/**
+ * Resolves `migration.validation.frozen` into the level and allowlist `check`
+ * applies, `"warn"` when unset.
+ *
+ * Reads the raw configuration `loadConfig` returns, which has not been through
+ * the schema, so an invalid value is rejected here rather than ignored.
+ */
+export function frozenImportsPolicy(
+  config: Partial<MigrationSystemConfig>,
+): FrozenImportsPolicy {
+  const raw = config.migration?.validation?.frozen ?? "warn";
+  const parsed = v.safeParse(FrozenImportsConfigSchema, raw);
+  if (!parsed.success) {
+    throw new Error(
+      `migration.validation.frozen: expected false, "warn", "error" or { level, allow? }, got ${JSON.stringify(raw)}`,
+    );
+  }
+  const value = parsed.output;
+  if (value === false) {
+    return { level: "off", allow: [...DEFAULT_FROZEN_ALLOW] };
+  }
+  if (typeof value === "string") {
+    return { level: value, allow: [...DEFAULT_FROZEN_ALLOW] };
+  }
+  return {
+    level: value.level,
+    allow: [...DEFAULT_FROZEN_ALLOW, ...(value.allow ?? [])],
+  };
 }
 
 /**
