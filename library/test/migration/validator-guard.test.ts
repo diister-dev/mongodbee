@@ -74,14 +74,22 @@ test("validator guard: one failing collection no longer leaves the later ones of
         zzz: { name: v.string() },
       },
     };
+    // The migration writes into `aaa`, so `aaa` is switched off; `zzz` is
+    // only restored to its target validator.
     const m = migrationDefinition("001", "indexes", {
       parent: null,
       schemas: S,
-      migrate: (b) => b.compile(),
+      migrate: (b) =>
+        b
+          .collection("aaa")
+          .transform({ up: (doc) => doc, down: (doc) => doc })
+          .end()
+          .compile(),
     });
+    const ops = m.migrate(migrationBuilder({ schemas: S })).operations;
 
     await assertRejects(
-      () => createMongodbApplier(db, m).applyMigration([], "up"),
+      () => createMongodbApplier(db, m).applyMigration(ops, "up"),
       Error,
       "aaa",
     );
@@ -93,7 +101,8 @@ test("validator guard: one failing collection no longer leaves the later ones of
       "the later collection got its validator back",
     );
     assert(zzz.rules > 0, "with its rules");
-    // The run did not complete: the record stays for the next command.
+    // The run did not complete: the record of what it switched off stays
+    // for the next command.
     const record = await getValidatorSuspension(db);
     assert(record !== null);
     assert(record.collections.includes("aaa"));
@@ -192,5 +201,33 @@ test("validator guard: a normal migration does not report its own restore as a l
     );
     assertEquals((await validationOf(db, "+notes")).level, "strict");
     assert((await validationOf(db, "+notes")).rules > 0);
+  });
+});
+
+test("validator guard: a collection the migration does not write keeps its validator through a failed restore", async () => {
+  await withDatabase("vguard-unwritten", async (db) => {
+    await db.createCollection("aaa");
+    await db.collection("aaa").insertMany([{ name: "dup" }, { name: "dup" }]);
+    const S = {
+      collections: { aaa: { name: withIndex(v.string(), { unique: true }) } },
+    };
+    const m = migrationDefinition("001", "indexes", {
+      parent: null,
+      schemas: S,
+      migrate: (b) => b.compile(),
+    });
+
+    await assertRejects(
+      () => createMongodbApplier(db, m).applyMigration([], "up"),
+      Error,
+      "aaa",
+    );
+
+    // Nothing was switched off, so nothing is left off and nothing is
+    // recorded: the validator went on, only the unique index failed.
+    const aaa = await validationOf(db, "aaa");
+    assertEquals(aaa.level, "strict");
+    assert(aaa.rules > 0);
+    assertEquals(await getValidatorSuspension(db), null);
   });
 });
