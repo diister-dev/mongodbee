@@ -66,6 +66,9 @@ import {
 
 const log = createLogger("migration-applier");
 
+/** MongoDB's error code when `create` targets a namespace that already exists. */
+const NAMESPACE_EXISTS = 48;
+
 /**
  * Resolve the `_id` of a seed document: honour an explicit `_id`, else
  * derive a deterministic one (so apply and reverse compute the same id and
@@ -1889,6 +1892,19 @@ export function createMongodbApplier(
        * consolidations expected to be retried or caught up.
        */
       apply: async (operation) => {
+        // The target exists after the flow even when no document flows, as
+        // in the memory applier: a chain that renames or reads it next
+        // (a consolidation into a temp collection) must not pass the
+        // simulation and then fail on an empty database.
+        if (!(await collectionExists(operation.into.collection))) {
+          try {
+            await db.createCollection(operation.into.collection);
+          } catch (error) {
+            if ((error as { code?: number })?.code !== NAMESPACE_EXISTS) {
+              throw error;
+            }
+          }
+        }
         const target = primaryCollection(db, operation.into.collection);
         const from = operation.from;
 
