@@ -33,7 +33,6 @@ import {
 import { getIrreversibleOperations, migrationBuilder } from "../builder.ts";
 import { fieldsOf } from "../../type-definition.ts";
 import * as v from "valibot";
-import { dirtyEquivalent } from "../../utils/object.ts";
 import { createMemoryApplier } from "../appliers/memory.ts";
 import {
   type CorrelationSession,
@@ -244,7 +243,6 @@ export class SimulationValidator implements MigrationValidator {
 
       // Test forward execution of current migration
       const forwardErrors: string[] = [];
-      const stateBeforeMigration = currentState; // Capture state before applying this migration
 
       // Apply operations in sequence
       let appliedOperations = 0;
@@ -461,7 +459,6 @@ export class SimulationValidator implements MigrationValidator {
       const changeStateResult = await this.validateSchemaChanges(
         definition,
         applier,
-        stateBeforeMigration,
         stateAfterMigration,
         operations,
       );
@@ -539,15 +536,10 @@ export class SimulationValidator implements MigrationValidator {
    */
   private async validateCollectionSchemaChanges(
     definition: MigrationDefinition,
-    stateBefore: SimulationDatabaseState,
     stateAfter: SimulationDatabaseState,
     rolledBack: () => Promise<SimulationDatabaseState | null>,
-  ): Promise<{
-    errors: string[];
-    issues: { type: string; message: string }[];
-  }> {
+  ): Promise<{ errors: string[] }> {
     const errors: string[] = [];
-    const issues: { type: string; message: string }[] = [];
     const currentSchema = definition.schemas.collections || {};
     const parentSchema = definition.parent?.schemas.collections || {};
 
@@ -578,7 +570,7 @@ export class SimulationValidator implements MigrationValidator {
 
     const stateAfterRollback = await rolledBack();
     // No rollback state exists to validate for an irreversible migration.
-    if (!stateAfterRollback) return { errors, issues };
+    if (!stateAfterRollback) return { errors };
 
     // Check each collection for schema changes
     for (const [collectionName, parentCollSchema] of Object.entries(
@@ -605,39 +597,20 @@ export class SimulationValidator implements MigrationValidator {
               .join("\n-> ")}"`,
           );
         }
-
-        const docBefore = (stateBefore.collections || {})[collectionName]
-          ?.content?.[docIndex];
-
-        const equal = dirtyEquivalent(docBefore, doc);
-        if (!equal) {
-          issues.push({
-            type: "rollback_document_mismatch",
-            message: `Document in collection "${collectionName}" different after rollback.`,
-          });
-        }
       }
       const currentCollSchema = currentSchema[collectionName];
       if (!currentCollSchema) continue; // Collection was removed, skip
     }
 
-    return {
-      errors,
-      issues,
-    };
+    return { errors };
   }
 
   private async validateMultiCollectionSchemaChanges(
     definition: MigrationDefinition,
-    stateBefore: SimulationDatabaseState,
     stateAfter: SimulationDatabaseState,
     rolledBack: () => Promise<SimulationDatabaseState | null>,
-  ): Promise<{
-    errors: string[];
-    issues: { type: string; message: string }[];
-  }> {
+  ): Promise<{ errors: string[] }> {
     const errors: string[] = [];
-    const issues: { type: string; message: string }[] = [];
     const currentSchema = definition.schemas.multiCollections || {};
     const parentSchema = definition.parent?.schemas.multiCollections || {};
 
@@ -686,7 +659,7 @@ export class SimulationValidator implements MigrationValidator {
 
     const stateAfterRollback = await rolledBack();
     // No rollback state exists to validate for an irreversible migration.
-    if (!stateAfterRollback) return { errors, issues };
+    if (!stateAfterRollback) return { errors };
 
     // Check each multi-collection for schema changes
     for (const [multiCollectionName, parentMultiCollSchema] of Object.entries(
@@ -723,36 +696,18 @@ export class SimulationValidator implements MigrationValidator {
               .join("\n-> ")}`,
           );
         }
-        const docBefore = (stateBefore.multiCollections || {})[
-          multiCollectionName
-        ]?.content?.[docIndex];
-        const equal = dirtyEquivalent(docBefore, doc);
-        if (!equal) {
-          issues.push({
-            type: "rollback_document_mismatch",
-            message: `Document in multi-collection "${multiCollectionName}" type "${docType}" different after rollback.`,
-          });
-        }
       }
     }
 
-    return {
-      errors,
-      issues,
-    };
+    return { errors };
   }
 
   private async validateMultiModelSchemaChanges(
     definition: MigrationDefinition,
-    stateBefore: SimulationDatabaseState,
     stateAfter: SimulationDatabaseState,
     rolledBack: () => Promise<SimulationDatabaseState | null>,
-  ): Promise<{
-    errors: string[];
-    issues: { type: string; message: string }[];
-  }> {
+  ): Promise<{ errors: string[] }> {
     const errors: string[] = [];
-    const issues: { type: string; message: string }[] = [];
     const currentSchema = definition.schemas.multiModels || {};
     const parentSchema = definition.parent?.schemas.multiModels || {};
 
@@ -814,7 +769,7 @@ export class SimulationValidator implements MigrationValidator {
 
     const stateAfterRollback = await rolledBack();
     // No rollback state exists to validate for an irreversible migration.
-    if (!stateAfterRollback) return { errors, issues };
+    if (!stateAfterRollback) return { errors };
     // Check each multi-collection model for schema changes
     for (const [modelType, parentModelSchema] of Object.entries(parentSchema)) {
       // New multi-collection model, no validation needed
@@ -849,23 +804,11 @@ export class SimulationValidator implements MigrationValidator {
                 .join("\n-> ")}`,
             );
           }
-          const docBefore = (stateBefore.multiModels || {})[collectionName]
-            ?.content?.[docIndex];
-          const equal = dirtyEquivalent(docBefore, doc);
-          if (!equal) {
-            issues.push({
-              type: "rollback_document_mismatch",
-              message: `Document in multi-collection model "${collectionName}" type "${docType}" different after rollback.`,
-            });
-          }
         }
       }
     }
 
-    return {
-      errors,
-      issues,
-    };
+    return { errors };
   }
 
   /**
@@ -881,15 +824,10 @@ export class SimulationValidator implements MigrationValidator {
    */
   private async validateScopedMultiCollectionSchemaChanges(
     definition: MigrationDefinition,
-    stateBefore: SimulationDatabaseState,
     stateAfter: SimulationDatabaseState,
     rolledBack: () => Promise<SimulationDatabaseState | null>,
-  ): Promise<{
-    errors: string[];
-    issues: { type: string; message: string }[];
-  }> {
+  ): Promise<{ errors: string[] }> {
     const errors: string[] = [];
-    const issues: { type: string; message: string }[] = [];
     const currentSchema = definition.schemas.scopedMultiCollections || {};
     const parentSchema =
       definition.parent?.schemas.scopedMultiCollections || {};
@@ -951,7 +889,7 @@ export class SimulationValidator implements MigrationValidator {
 
     const stateAfterRollback = await rolledBack();
     // No rollback state exists to validate for an irreversible migration.
-    if (!stateAfterRollback) return { errors, issues };
+    if (!stateAfterRollback) return { errors };
 
     // Check each scoped multi-collection for schema changes
     for (const [scopedName, parentScopedSchema] of Object.entries(
@@ -987,22 +925,10 @@ export class SimulationValidator implements MigrationValidator {
               .join("\n-> ")}`,
           );
         }
-        const docBefore = (stateBefore.scopedMultiCollections || {})[scopedName]
-          ?.content?.[docIndex];
-        const equal = dirtyEquivalent(docBefore, doc);
-        if (!equal) {
-          issues.push({
-            type: "rollback_document_mismatch",
-            message: `Document in scoped multi-collection "${scopedName}" type "${docType}" different after rollback.`,
-          });
-        }
       }
     }
 
-    return {
-      errors,
-      issues,
-    };
+    return { errors };
   }
 
   /**
@@ -1037,7 +963,6 @@ export class SimulationValidator implements MigrationValidator {
    * @private
    * @param definition - The migration definition
    * @param applier - The memory applier for this migration
-   * @param stateBefore - Database state before this migration
    * @param stateAfter - Database state after this migration
    * @param operations - Operations in this migration
    * @returns Array of error messages (empty if validation passes)
@@ -1045,7 +970,6 @@ export class SimulationValidator implements MigrationValidator {
   private async validateSchemaChanges(
     definition: MigrationDefinition,
     applier: ReturnType<typeof createMemoryApplier>,
-    stateBefore: SimulationDatabaseState,
     stateAfter: SimulationDatabaseState,
     operations: MigrationRule[],
   ): Promise<string[]> {
@@ -1072,27 +996,23 @@ export class SimulationValidator implements MigrationValidator {
 
     const collectionChangeResult = await this.validateCollectionSchemaChanges(
       definition,
-      stateBefore,
       checked,
       rolledBack,
     );
     const multiCollectionChangeResult =
       await this.validateMultiCollectionSchemaChanges(
         definition,
-        stateBefore,
         checked,
         rolledBack,
       );
     const multiModelsChangeResult = await this.validateMultiModelSchemaChanges(
       definition,
-      stateBefore,
       checked,
       rolledBack,
     );
     const scopedChangeResult =
       await this.validateScopedMultiCollectionSchemaChanges(
         definition,
-        stateBefore,
         checked,
         rolledBack,
       );
