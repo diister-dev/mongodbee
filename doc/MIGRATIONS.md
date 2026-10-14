@@ -45,6 +45,32 @@ export default migrationDefinition(id, name, {
 
 **Why?** If `schemas.ts` evolves, your migration will no longer represent the schema state at the time it was created. The migration chain must be reproducible identically.
 
+**Enforced by `check`.** Before validating the schema, `check` reads every migration file — and every relative file it imports, transitively — without running it, and flags any import that can still evolve:
+
+- a relative import that leaves the migrations directory (`../schemas.ts`, `../src/…`);
+- a package or alias outside the allowlist — `#app/…`, `$lib/…`, `@/…` are flagged on purpose, import maps are not resolved;
+- an `import(…)` whose specifier is computed, since it cannot be verified.
+
+Allowed by default: `node:*`, `@diister/mongodbee` and its subpaths, `valibot` (and their `npm:` / `jsr:` forms, including `jsr:@valibot/valibot`). Relative imports that stay inside the directory — a parent migration, a `./helpers/…` file — are followed and checked the same way. An `import type` is only ever a warning: it is erased at runtime, but the types it brings in drift with the application.
+
+The level is `migration.validation.frozen` in the configuration:
+
+```typescript
+export default defineConfig({
+  // ...
+  migration: {
+    validation: {
+      frozen: "warn", // default: offenders are printed as warnings
+      // frozen: "error",  // offenders fail `check` before the schema stage
+      // frozen: false,    // no import check
+      // frozen: { level: "error", allow: ["@std/"] }, // extra allowed prefixes
+    },
+  },
+});
+```
+
+An `allow` entry ending in `/` or `:` is a prefix; any other entry is a package name, matching itself, its subpaths and its versioned forms.
+
 ### 2. Migration Chain
 
 Migrations form a **linear chain** where each migration has a parent (except the first one).
@@ -334,6 +360,9 @@ export default defineConfig({
 **Paths Configuration**:
 - `paths.migrations` - Directory containing migration files (default: `"./migrations"`)
 - `paths.schemas` - Path to schemas file (default: `"./schemas.ts"`)
+
+**Validation Configuration**:
+- `migration.validation.frozen` - How `check` treats imports that break a migration's freeze: `"warn"` (default), `"error"`, `false`, or `{ level: "warn" | "error", allow?: string[] }` to allow extra specifier prefixes (see [Frozen-in-Time Migrations](#1-frozen-in-time-migrations))
 
 #### Environment Variables
 
@@ -1013,6 +1042,8 @@ export default migrationDefinition(id, name, {
 ```
 
 ✅ **Correct**: Always copy the schema definition into the migration file.
+
+`check` reports this import (and any other import from outside the migrations directory, or of an application alias) as a warning by default; set `migration.validation.frozen: "error"` to make it fail. See [Frozen-in-Time Migrations](#1-frozen-in-time-migrations).
 
 ### 2. Wrong Builder API Usage
 

@@ -519,3 +519,42 @@ test("parity where: $in and $ne on an array field and on a missing field", async
     },
   );
 });
+
+for (const source of ["keep", "consume"] as const) {
+  test(`parity flowToScope: an empty source still creates the target a rename then moves (${source})`, async () => {
+    const outcome = await assertParity(
+      `fts-empty-rename-${source}`,
+      SCOPED_SCHEMAS,
+      (b) =>
+        b
+          .flowToScope({
+            from: { kind: "collection", name: "rows" },
+            into: { collection: "+staging" },
+            scope: () => "s",
+            toType: () => "row",
+            source,
+          })
+          .renameCollection("+staging", "+rows"),
+      { collections: { rows: [] } },
+    );
+    assertEquals(outcome.threw, false);
+  });
+}
+
+test("parity flow: an empty source into a declared target then a rename", async () => {
+  const outcome = await assertParity(
+    "flow-empty-rename",
+    WIDGETS,
+    (b) =>
+      b
+        .flow({
+          from: { collection: "widgets" },
+          into: { collection: "copies" },
+          map: (d: Doc) => ({ n: d.n }),
+          source: "keep",
+        })
+        .renameCollection("copies", "copies2"),
+    { collections: { widgets: [], copies: [] } },
+  );
+  assertEquals(outcome.threw, false);
+});

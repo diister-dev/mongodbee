@@ -10,8 +10,16 @@ import process from "node:process";
 import { blue, bold, dim, green, red, yellow } from "../../../utils/colors.ts";
 import * as path from "node:path";
 
-import { loadConfig } from "../../config/loader.ts";
-import { buildMigrationChain, loadAllMigrations } from "../../discovery.ts";
+import { frozenImportsPolicy, loadConfig } from "../../config/loader.ts";
+import {
+  buildMigrationChain,
+  discoverMigrationFiles,
+  loadAllMigrations,
+} from "../../discovery.ts";
+import {
+  type FrozenImportOffender,
+  scanFrozenImports,
+} from "../../frozen-imports.ts";
 import { validateMigrationChainWithProjectSchema } from "../../schema-validation.ts";
 import {
   MigrationValidationFailedError,
@@ -97,7 +105,41 @@ export async function checkCommand(
   if (report.failure) throw report.failure;
 }
 
-export type CheckStage = "no-migrations" | "schema" | "simulation";
+/**
+ * Prints the imports that break the freeze — nothing when there are none, so a
+ * clean chain reads as before. Returns `false` when one of them is an error.
+ */
+function reportFrozenImports(
+  offenders: FrozenImportOffender[],
+  log: (line: string) => void,
+): boolean {
+  if (offenders.length === 0) return true;
+  const describe = (o: FrozenImportOffender) =>
+    `${o.file}:${o.line} "${o.specifier}": ${o.reason}`;
+  const warnings = offenders.filter((o) => o.severity === "warning");
+  const errors = offenders.filter((o) => o.severity === "error");
+
+  log(bold("🧊 Checking that migrations are frozen..."));
+  if (warnings.length > 0) {
+    log(yellow("\n  Warnings:"));
+    for (const offender of warnings) log(yellow(`    ⚠ ${describe(offender)}`));
+  }
+  if (errors.length > 0) {
+    log(red("\n  ✗ Frozen import check failed"));
+    for (const offender of errors) log(red(`    ${describe(offender)}`));
+    log(
+      dim(
+        "    A migration must keep running the code it shipped with: copy what it needs next to it, or allow the package in migration.validation.frozen.allow",
+      ),
+    );
+    log("");
+    return false;
+  }
+  log("");
+  return true;
+}
+
+export type CheckStage = "no-migrations" | "imports" | "schema" | "simulation";
 
 export interface CheckMigrationReport {
   id: string;
@@ -119,6 +161,8 @@ export interface CheckReport {
   migrationCount: number;
   stage: CheckStage;
   valid: boolean;
+  /** Imports that break the freeze of a migration (`migration.validation.frozen`). */
+  imports: { offenders: FrozenImportOffender[] };
   schema?: { valid: boolean; errors: string[]; warnings: string[] };
   migrations: CheckMigrationReport[];
   notValidated: string[];
@@ -170,6 +214,7 @@ export async function runCheck(
   // Load configuration
   const cwd = options.cwd || process.cwd();
   const config = await loadConfig({ configPath: options.configPath, cwd });
+  const frozen = frozenImportsPolicy(config);
 
   const migrationsDir = path.resolve(
     cwd,
@@ -191,14 +236,32 @@ export async function runCheck(
     migrationCount: 0,
     stage: "no-migrations",
     valid: true,
+    imports: { offenders: [] },
     migrations: [],
     notValidated: [],
   };
 
-  // Discover and load migrations
+  // Scanned from the source before anything is imported: an alias that only
+  // resolves inside the application would otherwise fail the load first.
+  const migrationFiles = await discoverMigrationFiles(migrationsDir);
+  if (migrationFiles.length > 0 && frozen.level !== "off") {
+    report.stage = "imports";
+    const offenders = await scanFrozenImports(migrationsDir, migrationFiles, {
+      level: frozen.level,
+      allow: frozen.allow,
+    });
+    report.imports.offenders = offenders;
+    if (!reportFrozenImports(offenders, log)) {
+      report.valid = false;
+      report.failure = new Error("Frozen import check failed");
+      return report;
+    }
+  }
+
   const migrationsWithFiles = await loadAllMigrations(migrationsDir);
 
   if (migrationsWithFiles.length === 0) {
+    report.stage = "no-migrations";
     log(yellow("⚠ No migrations found"));
     return report;
   }

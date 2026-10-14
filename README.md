@@ -371,6 +371,13 @@ bunx mongodbee rollback   # undo the last one
 
 Under Deno: `deno run -A jsr:@diister/mongodbee/migration/cli/bin <cmd>`.
 
+`check` also verifies that each migration is frozen: an import from outside the
+migrations directory, or of an application alias (`#app/`, `$lib`, `@/`), is
+reported as a warning — or an error with `migration.validation.frozen: "error"`
+in the configuration. Only `node:*`, `@diister/mongodbee` and `valibot` are
+allowed by default; `frozen: { level, allow: ["@std/"] }` adds prefixes. See
+[MIGRATIONS.md](https://github.com/diister-dev/mongodbee/blob/main/doc/MIGRATIONS.md#1-frozen-in-time-migrations).
+
 A generated migration looks like this:
 
 ```ts

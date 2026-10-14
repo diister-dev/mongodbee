@@ -206,6 +206,36 @@ const PathsConfigSchema: v.ObjectSchema<
 });
 
 /**
+ * How `check` enforces that migrations are frozen in time: `false` turns it
+ * off, a level reports offending imports as warnings or errors, and the
+ * object form adds specifier prefixes to the default allowlist.
+ */
+export const FrozenImportsConfigSchema: v.UnionSchema<
+  [
+    v.LiteralSchema<false, undefined>,
+    v.PicklistSchema<["warn", "error"], undefined>,
+    v.ObjectSchema<
+      {
+        readonly level: v.PicklistSchema<["warn", "error"], undefined>;
+        readonly allow: v.OptionalSchema<
+          v.ArraySchema<v.StringSchema<undefined>, undefined>,
+          undefined
+        >;
+      },
+      undefined
+    >,
+  ],
+  undefined
+> = v.union([
+  v.literal(false),
+  v.picklist(["warn", "error"]),
+  v.object({
+    level: v.picklist(["warn", "error"]),
+    allow: v.optional(v.array(v.string())),
+  }),
+]);
+
+/**
  * Migration execution configuration
  *
  * Controls how migrations are executed, validated, and logged.
@@ -262,6 +292,10 @@ const MigrationConfigSchema: v.ObjectSchema<
             v.BooleanSchema<undefined>,
             undefined
           >;
+          readonly frozen: v.OptionalSchema<
+            typeof FrozenImportsConfigSchema,
+            undefined
+          >;
         },
         undefined
       >,
@@ -313,6 +347,9 @@ const MigrationConfigSchema: v.ObjectSchema<
 
       /** Whether to validate data integrity after operations */
       data: v.optional(v.boolean()),
+
+      /** Whether `check` flags migrations importing code that keeps evolving */
+      frozen: v.optional(FrozenImportsConfigSchema),
     }),
   ),
 });
@@ -461,6 +498,9 @@ export type PathsConfig = v.InferInput<typeof PathsConfigSchema>;
 export type MigrationConfig = v.InferInput<typeof MigrationConfigSchema>;
 export type PrivacyConfig = v.InferInput<typeof PrivacyConfigSchema>;
 export type CliConfig = v.InferInput<typeof CliConfigSchema>;
+export type FrozenImportsConfig = v.InferInput<
+  typeof FrozenImportsConfigSchema
+>;
 export type MigrationSystemConfig = v.InferInput<
   typeof MigrationSystemConfigSchema
 >;
@@ -498,6 +538,7 @@ export const DEFAULT_CONFIG: Partial<MigrationSystemConfig> = {
       schemas: true,
       chain: true,
       data: true,
+      frozen: "warn",
     },
   },
   cli: {
