@@ -33,7 +33,6 @@ import {
 import { getIrreversibleOperations, migrationBuilder } from "../builder.ts";
 import { fieldsOf } from "../../type-definition.ts";
 import * as v from "valibot";
-import { dirtyEquivalent } from "../../utils/object.ts";
 import { createMemoryApplier } from "../appliers/memory.ts";
 import {
   type CorrelationSession,
@@ -244,7 +243,6 @@ export class SimulationValidator implements MigrationValidator {
 
       // Test forward execution of current migration
       const forwardErrors: string[] = [];
-      const stateBeforeMigration = currentState; // Capture state before applying this migration
 
       // Apply operations in sequence
       let appliedOperations = 0;
@@ -461,7 +459,6 @@ export class SimulationValidator implements MigrationValidator {
       const changeStateResult = await this.validateSchemaChanges(
         definition,
         applier,
-        stateBeforeMigration,
         stateAfterMigration,
         operations,
       );
@@ -539,16 +536,10 @@ export class SimulationValidator implements MigrationValidator {
    */
   private async validateCollectionSchemaChanges(
     definition: MigrationDefinition,
-    applier: ReturnType<typeof createMemoryApplier>,
-    stateBefore: SimulationDatabaseState,
     stateAfter: SimulationDatabaseState,
-    operations: MigrationRule[],
-  ): Promise<{
-    errors: string[];
-    issues: { type: string; message: string }[];
-  }> {
+    rolledBack: () => Promise<SimulationDatabaseState | null>,
+  ): Promise<{ errors: string[] }> {
     const errors: string[] = [];
-    const issues: { type: string; message: string }[] = [];
     const currentSchema = definition.schemas.collections || {};
     const parentSchema = definition.parent?.schemas.collections || {};
 
@@ -577,31 +568,9 @@ export class SimulationValidator implements MigrationValidator {
       }
     }
 
-    // The real rollback path refuses a migration containing any irreversible
-    // operation (applier pre-scan), so no rollback state exists to validate.
-    if (getIrreversibleOperations(operations).length > 0) {
-      return { errors, issues };
-    }
-
-    let stateBeforeRollback = stateAfter;
-    // Apply reverse operations to get back to pre-migration state
-    for (let i = operations.length - 1; i >= 0; i--) {
-      this.report(
-        `rolling back collections operation ${
-          operations.length - i
-        }/${operations.length}`,
-      );
-      const operation = operations[i];
-      try {
-        stateBeforeRollback = await applier.reverseOperation(
-          stateBeforeRollback,
-          operation,
-        );
-      } catch {
-        // Ignore errors during reverse application
-      }
-    }
-    const stateAfterRollback = stateBeforeRollback;
+    const stateAfterRollback = await rolledBack();
+    // No rollback state exists to validate for an irreversible migration.
+    if (!stateAfterRollback) return { errors };
 
     // Check each collection for schema changes
     for (const [collectionName, parentCollSchema] of Object.entries(
@@ -628,40 +597,20 @@ export class SimulationValidator implements MigrationValidator {
               .join("\n-> ")}"`,
           );
         }
-
-        const docBefore = (stateBefore.collections || {})[collectionName]
-          ?.content?.[docIndex];
-
-        const equal = dirtyEquivalent(docBefore, doc);
-        if (!equal) {
-          issues.push({
-            type: "rollback_document_mismatch",
-            message: `Document in collection "${collectionName}" different after rollback.`,
-          });
-        }
       }
       const currentCollSchema = currentSchema[collectionName];
       if (!currentCollSchema) continue; // Collection was removed, skip
     }
 
-    return {
-      errors,
-      issues,
-    };
+    return { errors };
   }
 
   private async validateMultiCollectionSchemaChanges(
     definition: MigrationDefinition,
-    applier: ReturnType<typeof createMemoryApplier>,
-    stateBefore: SimulationDatabaseState,
     stateAfter: SimulationDatabaseState,
-    operations: MigrationRule[],
-  ): Promise<{
-    errors: string[];
-    issues: { type: string; message: string }[];
-  }> {
+    rolledBack: () => Promise<SimulationDatabaseState | null>,
+  ): Promise<{ errors: string[] }> {
     const errors: string[] = [];
-    const issues: { type: string; message: string }[] = [];
     const currentSchema = definition.schemas.multiCollections || {};
     const parentSchema = definition.parent?.schemas.multiCollections || {};
 
@@ -708,30 +657,9 @@ export class SimulationValidator implements MigrationValidator {
       }
     }
 
+    const stateAfterRollback = await rolledBack();
     // No rollback state exists to validate for an irreversible migration.
-    if (getIrreversibleOperations(operations).length > 0) {
-      return { errors, issues };
-    }
-
-    let stateBeforeRollback = stateAfter;
-    // Apply reverse operations to get back to pre-migration state
-    for (let i = operations.length - 1; i >= 0; i--) {
-      this.report(
-        `rolling back multi-collections operation ${
-          operations.length - i
-        }/${operations.length}`,
-      );
-      const operation = operations[i];
-      try {
-        stateBeforeRollback = await applier.reverseOperation(
-          stateBeforeRollback,
-          operation,
-        );
-      } catch {
-        // Ignore errors during reverse application
-      }
-    }
-    const stateAfterRollback = stateBeforeRollback;
+    if (!stateAfterRollback) return { errors };
 
     // Check each multi-collection for schema changes
     for (const [multiCollectionName, parentMultiCollSchema] of Object.entries(
@@ -768,37 +696,18 @@ export class SimulationValidator implements MigrationValidator {
               .join("\n-> ")}`,
           );
         }
-        const docBefore = (stateBefore.multiCollections || {})[
-          multiCollectionName
-        ]?.content?.[docIndex];
-        const equal = dirtyEquivalent(docBefore, doc);
-        if (!equal) {
-          issues.push({
-            type: "rollback_document_mismatch",
-            message: `Document in multi-collection "${multiCollectionName}" type "${docType}" different after rollback.`,
-          });
-        }
       }
     }
 
-    return {
-      errors,
-      issues,
-    };
+    return { errors };
   }
 
   private async validateMultiModelSchemaChanges(
     definition: MigrationDefinition,
-    applier: ReturnType<typeof createMemoryApplier>,
-    stateBefore: SimulationDatabaseState,
     stateAfter: SimulationDatabaseState,
-    operations: MigrationRule[],
-  ): Promise<{
-    errors: string[];
-    issues: { type: string; message: string }[];
-  }> {
+    rolledBack: () => Promise<SimulationDatabaseState | null>,
+  ): Promise<{ errors: string[] }> {
     const errors: string[] = [];
-    const issues: { type: string; message: string }[] = [];
     const currentSchema = definition.schemas.multiModels || {};
     const parentSchema = definition.parent?.schemas.multiModels || {};
 
@@ -858,30 +767,9 @@ export class SimulationValidator implements MigrationValidator {
       }
     }
 
+    const stateAfterRollback = await rolledBack();
     // No rollback state exists to validate for an irreversible migration.
-    if (getIrreversibleOperations(operations).length > 0) {
-      return { errors, issues };
-    }
-
-    let stateBeforeRollback = stateAfter;
-    // Apply reverse operations to get back to pre-migration state
-    for (let i = operations.length - 1; i >= 0; i--) {
-      this.report(
-        `rolling back models operation ${
-          operations.length - i
-        }/${operations.length}`,
-      );
-      const operation = operations[i];
-      try {
-        stateBeforeRollback = await applier.reverseOperation(
-          stateBeforeRollback,
-          operation,
-        );
-      } catch {
-        // Ignore errors during reverse application
-      }
-    }
-    const stateAfterRollback = stateBeforeRollback;
+    if (!stateAfterRollback) return { errors };
     // Check each multi-collection model for schema changes
     for (const [modelType, parentModelSchema] of Object.entries(parentSchema)) {
       // New multi-collection model, no validation needed
@@ -916,23 +804,11 @@ export class SimulationValidator implements MigrationValidator {
                 .join("\n-> ")}`,
             );
           }
-          const docBefore = (stateBefore.multiModels || {})[collectionName]
-            ?.content?.[docIndex];
-          const equal = dirtyEquivalent(docBefore, doc);
-          if (!equal) {
-            issues.push({
-              type: "rollback_document_mismatch",
-              message: `Document in multi-collection model "${collectionName}" type "${docType}" different after rollback.`,
-            });
-          }
         }
       }
     }
 
-    return {
-      errors,
-      issues,
-    };
+    return { errors };
   }
 
   /**
@@ -948,16 +824,10 @@ export class SimulationValidator implements MigrationValidator {
    */
   private async validateScopedMultiCollectionSchemaChanges(
     definition: MigrationDefinition,
-    applier: ReturnType<typeof createMemoryApplier>,
-    stateBefore: SimulationDatabaseState,
     stateAfter: SimulationDatabaseState,
-    operations: MigrationRule[],
-  ): Promise<{
-    errors: string[];
-    issues: { type: string; message: string }[];
-  }> {
+    rolledBack: () => Promise<SimulationDatabaseState | null>,
+  ): Promise<{ errors: string[] }> {
     const errors: string[] = [];
-    const issues: { type: string; message: string }[] = [];
     const currentSchema = definition.schemas.scopedMultiCollections || {};
     const parentSchema =
       definition.parent?.schemas.scopedMultiCollections || {};
@@ -1017,30 +887,9 @@ export class SimulationValidator implements MigrationValidator {
       }
     }
 
+    const stateAfterRollback = await rolledBack();
     // No rollback state exists to validate for an irreversible migration.
-    if (getIrreversibleOperations(operations).length > 0) {
-      return { errors, issues };
-    }
-
-    let stateBeforeRollback = stateAfter;
-    // Apply reverse operations to get back to pre-migration state
-    for (let i = operations.length - 1; i >= 0; i--) {
-      this.report(
-        `rolling back scoped multi-collections operation ${
-          operations.length - i
-        }/${operations.length}`,
-      );
-      const operation = operations[i];
-      try {
-        stateBeforeRollback = await applier.reverseOperation(
-          stateBeforeRollback,
-          operation,
-        );
-      } catch {
-        // Ignore errors during reverse application
-      }
-    }
-    const stateAfterRollback = stateBeforeRollback;
+    if (!stateAfterRollback) return { errors };
 
     // Check each scoped multi-collection for schema changes
     for (const [scopedName, parentScopedSchema] of Object.entries(
@@ -1076,22 +925,36 @@ export class SimulationValidator implements MigrationValidator {
               .join("\n-> ")}`,
           );
         }
-        const docBefore = (stateBefore.scopedMultiCollections || {})[scopedName]
-          ?.content?.[docIndex];
-        const equal = dirtyEquivalent(docBefore, doc);
-        if (!equal) {
-          issues.push({
-            type: "rollback_document_mismatch",
-            message: `Document in scoped multi-collection "${scopedName}" type "${docType}" different after rollback.`,
-          });
-        }
       }
     }
 
-    return {
-      errors,
-      issues,
-    };
+    return { errors };
+  }
+
+  /**
+   * Reverses `operations` on a clone of `stateAfter`, or `null` when the
+   * migration holds an irreversible operation. Errors of single reverse
+   * operations are ignored, as the rollback checks always did.
+   */
+  private async rollBack(
+    applier: ReturnType<typeof createMemoryApplier>,
+    stateAfter: SimulationDatabaseState,
+    operations: MigrationRule[],
+  ): Promise<SimulationDatabaseState | null> {
+    if (getIrreversibleOperations(operations).length > 0) return null;
+    this.report("cloning state for rollback");
+    let state = structuredClone(stateAfter);
+    for (let i = operations.length - 1; i >= 0; i--) {
+      this.report(
+        `rolling back operation ${operations.length - i}/${operations.length}`,
+      );
+      try {
+        state = await applier.reverseOperation(state, operations[i]);
+      } catch {
+        // Ignore errors during reverse application
+      }
+    }
+    return state;
   }
 
   /**
@@ -1100,7 +963,6 @@ export class SimulationValidator implements MigrationValidator {
    * @private
    * @param definition - The migration definition
    * @param applier - The memory applier for this migration
-   * @param stateBefore - Database state before this migration
    * @param stateAfter - Database state after this migration
    * @param operations - Operations in this migration
    * @returns Array of error messages (empty if validation passes)
@@ -1108,61 +970,51 @@ export class SimulationValidator implements MigrationValidator {
   private async validateSchemaChanges(
     definition: MigrationDefinition,
     applier: ReturnType<typeof createMemoryApplier>,
-    stateBefore: SimulationDatabaseState,
     stateAfter: SimulationDatabaseState,
     operations: MigrationRule[],
   ): Promise<string[]> {
     const errors: string[] = [];
 
-    // Each sub-validator gets its OWN clones because it rolls the state back
-    // in place. A clone of a chain-sized state is a third of a second of
-    // blocked thread, hence a note before each pair.
-    const clones = (
-      phase: string,
-    ): [SimulationDatabaseState, SimulationDatabaseState] => {
-      this.report(`cloning state for ${phase}`);
-      return [structuredClone(stateBefore), structuredClone(stateAfter)];
+    // The checks read a clone, never the live state: the live state is handed
+    // to the next migration, and documents are checked as structuredClone
+    // leaves them. Every check reads the same untouched copy, so one clone
+    // serves all four. A clone of a chain-sized state is a third of a second
+    // of blocked thread, hence a note before each.
+    this.report("cloning state for schema checks");
+    const checked = structuredClone(stateAfter);
+
+    // The rollback runs once, on its own clone, the first time a check asks
+    // for it: replaying the same reverse operations on the same state once
+    // per bucket reached the same rolled-back state four times. The real
+    // rollback path refuses a migration containing any irreversible
+    // operation (applier pre-scan), so no rollback state exists for one.
+    let rollback: Promise<SimulationDatabaseState | null> | undefined;
+    const rolledBack = () => {
+      rollback ??= this.rollBack(applier, stateAfter, operations);
+      return rollback;
     };
 
-    // Validate collection schema changes
-    const collectionClones = clones("collections");
     const collectionChangeResult = await this.validateCollectionSchemaChanges(
       definition,
-      applier,
-      collectionClones[0],
-      collectionClones[1],
-      operations,
+      checked,
+      rolledBack,
     );
-
-    // Validate multi-collection schema changes
-    const multiCollectionClones = clones("multi-collections");
     const multiCollectionChangeResult =
       await this.validateMultiCollectionSchemaChanges(
         definition,
-        applier,
-        multiCollectionClones[0],
-        multiCollectionClones[1],
-        operations,
+        checked,
+        rolledBack,
       );
-
-    const multiModelClones = clones("models");
     const multiModelsChangeResult = await this.validateMultiModelSchemaChanges(
       definition,
-      applier,
-      multiModelClones[0],
-      multiModelClones[1],
-      operations,
+      checked,
+      rolledBack,
     );
-
-    // Validate scoped multi-collection schema changes
-    const scopedClones = clones("scoped multi-collections");
     const scopedChangeResult =
       await this.validateScopedMultiCollectionSchemaChanges(
         definition,
-        applier,
-        scopedClones[0],
-        scopedClones[1],
-        operations,
+        checked,
+        rolledBack,
       );
 
     errors.push(

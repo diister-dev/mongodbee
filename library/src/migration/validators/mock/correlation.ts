@@ -48,6 +48,21 @@ import {
 import { SKIP } from "@diister/valibot-mock";
 import type { ResolveNode } from "@diister/valibot-mock";
 
+/**
+ * One `refId(space)` schema per space, so the mock generator built for it is
+ * reused for every id minted in that space.
+ */
+const spaceIdSchemas = new Map<string, ReturnType<typeof refId>>();
+
+function spaceIdSchema(space: string): ReturnType<typeof refId> {
+  let schema = spaceIdSchemas.get(space);
+  if (!schema) {
+    schema = refId(space);
+    spaceIdSchemas.set(space, schema);
+  }
+  return schema;
+}
+
 /** Canonical bucket order — the {@link DatabaseState} declaration order. */
 const BUCKET_ORDER: Record<keyof DatabaseState, number> = {
   collections: 0,
@@ -654,7 +669,7 @@ export function createCorrelationSession(
         value = options.mintId(space, n, attempt);
       } else {
         const seed = fnv1a32(`${baseSeed}|mint|${space}|${n}|${attempt}`);
-        value = String(generateMockScopeValue(refId(space), { seed }));
+        value = String(generateMockScopeValue(spaceIdSchema(space), { seed }));
       }
       if (!set.has(value)) break;
     }

@@ -9,9 +9,10 @@
  */
 
 import * as v from "valibot";
-import { createMockGenerator } from "@diister/valibot-mock";
+import { createMockGenerator, SKIP } from "@diister/valibot-mock";
 import type { MockGeneratorOptions } from "@diister/valibot-mock";
 import { createLogger } from "../../../utils/logger.ts";
+import { createSeedableRandomizer } from "./randomizer.ts";
 
 const log = createLogger("simulation");
 
@@ -29,16 +30,84 @@ export interface MockDocumentOptions {
 }
 
 /**
- * Builds the generator options, including `faker.seed` only when a seed is
- * given.
+ * One generator per schema, reseeded per invocation.
+ *
+ * `createMockGenerator` builds a Faker, and a Faker binds every method of
+ * every module and seeds a Mersenne Twister when it is built: per document,
+ * that was most of a mock document's cost. A schema now gets one generator,
+ * built over a randomizer this module owns, and each invocation reseeds that
+ * randomizer — the stream Faker draws is the one a fresh `faker: { seed }`
+ * instance would have drawn, so every document is the same as before.
+ *
+ * The per-invocation `resolve` hook reaches the generator through a slot
+ * the generator's own hook reads. A generator in use is never reentered: a hook that generates a value of
+ * the same schema gets a fresh, uncached generator for it.
  */
-function toGeneratorOptions(
-  options?: MockDocumentOptions,
-): MockGeneratorOptions {
-  const out: MockGeneratorOptions = {};
-  if (options?.seed !== undefined) out.faker = { seed: options.seed };
-  if (options?.resolve !== undefined) out.resolve = options.resolve;
-  return out;
+interface CachedGenerator {
+  busy: boolean;
+  generate(seed: number, resolve: MockDocumentOptions["resolve"]): unknown;
+}
+
+const generators = new WeakMap<object, CachedGenerator>();
+
+function buildGenerator(schema: v.GenericSchema): CachedGenerator {
+  const randomizer = createSeedableRandomizer();
+  let hook: MockDocumentOptions["resolve"];
+  const generator = createMockGenerator(schema as any, {
+    faker: { randomizer },
+    resolve: (node) => (hook ? hook(node) : SKIP),
+  });
+  return {
+    busy: false,
+    generate(seed, resolve) {
+      randomizer.seed(seed);
+      hook = resolve;
+      this.busy = true;
+      try {
+        return generator.generate();
+      } finally {
+        hook = undefined;
+        this.busy = false;
+      }
+    },
+  };
+}
+
+function randomSeed(): number {
+  // What Faker seeds itself with when no seed is given.
+  return Math.ceil(Math.random() * (2 ** 53 - 1));
+}
+
+function generateWith(
+  key: object,
+  schema: () => v.GenericSchema,
+  options: MockDocumentOptions | undefined,
+): unknown {
+  let cached = generators.get(key);
+  if (!cached) {
+    cached = buildGenerator(schema());
+    generators.set(key, cached);
+  } else if (cached.busy) {
+    cached = buildGenerator(schema());
+  }
+  return cached.generate(options?.seed ?? randomSeed(), options?.resolve);
+}
+
+/**
+ * The `v.object()` a fields record is generated and validated as, built once
+ * per record rather than once per document.
+ */
+type DocumentSchema = v.ObjectSchema<v.ObjectEntries, undefined>;
+
+const documentSchemas = new WeakMap<object, DocumentSchema>();
+
+function documentSchema(fields: Record<string, unknown>): DocumentSchema {
+  let schema = documentSchemas.get(fields);
+  if (!schema) {
+    schema = v.object(fields as v.ObjectEntries);
+    documentSchemas.set(fields, schema);
+  }
+  return schema;
 }
 
 /**
@@ -83,20 +152,10 @@ export function generateMockDocument(
   schema: Record<string, unknown>,
   options?: MockDocumentOptions,
 ): Record<string, unknown> {
-  // Wrap the schema in v.object() for valibot-mock
-  const schemaObject = v.object(
-    schema as Record<string, v.BaseSchema<any, any, any>>,
-  );
-
-  // Use valibot-mock to generate realistic test data from schema
-  const generator = createMockGenerator(
-    schemaObject as any,
-    toGeneratorOptions(options),
-  );
-  const mockData = stripUndefinedKeys(generator.generate()) as Record<
-    string,
-    unknown
-  >;
+  const schemaObject = documentSchema(schema);
+  const mockData = stripUndefinedKeys(
+    generateWith(schema, () => schemaObject, options),
+  ) as Record<string, unknown>;
 
   // Validate the generated data matches the schema
   const validation = v.safeParse(schemaObject, mockData);
@@ -120,11 +179,7 @@ export function generateMockScopeValue(
   schema: v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>,
   options?: MockDocumentOptions,
 ): unknown {
-  const generator = createMockGenerator(
-    schema as any,
-    toGeneratorOptions(options),
-  );
-  const mockValue = generator.generate();
+  const mockValue = generateWith(schema, () => schema, options);
 
   const validation = v.safeParse(schema, mockValue);
   if (validation.success) {

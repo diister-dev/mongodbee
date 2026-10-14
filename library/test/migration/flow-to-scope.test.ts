@@ -239,3 +239,40 @@ test("mongodb flowToScope: collection → scoped, merge + consume on a real DB",
     assertEquals((a as { note?: string }).note, "note A"); // merged from details
   });
 });
+
+test("mongodb flowToScope: an empty source still leaves the target, which a rename can take over", async () => {
+  await withDatabase("flow-to-scope-empty", async (db) => {
+    await db.createCollection("roots");
+    const S = { collections: { roots: { _id: v.string() } } };
+    const m = migrationDefinition("001", "consolidate-empty", {
+      parent: null,
+      schemas: S,
+      migrate: (b) =>
+        b
+          .flowToScope({
+            from: { kind: "collection", name: "roots" },
+            into: { collection: "roots__migrating" },
+            toType: () => "info",
+            scope: (d) => d._id as string,
+            source: "consume",
+          })
+          .renameCollection("roots__migrating", "scoped")
+          .compile(),
+    });
+    const ops = m.migrate(migrationBuilder({ schemas: S })).operations;
+
+    const state = await createMemoryApplier(m).applyMigration(
+      createEmptyDatabaseState(),
+      ops,
+      "up",
+    );
+    assert(state.scopedMultiCollections["scoped"] !== undefined);
+
+    await createMongodbApplier(db, m).applyMigration(ops, "up");
+    const names = (await db.listCollections({}, { nameOnly: true }).toArray())
+      .map((c) => c.name)
+      .filter((name) => !name.startsWith("__"));
+    assert(names.includes("scoped"), `collections: ${names.join(", ")}`);
+    assertEquals(names.includes("roots__migrating"), false);
+  });
+});
