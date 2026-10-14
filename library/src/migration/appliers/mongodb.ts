@@ -372,6 +372,25 @@ export function createMongodbApplier(
   }
 
   /**
+   * Creates a collection, tolerating ONLY "it already exists".
+   *
+   * A flow writes its target through upserts, which create the collection
+   * implicitly — but only when there is something to write. From an empty
+   * source the target would never exist, so a following `renameCollection`
+   * fails here while the memory applier (which creates the bucket regardless)
+   * passes `check`.
+   */
+  async function ensureCollection(collectionName: string): Promise<void> {
+    try {
+      await db.createCollection(collectionName);
+    } catch (error) {
+      const e = error as { code?: number; codeName?: string };
+      if (e?.code === 48 || e?.codeName === "NamespaceExists") return;
+      throw error;
+    }
+  }
+
+  /**
    * Helper to disable validator for a collection temporarily
    */
   async function disableValidator(collectionName: string): Promise<void> {
@@ -1893,6 +1912,7 @@ export function createMongodbApplier(
           operation.into.collection,
           await countForProgress(operation.from.collection, baseFilter),
         );
+        await ensureCollection(operation.into.collection);
 
         // Batch by _id cursor (stable on a mutating set; see transformDocuments).
         let lastId: unknown = undefined;
@@ -2080,6 +2100,7 @@ export function createMongodbApplier(
           undefined,
         );
         const onConflict = operation.onConflict ?? "error";
+        await ensureCollection(operation.into.collection);
 
         for (const src of sources) {
           // Never flow a collection into itself: the target is not a source
