@@ -465,6 +465,51 @@ test({
 });
 
 test({
+  name: "moveType (mongodb): a target document that takes a moving one's unique field under another _id stops the move at once, each document in one collection",
+  timeout: MONGO_TIMEOUT_MS,
+  fn: async () => {
+    await withDatabase("move-type-unique-clash", async (db) => {
+      const { child, childOps } = await applyParent(db, 4);
+      const readings = byId(
+        (await db
+          .collection("+old")
+          .find({ _type: "reading" })
+          .toArray()) as Doc[],
+      );
+      const taken = readings[2];
+      const fresh = db.collection("+new");
+      await db.createCollection("+new");
+      await fresh.createIndex(
+        { _scope: 1, user: 1 },
+        { unique: true, partialFilterExpression: { _type: "reading" } },
+      );
+      const intruder = { ...taken, _id: "reading:intruder", seq: 99 };
+      await fresh.insertOne(intruder as never);
+
+      const failure = await assertRejects(
+        () =>
+          createMongodbApplier(db, child, {
+            currentMigrationId: child.id,
+            batchSize: 3,
+          }).applyMigration(childOps, "up"),
+        Error,
+      );
+      assert(
+        /E11000/.test(failure.message),
+        `expected the duplicate key error, got: ${failure.message}`,
+      );
+      const after = await mongoSnapshot(db);
+      const where = (id: unknown) =>
+        Number(after.old.some((doc) => doc._id === id)) +
+        Number(after.new.some((doc) => doc._id === id));
+      assert(readings.every((doc) => where(doc._id) === 1));
+      assert(after.old.some((doc) => doc._id === taken._id));
+      assert(after.new.some((doc) => doc._id === intruder._id));
+    });
+  },
+});
+
+test({
   name: "moveType (mongodb): the source is read once with a cursor, 400 documents in batches of 50 examine about 400",
   timeout: MONGO_TIMEOUT_MS,
   fn: async () => {

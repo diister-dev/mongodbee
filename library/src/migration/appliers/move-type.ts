@@ -96,15 +96,16 @@ export async function moveDocumentsOfType(
     const held = await target.findOne({ _id: doc._id });
     if (held === null) {
       // Inserted as read, its fields in the source's order, so the copy compares
-      // equal to it in MongoDB (`$$ROOT`). A document inserted meanwhile under this
-      // `_id` makes the insert fail: of another type, the move stops there;
-      // of this type, the next pass decides.
+      // equal to it in MongoDB (`$$ROOT`). A document of this type inserted
+      // meanwhile under this `_id` leaves the decision to the next pass; any
+      // other duplicate key (another type, or another `_id` holding a unique
+      // field) stops the move.
       try {
         await target.insertOne(doc);
       } catch (error) {
         if (!isDuplicateKey(error)) throw error;
         const raced = await target.findOne({ _id: doc._id });
-        if (raced !== null && raced._type !== documentType) throw error;
+        if (raced === null || raced._type !== documentType) throw error;
         return "left";
       }
     } else if (held._type !== documentType) {

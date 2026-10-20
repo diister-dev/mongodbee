@@ -548,6 +548,12 @@ the clashing one stays in the source, with those not reached yet (on MongoDB,
 documents of the clashing batch may have moved already). Resolve the clash and run the
 migration again; it carries on from there.
 
+A document of the moving type that the target already holds under another
+`_id` with the same value of a unique field (the new code created its own copy
+before the move reached the source) stops the move the same way, with
+MongoDB's duplicate-key error, rather than passing for a writer that keeps
+changing it. Deploy the code that writes the target after the migration.
+
 ## See also
 
 - [README — Scoped Multi-Collections](../README.md#-scoped-multi-collections) —
