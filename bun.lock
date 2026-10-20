@@ -7,7 +7,7 @@
     },
     "library": {
       "name": "@diister/mongodbee",
-      "version": "0.23.0-beta.41",
+      "version": "0.23.0-beta.43",
       "bin": {
         "mongodbee": "dist/src/migration/cli/bin.js",
       },
@@ -26,7 +26,7 @@
         "typescript": "6.0.3",
       },
       "peerDependencies": {
-        "@diister/mongodbee-studio": "0.23.0-beta.41",
+        "@diister/mongodbee-studio": "0.23.0-beta.43",
       },
       "optionalPeers": [
         "@diister/mongodbee-studio",
@@ -34,9 +34,9 @@
     },
     "studio": {
       "name": "@diister/mongodbee-studio",
-      "version": "0.23.0-beta.41",
+      "version": "0.23.0-beta.43",
       "dependencies": {
-        "@diister/mongodbee": "0.23.0-beta.40",
+        "@diister/mongodbee": "0.23.0-beta.43",
         "mongodb": "7.7.0",
       },
       "devDependencies": {
