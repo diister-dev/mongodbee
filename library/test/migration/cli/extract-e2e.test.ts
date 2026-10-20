@@ -273,8 +273,9 @@ e2e(
     await withSourceAndTarget(
       async ({ dir, client, source, target, world }) => {
         const twin = "ALICE.REAL@acme-corp.example";
+        const original = world.userIds[0];
         await rawCollection(client.db(source), "users").insertOne({
-          _id: `user:${world.userIds[0].slice(5, -1)}z`,
+          _id: `user:${original.slice(5, -1)}${original.endsWith("z") ? "y" : "z"}`,
           email: twin,
           firstname: "Alicetwin",
           role: "member",
