@@ -471,6 +471,33 @@ The per-collection `schemaManagement` option overrides the global setting for
 one catalog (`"auto"`, `"managed"`, or `"inherit"`, the default). Initialisation
 inside an active session never issues DDL, whatever the mode.
 
+## Moving a type to another scoped collection
+
+A scoped collection holds at most 64 indexes, and each type adds its own. When
+one fills up, a type can move out to a scoped collection of its own:
+
+```typescript
+migrate(migration) {
+  migration.createScopedMultiCollection("+reading");
+  migration.scopedMultiCollection("+messaging").moveType("read_state", { into: "+reading" }).end();
+  return migration.compile();
+}
+```
+
+The migration's `schemas` declare the type under the target and no longer under
+the source. Every document of the type moves as it is, in every scope: same
+`_id`, `_scope`, `_type` and fields, so nothing that refers to one breaks.
+
+- **Batched and crash-safe.** Each batch (`batchSize`, 1000 by default) is
+  upserted into the target by `(_id, _type)`, then deleted from the source. A run
+  cut between the two finds the batch still in the source and writes the same
+  documents again: nothing is duplicated, nothing is lost.
+- **Reversible.** Rollback moves every document of the type in the target back
+  into the source, the same way, including those written after the migration.
+- **Refused on a clash.** A document of another type holding the same `_id` in
+  the target stops the move: MongoDB's `_id` index refuses the upsert, and
+  `check` (the memory applier) refuses it the same way.
+
 ## See also
 
 - [README — Scoped Multi-Collections](../README.md#-scoped-multi-collections) —

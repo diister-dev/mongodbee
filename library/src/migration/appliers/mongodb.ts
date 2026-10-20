@@ -337,6 +337,61 @@ export function createMongodbApplier(
   }
 
   /**
+   * Every document of `documentType` leaves `from` for `into`, as it is, one
+   * batch at a time: the batch is upserted into `into` by `(_id, _type)`, then
+   * deleted from `from`. A run cut between the two finds the batch still in
+   * `from` and writes the same documents again, so nothing is duplicated nor
+   * lost. A document of another type holding the same `_id` in `into` stops
+   * the move (the upsert collides with the `_id` index).
+   */
+  async function moveScopedType(
+    operationType: string,
+    from: string,
+    into: string,
+    documentType: string,
+  ): Promise<void> {
+    if (opts.strictValidation && !(await collectionExists(from))) {
+      throw new Error(`Scoped multi-collection ${from} does not exist`);
+    }
+    await ensureCollection(into);
+    const source = primaryCollection(db, from);
+    const target = primaryCollection(db, into);
+    const filter = { _type: documentType } as Record<string, unknown>;
+    const reporter = makeReporter(
+      operationType,
+      into,
+      await countForProgress(from, filter),
+    );
+    while (true) {
+      const docs = await source
+        .find(filter)
+        .sort({ _id: 1 })
+        .limit(opts.batchSize)
+        .toArray();
+      if (docs.length === 0) break;
+      await target.bulkWrite(
+        docs.map((doc) => ({
+          replaceOne: {
+            filter: { _id: doc._id, _type: documentType } as Record<
+              string,
+              unknown
+            >,
+            replacement: doc,
+            upsert: true,
+          },
+        })),
+        { ordered: true },
+      );
+      await source.deleteMany({
+        _id: { $in: docs.map((doc) => doc._id) },
+        _type: documentType,
+      } as Record<string, unknown>);
+      reporter.add(docs.length);
+    }
+    reporter.done();
+  }
+
+  /**
    * Helper to check if a collection exists
    */
   async function collectionExists(collectionName: string): Promise<boolean> {
@@ -725,6 +780,10 @@ export function createMongodbApplier(
         case "rename_collection":
           written.add(operation.from);
           written.add(operation.to);
+          break;
+        case "move_scoped_multicollection_type":
+          written.add(operation.collectionName);
+          written.add(operation.into.collection);
           break;
         default:
           return undefined;
@@ -2558,6 +2617,23 @@ export function createMongodbApplier(
           `Cannot reverse delete_scoped_multicollection_type: operation is irreversible`,
         );
       },
+    },
+
+    move_scoped_multicollection_type: {
+      apply: async (operation) =>
+        await moveScopedType(
+          operation.type,
+          operation.collectionName,
+          operation.into.collection,
+          operation.documentType,
+        ),
+      reverse: async (operation) =>
+        await moveScopedType(
+          operation.type,
+          operation.into.collection,
+          operation.collectionName,
+          operation.documentType,
+        ),
     },
 
     rename_multicollection_type: {

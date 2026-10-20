@@ -87,6 +87,37 @@ function dropPhysical(state: DatabaseState, name: string): void {
 }
 
 /** Insert-or-replace keyed on `_id`, like the mongodb applier's upserts. */
+// Every document of `documentType` leaves `from` for `into`, as it is: a
+// document already in `into` under the same `_id` (a move cut short) is
+// replaced by it, one of another type under that `_id` stops the move, as
+// MongoDB's `_id` index stops it.
+function moveScopedType(
+  state: DatabaseState,
+  from: string,
+  into: string,
+  documentType: string,
+): DatabaseState {
+  const source = state.scopedMultiCollections[from];
+  const target = state.scopedMultiCollections[into];
+  if (!source)
+    throw new Error(`Scoped multi-collection ${from} does not exist`);
+  if (!target)
+    throw new Error(`Scoped multi-collection ${into} does not exist`);
+  const moving = source.content.filter((doc) => doc._type === documentType);
+  const moved = new Set(moving.map((doc) => String(doc._id)));
+  const clash = target.content.find(
+    (doc) => moved.has(String(doc._id)) && doc._type !== documentType,
+  );
+  if (clash) {
+    throw new Error(
+      `Cannot move ${from}.${documentType} into ${into}: _id ${String(clash._id)} is held there by a document of type ${String(clash._type)}`,
+    );
+  }
+  upsertById(target.content, moving);
+  source.content = source.content.filter((doc) => doc._type !== documentType);
+  return state;
+}
+
 function upsertById(
   content: Record<string, unknown>[],
   documents: readonly Record<string, unknown>[],
@@ -1470,6 +1501,22 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           `Cannot reverse delete_scoped_multicollection_type: operation is irreversible`,
         );
       },
+    },
+    move_scoped_multicollection_type: {
+      apply: (state, operation) =>
+        moveScopedType(
+          state,
+          operation.collectionName,
+          operation.into.collection,
+          operation.documentType,
+        ),
+      reverse: (state, operation) =>
+        moveScopedType(
+          state,
+          operation.into.collection,
+          operation.collectionName,
+          operation.documentType,
+        ),
     },
     rename_multicollection_type: {
       apply: (state, operation) => {

@@ -840,6 +840,27 @@ function createScopedMultiCollectionBuilder(
 
       return builder;
     },
+    moveType(typeName, target) {
+      if (target.into === collectionName) {
+        throw new Error(
+          `Cannot move ${collectionName}.${typeName} into the collection it is in`,
+        );
+      }
+      const targetTypes =
+        options.schemas?.scopedMultiCollections?.[target.into]?.types;
+      if (targetTypes !== undefined && !(typeName in targetTypes)) {
+        throw new Error(
+          `Cannot move ${collectionName}.${typeName} into ${target.into}: the type is not declared in migration.schemas.scopedMultiCollections["${target.into}"]`,
+        );
+      }
+      state.operations.push({
+        type: "move_scoped_multicollection_type",
+        collectionName,
+        documentType: typeName,
+        into: { collection: target.into },
+      });
+      return builder;
+    },
     end() {
       return mainBuilder;
     },

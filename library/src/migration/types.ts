@@ -272,6 +272,21 @@ export type DeleteScopedMultiCollectionTypeRule = {
   parentSchema?: SchemaContent;
 };
 
+/**
+ * Rule for moving every document of a type from one scoped multi-collection
+ * into another, across all scopes, as they are: same `_id`, `_scope`, `_type`
+ * and fields. Batched and crash-safe — each batch is upserted into the target
+ * by `_id` before it leaves the source, so a re-run after a partial batch
+ * neither duplicates nor loses a document. Reversible: `down` moves every
+ * document of the type in the target back into the source, the same way.
+ */
+export type MoveScopedMultiCollectionTypeRule = {
+  type: "move_scoped_multicollection_type";
+  collectionName: string;
+  documentType: string;
+  into: { collection: string };
+};
+
 export type DeleteMultiCollectionDocumentsRule = {
   type: "delete_multicollection_documents";
   collectionName: string;
@@ -509,6 +524,7 @@ export type MigrationRule =
   | DeleteMultiCollectionTypeRule
   | DeleteMultiModelInstancesTypeRule
   | DeleteScopedMultiCollectionTypeRule
+  | MoveScopedMultiCollectionTypeRule
   | DeleteMultiCollectionDocumentsRule
   | DeleteCollectionDocumentsRule
   | DeleteMultiModelInstanceDocumentsRule
@@ -795,6 +811,24 @@ export interface ScopedMultiCollectionBuilder {
    * Deletes every document of a type across all scopes. Irreversible.
    */
   deleteType(typeName: string): ScopedMultiCollectionBuilder;
+
+  /**
+   * Moves every document of a type, across all scopes, into another scoped
+   * multi-collection, keeping each document's `_id`, `_scope` and `_type`.
+   * Batched, crash-safe and reversible (`down` moves them back). The target
+   * must be declared in `migration.schemas.scopedMultiCollections` with the
+   * type.
+   *
+   * @example
+   * ```typescript
+   * migration.createScopedMultiCollection("+reading").end();
+   * migration.scopedMultiCollection("+messaging").moveType("read_state", { into: "+reading" }).end();
+   * ```
+   */
+  moveType(
+    typeName: string,
+    target: { into: string },
+  ): ScopedMultiCollectionBuilder;
 
   /**
    * Finishes configuring this scoped multi-collection and returns to the
