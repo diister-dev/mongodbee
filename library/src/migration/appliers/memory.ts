@@ -6,6 +6,8 @@ import type {
   TransformScope,
 } from "../types.ts";
 import * as v from "valibot";
+import { isDeepStrictEqual } from "node:util";
+import { idKey, MoveConflictError } from "./move-type.ts";
 import {
   extractIdPrefix,
   flowDocumentPrefix,
@@ -84,6 +86,62 @@ function locatePhysical(
 
 function dropPhysical(state: DatabaseState, name: string): void {
   for (const bucket of PHYSICAL_BUCKETS) delete state[bucket][name];
+}
+
+// Every document of `documentType` leaves `from` for `into`, as the mongodb
+// applier moves it (move-type.ts): the target is created when missing; a
+// document the target already holds with the same content is only removed
+// from the source; one it holds with other content is a conflict, left in both,
+// reported once the others have moved; one of another type under the same
+// `_id` stops the move there, the documents before it already moved.
+function moveScopedType(
+  state: DatabaseState,
+  from: string,
+  into: string,
+  documentType: string,
+): DatabaseState {
+  const source = state.scopedMultiCollections[from];
+  if (!source)
+    throw new Error(`Scoped multi-collection ${from} does not exist`);
+  state.scopedMultiCollections[into] ??= { content: [] };
+  const target = state.scopedMultiCollections[into];
+  const held = new Map(
+    target.content
+      .filter((doc) => doc._id !== undefined)
+      .map((doc) => [idKey(doc._id), doc]),
+  );
+  const moving = source.content
+    .filter((doc) => doc._type === documentType)
+    .sort((a, b) => (idKey(a._id) < idKey(b._id) ? -1 : 1));
+  const conflicts: unknown[] = [];
+  const moved = new Set<Record<string, unknown>>();
+  const leave = () => {
+    source.content = source.content.filter((doc) => !moved.has(doc));
+  };
+  for (const doc of moving) {
+    // Simulated documents may carry no `_id`; MongoDB would give each its own.
+    const there = doc._id === undefined ? undefined : held.get(idKey(doc._id));
+    if (there !== undefined && there._type !== documentType) {
+      leave();
+      throw new Error(
+        `Cannot move ${from}.${documentType} into ${into}: _id ${String(doc._id)} is held there by a document of type ${String(there._type)}`,
+      );
+    }
+    if (there !== undefined && !isDeepStrictEqual(there, doc)) {
+      conflicts.push(doc._id);
+      continue;
+    }
+    if (there === undefined) {
+      target.content.push(doc);
+      if (doc._id !== undefined) held.set(idKey(doc._id), doc);
+    }
+    moved.add(doc);
+  }
+  leave();
+  if (conflicts.length > 0) {
+    throw new MoveConflictError(from, into, documentType, conflicts);
+  }
+  return state;
 }
 
 /** Insert-or-replace keyed on `_id`, like the mongodb applier's upserts. */
@@ -1470,6 +1528,22 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           `Cannot reverse delete_scoped_multicollection_type: operation is irreversible`,
         );
       },
+    },
+    move_scoped_multicollection_type: {
+      apply: (state, operation) =>
+        moveScopedType(
+          state,
+          operation.collectionName,
+          operation.into.collection,
+          operation.documentType,
+        ),
+      reverse: (state, operation) =>
+        moveScopedType(
+          state,
+          operation.into.collection,
+          operation.collectionName,
+          operation.documentType,
+        ),
     },
     rename_multicollection_type: {
       apply: (state, operation) => {

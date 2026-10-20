@@ -53,6 +53,7 @@ import { getIrreversibleOperations } from "../builder.ts";
 import { scopedMultiCollection } from "../../scoped-multi-collection.ts";
 import { getSessionContext } from "../../session.ts";
 import { PRIMARY, primaryCollection } from "../../read-preference.ts";
+import { moveDocumentsOfType } from "./move-type.ts";
 import { createLogger } from "../../utils/logger.ts";
 import { applyComputed } from "../../computed-apply.ts";
 import {
@@ -334,6 +335,38 @@ export function createMongodbApplier(
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * Every document of `documentType` leaves `from` for `into`, as it is,
+   * without losing a write made meanwhile (move-type.ts). The target is created
+   * when missing, as `flow` creates its own.
+   */
+  async function moveScopedType(
+    operationType: string,
+    from: string,
+    into: string,
+    documentType: string,
+  ): Promise<void> {
+    if (opts.strictValidation && !(await collectionExists(from))) {
+      throw new Error(`Scoped multi-collection ${from} does not exist`);
+    }
+    await ensureCollection(into);
+    const reporter = makeReporter(
+      operationType,
+      into,
+      await countForProgress(from, { _type: documentType }),
+    );
+    await moveDocumentsOfType(
+      {
+        source: primaryCollection(db, from),
+        target: primaryCollection(db, into),
+        batchSize: opts.batchSize,
+        progress: reporter.add,
+      },
+      { from, into, documentType },
+    );
+    reporter.done();
   }
 
   /**
@@ -725,6 +758,10 @@ export function createMongodbApplier(
         case "rename_collection":
           written.add(operation.from);
           written.add(operation.to);
+          break;
+        case "move_scoped_multicollection_type":
+          written.add(operation.collectionName);
+          written.add(operation.into.collection);
           break;
         default:
           return undefined;
@@ -2558,6 +2595,23 @@ export function createMongodbApplier(
           `Cannot reverse delete_scoped_multicollection_type: operation is irreversible`,
         );
       },
+    },
+
+    move_scoped_multicollection_type: {
+      apply: async (operation) =>
+        await moveScopedType(
+          operation.type,
+          operation.collectionName,
+          operation.into.collection,
+          operation.documentType,
+        ),
+      reverse: async (operation) =>
+        await moveScopedType(
+          operation.type,
+          operation.into.collection,
+          operation.collectionName,
+          operation.documentType,
+        ),
     },
 
     rename_multicollection_type: {

@@ -535,11 +535,13 @@ async function estimate(
   const verb =
     isDelete || isDedupe
       ? "removed"
-      : type.startsWith("rename_")
-        ? "retyped"
-        : type.startsWith("mark_")
-          ? "marked"
-          : "rewritten";
+      : type.startsWith("move_")
+        ? "moved"
+        : type.startsWith("rename_")
+          ? "retyped"
+          : type.startsWith("mark_")
+            ? "marked"
+            : "rewritten";
 
   const targets: string[] = [];
   if (type.includes("multimodel_instances")) {

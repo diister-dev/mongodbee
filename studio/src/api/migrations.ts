@@ -142,6 +142,9 @@ function targetOf(rule: MigrationRule): string | undefined {
   if (rule.type === "rename_collection") {
     return `${textField(rule, "from")} → ${textField(rule, "to")}`;
   }
+  if (rule.type === "move_scoped_multicollection_type") {
+    return `${textField(rule, "collectionName")}.${textField(rule, "documentType")} → ${textField(recordField(rule, "into"), "collection")}`;
+  }
   const collection =
     textField(rule, "collectionName") ?? textField(rule, "modelType");
   const type =

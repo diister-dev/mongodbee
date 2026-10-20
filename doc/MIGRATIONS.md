@@ -792,6 +792,27 @@ const events = await newMultiCollection(db, "user_events", eventsModel);
 // Works correctly because metadata now exists
 ```
 
+### Moving a type between scoped multi-collections
+
+```typescript
+migration.createScopedMultiCollection("+reading");
+migration.scopedMultiCollection("+messaging").moveType("read_state", { into: "+reading" }).end();
+```
+
+`moveType` (`move_scoped_multicollection_type`) moves every document of a type,
+in every scope, with its `_id`, `_scope`, `_type` and fields; validators are
+suspended on both collections during the move, and rollback moves the type back.
+It is batched, crash-safe and linear in the size of the type.
+
+**Concurrency.** The move tolerates writers of the type: a document changed in the
+source after its copy is moved again, a document written in the target is never
+overwritten, a document deleted from the source does not come back. Writers
+must be stopped, or a maintenance window taken, when old code keeps writing the
+source after the move ends, and when the same documents keep changing (the move
+stops after 10 passes, each document in one collection, and a run with the writers stopped carries on). A document both collections hold with
+different contents is left in both and reported (`MoveConflictError`). Details:
+[SCOPED-MULTI-COLLECTIONS.md](./SCOPED-MULTI-COLLECTIONS.md#writers-during-the-move).
+
 ### Advanced Operations
 
 ```typescript
