@@ -16,6 +16,7 @@ import {
 } from "../../src/migration/builder.ts";
 import { createMemoryApplier } from "../../src/migration/appliers/memory.ts";
 import { createMongodbApplier } from "../../src/migration/appliers/mongodb.ts";
+import { MOVE_MAX_PASSES } from "../../src/migration/appliers/move-type.ts";
 import {
   createEmptyDatabaseState,
   type DatabaseState,
@@ -405,6 +406,59 @@ test({
       });
       const after = await mongoSnapshot(db);
       assertEquals(after.new, byId(expected));
+      assert(after.old.every((doc) => doc._type === "keep"));
+    });
+  },
+});
+
+test({
+  name: "moveType (mongodb): a document that keeps changing stops the move after 10 passes, in one collection only, and a run with the writers stopped then succeeds",
+  timeout: MONGO_TIMEOUT_MS,
+  fn: async () => {
+    await withDatabase("move-type-max-passes", async (db) => {
+      const { child, childOps } = await applyParent(db, 4);
+      const old = db.collection("+old");
+      const readings = byId(
+        (await old.find({ _type: "reading" }).toArray()) as Doc[],
+      );
+      const restless = readings[5]._id;
+      const probe = probed(db, async (id) => {
+        if (id === restless) {
+          await old.updateOne({ _id: id } as never, { $inc: { seq: 1 } });
+        }
+      });
+      await assertRejects(
+        () =>
+          createMongodbApplier(probe, child, {
+            currentMigrationId: child.id,
+            batchSize: 3,
+          }).applyMigration(childOps, "up"),
+        Error,
+        `kept changing over ${MOVE_MAX_PASSES} passes`,
+      );
+      const latest = {
+        ...readings[5],
+        seq: (readings[5].seq as number) + MOVE_MAX_PASSES,
+      };
+      const stopped = await mongoSnapshot(db);
+      assertEquals(
+        stopped.old.filter((doc) => doc._type === "reading"),
+        [latest],
+      );
+      assertEquals(
+        stopped.new,
+        readings.filter((doc) => doc._id !== restless),
+      );
+
+      await createMongodbApplier(db, child, {
+        currentMigrationId: child.id,
+        batchSize: 3,
+      }).applyMigration(childOps, "up");
+      const after = await mongoSnapshot(db);
+      assertEquals(
+        after.new,
+        readings.map((doc) => (doc._id === restless ? latest : doc)),
+      );
       assert(after.old.every((doc) => doc._type === "keep"));
     });
   },

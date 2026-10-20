@@ -809,7 +809,7 @@ source after its copy is moved again, a document written in the target is never
 overwritten, a document deleted from the source does not come back. Writers
 must be stopped, or a maintenance window taken, when old code keeps writing the
 source after the move ends, and when the same documents keep changing (the move
-stops after 10 passes, nothing lost). A document both collections hold with
+stops after 10 passes, each document in one collection, and a run with the writers stopped carries on). A document both collections hold with
 different contents is left in both and reported (`MoveConflictError`). Details:
 [SCOPED-MULTI-COLLECTIONS.md](./SCOPED-MULTI-COLLECTIONS.md#writers-during-the-move).
 

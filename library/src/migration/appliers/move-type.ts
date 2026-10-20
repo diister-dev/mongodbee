@@ -84,13 +84,15 @@ export async function moveDocumentsOfType(
 ): Promise<void> {
   const { source, target, batchSize } = io;
   const { documentType } = names;
-  // What this run wrote in the target, by `_id`: the only copies it may replace.
-  const copied = new Map<string, Doc>();
-  const deleted = new Set<string>();
+  // Copies this run wrote whose source it has not deleted yet, by `_id`: the
+  // only copies it may replace or withdraw. Bounded by the documents a writer
+  // touched during the move, not by the size of the type.
+  const pending = new Map<string, Doc>();
   const conflicts: unknown[] = [];
 
   // One document: "moved", "left" for the next pass, or recorded as a conflict.
   const moveOne = async (doc: Doc): Promise<"moved" | "left"> => {
+    const key = idKey(doc._id);
     const held = await target.findOne({ _id: doc._id });
     if (held === null) {
       // Inserted as read, its fields in the source's order, so the copy compares
@@ -110,7 +112,7 @@ export async function moveDocumentsOfType(
         `Cannot move ${names.from}.${documentType} into ${names.into}: _id ${String(doc._id)} is held there by a document of type ${String(held._type)}`,
       );
     } else if (!isDeepStrictEqual(held, doc)) {
-      const ours = copied.get(idKey(doc._id));
+      const ours = pending.get(key);
       if (ours === undefined || !isDeepStrictEqual(held, ours)) {
         conflicts.push(doc._id);
         return "left";
@@ -118,11 +120,30 @@ export async function moveDocumentsOfType(
       const replaced = await target.replaceOne(sameContent(held), doc);
       if (replaced.matchedCount === 0) return "left";
     }
-    copied.set(idKey(doc._id), doc);
+    pending.set(key, doc);
     const removed = await source.deleteOne(sameContent(doc));
     if (removed.deletedCount === 0) return "left";
-    deleted.add(idKey(doc._id));
+    pending.delete(key);
     return "moved";
+  };
+
+  // A copy whose source was not deleted goes, unless the target changed it
+  // since: the source holds a newer version, or a writer deleted it there. Run
+  // before every exit, so each document ends in one collection only and a
+  // later run finds no copy it cannot tell from a conflict.
+  const withdrawPending = async (): Promise<void> => {
+    for (const ours of pending.values()) {
+      const held = await target.findOne({ _id: ours._id });
+      if (held !== null && isDeepStrictEqual(held, ours)) {
+        await target.deleteOne(sameContent(held));
+      }
+    }
+    pending.clear();
+  };
+
+  const fail = async (error: unknown): Promise<never> => {
+    await withdrawPending();
+    throw error;
   };
 
   for (let pass = 1; ; pass += 1) {
@@ -138,16 +159,22 @@ export async function moveDocumentsOfType(
         .limit(batchSize)
         .toArray();
       if (docs.length === 0) break;
-      const outcomes = await Promise.all(docs.map(moveOne));
-      io.progress(outcomes.filter((outcome) => outcome === "moved").length);
+      // Settled first, so no write of the batch is still running when the move
+      // reports its failure.
+      const outcomes = await Promise.allSettled(docs.map(moveOne));
+      const failed = outcomes.find((outcome) => outcome.status === "rejected");
+      if (failed !== undefined) await fail(failed.reason);
+      io.progress(
+        outcomes.filter(
+          (outcome) =>
+            outcome.status === "fulfilled" && outcome.value === "moved",
+        ).length,
+      );
       lastId = docs[docs.length - 1]._id;
     }
     if (conflicts.length > 0) {
-      throw new MoveConflictError(
-        names.from,
-        names.into,
-        documentType,
-        conflicts,
+      await fail(
+        new MoveConflictError(names.from, names.into, documentType, conflicts),
       );
     }
     if (
@@ -155,23 +182,13 @@ export async function moveDocumentsOfType(
     )
       break;
     if (pass === MOVE_MAX_PASSES) {
-      throw new Error(
-        `Cannot move ${names.from}.${documentType} into ${names.into}: its documents kept changing over ${MOVE_MAX_PASSES} passes. Nothing was lost; stop the writers of the type and run the migration again.`,
+      await fail(
+        new Error(
+          `Cannot move ${names.from}.${documentType} into ${names.into}: its documents kept changing over ${MOVE_MAX_PASSES} passes. Nothing was lost; stop the writers of the type and run the migration again.`,
+        ),
       );
     }
   }
 
-  // A document deleted from the source by a writer after this run copied it
-  // must not come back to life in the target: its copy goes, unless the
-  // target changed it since.
-  for (const [key, doc] of copied) {
-    if (deleted.has(key)) continue;
-    if ((await source.countDocuments({ _id: doc._id }, { limit: 1 })) > 0) {
-      continue;
-    }
-    const held = await target.findOne({ _id: doc._id });
-    if (held !== null && isDeepStrictEqual(held, doc)) {
-      await target.deleteOne(sameContent(held));
-    }
-  }
+  await withdrawPending();
 }

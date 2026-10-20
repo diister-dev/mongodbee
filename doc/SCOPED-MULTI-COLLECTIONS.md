@@ -518,7 +518,7 @@ The move tolerates writers of the type that keep running:
 |---|---|
 | updates a document in the source after its copy | the delete does not match; the next pass copies the new version over this run's copy |
 | updates or creates a document in the target | never overwritten; the source's copy, if any, is then a conflict (below) |
-| deletes a document from the source after its copy | the copy is removed from the target at the end, unless the target changed it |
+| deletes a document from the source after its copy | the copy is withdrawn from the target before the move ends, unless the target changed it |
 | inserts a new document in the source | moved by the current or the next pass |
 
 What still needs the writers stopped, or a maintenance window:
@@ -533,7 +533,10 @@ What still needs the writers stopped, or a maintenance window:
   the right copy, delete the other, and run the migration again.
 - **Writers that keep changing the same documents.** After 10 passes over a
   source that still holds documents of the type, the move stops with an error.
-  Nothing is lost; stop the writers and run it again.
+  Nothing is lost: before any error, the move withdraws the copies whose source
+  it could not delete (unless the target changed them), so each document is in
+  one collection only, its latest version in the source. Stop the writers and
+  run it again.
 
 ### A clash with another type
 
