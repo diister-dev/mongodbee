@@ -53,6 +53,7 @@ import { getIrreversibleOperations } from "../builder.ts";
 import { scopedMultiCollection } from "../../scoped-multi-collection.ts";
 import { getSessionContext } from "../../session.ts";
 import { PRIMARY, primaryCollection } from "../../read-preference.ts";
+import { moveDocumentsOfType } from "./move-type.ts";
 import { createLogger } from "../../utils/logger.ts";
 import { applyComputed } from "../../computed-apply.ts";
 import {
@@ -337,12 +338,9 @@ export function createMongodbApplier(
   }
 
   /**
-   * Every document of `documentType` leaves `from` for `into`, as it is, one
-   * batch at a time: the batch is upserted into `into` by `(_id, _type)`, then
-   * deleted from `from`. A run cut between the two finds the batch still in
-   * `from` and writes the same documents again, so nothing is duplicated nor
-   * lost. A document of another type holding the same `_id` in `into` stops
-   * the move (the upsert collides with the `_id` index).
+   * Every document of `documentType` leaves `from` for `into`, as it is,
+   * without losing a write made meanwhile (move-type.ts). The target is created
+   * when missing, as `flow` creates its own.
    */
   async function moveScopedType(
     operationType: string,
@@ -354,40 +352,20 @@ export function createMongodbApplier(
       throw new Error(`Scoped multi-collection ${from} does not exist`);
     }
     await ensureCollection(into);
-    const source = primaryCollection(db, from);
-    const target = primaryCollection(db, into);
-    const filter = { _type: documentType } as Record<string, unknown>;
     const reporter = makeReporter(
       operationType,
       into,
-      await countForProgress(from, filter),
+      await countForProgress(from, { _type: documentType }),
     );
-    while (true) {
-      const docs = await source
-        .find(filter)
-        .sort({ _id: 1 })
-        .limit(opts.batchSize)
-        .toArray();
-      if (docs.length === 0) break;
-      await target.bulkWrite(
-        docs.map((doc) => ({
-          replaceOne: {
-            filter: { _id: doc._id, _type: documentType } as Record<
-              string,
-              unknown
-            >,
-            replacement: doc,
-            upsert: true,
-          },
-        })),
-        { ordered: true },
-      );
-      await source.deleteMany({
-        _id: { $in: docs.map((doc) => doc._id) },
-        _type: documentType,
-      } as Record<string, unknown>);
-      reporter.add(docs.length);
-    }
+    await moveDocumentsOfType(
+      {
+        source: primaryCollection(db, from),
+        target: primaryCollection(db, into),
+        batchSize: opts.batchSize,
+        progress: reporter.add,
+      },
+      { from, into, documentType },
+    );
     reporter.done();
   }
 

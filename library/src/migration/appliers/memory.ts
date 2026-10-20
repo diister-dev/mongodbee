@@ -6,6 +6,8 @@ import type {
   TransformScope,
 } from "../types.ts";
 import * as v from "valibot";
+import { isDeepStrictEqual } from "node:util";
+import { idKey, MoveConflictError } from "./move-type.ts";
 import {
   extractIdPrefix,
   flowDocumentPrefix,
@@ -86,11 +88,12 @@ function dropPhysical(state: DatabaseState, name: string): void {
   for (const bucket of PHYSICAL_BUCKETS) delete state[bucket][name];
 }
 
-/** Insert-or-replace keyed on `_id`, like the mongodb applier's upserts. */
-// Every document of `documentType` leaves `from` for `into`, as it is: a
-// document already in `into` under the same `_id` (a move cut short) is
-// replaced by it, one of another type under that `_id` stops the move, as
-// MongoDB's `_id` index stops it.
+// Every document of `documentType` leaves `from` for `into`, as the mongodb
+// applier moves it (move-type.ts): the target is created when missing; a
+// document the target already holds with the same content is only removed
+// from the source; one it holds with other content is a conflict, left in both,
+// reported once the others have moved; one of another type under the same
+// `_id` stops the move there, the documents before it already moved.
 function moveScopedType(
   state: DatabaseState,
   from: string,
@@ -98,26 +101,45 @@ function moveScopedType(
   documentType: string,
 ): DatabaseState {
   const source = state.scopedMultiCollections[from];
-  const target = state.scopedMultiCollections[into];
   if (!source)
     throw new Error(`Scoped multi-collection ${from} does not exist`);
-  if (!target)
-    throw new Error(`Scoped multi-collection ${into} does not exist`);
-  const moving = source.content.filter((doc) => doc._type === documentType);
-  const moved = new Set(moving.map((doc) => String(doc._id)));
-  const clash = target.content.find(
-    (doc) => moved.has(String(doc._id)) && doc._type !== documentType,
-  );
-  if (clash) {
-    throw new Error(
-      `Cannot move ${from}.${documentType} into ${into}: _id ${String(clash._id)} is held there by a document of type ${String(clash._type)}`,
-    );
+  state.scopedMultiCollections[into] ??= { content: [] };
+  const target = state.scopedMultiCollections[into];
+  const held = new Map(target.content.map((doc) => [idKey(doc._id), doc]));
+  const moving = source.content
+    .filter((doc) => doc._type === documentType)
+    .sort((a, b) => (idKey(a._id) < idKey(b._id) ? -1 : 1));
+  const conflicts: unknown[] = [];
+  const moved = new Set<Record<string, unknown>>();
+  const leave = () => {
+    source.content = source.content.filter((doc) => !moved.has(doc));
+  };
+  for (const doc of moving) {
+    const there = held.get(idKey(doc._id));
+    if (there !== undefined && there._type !== documentType) {
+      leave();
+      throw new Error(
+        `Cannot move ${from}.${documentType} into ${into}: _id ${String(doc._id)} is held there by a document of type ${String(there._type)}`,
+      );
+    }
+    if (there !== undefined && !isDeepStrictEqual(there, doc)) {
+      conflicts.push(doc._id);
+      continue;
+    }
+    if (there === undefined) {
+      target.content.push(doc);
+      held.set(idKey(doc._id), doc);
+    }
+    moved.add(doc);
   }
-  upsertById(target.content, moving);
-  source.content = source.content.filter((doc) => doc._type !== documentType);
+  leave();
+  if (conflicts.length > 0) {
+    throw new MoveConflictError(from, into, documentType, conflicts);
+  }
   return state;
 }
 
+/** Insert-or-replace keyed on `_id`, like the mongodb applier's upserts. */
 function upsertById(
   content: Record<string, unknown>[],
   documents: readonly Record<string, unknown>[],

@@ -3,7 +3,8 @@
  * one scoped collection for another as it is (`_id`, `_scope`, `_type` and
  * fields kept), in batches, and `down` puts them back. A run cut short between
  * a batch's copy and its delete resumes without duplicating or losing a
- * document, and the memory applier (`check`) ends where MongoDB ends.
+ * document, a write made in either collection during the move is kept, and the
+ * memory applier (`check`) ends where MongoDB ends.
  */
 import { test } from "../+harness.ts";
 import { assert, assertEquals, assertRejects } from "../+assert.ts";
@@ -21,12 +22,18 @@ import {
 } from "../../src/migration/types.ts";
 import type { Db } from "../../src/mongodb.ts";
 import { dbId, refId } from "../../src/ids.ts";
+import { withIndex } from "../../src/indexes.ts";
 import * as v from "../../src/schema.ts";
 
 type Doc = Record<string, unknown>;
 
 const KEEP = { _id: dbId("keep"), label: v.string() };
-const READING = { _id: dbId("reading"), user: v.string(), seq: v.number() };
+// `user` is unique per scope: the move carries a type with an index of its own.
+const READING = {
+  _id: dbId("reading"),
+  user: withIndex(v.string(), { unique: true }),
+  seq: v.number(),
+};
 
 const BEFORE = {
   scopedMultiCollections: {
@@ -287,8 +294,176 @@ test("moveType (memory): a cut run resumes the same way", async () => {
   assert(after.old.every((doc) => doc._type === "keep"));
 });
 
+// The applier's view of the database, where every write that copies a reading
+// into "+new" is followed, before the move goes on, by `after(id)`: a writer of
+// the application acting between a document's copy and its delete.
+function probed(db: Db, after: (id: unknown) => Promise<void>): Db {
+  const wrap = (collection: object): object =>
+    new Proxy(collection, {
+      get(target, key) {
+        const value = Reflect.get(target, key, target);
+        if (typeof value !== "function") return value;
+        if (!["insertOne", "updateOne", "replaceOne"].includes(String(key)))
+          return value.bind(target);
+        return async (...args: unknown[]) => {
+          const done = await value.apply(target, args);
+          await after((args[0] as Doc)._id);
+          return done;
+        };
+      },
+    });
+  return new Proxy(db, {
+    get(target, key) {
+      const value = Reflect.get(target, key, target);
+      if (key !== "collection")
+        return typeof value === "function" ? value.bind(target) : value;
+      return (name: string, options?: unknown) => {
+        const opened = (
+          target.collection as (n: string, o?: unknown) => object
+        )(name, options);
+        return name === "+new" ? wrap(opened) : opened;
+      };
+    },
+  }) as Db;
+}
+
+async function applyParent(db: Db, readingsPerScope: number) {
+  const pair = chain(readingsPerScope);
+  await createMongodbApplier(db, pair.parent, {
+    currentMigrationId: pair.parent.id,
+  }).applyMigration(pair.parentOps, "up");
+  return pair;
+}
+
 test({
-  name: "moveType: a document of another type holding the same _id in the target stops the move, in both appliers",
+  name: "moveType (mongodb): writes made during the move, in the source after a copy or in the target after it, are all kept",
+  timeout: MONGO_TIMEOUT_MS,
+  fn: async () => {
+    await withDatabase("move-type-concurrent", async (db) => {
+      const { child, childOps } = await applyParent(db, 4);
+      const old = db.collection("+old");
+      const fresh = db.collection("+new");
+      const readings = byId(
+        (await old.find({ _type: "reading" }).toArray()) as Doc[],
+      );
+      const role = new Map(
+        readings.map((doc, i) => [
+          String(doc._id),
+          (["source", "target", "gone"] as const)[i % 3],
+        ]),
+      );
+      const touched = new Set<string>();
+      const probe = probed(db, async (id) => {
+        const key = String(id);
+        if (touched.has(key)) return;
+        touched.add(key);
+        const kind = role.get(key);
+        if (kind === "source") {
+          await old.updateOne({ _id: id } as never, { $inc: { seq: 1000 } });
+        } else if (kind === "target") {
+          await fresh.updateOne({ _id: id } as never, { $set: { seq: -1 } });
+        } else {
+          await old.deleteOne({ _id: id } as never);
+        }
+      });
+      await createMongodbApplier(probe, child, {
+        currentMigrationId: child.id,
+        batchSize: 2,
+      }).applyMigration(childOps, "up");
+
+      const expected = readings.flatMap((doc) => {
+        const kind = role.get(String(doc._id));
+        if (kind === "gone") return [];
+        return [
+          {
+            ...doc,
+            seq: kind === "source" ? (doc.seq as number) + 1000 : -1,
+          },
+        ];
+      });
+      const after = await mongoSnapshot(db);
+      assertEquals(after.new, byId(expected));
+      assert(after.old.every((doc) => doc._type === "keep"));
+    });
+  },
+});
+
+test({
+  name: "moveType (mongodb): the source is read once with a cursor, 400 documents in batches of 50 examine about 400",
+  timeout: MONGO_TIMEOUT_MS,
+  fn: async () => {
+    await withDatabase("move-type-linear", async (db) => {
+      const { child, childOps } = await applyParent(db, 134);
+      await db.command({ profile: 2 });
+      try {
+        await createMongodbApplier(db, child, {
+          currentMigrationId: child.id,
+          batchSize: 50,
+        }).applyMigration(childOps, "up");
+      } finally {
+        await db.command({ profile: 0 });
+      }
+      const reads = await db
+        .collection("system.profile")
+        .find({ ns: `${db.databaseName}.+old`, op: "query" })
+        .toArray();
+      const examined = reads.reduce(
+        (sum, entry) => sum + Number(entry.docsExamined ?? 0),
+        0,
+      );
+      assertEquals(
+        (await mongoSnapshot(db)).new.filter((doc) => doc._type === "reading")
+          .length,
+        402,
+      );
+      assert(examined <= 402 + 3 * 9, `examined ${examined} documents`);
+    });
+  },
+});
+
+test({
+  name: "moveType (mongodb): a document written in the target after the move goes back with the others on down, and the unique index follows the type",
+  timeout: MONGO_TIMEOUT_MS,
+  fn: async () => {
+    await withDatabase("move-type-down-new", async (db) => {
+      const { child, childOps } = await applyParent(db, 2);
+      const applier = createMongodbApplier(db, child, {
+        currentMigrationId: child.id,
+      });
+      await applier.applyMigration(childOps, "up");
+      const indexed = async (name: string) =>
+        (await db.collection(name).indexes()).some(
+          (index) => index.unique === true && "user" in (index.key ?? {}),
+        );
+      assertEquals(
+        [await indexed("+new"), await indexed("+old")],
+        [true, false],
+      );
+
+      const later = {
+        _id: "reading:written-after",
+        _type: "reading",
+        _scope: "ws:a",
+        user: "ws:a-late",
+        seq: 9,
+      };
+      await db.collection("+new").insertOne(later as never);
+      await applier.applyMigration(childOps, "down");
+
+      const after = await mongoSnapshot(db);
+      assertEquals(after.new, []);
+      assert(after.old.some((doc) => doc._id === later._id && doc.seq === 9));
+      assertEquals(
+        after.old.filter((doc) => doc._type === "reading").length,
+        7,
+      );
+      assertEquals(await indexed("+old"), true);
+    });
+  },
+});
+
+test({
+  name: "moveType: a document the target holds with other content is a conflict, left in both; the others move, in both appliers",
   timeout: MONGO_TIMEOUT_MS,
   fn: async () => {
     const { parent, child, parentOps, childOps } = chain(2);
@@ -297,36 +472,93 @@ test({
       parentOps,
       "up",
     );
-    const reading = state.scopedMultiCollections["+old"].content.find(
-      (doc) => doc._type === "reading",
-    );
+    const first = byId(
+      state.scopedMultiCollections["+old"].content.filter(
+        (doc) => doc._type === "reading",
+      ),
+    )[0];
     state.scopedMultiCollections["+new"] = {
-      content: [{ ...reading, _type: "other" }],
+      content: [{ ...first, seq: 77 }],
+    };
+    await assertRejects(
+      () => createMemoryApplier(child).applyMigration(state, childOps, "up"),
+      Error,
+      "differ between the two collections",
+    );
+    const memory = snapshot(state);
+
+    await withDatabase("move-type-conflict", async (db) => {
+      await applyParent(db, 2);
+      await db.createCollection("+new");
+      await db.collection("+new").insertOne({ ...first, seq: 77 } as never);
+      await assertRejects(
+        () =>
+          createMongodbApplier(db, child, {
+            currentMigrationId: child.id,
+          }).applyMigration(childOps, "up"),
+        Error,
+        "differ between the two collections",
+      );
+      const mongo = await mongoSnapshot(db);
+      assertEquals(mongo, memory);
+      assertEquals(
+        mongo.old
+          .filter((doc) => doc._type === "reading")
+          .map((doc) => doc._id),
+        [first._id],
+      );
+      assertEquals(mongo.new.length, 6);
+    });
+  },
+});
+
+test({
+  name: "moveType: a document of another type holding the same _id in the target stops the move; what moved before it is in one collection only",
+  timeout: MONGO_TIMEOUT_MS,
+  fn: async () => {
+    const { parent, child, parentOps, childOps } = chain(2);
+    const state = await createMemoryApplier(parent).applyMigration(
+      createEmptyDatabaseState(),
+      parentOps,
+      "up",
+    );
+    const readings = byId(
+      state.scopedMultiCollections["+old"].content.filter(
+        (doc) => doc._type === "reading",
+      ),
+    );
+    const clashing = readings[readings.length - 1];
+    state.scopedMultiCollections["+new"] = {
+      content: [{ ...clashing, _type: "other" }],
     };
     await assertRejects(
       () => createMemoryApplier(child).applyMigration(state, childOps, "up"),
       Error,
       "is held there by a document of type other",
     );
+    const memory = snapshot(state);
+    assertEquals(
+      memory.old.filter((doc) => doc._type === "reading").map((doc) => doc._id),
+      [clashing._id],
+    );
 
     await withDatabase("move-type-clash", async (db) => {
-      await createMongodbApplier(db, parent, {
-        currentMigrationId: parent.id,
-      }).applyMigration(parentOps, "up");
-      const first = await db.collection("+old").findOne({ _type: "reading" });
+      await applyParent(db, 2);
       await db.createCollection("+new");
       await db
         .collection("+new")
-        .insertOne({ ...first, _type: "other" } as never);
+        .insertOne({ ...clashing, _type: "other" } as never);
       await assertRejects(() =>
         createMongodbApplier(db, child, {
           currentMigrationId: child.id,
+          batchSize: 1,
         }).applyMigration(childOps, "up"),
       );
-      assertEquals(
-        await db.collection("+old").countDocuments({ _type: "reading" }),
-        6,
-      );
+      const mongo = await mongoSnapshot(db);
+      const ids = (docs: Doc[]) => docs.map((doc) => String(doc._id));
+      const everywhere = [...ids(mongo.old), ...ids(mongo.new)];
+      assertEquals(new Set(everywhere).size, everywhere.length - 1);
+      assertEquals(mongo, memory);
     });
   },
 });

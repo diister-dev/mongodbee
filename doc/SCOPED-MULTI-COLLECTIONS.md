@@ -488,15 +488,62 @@ The migration's `schemas` declare the type under the target and no longer under
 the source. Every document of the type moves as it is, in every scope: same
 `_id`, `_scope`, `_type` and fields, so nothing that refers to one breaks.
 
-- **Batched and crash-safe.** Each batch (`batchSize`, 1000 by default) is
-  upserted into the target by `(_id, _type)`, then deleted from the source. A run
-  cut between the two finds the batch still in the source and writes the same
-  documents again: nothing is duplicated, nothing is lost.
-- **Reversible.** Rollback moves every document of the type in the target back
-  into the source, the same way, including those written after the migration.
-- **Refused on a clash.** A document of another type holding the same `_id` in
-  the target stops the move: MongoDB's `_id` index refuses the upsert, and
-  `check` (the memory applier) refuses it the same way.
+The target is created when it does not exist yet, by `migrate` and by `check`
+alike.
+
+### How a document moves
+
+The source is read in `_id` order, `batchSize` documents at a time (1000 by
+default), with a cursor: each document is examined once per pass, so the move
+stays linear in the size of the type. Each document then moves on its own:
+
+1. **Copied into the target only where the target has nothing under its `_id`.**
+   If the target already holds the same document (a run cut earlier), nothing is
+   written. If it holds the copy this run made and the source changed since, the
+   copy is replaced. Any other content is never overwritten.
+2. **Deleted from the source only if the source still holds exactly what was
+   copied.** A document changed in between stays in the source and is moved
+   again.
+
+Passes repeat until the source holds no document of the type. A run cut at any
+point and started again duplicates nothing and loses nothing. Rollback moves the
+type back the same way, including documents written in the target after the
+migration.
+
+### Writers during the move
+
+The move tolerates writers of the type that keep running:
+
+| A writer… | What happens |
+|---|---|
+| updates a document in the source after its copy | the delete does not match; the next pass copies the new version over this run's copy |
+| updates or creates a document in the target | never overwritten; the source's copy, if any, is then a conflict (below) |
+| deletes a document from the source after its copy | the copy is removed from the target at the end, unless the target changed it |
+| inserts a new document in the source | moved by the current or the next pass |
+
+What still needs the writers stopped, or a maintenance window:
+
+- **Code that still writes the source.** Once the move ends, nothing moves a
+  document of the type written in the source; deploy the code that writes the
+  target before, or with, the migration, and stop the old code first.
+- **A document both collections hold with different contents** that this run did
+  not copy (a writer of the new code writing the target before the move reaches
+  the source's copy, or a run cut in the middle of one). Neither is
+  overwritten: the move ends with a `MoveConflictError` naming the `_id`s. Keep
+  the right copy, delete the other, and run the migration again.
+- **Writers that keep changing the same documents.** After 10 passes over a
+  source that still holds documents of the type, the move stops with an error.
+  Nothing is lost; stop the writers and run it again.
+
+### A clash with another type
+
+A document of another type holding the same `_id` in the target stops the move,
+in `migrate` and in `check` alike, and `_id`s are compared the way MongoDB does
+(the string `"x"` and an ObjectId are two ids). The documents moved before the
+clash stay moved, and each document is in exactly one of the two collections:
+the clashing one stays in the source, with those not reached yet (on MongoDB,
+documents of the clashing batch may have moved already). Resolve the clash and run the
+migration again; it carries on from there.
 
 ## See also
 
