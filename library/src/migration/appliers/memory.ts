@@ -105,7 +105,11 @@ function moveScopedType(
     throw new Error(`Scoped multi-collection ${from} does not exist`);
   state.scopedMultiCollections[into] ??= { content: [] };
   const target = state.scopedMultiCollections[into];
-  const held = new Map(target.content.map((doc) => [idKey(doc._id), doc]));
+  const held = new Map(
+    target.content
+      .filter((doc) => doc._id !== undefined)
+      .map((doc) => [idKey(doc._id), doc]),
+  );
   const moving = source.content
     .filter((doc) => doc._type === documentType)
     .sort((a, b) => (idKey(a._id) < idKey(b._id) ? -1 : 1));
@@ -115,7 +119,8 @@ function moveScopedType(
     source.content = source.content.filter((doc) => !moved.has(doc));
   };
   for (const doc of moving) {
-    const there = held.get(idKey(doc._id));
+    // Simulated documents may carry no `_id`; MongoDB would give each its own.
+    const there = doc._id === undefined ? undefined : held.get(idKey(doc._id));
     if (there !== undefined && there._type !== documentType) {
       leave();
       throw new Error(
@@ -128,7 +133,7 @@ function moveScopedType(
     }
     if (there === undefined) {
       target.content.push(doc);
-      held.set(idKey(doc._id), doc);
+      if (doc._id !== undefined) held.set(idKey(doc._id), doc);
     }
     moved.add(doc);
   }

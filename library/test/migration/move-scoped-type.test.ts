@@ -297,6 +297,28 @@ test("moveType (memory): a cut run resumes the same way", async () => {
 // The applier's view of the database, where every write that copies a reading
 // into "+new" is followed, before the move goes on, by `after(id)`: a writer of
 // the application acting between a document's copy and its delete.
+test("moveType (memory): simulated documents without an _id all move, none mistaken for another", async () => {
+  const { parent, child, parentOps, childOps } = chain(2);
+  const state = await createMemoryApplier(parent).applyMigration(
+    createEmptyDatabaseState(),
+    parentOps,
+    "up",
+  );
+  const old = state.scopedMultiCollections["+old"];
+  old.content = old.content.map(({ _id, ...doc }) =>
+    doc._type === "reading" ? doc : { _id, ...doc },
+  );
+  const readings = old.content.filter((doc) => doc._type === "reading");
+  assert(readings.length > 1);
+  await createMemoryApplier(child).applyMigration(state, childOps, "up");
+  assertEquals(state.scopedMultiCollections["+new"].content, readings);
+  assert(
+    state.scopedMultiCollections["+old"].content.every(
+      (doc) => doc._type === "keep",
+    ),
+  );
+});
+
 function probed(db: Db, after: (id: unknown) => Promise<void>): Db {
   const wrap = (collection: object): object =>
     new Proxy(collection, {
