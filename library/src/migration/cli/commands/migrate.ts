@@ -40,6 +40,70 @@ import {
   getMigrationsForCatchUp,
 } from "../../catch-up.ts";
 import { recordMultiCollectionMigration } from "../../multicollection-registry.ts";
+import {
+  type AppliedMigrationSteps,
+  appliedMigrationSteps,
+  describeDrift,
+  operationLabel,
+  recordAssumedSteps,
+  stepsOf,
+} from "../../steps.ts";
+import type { Db } from "../../../mongodb.ts";
+import type { MigrationDefinition } from "../../types.ts";
+
+type Extension = {
+  readonly migration: MigrationDefinition;
+  readonly applied: number;
+};
+
+function extensionsToApply(
+  appliedSteps: readonly AppliedMigrationSteps[],
+): Extension[] {
+  const changed = appliedSteps.filter(({ drift }) => drift.kind === "changed");
+  if (changed.length > 0) {
+    throw new Error(
+      `${changed.map(({ migration, drift }) => describeDrift(migration, drift)).join("; ")}. ` +
+        "Nothing was applied: restore the operations it was applied with, or roll it back with the version that applied it.",
+    );
+  }
+  const extensions: Extension[] = [];
+  appliedSteps.forEach(({ migration, drift }, index) => {
+    if (drift.kind !== "extended") return;
+    const appliedAfter = appliedSteps.slice(index + 1);
+    if (appliedAfter.length > 0) {
+      throw new Error(
+        `${describeDrift(migration, drift)}, and ${appliedAfter
+          .map((later) => later.migration.id)
+          .join(
+            ", ",
+          )} ${appliedAfter.length === 1 ? "is" : "are"} applied after it. ` +
+          "Nothing was applied: roll back down to it, then migrate.",
+      );
+    }
+    extensions.push({ migration, applied: drift.applied.length });
+  });
+  return extensions;
+}
+
+async function recordUnrecordedSteps(
+  db: Db,
+  appliedSteps: readonly AppliedMigrationSteps[],
+): Promise<void> {
+  const unrecorded = appliedSteps.filter(
+    ({ drift }) => drift.kind === "unrecorded",
+  );
+  if (unrecorded.length === 0) return;
+  for (const { migration, current } of unrecorded) {
+    await recordAssumedSteps(db, migration.id, current);
+  }
+  console.log(
+    yellow(
+      `⚠ ${unrecorded.length} applied migration(s) carried no record of their operations; ` +
+        "their current operations are now recorded as the ones applied: " +
+        unrecorded.map(({ migration }) => migration.id).join(", "),
+    ),
+  );
+}
 
 interface CliArgs {
   config?: string;
@@ -244,8 +308,22 @@ export async function migrateCommand(
     const appliedIds = await getAppliedMigrationIds(db);
     console.log(dim(`Applied migrations: ${appliedIds.length}`));
 
-    // Calculate pending migrations
-    let pendingMigrations = getPendingMigrations(allMigrations, appliedIds);
+    const appliedSteps = await appliedMigrationSteps(db, allMigrations);
+    const extensions = extensionsToApply(appliedSteps);
+    if (!opts.dryRun) await recordUnrecordedSteps(db, appliedSteps);
+
+    const appliedStepCount = new Map(
+      extensions.map((extension) => [
+        extension.migration.id,
+        extension.applied,
+      ]),
+    );
+    const pendingIdsBeforeExtensions = new Set(
+      getPendingMigrations(allMigrations, appliedIds).map((m) => m.id),
+    );
+    let pendingMigrations = allMigrations.filter(
+      (m) => pendingIdsBeforeExtensions.has(m.id) || appliedStepCount.has(m.id),
+    );
 
     // `--target` stops the run part-way through the pending chain. Only ever a
     // PREFIX of it: applying a migration while an earlier one stays pending
@@ -972,9 +1050,20 @@ export async function migrateCommand(
         // Execute migration on real database
         const builder = migrationBuilder({ schemas: migration.schemas });
         const migrator = migration.migrate(builder);
+        const alreadyApplied = appliedStepCount.get(migration.id) ?? 0;
+        const operations = migrator.operations.slice(alreadyApplied);
+
+        if (alreadyApplied > 0) {
+          console.log(
+            yellow(
+              `  Applied earlier with ${alreadyApplied} operation(s); running the ${operations.length} added since: ` +
+                operations.map(operationLabel).join(", "),
+            ),
+          );
+        }
 
         if (options.verbose) {
-          console.log(dim(`  📦 Operations: ${migrator.operations.length}`));
+          console.log(dim(`  📦 Operations: ${operations.length}`));
         }
 
         console.log(dim("  📝 Executing operations..."));
@@ -994,7 +1083,7 @@ export async function migrateCommand(
         // Apply all operations and synchronize schemas. `finally` closes the
         // progress line so a success/error log starts on a clean row.
         try {
-          await migrationApplier.applyMigration(migrator.operations, "up");
+          await migrationApplier.applyMigration(operations, "up");
         } finally {
           progress.finish();
         }
@@ -1007,6 +1096,7 @@ export async function migrateCommand(
           migration.id,
           migration.name,
           duration,
+          stepsOf(migrator.operations),
         );
 
         console.log(

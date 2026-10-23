@@ -244,6 +244,13 @@ During M2.apply():
 2. Creates indexes defined with `withIndex()` in schemas
 3. Updates validators and indexes on existing collections to match the current schema
 
+**A multi-collection gets the same indexes in both modes.** Opened with
+`schemaManagement: "auto"` or built by a migration (`"managed"`), it holds one
+shared `_type_1` index plus the `withIndex` fields of each type. Older
+versions also built, in auto mode only, one `<type>__type` index per type, so
+a test database reached MongoDB's 64-index limit long before the managed
+production one; opening such a collection in auto mode drops them.
+
 **Manual Control**: If you need to manually apply validators/indexes:
 ```typescript
 import { applySecurityToCollection, applySecurityToMultiCollection } from "@diister/mongodbee";
@@ -453,6 +460,39 @@ the first one. The schema consistency of the chain's last migration against
 `--last N` can only widen the window (to re-validate applied migrations too),
 never shrink it below the pending ones. `--docs` and `--retention` tune the
 simulation exactly as they do for `check`.
+
+### A migration extended after it was applied
+
+The history records the operations each migration ran, in order, with its
+`applied` entry (`steps` in `__dbee_migration__`). A migration that gained
+operations after it was applied, typically a batch assembled from several
+files that received one more, is compared with that record:
+
+- **Operations added at the end**: `migrate` runs only the added ones, then
+  records the whole list. It refuses when a later migration is already
+  applied on top of it: roll back down to it first.
+- **An applied operation changed, moved or removed**: `migrate` and
+  `rollback` refuse and name the migration and the operation. Restore the
+  operations it was applied with.
+- **`rollback`** undoes only the operations that ran.
+- **`check`** (when the configuration names a database it can reach) and
+  `checkMigrationStatus({ db })` report every applied migration whose
+  operations differ (`database.changedIds`).
+
+An operation is compared by what it is and where it acts: its type, its
+collections and types, filters and flags. The schemas it carries are not
+compared, because a later operation of the same migration may rewrite them,
+nor are seed documents or function bodies, which differ between two runs or
+two runtimes without the operation changing. Editing the body of a transform
+that already ran is therefore not detected; a migration that has run stays
+frozen.
+
+**Databases migrated before this was recorded.** Their `applied` entries
+carry no `steps`. The first `migrate` records the current operations of each
+of them as the ones applied, in place (the order of the history does not
+move), and lists them. A migration extended before that first run cannot be
+told apart and is taken as applied whole. Until then, `rollback` undoes all
+the current operations of such a migration, as before, and says so.
 
 ### Without a terminal (CI, agents)
 

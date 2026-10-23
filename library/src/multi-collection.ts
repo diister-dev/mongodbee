@@ -45,7 +45,6 @@ import {
   findOneThrough,
   findThrough,
 } from "./request-context.ts";
-import { withIndex } from "./indexes.ts";
 import type { FlatType } from "../types/flat.ts";
 import type { Db } from "./mongodb.ts";
 import { ensureValidator } from "./utils/ensure-validator.ts";
@@ -783,7 +782,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         ...acc,
         [key]: {
           _id: dbId(key),
-          _type: withIndex(v.optional(v.literal(key), () => key)),
+          _type: v.optional(v.literal(key), () => key),
           ...value,
         },
       };

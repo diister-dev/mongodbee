@@ -29,6 +29,9 @@ import {
   validateMigrationsWithSimulation,
 } from "../utils/validate-migrations.ts";
 import type { SimulationPowerLevel } from "../../validators/simulation.ts";
+import type { MigrationDefinition } from "../../types.ts";
+import { appliedMigrationSteps, describeDrift } from "../../steps.ts";
+import { createMigrationClient } from "../utils/client.ts";
 
 export interface CheckCommandOptions {
   configPath?: string;
@@ -139,7 +142,12 @@ function reportFrozenImports(
   return true;
 }
 
-export type CheckStage = "no-migrations" | "imports" | "schema" | "simulation";
+export type CheckStage =
+  | "no-migrations"
+  | "imports"
+  | "schema"
+  | "simulation"
+  | "database";
 
 export interface CheckMigrationReport {
   id: string;
@@ -166,7 +174,61 @@ export interface CheckReport {
   schema?: { valid: boolean; errors: string[]; warnings: string[] };
   migrations: CheckMigrationReport[];
   notValidated: string[];
+  database?: AppliedStepsReport;
   failure?: Error;
+}
+
+export type AppliedStepsReport =
+  | { readonly reachable: false; readonly reason: string }
+  | { readonly reachable: true; readonly changed: readonly string[] };
+
+const DATABASE_TIMEOUT_MS = 3000;
+
+async function checkAppliedSteps(
+  config: Awaited<ReturnType<typeof loadConfig>>,
+  chain: readonly MigrationDefinition[],
+  log: (line: string) => void,
+): Promise<AppliedStepsReport | undefined> {
+  const uri = config.database?.connection?.uri;
+  if (!uri) return undefined;
+  const client = createMigrationClient(uri, {
+    database: {
+      connection: {
+        options: {
+          ...config.database?.connection?.options,
+          serverSelectionTimeoutMS: DATABASE_TIMEOUT_MS,
+        },
+      },
+    },
+  });
+  try {
+    try {
+      await client.connect();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      log(
+        yellow(
+          `⚠ Database not reachable, applied migrations not compared with their files: ${reason}`,
+        ),
+      );
+      log("");
+      return { reachable: false, reason };
+    }
+    const db = client.db(config.database?.name || "myapp");
+    const changed = (await appliedMigrationSteps(db, chain))
+      .filter(
+        ({ drift }) => drift.kind === "extended" || drift.kind === "changed",
+      )
+      .map(({ migration, drift }) => describeDrift(migration, drift));
+    if (changed.length > 0) {
+      log(red(bold("✗ Applied migrations changed since they ran")));
+      for (const line of changed) log(red(`    ${line}`));
+      log("");
+    }
+    return { reachable: true, changed };
+  } finally {
+    await client.close(true);
+  }
 }
 
 export interface CheckHooks {
@@ -337,6 +399,18 @@ export async function runCheck(
     report.migrations = collect(error.results);
     report.valid = false;
     report.failure = error;
+  }
+
+  const database = await checkAppliedSteps(config, allMigrations, log);
+  if (database) {
+    report.database = database;
+    if (database.reachable && database.changed.length > 0) {
+      report.stage = "database";
+      report.valid = false;
+      report.failure ??= new Error(
+        `Applied migrations changed since they ran: ${database.changed.join("; ")}`,
+      );
+    }
   }
   return report;
 }
