@@ -29,9 +29,13 @@ import { confirm } from "../utils/confirm.ts";
 import { repairSuspendedValidators } from "../utils/validator-repair.ts";
 import { ensureMigrationPrivileges } from "../utils/privileges.ts";
 import {
+  acceptDriftHint,
+  acceptDriftIds,
+  acceptedSteps,
   appliedMigrationSteps,
   describeDrift,
   operationLabel,
+  replaceRecordedSteps,
 } from "../../steps.ts";
 import type { Db } from "../../../mongodb.ts";
 import type { MigrationDefinition, MigrationRule } from "../../types.ts";
@@ -40,15 +44,29 @@ async function operationsToUndo(
   db: Db,
   migration: MigrationDefinition,
   operations: MigrationRule[],
+  acceptDrift: readonly string[],
 ): Promise<MigrationRule[]> {
   const [applied] = await appliedMigrationSteps(db, [migration]);
   const drift = applied?.drift;
   switch (drift?.kind) {
-    case "changed":
-      throw new Error(
-        `${describeDrift(migration, drift)}. Nothing was rolled back: undoing its current operations would undo what never ran. ` +
-          "Restore the operations it was applied with, then roll back.",
+    case "changed": {
+      if (!acceptDrift.includes(migration.id)) {
+        throw new Error(
+          `${describeDrift(migration, drift)}. Nothing was rolled back: undoing its current operations would undo what never ran. ` +
+            `Restore the operations it was applied with, then roll back. ${acceptDriftHint("rollback", migration.id)}`,
+        );
+      }
+      const steps = acceptedSteps(drift, applied.current);
+      console.log(
+        yellow(
+          bold(
+            `mongodbee: --accept-drift ${migration.id}: recording its first ${steps.length} current operation(s) as the ones that ran and undoing them (${describeDrift(migration, drift)}).`,
+          ),
+        ),
       );
+      await replaceRecordedSteps(db, migration.id, drift.applied.length, steps);
+      return operations.slice(0, steps.length);
+    }
     case "extended":
       console.log(
         yellow(
@@ -82,6 +100,7 @@ export interface RollbackCommandOptions {
    * A rollback needs the same DDL actions as a migration (`collMod`, ...).
    */
   skipPrivilegeCheck?: boolean;
+  acceptDrift?: readonly string[];
 }
 
 /**
@@ -167,6 +186,10 @@ export async function rollbackCommand(
       db,
       migrationToRollback,
       state.operations,
+      acceptDriftIds(
+        options.acceptDrift ??
+          (options as Record<string, unknown>)["accept-drift"],
+      ),
     );
 
     // Irreversible operations cannot be rolled back at all — refuse up-front

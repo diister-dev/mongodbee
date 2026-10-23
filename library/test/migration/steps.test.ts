@@ -1,5 +1,7 @@
 import { test } from "../+harness.ts";
-import { assertEquals } from "../+assert.ts";
+import { assert, assertEquals } from "../+assert.ts";
+import { parseArgs } from "../../src/utils/parse-args.ts";
+import type { MigrationRule } from "../../src/migration/types.ts";
 import { migrationBuilder } from "../../src/migration/builder.ts";
 import { compareSteps, stepsOf } from "../../src/migration/steps.ts";
 import * as v from "../../src/schema.ts";
@@ -71,4 +73,42 @@ test("operations appended to applied ones are an extension, a different first op
   assertEquals(compareSteps(applied, extended).kind, "extended");
   assertEquals(compareSteps(extended.slice(1), applied).kind, "changed");
   assertEquals(compareSteps(undefined, applied).kind, "unrecorded");
+});
+
+test("a signature covers what an operation is and where it acts, not its data, flags or fields added later", () => {
+  const signatureOf = (operation: Record<string, unknown>) =>
+    stepsOf([operation as unknown as MigrationRule])[0].signature;
+  const seed = {
+    type: "seed_collection",
+    collectionName: "alpha",
+    documents: [{ n: 1 }],
+    schema: {},
+  };
+
+  assertEquals(
+    signatureOf(seed),
+    signatureOf({
+      ...seed,
+      documents: [{ n: 1 }, { n: 2 }],
+      where: { at: Date.now() },
+      lossy: true,
+      futureDefault: "added by a later mongodbee",
+    }),
+  );
+  assert(
+    signatureOf(seed) !== signatureOf({ ...seed, collectionName: "beta" }),
+  );
+  assert(
+    signatureOf(seed) !==
+      signatureOf({ ...seed, type: "seed_multicollection_type" }),
+  );
+});
+
+test("--accept-drift can be repeated on the command line", () => {
+  const args = parseArgs(
+    ["migrate", "--accept-drift", "a@one", "--accept-drift", "b@two"],
+    { string: ["accept-drift"], collect: ["accept-drift"] },
+  );
+
+  assertEquals(args["accept-drift"], ["a@one", "b@two"]);
 });

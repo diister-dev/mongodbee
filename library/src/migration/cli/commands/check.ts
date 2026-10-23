@@ -30,7 +30,11 @@ import {
 } from "../utils/validate-migrations.ts";
 import type { SimulationPowerLevel } from "../../validators/simulation.ts";
 import type { MigrationDefinition } from "../../types.ts";
-import { appliedMigrationSteps, describeDrift } from "../../steps.ts";
+import {
+  acceptDriftHint,
+  appliedMigrationSteps,
+  describeDrift,
+} from "../../steps.ts";
 import { createMigrationClient } from "../utils/client.ts";
 
 export interface CheckCommandOptions {
@@ -225,7 +229,11 @@ async function checkAppliedSteps(
       .filter(
         ({ drift }) => drift.kind === "extended" || drift.kind === "changed",
       )
-      .map(({ migration, drift }) => describeDrift(migration, drift));
+      .map(({ migration, drift }) =>
+        drift.kind === "changed"
+          ? `${describeDrift(migration, drift)}. ${acceptDriftHint("migrate", migration.id)}`
+          : describeDrift(migration, drift),
+      );
     const unrecorded = applied
       .filter(({ drift }) => drift.kind === "unrecorded")
       .map(({ migration }) => migration.id);

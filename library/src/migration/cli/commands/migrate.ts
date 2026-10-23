@@ -41,8 +41,13 @@ import {
 } from "../../catch-up.ts";
 import { recordMultiCollectionMigration } from "../../multicollection-registry.ts";
 import {
+  acceptDriftHint,
+  acceptDriftIds,
+  acceptedSteps,
   type AppliedMigrationSteps,
   appendAppliedStep,
+  type MigrationStep,
+  replaceRecordedSteps,
   appliedMigrationSteps,
   describeDrift,
   operationLabel,
@@ -57,23 +62,59 @@ type Extension = {
   readonly applied: number;
 };
 
-function extensionsToApply(
+type Acceptance = {
+  readonly migration: MigrationDefinition;
+  readonly read: number;
+  readonly steps: readonly MigrationStep[];
+  readonly description: string;
+};
+
+type StepPlan = {
+  readonly extensions: Extension[];
+  readonly acceptances: Acceptance[];
+};
+
+function planSteps(
   appliedSteps: readonly AppliedMigrationSteps[],
-): Extension[] {
-  const changed = appliedSteps.filter(({ drift }) => drift.kind === "changed");
-  if (changed.length > 0) {
+  acceptDrift: readonly string[],
+): StepPlan {
+  const accepted = new Set(acceptDrift);
+  const refused = appliedSteps.filter(
+    ({ migration, drift }) =>
+      drift.kind === "changed" && !accepted.has(migration.id),
+  );
+  if (refused.length > 0) {
     throw new Error(
-      `${changed.map(({ migration, drift }) => describeDrift(migration, drift)).join("; ")}. ` +
-        "Nothing was applied: restore the operations it was applied with, or roll it back with the version that applied it.",
+      `${refused.map(({ migration, drift }) => describeDrift(migration, drift)).join("; ")}. ` +
+        "Nothing was applied: restore the operations it was applied with, or roll it back with the version that applied it. " +
+        refused
+          .map(({ migration }) => acceptDriftHint("migrate", migration.id))
+          .join(". "),
     );
   }
   const extensions: Extension[] = [];
-  appliedSteps.forEach(({ migration, drift }, index) => {
-    if (drift.kind !== "extended") return;
+  const acceptances: Acceptance[] = [];
+  appliedSteps.forEach(({ migration, current, drift }, index) => {
+    let applied: number;
+    if (drift.kind === "extended") {
+      applied = drift.applied.length;
+    } else if (drift.kind === "changed") {
+      const steps = acceptedSteps(drift, current);
+      acceptances.push({
+        migration,
+        read: drift.applied.length,
+        steps,
+        description: describeDrift(migration, drift),
+      });
+      if (steps.length === current.length) return;
+      applied = steps.length;
+    } else {
+      return;
+    }
     const appliedAfter = appliedSteps.slice(index + 1);
     if (appliedAfter.length > 0) {
       throw new Error(
-        `${describeDrift(migration, drift)}, and ${appliedAfter
+        `${migration.name} (${migration.id}) has operations added since it was applied, and ${appliedAfter
           .map((later) => later.migration.id)
           .join(
             ", ",
@@ -81,9 +122,41 @@ function extensionsToApply(
           "Nothing was applied: roll back down to it, then migrate.",
       );
     }
-    extensions.push({ migration, applied: drift.applied.length });
+    extensions.push({ migration, applied });
   });
-  return extensions;
+  return { extensions, acceptances };
+}
+
+async function acceptDrift(
+  db: Db,
+  plan: StepPlan,
+  acceptDrift: readonly string[],
+  dryRun: boolean | undefined,
+): Promise<void> {
+  const acceptedIds = new Set(plan.acceptances.map((a) => a.migration.id));
+  for (const id of acceptDrift.filter((id) => !acceptedIds.has(id))) {
+    console.log(
+      yellow(
+        `--accept-drift ${id}: nothing to accept, its recorded operations match`,
+      ),
+    );
+  }
+  for (const acceptance of plan.acceptances) {
+    console.log(
+      yellow(
+        bold(
+          `mongodbee: --accept-drift ${acceptance.migration.id}: ${dryRun ? "would record" : "recording"} its first ${acceptance.steps.length} current operation(s) as the ones that ran, without running them (${acceptance.description}).`,
+        ),
+      ),
+    );
+    if (dryRun) continue;
+    await replaceRecordedSteps(
+      db,
+      acceptance.migration.id,
+      acceptance.read,
+      acceptance.steps,
+    );
+  }
 }
 
 async function recordUnrecordedSteps(
@@ -160,6 +233,7 @@ export interface MigrateCommandOptions {
    * needs — typically `collMod`, granted by `dbAdmin` but not by `readWrite`.
    */
   skipPrivilegeCheck?: boolean;
+  acceptDrift?: readonly string[];
   /**
    * Mock documents per collection during the simulation, 1 to 5000,
    * overriding the mode's preset. Same rules as `check --docs`.
@@ -314,8 +388,13 @@ export async function migrateCommand(
     console.log(dim(`Applied migrations: ${appliedIds.length}`));
 
     const appliedSteps = await appliedMigrationSteps(db, allMigrations);
-    const extensions = extensionsToApply(appliedSteps);
+    const acceptDriftList = acceptDriftIds(
+      options.acceptDrift ?? cliArgs["accept-drift"],
+    );
+    const plan = planSteps(appliedSteps, acceptDriftList);
+    const extensions = plan.extensions;
     await recordUnrecordedSteps(db, appliedSteps, opts.dryRun);
+    await acceptDrift(db, plan, acceptDriftList, opts.dryRun);
 
     const appliedStepCount = new Map(
       extensions.map((extension) => [

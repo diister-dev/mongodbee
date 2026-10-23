@@ -158,6 +158,10 @@ ${yellow("STATUS OPTIONS:")}
   -l, --last        Only validate the last N migrations
 
 ${yellow("MIGRATE OPTIONS:")}
+  --accept-drift <id>
+                    Take the current operations of this applied migration as
+                    the ones that ran, without running them, when its record
+                    no longer matches (repeatable)
   --dry-run         Simulate migration without applying changes
   --force           Skip all confirmations (use with caution!)
   --auto-sync       Automatically catch up orphaned multi-model instances
@@ -181,6 +185,10 @@ ${yellow("BASELINE OPTIONS:")}
   --force           Skip the confirmation
 
 ${yellow("ROLLBACK OPTIONS:")}
+  --accept-drift <id>
+                    Take the current operations of this applied migration as
+                    the ones that ran, without running them, when its record
+                    no longer matches (repeatable)
   --force           Skip all confirmations (use with caution!)
   --progress        Force the live progress line (auto-detected on a TTY; use --no-progress to disable)
   --skip-privilege-check
@@ -316,7 +324,9 @@ async function main(): Promise<void> {
       "project",
       "migrations",
       "schemas",
+      "accept-drift",
     ],
+    collect: ["accept-drift"],
     alias: {
       v: "version",
       h: "help",

@@ -23,38 +23,55 @@ export type StepDrift =
     }
   | {
       readonly kind: "changed";
+      readonly applied: readonly MigrationStep[];
       readonly index: number;
       readonly was: MigrationStep | undefined;
       readonly now: MigrationStep | undefined;
     };
 
-const UNSIGNED_KEYS = new Set(["schema", "parentSchema", "targetIdSchema"]);
+const TARGET_KEYS = [
+  "collectionName",
+  "documentType",
+  "modelType",
+  "oldTypeName",
+  "newTypeName",
+  "field",
+  "to",
+] as const;
 
-function isValibotSchema(value: object): boolean {
-  return "~standard" in value && "kind" in value;
-}
+const SOURCE_KEYS = [
+  "collection",
+  "kind",
+  "name",
+  "model",
+  "collectionName",
+  "documentType",
+] as const;
 
-function canonical(value: unknown): unknown {
-  if (value === null || value === undefined) return null;
-  if (typeof value === "function") return "[function]";
-  if (typeof value === "bigint") return value.toString();
-  if (typeof value !== "object") return value;
-  if (value instanceof Date) return "[date]";
-  if (value instanceof RegExp) return value.toString();
-  if (isValibotSchema(value)) return "[schema]";
-  if (Array.isArray(value)) return value.map(canonical);
+function namesOf(
+  value: unknown,
+  keys: readonly string[],
+): Record<string, string> {
+  if (typeof value !== "object" || value === null) return {};
   const fields = value as Record<string, unknown>;
   return Object.fromEntries(
-    Object.keys(fields)
-      .filter((key) => !UNSIGNED_KEYS.has(key) && fields[key] !== undefined)
-      .sort()
-      .map((key) => {
-        const field = fields[key];
-        return key === "documents" && Array.isArray(field)
-          ? [key, { count: field.length }]
-          : [key, canonical(field)];
-      }),
+    keys.flatMap((key) =>
+      typeof fields[key] === "string" ? [[key, fields[key]]] : [],
+    ),
   );
+}
+
+function identity(operation: MigrationRule): unknown {
+  const fields = operation as Record<string, unknown>;
+  return {
+    type: operation.type,
+    target: namesOf(fields, TARGET_KEYS),
+    from:
+      typeof fields.from === "string"
+        ? fields.from
+        : namesOf(fields.from, SOURCE_KEYS),
+    into: namesOf(fields.into, ["collection"]),
+  };
 }
 
 export function operationLabel(operation: MigrationRule): string {
@@ -78,7 +95,7 @@ export function operationLabel(operation: MigrationRule): string {
 export function stepsOf(operations: readonly MigrationRule[]): MigrationStep[] {
   return operations.map((operation) => ({
     signature: createHash("sha256")
-      .update(JSON.stringify(canonical(operation)))
+      .update(JSON.stringify(identity(operation)))
       .digest("hex"),
     label: operationLabel(operation),
   }));
@@ -99,6 +116,7 @@ export function compareSteps(
     if (applied[index].signature !== current[index].signature) {
       return {
         kind: "changed",
+        applied,
         index,
         was: applied[index],
         now: current[index],
@@ -108,6 +126,7 @@ export function compareSteps(
   if (applied.length > current.length) {
     return {
       kind: "changed",
+      applied,
       index: current.length,
       was: applied[current.length],
       now: undefined,
@@ -196,6 +215,43 @@ export class ConcurrentStepRecordError extends Error {
     );
     this.name = "ConcurrentStepRecordError";
   }
+}
+
+export async function replaceRecordedSteps(
+  db: Db,
+  migrationId: string,
+  read: number,
+  steps: readonly MigrationStep[],
+): Promise<void> {
+  const latest = await latestAppliedRecord(db, migrationId);
+  const updated = latest
+    ? await getMigrationOperationsCollection(db).updateOne(
+        { _id: latest._id, steps: { $size: read } },
+        { $set: { steps: [...steps] } },
+      )
+    : undefined;
+  if (updated?.matchedCount !== 1) {
+    throw new ConcurrentStepRecordError(migrationId, read);
+  }
+}
+
+export function acceptedSteps(
+  drift: Extract<StepDrift, { kind: "changed" }>,
+  current: readonly MigrationStep[],
+): readonly MigrationStep[] {
+  return current.slice(0, Math.min(drift.applied.length, current.length));
+}
+
+export function acceptDriftIds(raw: unknown): string[] {
+  if (raw === undefined || raw === null || raw === false) return [];
+  return (Array.isArray(raw) ? raw : [raw]).map((id) => String(id));
+}
+
+export function acceptDriftHint(
+  command: "migrate" | "rollback",
+  migrationId: string,
+): string {
+  return `If the migration did not really change (a signature that moved on its own), accept its current operations as the ones that ran: mongodbee ${command} --accept-drift ${migrationId}`;
 }
 
 export async function appendAppliedStep(

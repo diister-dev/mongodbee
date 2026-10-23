@@ -478,8 +478,14 @@ files that received one more, is compared with that record:
   Two concurrent `migrate` runs are still not prevented from running the
   same operations: run one at a time.
 - **An applied operation changed, moved or removed**: `migrate` and
-  `rollback` refuse and name the migration and the operation. Restore the
-  operations it was applied with.
+  `rollback` refuse and name the migration, the operation and the way out.
+  Restore the operations it was applied with or, when the migration did not
+  really change, pass `--accept-drift <migration id>` (repeatable;
+  `acceptDrift: [id]` in `migrateCommand` / `rollbackCommand`). Its first
+  operations, as many as were recorded, are then taken as the ones that ran
+  and recorded without running anything; operations past them run normally
+  with `migrate`, and `rollback` undoes the accepted ones. Each acceptance is
+  printed; with `--dry-run` it is printed and nothing is written.
 - **`rollback`** undoes only the operations that ran.
 - **`check`**, when the configuration names a connection URI, compares the
   database's applied migrations with their files: it fails on any that
@@ -488,15 +494,16 @@ files that received one more, is compared with that record:
   `--require-database` makes it a failure. `checkMigrationStatus({ db })`
   reports the same (`database.changedIds`, `database.unrecordedIds`).
 
-An operation is compared by what it is and where it acts: its type, its
-collections and types, filters and flags. The schemas it carries are not
-compared, because a later operation of the same migration may rewrite them,
-nor are function bodies, dates, or seed documents beyond their count, which
-differ between two runs or two runtimes without the operation changing.
-These edits to an operation that already ran are therefore not detected: a
-transform's body, the contents of a seed (same count), the schema a
-`createCollection` or an index update carries, a filter built from
-`new Date()`. A migration that has run stays frozen.
+An operation is compared by what it is and where it acts, and nothing else:
+its type and the names of the collections, types and fields it targets (a
+rename's old and new names, a flow's source and target). Schemas, filters,
+flags, functions and seed documents are not compared: a later operation of
+the same migration rewrites the schemas, and the others can change between
+two runs, two runtimes or two mongodbee versions without the migration
+changing, which would refuse a deploy for nothing. So adding, removing,
+moving or retargeting an operation is detected; editing an operation in
+place (a transform's body, a seed's documents, a filter, a schema) is not. A
+migration that has run stays frozen.
 
 **Databases migrated before this was recorded.** Their `applied` entries
 carry no `steps`. The first `migrate` says so in one line before it runs

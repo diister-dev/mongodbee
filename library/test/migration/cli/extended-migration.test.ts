@@ -24,6 +24,7 @@ const LATER = "2026_01_03_0900_LATER001@later";
 const PLUS_ONE = `.collection("alpha").transform({ up: (doc) => ({ ...doc, n: doc.n + 1 }), down: (doc) => ({ ...doc, n: doc.n - 1 }) }).end()`;
 const TIMES_TEN = `.collection("alpha").transform({ up: (doc) => ({ ...doc, n: doc.n * 10 }), down: (doc) => ({ ...doc, n: doc.n / 10 }) }).end()`;
 const CREATE_BETA = `.createCollection("beta").end()`;
+const SEED_ALPHA = `.collection("alpha").seed([{ n: 100 }]).end()`;
 const PLUS_HALF = `.collection("alpha").transform({ up: (doc) => ({ ...doc, n: doc.n + 0.5 }), down: (doc) => ({ ...doc, n: doc.n - 0.5 }) }).end()`;
 const CRASH_ONCE_THEN_DOUBLE = `.collection("alpha").transform({ up: (doc) => { if (doc.n === -12344.5 && globalThis["mdbCrashOnce"]) { globalThis["mdbCrashOnce"] = false; throw new Error("crash"); } return { ...doc, n: doc.n * 2 }; }, down: (doc) => ({ ...doc, n: doc.n / 2 }) }).end()`;
 
@@ -193,11 +194,19 @@ test({
       assert(migrateError.includes(BATCH), migrateError);
       assert(migrateError.includes("operation #1"), migrateError);
       assert(migrateError.includes("create_collection: beta"), migrateError);
+      assert(
+        migrateError.includes(`mongodbee migrate --accept-drift ${BATCH}`),
+        migrateError,
+      );
 
       const rollbackError = await errorOf(() =>
         rollbackCommand({ cwd: inserted, force: true }),
       );
       assert(rollbackError.includes(BATCH), rollbackError);
+      assert(
+        rollbackError.includes(`mongodbee rollback --accept-drift ${BATCH}`),
+        rollbackError,
+      );
 
       assertEquals(await alphaValue(db), 2);
       assertEquals(await getAppliedMigrationIds(db), [BASE, BATCH]);
@@ -455,6 +464,108 @@ test({
 
       assertEquals(report.valid, false);
       assertEquals(report.stage, "database");
+    });
+  },
+});
+
+async function recordedLabels(db: Db): Promise<string[]> {
+  const [record] = await db
+    .collection<{ steps?: { label: string }[] }>(
+      MIGRATION_OPERATIONS_COLLECTION,
+    )
+    .find({ migrationId: BATCH, operation: "applied" })
+    .sort({ executedAt: -1 })
+    .limit(1)
+    .toArray();
+  return (record?.steps ?? []).map((step) => step.label);
+}
+
+async function alphaCount(db: Db): Promise<number> {
+  return await db.collection("alpha").countDocuments();
+}
+
+test({
+  name: "migrate --accept-drift records the changed operations as run without running them, and runs the appended ones",
+  timeout: 60_000,
+  fn: async () => {
+    await withProject(async (db, root, dbName) => {
+      const v1 = await project(root, "v1", dbName, { batch: PLUS_ONE });
+      await migrateCommand({ cwd: v1, force: true });
+      const drifted = await project(root, "drifted", dbName, {
+        batch: SEED_ALPHA + TIMES_TEN,
+      });
+
+      await migrateCommand({
+        cwd: drifted,
+        force: true,
+        acceptDrift: [BATCH],
+      });
+
+      assertEquals(await alphaValue(db), 20);
+      assertEquals(await alphaCount(db), 1);
+      assertEquals(await recordedLabels(db), [
+        "seed_collection: alpha",
+        "transform_collection: alpha",
+      ]);
+
+      await migrateCommand({ cwd: drifted, force: true });
+      assertEquals(await alphaValue(db), 20);
+      assertEquals(await alphaCount(db), 1);
+    });
+  },
+});
+
+test({
+  name: "migrate --accept-drift --dry-run writes nothing",
+  timeout: 60_000,
+  fn: async () => {
+    await withProject(async (db, root, dbName) => {
+      const v1 = await project(root, "v1", dbName, { batch: PLUS_ONE });
+      await migrateCommand({ cwd: v1, force: true });
+      const drifted = await project(root, "drifted", dbName, {
+        batch: SEED_ALPHA + TIMES_TEN,
+      });
+
+      await migrateCommand({
+        cwd: drifted,
+        force: true,
+        dryRun: true,
+        acceptDrift: [BATCH],
+      });
+
+      assertEquals(await alphaValue(db), 2);
+      assertEquals(await alphaCount(db), 1);
+      assertEquals(await recordedLabels(db), ["transform_collection: alpha"]);
+      const error = await errorOf(() =>
+        migrateCommand({ cwd: drifted, force: true }),
+      );
+      assert(error.includes(`--accept-drift ${BATCH}`), error);
+    });
+  },
+});
+
+test({
+  name: "rollback --accept-drift undoes the operations it accepts as the ones that ran",
+  timeout: 60_000,
+  fn: async () => {
+    await withProject(async (db, root, dbName) => {
+      const v1 = await project(root, "v1", dbName, {
+        batch: PLUS_ONE + TIMES_TEN,
+      });
+      await migrateCommand({ cwd: v1, force: true });
+      assertEquals(await alphaValue(db), 20);
+      const drifted = await project(root, "drifted", dbName, {
+        batch: SEED_ALPHA + TIMES_TEN,
+      });
+
+      await rollbackCommand({
+        cwd: drifted,
+        force: true,
+        acceptDrift: [BATCH],
+      });
+
+      assertEquals(await getAppliedMigrationIds(db), [BASE]);
+      assertEquals(await alphaValue(db), 2);
     });
   },
 });
