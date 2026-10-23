@@ -30,6 +30,7 @@ export interface ParseArgsOptions {
   alias?: Record<string, string>;
   /** Seed values, applied when a flag is absent from the argument vector. */
   default?: Record<string, unknown>;
+  collect?: string[];
 }
 
 /** Result of {@linkcode parseArgs}: parsed flags plus positional arguments. */
@@ -88,6 +89,7 @@ export function parseArgs(
   };
   const booleans = expand(options.boolean);
   const strings = expand(options.string);
+  const collected = expand(options.collect);
 
   const result = { _: [] as (string | number)[] } as ParsedArgs;
   /** Keys the argument vector set explicitly, which defaults must not clobber. */
@@ -95,7 +97,12 @@ export function parseArgs(
 
   const setValue = (key: string, value: unknown): void => {
     for (const name of groupOf.get(key) ?? [key]) {
-      result[name] = value;
+      const previous = result[name];
+      result[name] = !collected.has(name)
+        ? value
+        : Array.isArray(previous)
+          ? [...previous, value]
+          : [value];
       seen.add(name);
     }
   };

@@ -19,6 +19,7 @@ import {
   type MigrationOperation,
   recordOperation,
 } from "./history.ts";
+import type { MigrationStep } from "./steps.ts";
 
 /**
  * State of a migration in the database (computed from history)
@@ -153,8 +154,17 @@ export async function markMigrationAsApplied(
   migrationId: string,
   name: string,
   duration?: number,
+  steps?: readonly MigrationStep[],
 ): Promise<void> {
-  await recordOperation(db, migrationId, name, "applied", duration);
+  await recordOperation(
+    db,
+    migrationId,
+    name,
+    "applied",
+    duration,
+    undefined,
+    steps ? { steps } : undefined,
+  );
 }
 
 /**

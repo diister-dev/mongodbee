@@ -244,6 +244,13 @@ During M2.apply():
 2. Creates indexes defined with `withIndex()` in schemas
 3. Updates validators and indexes on existing collections to match the current schema
 
+**A multi-collection gets the same indexes in both modes.** Opened with
+`schemaManagement: "auto"` or built by a migration (`"managed"`), it holds one
+shared `_type_1` index plus the `withIndex` fields of each type. Older
+versions also built, in auto mode only, one `<type>__type` index per type, so
+a test database reached MongoDB's 64-index limit long before the managed
+production one; opening such a collection in auto mode drops them.
+
 **Manual Control**: If you need to manually apply validators/indexes:
 ```typescript
 import { applySecurityToCollection, applySecurityToMultiCollection } from "@diister/mongodbee";
@@ -453,6 +460,58 @@ the first one. The schema consistency of the chain's last migration against
 `--last N` can only widen the window (to re-validate applied migrations too),
 never shrink it below the pending ones. `--docs` and `--retention` tune the
 simulation exactly as they do for `check`.
+
+### A migration extended after it was applied
+
+The history records the operations each migration ran, in order, with its
+`applied` entry (`steps` in `__dbee_migration__`). A migration that gained
+operations after it was applied, typically a batch assembled from several
+files that received one more, is compared with that record:
+
+- **Operations added at the end**: `migrate` runs only the added ones and
+  records each one as soon as it has run, so a run that dies part-way
+  resumes after the last recorded operation (only the one in flight runs
+  again). It refuses when a later migration is already applied on top of
+  it: roll back down to it first. Each record only lands if the list still
+  holds what the run read, so a second `migrate` recording the same
+  migration at the same time stops with an error instead of recording twice.
+  Two concurrent `migrate` runs are still not prevented from running the
+  same operations: run one at a time.
+- **An applied operation changed, moved or removed**: `migrate` and
+  `rollback` refuse and name the migration, the operation and the way out.
+  Restore the operations it was applied with or, when the migration did not
+  really change, pass `--accept-drift <migration id>` (repeatable;
+  `acceptDrift: [id]` in `migrateCommand` / `rollbackCommand`). Its first
+  operations, as many as were recorded, are then taken as the ones that ran
+  and recorded without running anything; operations past them run normally
+  with `migrate`, and `rollback` undoes the accepted ones. Each acceptance is
+  printed; with `--dry-run` it is printed and nothing is written.
+- **`rollback`** undoes only the operations that ran.
+- **`check`**, when the configuration names a connection URI, compares the
+  database's applied migrations with their files: it fails on any that
+  changed, and names those applied before operations were recorded. An
+  unreachable database is a warning, so the comparison is advisory;
+  `--require-database` makes it a failure. `checkMigrationStatus({ db })`
+  reports the same (`database.changedIds`, `database.unrecordedIds`).
+
+An operation is compared by what it is and where it acts, and nothing else:
+its type and the names of the collections, types and fields it targets (a
+rename's old and new names, a flow's source and target). Schemas, filters,
+flags, functions and seed documents are not compared: a later operation of
+the same migration rewrites the schemas, and the others can change between
+two runs, two runtimes or two mongodbee versions without the migration
+changing, which would refuse a deploy for nothing. So adding, removing,
+moving or retargeting an operation is detected; editing an operation in
+place (a transform's body, a seed's documents, a filter, a schema) is not. A
+migration that has run stays frozen.
+
+**Databases migrated before this was recorded.** Their `applied` entries
+carry no `steps`. The first `migrate` says so in one line before it runs
+anything, then records the current operations of each of them as the ones
+applied, in place (the order of the history does not move). `check` names
+them until then. A migration extended before that first run cannot be
+told apart and is taken as applied whole. Until then, `rollback` undoes all
+the current operations of such a migration, as before, and says so.
 
 ### Without a terminal (CI, agents)
 

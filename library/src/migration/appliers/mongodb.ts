@@ -190,6 +190,10 @@ const DEFAULT_OPTIONS: Required<MongodbApplierOptions> = {
   onProgress: () => {},
 };
 
+export type ApplyMigrationHooks = {
+  readonly afterOperation?: (operation: MigrationRule) => Promise<void>;
+};
+
 export function createMongodbApplier(
   db: Db,
   migration: MigrationDefinition,
@@ -200,6 +204,7 @@ export function createMongodbApplier(
   applyMigration: (
     operations: MigrationRule[],
     direction: "up" | "down",
+    hooks?: ApplyMigrationHooks,
   ) => Promise<void>;
   setCurrentMigrationId: (migrationId: string) => void;
 } {
@@ -2924,6 +2929,7 @@ export function createMongodbApplier(
   async function applyMigration(
     operations: MigrationRule[],
     direction: "up" | "down",
+    hooks: ApplyMigrationHooks = {},
   ): Promise<void> {
     // Pre-scan: refuse to roll back if any operation is irreversible, BEFORE
     // touching validators or data — otherwise we'd leave the database in a
@@ -2972,6 +2978,7 @@ export function createMongodbApplier(
         } else {
           await reverseOperation(operation);
         }
+        await hooks.afterOperation?.(operation);
       }
     } catch (err) {
       applyError = err;
