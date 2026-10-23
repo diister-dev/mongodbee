@@ -42,6 +42,7 @@ import {
 import { recordMultiCollectionMigration } from "../../multicollection-registry.ts";
 import {
   type AppliedMigrationSteps,
+  appendAppliedStep,
   appliedMigrationSteps,
   describeDrift,
   operationLabel,
@@ -88,21 +89,25 @@ function extensionsToApply(
 async function recordUnrecordedSteps(
   db: Db,
   appliedSteps: readonly AppliedMigrationSteps[],
+  dryRun: boolean | undefined,
 ): Promise<void> {
   const unrecorded = appliedSteps.filter(
     ({ drift }) => drift.kind === "unrecorded",
   );
   if (unrecorded.length === 0) return;
+  console.log(
+    yellow(
+      bold(
+        `mongodbee: ${dryRun ? "will record" : "recording"} the steps of ${unrecorded.length} migration(s) applied before step tracking ` +
+          `(${unrecorded.map(({ migration }) => migration.id).join(", ")}). ` +
+          "Steps added to them before this run are assumed applied; if unsure, roll back to before them and migrate again.",
+      ),
+    ),
+  );
+  if (dryRun) return;
   for (const { migration, current } of unrecorded) {
     await recordAssumedSteps(db, migration.id, current);
   }
-  console.log(
-    yellow(
-      `⚠ ${unrecorded.length} applied migration(s) carried no record of their operations; ` +
-        "their current operations are now recorded as the ones applied: " +
-        unrecorded.map(({ migration }) => migration.id).join(", "),
-    ),
-  );
 }
 
 interface CliArgs {
@@ -310,7 +315,7 @@ export async function migrateCommand(
 
     const appliedSteps = await appliedMigrationSteps(db, allMigrations);
     const extensions = extensionsToApply(appliedSteps);
-    if (!opts.dryRun) await recordUnrecordedSteps(db, appliedSteps);
+    await recordUnrecordedSteps(db, appliedSteps, opts.dryRun);
 
     const appliedStepCount = new Map(
       extensions.map((extension) => [
@@ -1083,7 +1088,25 @@ export async function migrateCommand(
         // Apply all operations and synchronize schemas. `finally` closes the
         // progress line so a success/error log starts on a clean row.
         try {
-          await migrationApplier.applyMigration(operations, "up");
+          const addedSteps = stepsOf(operations);
+          let recorded = alreadyApplied;
+          await migrationApplier.applyMigration(
+            operations,
+            "up",
+            alreadyApplied > 0
+              ? {
+                  afterOperation: async () => {
+                    await appendAppliedStep(
+                      db,
+                      migration.id,
+                      recorded,
+                      addedSteps[recorded - alreadyApplied],
+                    );
+                    recorded++;
+                  },
+                }
+              : {},
+          );
         } finally {
           progress.finish();
         }

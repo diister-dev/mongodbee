@@ -468,29 +468,41 @@ The history records the operations each migration ran, in order, with its
 operations after it was applied, typically a batch assembled from several
 files that received one more, is compared with that record:
 
-- **Operations added at the end**: `migrate` runs only the added ones, then
-  records the whole list. It refuses when a later migration is already
-  applied on top of it: roll back down to it first.
+- **Operations added at the end**: `migrate` runs only the added ones and
+  records each one as soon as it has run, so a run that dies part-way
+  resumes after the last recorded operation (only the one in flight runs
+  again). It refuses when a later migration is already applied on top of
+  it: roll back down to it first. Each record only lands if the list still
+  holds what the run read, so a second `migrate` recording the same
+  migration at the same time stops with an error instead of recording twice.
+  Two concurrent `migrate` runs are still not prevented from running the
+  same operations: run one at a time.
 - **An applied operation changed, moved or removed**: `migrate` and
   `rollback` refuse and name the migration and the operation. Restore the
   operations it was applied with.
 - **`rollback`** undoes only the operations that ran.
-- **`check`** (when the configuration names a database it can reach) and
-  `checkMigrationStatus({ db })` report every applied migration whose
-  operations differ (`database.changedIds`).
+- **`check`**, when the configuration names a connection URI, compares the
+  database's applied migrations with their files: it fails on any that
+  changed, and names those applied before operations were recorded. An
+  unreachable database is a warning, so the comparison is advisory;
+  `--require-database` makes it a failure. `checkMigrationStatus({ db })`
+  reports the same (`database.changedIds`, `database.unrecordedIds`).
 
 An operation is compared by what it is and where it acts: its type, its
 collections and types, filters and flags. The schemas it carries are not
 compared, because a later operation of the same migration may rewrite them,
-nor are seed documents or function bodies, which differ between two runs or
-two runtimes without the operation changing. Editing the body of a transform
-that already ran is therefore not detected; a migration that has run stays
-frozen.
+nor are function bodies, dates, or seed documents beyond their count, which
+differ between two runs or two runtimes without the operation changing.
+These edits to an operation that already ran are therefore not detected: a
+transform's body, the contents of a seed (same count), the schema a
+`createCollection` or an index update carries, a filter built from
+`new Date()`. A migration that has run stays frozen.
 
 **Databases migrated before this was recorded.** Their `applied` entries
-carry no `steps`. The first `migrate` records the current operations of each
-of them as the ones applied, in place (the order of the history does not
-move), and lists them. A migration extended before that first run cannot be
+carry no `steps`. The first `migrate` says so in one line before it runs
+anything, then records the current operations of each of them as the ones
+applied, in place (the order of the history does not move). `check` names
+them until then. A migration extended before that first run cannot be
 told apart and is taken as applied whole. Until then, `rollback` undoes all
 the current operations of such a migration, as before, and says so.
 

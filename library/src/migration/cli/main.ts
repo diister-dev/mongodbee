@@ -147,6 +147,10 @@ ${yellow("CHECK OPTIONS:")}
   --verbose         Print every warning under the migration that raised it
                     (default: warnings are deduplicated into a single digest)
   --check-indexes   Check database indexes against schema (requires database connection)
+  --require-database
+                    Fail when the configured database cannot be reached to
+                    compare applied migrations with their files (default:
+                    warn and pass)
 
 ${yellow("STATUS OPTIONS:")}
   --validate        Run schema and simulation validation checks
@@ -280,6 +284,7 @@ async function main(): Promise<void> {
       "allow-non-empty",
       "skip-privilege-check",
       "write",
+      "require-database",
     ],
     // `progress` stays tri-state: `--progress` forces the live line on,
     // `--no-progress` forces it off, and omitting it leaves `undefined` so the

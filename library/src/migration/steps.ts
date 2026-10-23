@@ -166,22 +166,54 @@ export async function appliedMigrationSteps(
   return applied;
 }
 
+async function latestAppliedRecord(db: Db, migrationId: string) {
+  const [latest] = await getMigrationOperationsCollection(db)
+    .find({ migrationId, status: "success" })
+    .sort({ executedAt: -1 })
+    .limit(1)
+    .toArray();
+  return latest?.operation === "applied" ? latest : undefined;
+}
+
 export async function recordAssumedSteps(
   db: Db,
   migrationId: string,
   steps: readonly MigrationStep[],
 ): Promise<void> {
-  const history = getMigrationOperationsCollection(db);
-  const [latest] = await history
-    .find({ migrationId, status: "success" })
-    .sort({ executedAt: -1 })
-    .limit(1)
-    .toArray();
-  if (latest?.operation !== "applied" || latest.steps !== undefined) return;
-  await history.updateOne(
+  const latest = await latestAppliedRecord(db, migrationId);
+  if (latest === undefined || latest.steps !== undefined) return;
+  await getMigrationOperationsCollection(db).updateOne(
     { _id: latest._id, steps: { $exists: false } },
     { $set: { steps: [...steps] } },
   );
+}
+
+export class ConcurrentStepRecordError extends Error {
+  constructor(migrationId: string, recorded: number) {
+    super(
+      `${migrationId}: its record no longer holds the ${recorded} operation(s) this run read; ` +
+        "another migrate run is recording it. Stopped; run migrate again once it is done.",
+    );
+    this.name = "ConcurrentStepRecordError";
+  }
+}
+
+export async function appendAppliedStep(
+  db: Db,
+  migrationId: string,
+  recorded: number,
+  step: MigrationStep,
+): Promise<void> {
+  const latest = await latestAppliedRecord(db, migrationId);
+  const updated = latest
+    ? await getMigrationOperationsCollection(db).updateOne(
+        { _id: latest._id, steps: { $size: recorded } },
+        { $push: { steps: step } },
+      )
+    : undefined;
+  if (updated?.modifiedCount !== 1) {
+    throw new ConcurrentStepRecordError(migrationId, recorded);
+  }
 }
 
 function stepList(steps: readonly MigrationStep[], from: number): string {
@@ -200,7 +232,7 @@ export function describeDrift(
       return (
         `${named} was applied with ${drift.applied.length} operation(s) and now has ` +
         `${drift.applied.length + drift.added.length}: ` +
-        `${stepList(drift.added, drift.applied.length)} never ran`
+        `${stepList(drift.added, drift.applied.length)} added since`
       );
     case "changed":
       return (

@@ -8,6 +8,7 @@ import { runCheck } from "../../../src/migration/cli/commands/check.ts";
 import { checkMigrationStatus } from "../../../src/migration/check-status.ts";
 import { getAppliedMigrationIds } from "../../../src/migration/state.ts";
 import { MIGRATION_OPERATIONS_COLLECTION } from "../../../src/migration/history.ts";
+import { appendAppliedStep } from "../../../src/migration/steps.ts";
 import { type Db, MongoClient } from "../../../src/mongodb.ts";
 import { withTempDir } from "./shared.ts";
 
@@ -23,6 +24,8 @@ const LATER = "2026_01_03_0900_LATER001@later";
 const PLUS_ONE = `.collection("alpha").transform({ up: (doc) => ({ ...doc, n: doc.n + 1 }), down: (doc) => ({ ...doc, n: doc.n - 1 }) }).end()`;
 const TIMES_TEN = `.collection("alpha").transform({ up: (doc) => ({ ...doc, n: doc.n * 10 }), down: (doc) => ({ ...doc, n: doc.n / 10 }) }).end()`;
 const CREATE_BETA = `.createCollection("beta").end()`;
+const PLUS_HALF = `.collection("alpha").transform({ up: (doc) => ({ ...doc, n: doc.n + 0.5 }), down: (doc) => ({ ...doc, n: doc.n - 0.5 }) }).end()`;
+const CRASH_ONCE_THEN_DOUBLE = `.collection("alpha").transform({ up: (doc) => { if (doc.n === -12344.5 && globalThis["mdbCrashOnce"]) { globalThis["mdbCrashOnce"] = false; throw new Error("crash"); } return { ...doc, n: doc.n * 2 }; }, down: (doc) => ({ ...doc, n: doc.n / 2 }) }).end()`;
 
 type Version = {
   readonly batch: string;
@@ -91,7 +94,10 @@ async function project(
 }
 
 async function alphaValue(db: Db): Promise<unknown> {
-  const [doc] = await db.collection("alpha").find({}).toArray();
+  const [doc] = await db
+    .collection<{ _id: string; n: number }>("alpha")
+    .find({ _id: { $ne: "alpha:crash" } })
+    .toArray();
   return doc?.n;
 }
 
@@ -287,7 +293,11 @@ test({
       const v1 = await project(root, "v1", dbName, { batch: PLUS_ONE });
       await migrateCommand({ cwd: v1, force: true });
       const clean = await runCheck({ cwd: v1, mode: "quick" });
-      assertEquals(clean.database, { reachable: true, changed: [] });
+      assertEquals(clean.database, {
+        reachable: true,
+        changed: [],
+        unrecorded: [],
+      });
       assertEquals(clean.valid, true);
 
       const v2 = await project(root, "v2", dbName, {
@@ -332,6 +342,119 @@ test({
 
       assertEquals(report.valid, true);
       assertEquals(report.database?.reachable, false);
+    });
+  },
+});
+
+test({
+  name: "a run that crashes among appended operations resumes after the last one that ran, each running once",
+  timeout: 60_000,
+  fn: async () => {
+    await withProject(async (db, root, dbName) => {
+      const v1 = await project(root, "v1", dbName, { batch: PLUS_ONE });
+      await migrateCommand({ cwd: v1, force: true });
+      const v2 = await project(root, "v2", dbName, {
+        batch: PLUS_ONE + TIMES_TEN + PLUS_HALF + CRASH_ONCE_THEN_DOUBLE,
+      });
+      await db
+        .collection<{ _id: string; n: number }>("alpha")
+        .insertOne(
+          { _id: "alpha:crash", n: -1234.5 },
+          { bypassDocumentValidation: true },
+        );
+      Object.assign(globalThis, { mdbCrashOnce: true });
+
+      const error = await errorOf(() =>
+        migrateCommand({ cwd: v2, force: true }),
+      );
+      assert(error.includes("crash"), error);
+      assertEquals(await alphaValue(db), 20.5);
+
+      await migrateCommand({ cwd: v2, force: true });
+
+      assertEquals(await alphaValue(db), 41);
+      await rollbackCommand({ cwd: v2, force: true });
+      assertEquals(await alphaValue(db), 1);
+    });
+  },
+});
+
+test({
+  name: "recording an operation fails loudly when another run recorded the migration since it was read",
+  timeout: 60_000,
+  fn: async () => {
+    await withProject(async (db, root, dbName) => {
+      const v1 = await project(root, "v1", dbName, { batch: PLUS_ONE });
+      await migrateCommand({ cwd: v1, force: true });
+      const step = { signature: "s", label: "transform_collection: alpha" };
+
+      await appendAppliedStep(db, BATCH, 1, step);
+      const error = await errorOf(() => appendAppliedStep(db, BATCH, 1, step));
+
+      assert(error.includes(BATCH), error);
+      assert(error.includes("another migrate run"), error);
+      const [record] = await db
+        .collection(MIGRATION_OPERATIONS_COLLECTION)
+        .find({ migrationId: BATCH })
+        .toArray();
+      assertEquals(record.steps.length, 2);
+    });
+  },
+});
+
+test({
+  name: "check names applied migrations whose steps predate tracking, without failing",
+  timeout: 60_000,
+  fn: async () => {
+    await withProject(async (db, root, dbName) => {
+      const v1 = await project(root, "v1", dbName, { batch: PLUS_ONE });
+      await migrateCommand({ cwd: v1, force: true });
+      await db
+        .collection(MIGRATION_OPERATIONS_COLLECTION)
+        .updateMany({}, { $unset: { steps: "" } });
+
+      const report = await runCheck({ cwd: v1, mode: "quick" });
+      const status = await checkMigrationStatus({
+        cwd: v1,
+        db,
+        strictValidation: false,
+      });
+
+      assertEquals(report.valid, true);
+      assertEquals(report.database, {
+        reachable: true,
+        changed: [],
+        unrecorded: [BASE, BATCH],
+      });
+      assertEquals(status.database?.unrecordedIds, [BASE, BATCH]);
+      assert(
+        status.validation.warnings.some((w) => w.includes("step tracking")),
+      );
+    });
+  },
+});
+
+test({
+  name: "check --require-database fails when the database cannot be reached",
+  timeout: 60_000,
+  fn: async () => {
+    await withTempDir(async (root) => {
+      const dir = await project(root, "v1", "unreachable", {
+        batch: PLUS_ONE,
+      });
+      await writeFile(
+        `${dir}/mongodbee.config.ts`,
+        `export default { database: { connection: { uri: "mongodb://127.0.0.1:1/?directConnection=true" }, name: "unreachable" }, paths: { migrations: "./migrations", schemas: "./schemas.ts" }, migration: { validation: { frozen: false } } };`,
+      );
+
+      const report = await runCheck({
+        cwd: dir,
+        mode: "quick",
+        requireDatabase: true,
+      });
+
+      assertEquals(report.valid, false);
+      assertEquals(report.stage, "database");
     });
   },
 });

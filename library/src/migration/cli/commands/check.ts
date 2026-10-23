@@ -50,6 +50,7 @@ export interface CheckCommandOptions {
   last?: number;
   docs?: number;
   retention?: number;
+  requireDatabase?: boolean;
 }
 
 export const MAX_DOCS_PER_COLLECTION = 5000;
@@ -180,7 +181,11 @@ export interface CheckReport {
 
 export type AppliedStepsReport =
   | { readonly reachable: false; readonly reason: string }
-  | { readonly reachable: true; readonly changed: readonly string[] };
+  | {
+      readonly reachable: true;
+      readonly changed: readonly string[];
+      readonly unrecorded: readonly string[];
+    };
 
 const DATABASE_TIMEOUT_MS = 3000;
 
@@ -215,17 +220,29 @@ async function checkAppliedSteps(
       return { reachable: false, reason };
     }
     const db = client.db(config.database?.name || "myapp");
-    const changed = (await appliedMigrationSteps(db, chain))
+    const applied = await appliedMigrationSteps(db, chain);
+    const changed = applied
       .filter(
         ({ drift }) => drift.kind === "extended" || drift.kind === "changed",
       )
       .map(({ migration, drift }) => describeDrift(migration, drift));
+    const unrecorded = applied
+      .filter(({ drift }) => drift.kind === "unrecorded")
+      .map(({ migration }) => migration.id);
     if (changed.length > 0) {
       log(red(bold("✗ Applied migrations changed since they ran")));
       for (const line of changed) log(red(`    ${line}`));
       log("");
     }
-    return { reachable: true, changed };
+    if (unrecorded.length > 0) {
+      log(
+        yellow(
+          `⚠ ${unrecorded.length} applied migration(s) predate step tracking, so steps added to them cannot be detected; the next migrate records their current steps as applied: ${unrecorded.join(", ")}`,
+        ),
+      );
+      log("");
+    }
+    return { reachable: true, changed, unrecorded };
   } finally {
     await client.close(true);
   }
@@ -401,16 +418,27 @@ export async function runCheck(
     report.failure = error;
   }
 
+  const requireDatabase =
+    options.requireDatabase ??
+    (options as Record<string, unknown>)["require-database"] === true;
   const database = await checkAppliedSteps(config, allMigrations, log);
-  if (database) {
-    report.database = database;
-    if (database.reachable && database.changed.length > 0) {
-      report.stage = "database";
-      report.valid = false;
-      report.failure ??= new Error(
-        `Applied migrations changed since they ran: ${database.changed.join("; ")}`,
-      );
-    }
+  if (database) report.database = database;
+  if (database?.reachable && database.changed.length > 0) {
+    report.stage = "database";
+    report.valid = false;
+    report.failure ??= new Error(
+      `Applied migrations changed since they ran: ${database.changed.join("; ")}`,
+    );
+  } else if (requireDatabase && !database?.reachable) {
+    const reason = database
+      ? database.reason
+      : "no database connection is configured";
+    log(red(bold(`✗ --require-database: ${reason}`)));
+    report.stage = "database";
+    report.valid = false;
+    report.failure ??= new Error(
+      `Applied migrations could not be compared with their files: ${reason}`,
+    );
   }
   return report;
 }

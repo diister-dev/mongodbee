@@ -262,7 +262,9 @@ export interface DatabaseStatusDetails {
   /** List of pending migration IDs */
   pendingIds: string[];
 
-  changedIds: string[];
+  changedIds?: string[];
+
+  unrecordedIds?: string[];
 }
 
 /**
@@ -860,6 +862,7 @@ export async function checkMigrationStatus(
   let appliedMigrationIds: string[] = [];
   let pendingMigrations: MigrationDefinition[] = [];
   const changedMigrationIds: string[] = [];
+  const unrecordedMigrationIds: string[] = [];
   let lastAppliedMigrationId: string | undefined;
   let lastAppliedMigrationName: string | undefined;
 
@@ -875,9 +878,18 @@ export async function checkMigrationStatus(
         db,
         allMigrations,
       )) {
+        if (drift.kind === "unrecorded") {
+          unrecordedMigrationIds.push(migration.id);
+          continue;
+        }
         if (drift.kind !== "extended" && drift.kind !== "changed") continue;
         changedMigrationIds.push(migration.id);
         errors.push(describeDrift(migration, drift));
+      }
+      if (unrecordedMigrationIds.length > 0) {
+        warnings.push(
+          `${unrecordedMigrationIds.length} applied migration(s) predate step tracking, so steps added to them cannot be detected until the next migrate records them: ${unrecordedMigrationIds.join(", ")}`,
+        );
       }
       const lastApplied = await getLastAppliedMigration(db);
       if (lastApplied) {
@@ -1030,6 +1042,7 @@ export async function checkMigrationStatus(
       lastAppliedName: lastAppliedMigrationName,
       pendingIds: pendingMigrations.map((m) => m.id),
       changedIds: changedMigrationIds,
+      unrecordedIds: unrecordedMigrationIds,
     };
   }
 
