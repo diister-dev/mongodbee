@@ -72,6 +72,7 @@ import {
 import { sanitizePathName } from "../schema-navigator.ts";
 import * as v from "../schema.ts";
 import { primaryCollection } from "../read-preference.ts";
+import { appliedMigrationSteps, describeDrift } from "./steps.ts";
 
 /**
  * Options for checking migration status
@@ -260,6 +261,10 @@ export interface DatabaseStatusDetails {
 
   /** List of pending migration IDs */
   pendingIds: string[];
+
+  changedIds?: string[];
+
+  unrecordedIds?: string[];
 }
 
 /**
@@ -856,6 +861,8 @@ export async function checkMigrationStatus(
   // Step 4: Check database state (if db provided)
   let appliedMigrationIds: string[] = [];
   let pendingMigrations: MigrationDefinition[] = [];
+  const changedMigrationIds: string[] = [];
+  const unrecordedMigrationIds: string[] = [];
   let lastAppliedMigrationId: string | undefined;
   let lastAppliedMigrationName: string | undefined;
 
@@ -867,6 +874,23 @@ export async function checkMigrationStatus(
         appliedMigrationIds,
       );
 
+      for (const { migration, drift } of await appliedMigrationSteps(
+        db,
+        allMigrations,
+      )) {
+        if (drift.kind === "unrecorded") {
+          unrecordedMigrationIds.push(migration.id);
+          continue;
+        }
+        if (drift.kind !== "extended" && drift.kind !== "changed") continue;
+        changedMigrationIds.push(migration.id);
+        errors.push(describeDrift(migration, drift));
+      }
+      if (unrecordedMigrationIds.length > 0) {
+        warnings.push(
+          `${unrecordedMigrationIds.length} applied migration(s) predate step tracking, so steps added to them cannot be detected until the next migrate records them: ${unrecordedMigrationIds.join(", ")}`,
+        );
+      }
       const lastApplied = await getLastAppliedMigration(db);
       if (lastApplied) {
         lastAppliedMigrationId = lastApplied.id;
@@ -938,7 +962,9 @@ export async function checkMigrationStatus(
   const validMigrations = migrationsInfo.filter((m) => m.isValid).length;
   const invalidMigrations = migrationsInfo.filter((m) => !m.isValid).length;
 
-  const isDatabaseUpToDate = db ? pendingMigrations.length === 0 : undefined;
+  const isDatabaseUpToDate = db
+    ? pendingMigrations.length === 0 && changedMigrationIds.length === 0
+    : undefined;
   const areIndexesValid = indexValidation
     ? indexValidation.areIndexesValid
     : true;
@@ -976,8 +1002,13 @@ export async function checkMigrationStatus(
     if (!areIndexesValid && indexValidation) {
       issues.push(`${indexValidation.invalidIndexCount} invalid index(es)`);
     }
-    if (db && !isDatabaseUpToDate) {
+    if (db && pendingMigrations.length > 0) {
       issues.push(`${pendingMigrations.length} pending migration(s)`);
+    }
+    if (changedMigrationIds.length > 0) {
+      issues.push(
+        `${changedMigrationIds.length} applied migration(s) changed since`,
+      );
     }
     if (errors.length > 0) issues.push(`${errors.length} error(s)`);
 
@@ -1010,6 +1041,8 @@ export async function checkMigrationStatus(
       lastAppliedId: lastAppliedMigrationId,
       lastAppliedName: lastAppliedMigrationName,
       pendingIds: pendingMigrations.map((m) => m.id),
+      changedIds: changedMigrationIds,
+      unrecordedIds: unrecordedMigrationIds,
     };
   }
 

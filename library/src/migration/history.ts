@@ -13,6 +13,7 @@ import type { Db } from "../mongodb.ts";
 import { getCurrentVersion } from "./utils/package-info.ts";
 import { calculateMigrationStateFromHistory } from "./migration-history.ts";
 import { primaryCollection } from "../read-preference.ts";
+import type { MigrationStep } from "./steps.ts";
 
 /**
  * Type of migration operation
@@ -66,6 +67,8 @@ export type MigrationOperation = {
    * database.
    */
   adopted?: boolean;
+
+  steps?: MigrationStep[];
 };
 
 /**
@@ -100,7 +103,7 @@ export async function recordOperation(
   operation: MigrationOperationType,
   duration?: number,
   error?: string,
-  options?: { adopted?: boolean },
+  options?: { adopted?: boolean; steps?: readonly MigrationStep[] },
 ): Promise<void> {
   const collection = getMigrationOperationsCollection(db);
   const mongodbeeVersion = getCurrentVersion();
@@ -115,6 +118,7 @@ export async function recordOperation(
     status: error ? "failure" : "success",
     mongodbeeVersion,
     ...(options?.adopted ? { adopted: true } : {}),
+    ...(options?.steps ? { steps: [...options.steps] } : {}),
   };
 
   await collection.insertOne(record as any);

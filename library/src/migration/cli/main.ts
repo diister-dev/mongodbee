@@ -147,6 +147,10 @@ ${yellow("CHECK OPTIONS:")}
   --verbose         Print every warning under the migration that raised it
                     (default: warnings are deduplicated into a single digest)
   --check-indexes   Check database indexes against schema (requires database connection)
+  --require-database
+                    Fail when the configured database cannot be reached to
+                    compare applied migrations with their files (default:
+                    warn and pass)
 
 ${yellow("STATUS OPTIONS:")}
   --validate        Run schema and simulation validation checks
@@ -154,6 +158,10 @@ ${yellow("STATUS OPTIONS:")}
   -l, --last        Only validate the last N migrations
 
 ${yellow("MIGRATE OPTIONS:")}
+  --accept-drift <id>
+                    Take the current operations of this applied migration as
+                    the ones that ran, without running them, when its record
+                    no longer matches (repeatable)
   --dry-run         Simulate migration without applying changes
   --force           Skip all confirmations (use with caution!)
   --auto-sync       Automatically catch up orphaned multi-model instances
@@ -177,6 +185,10 @@ ${yellow("BASELINE OPTIONS:")}
   --force           Skip the confirmation
 
 ${yellow("ROLLBACK OPTIONS:")}
+  --accept-drift <id>
+                    Take the current operations of this applied migration as
+                    the ones that ran, without running them, when its record
+                    no longer matches (repeatable)
   --force           Skip all confirmations (use with caution!)
   --progress        Force the live progress line (auto-detected on a TTY; use --no-progress to disable)
   --skip-privilege-check
@@ -280,6 +292,7 @@ async function main(): Promise<void> {
       "allow-non-empty",
       "skip-privilege-check",
       "write",
+      "require-database",
     ],
     // `progress` stays tri-state: `--progress` forces the live line on,
     // `--no-progress` forces it off, and omitting it leaves `undefined` so the
@@ -311,7 +324,9 @@ async function main(): Promise<void> {
       "project",
       "migrations",
       "schemas",
+      "accept-drift",
     ],
+    collect: ["accept-drift"],
     alias: {
       v: "version",
       h: "help",

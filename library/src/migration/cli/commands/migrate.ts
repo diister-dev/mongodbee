@@ -40,6 +40,148 @@ import {
   getMigrationsForCatchUp,
 } from "../../catch-up.ts";
 import { recordMultiCollectionMigration } from "../../multicollection-registry.ts";
+import {
+  acceptDriftHint,
+  acceptDriftIds,
+  acceptedSteps,
+  type AppliedMigrationSteps,
+  appendAppliedStep,
+  type MigrationStep,
+  replaceRecordedSteps,
+  appliedMigrationSteps,
+  describeDrift,
+  operationLabel,
+  recordAssumedSteps,
+  stepsOf,
+} from "../../steps.ts";
+import type { Db } from "../../../mongodb.ts";
+import type { MigrationDefinition } from "../../types.ts";
+
+type Extension = {
+  readonly migration: MigrationDefinition;
+  readonly applied: number;
+};
+
+type Acceptance = {
+  readonly migration: MigrationDefinition;
+  readonly read: number;
+  readonly steps: readonly MigrationStep[];
+  readonly description: string;
+};
+
+type StepPlan = {
+  readonly extensions: Extension[];
+  readonly acceptances: Acceptance[];
+};
+
+function planSteps(
+  appliedSteps: readonly AppliedMigrationSteps[],
+  acceptDrift: readonly string[],
+): StepPlan {
+  const accepted = new Set(acceptDrift);
+  const refused = appliedSteps.filter(
+    ({ migration, drift }) =>
+      drift.kind === "changed" && !accepted.has(migration.id),
+  );
+  if (refused.length > 0) {
+    throw new Error(
+      `${refused.map(({ migration, drift }) => describeDrift(migration, drift)).join("; ")}. ` +
+        "Nothing was applied: restore the operations it was applied with, or roll it back with the version that applied it. " +
+        refused
+          .map(({ migration }) => acceptDriftHint("migrate", migration.id))
+          .join(". "),
+    );
+  }
+  const extensions: Extension[] = [];
+  const acceptances: Acceptance[] = [];
+  appliedSteps.forEach(({ migration, current, drift }, index) => {
+    let applied: number;
+    if (drift.kind === "extended") {
+      applied = drift.applied.length;
+    } else if (drift.kind === "changed") {
+      const steps = acceptedSteps(drift, current);
+      acceptances.push({
+        migration,
+        read: drift.applied.length,
+        steps,
+        description: describeDrift(migration, drift),
+      });
+      if (steps.length === current.length) return;
+      applied = steps.length;
+    } else {
+      return;
+    }
+    const appliedAfter = appliedSteps.slice(index + 1);
+    if (appliedAfter.length > 0) {
+      throw new Error(
+        `${migration.name} (${migration.id}) has operations added since it was applied, and ${appliedAfter
+          .map((later) => later.migration.id)
+          .join(
+            ", ",
+          )} ${appliedAfter.length === 1 ? "is" : "are"} applied after it. ` +
+          "Nothing was applied: roll back down to it, then migrate.",
+      );
+    }
+    extensions.push({ migration, applied });
+  });
+  return { extensions, acceptances };
+}
+
+async function acceptDrift(
+  db: Db,
+  plan: StepPlan,
+  acceptDrift: readonly string[],
+  dryRun: boolean | undefined,
+): Promise<void> {
+  const acceptedIds = new Set(plan.acceptances.map((a) => a.migration.id));
+  for (const id of acceptDrift.filter((id) => !acceptedIds.has(id))) {
+    console.log(
+      yellow(
+        `--accept-drift ${id}: nothing to accept, its recorded operations match`,
+      ),
+    );
+  }
+  for (const acceptance of plan.acceptances) {
+    console.log(
+      yellow(
+        bold(
+          `mongodbee: --accept-drift ${acceptance.migration.id}: ${dryRun ? "would record" : "recording"} its first ${acceptance.steps.length} current operation(s) as the ones that ran, without running them (${acceptance.description}).`,
+        ),
+      ),
+    );
+    if (dryRun) continue;
+    await replaceRecordedSteps(
+      db,
+      acceptance.migration.id,
+      acceptance.read,
+      acceptance.steps,
+    );
+  }
+}
+
+async function recordUnrecordedSteps(
+  db: Db,
+  appliedSteps: readonly AppliedMigrationSteps[],
+  dryRun: boolean | undefined,
+): Promise<void> {
+  const unrecorded = appliedSteps.filter(
+    ({ drift }) => drift.kind === "unrecorded",
+  );
+  if (unrecorded.length === 0) return;
+  console.log(
+    yellow(
+      bold(
+        `mongodbee: ${dryRun ? "will record" : "recording"} the steps of ${unrecorded.length} migration(s) applied before step tracking ` +
+          `(${unrecorded.map(({ migration }) => migration.id).join(", ")}). ` +
+          "Steps added to them before this run are assumed applied; if unsure, roll back to before them and migrate again.",
+      ),
+    ),
+  );
+  if (dryRun) return;
+  for (const { migration, current } of unrecorded) {
+    await recordAssumedSteps(db, migration.id, current);
+  }
+}
 
 interface CliArgs {
   config?: string;
@@ -91,6 +233,7 @@ export interface MigrateCommandOptions {
    * needs — typically `collMod`, granted by `dbAdmin` but not by `readWrite`.
    */
   skipPrivilegeCheck?: boolean;
+  acceptDrift?: readonly string[];
   /**
    * Mock documents per collection during the simulation, 1 to 5000,
    * overriding the mode's preset. Same rules as `check --docs`.
@@ -244,8 +387,27 @@ export async function migrateCommand(
     const appliedIds = await getAppliedMigrationIds(db);
     console.log(dim(`Applied migrations: ${appliedIds.length}`));
 
-    // Calculate pending migrations
-    let pendingMigrations = getPendingMigrations(allMigrations, appliedIds);
+    const appliedSteps = await appliedMigrationSteps(db, allMigrations);
+    const acceptDriftList = acceptDriftIds(
+      options.acceptDrift ?? cliArgs["accept-drift"],
+    );
+    const plan = planSteps(appliedSteps, acceptDriftList);
+    const extensions = plan.extensions;
+    await recordUnrecordedSteps(db, appliedSteps, opts.dryRun);
+    await acceptDrift(db, plan, acceptDriftList, opts.dryRun);
+
+    const appliedStepCount = new Map(
+      extensions.map((extension) => [
+        extension.migration.id,
+        extension.applied,
+      ]),
+    );
+    const pendingIdsBeforeExtensions = new Set(
+      getPendingMigrations(allMigrations, appliedIds).map((m) => m.id),
+    );
+    let pendingMigrations = allMigrations.filter(
+      (m) => pendingIdsBeforeExtensions.has(m.id) || appliedStepCount.has(m.id),
+    );
 
     // `--target` stops the run part-way through the pending chain. Only ever a
     // PREFIX of it: applying a migration while an earlier one stays pending
@@ -972,9 +1134,20 @@ export async function migrateCommand(
         // Execute migration on real database
         const builder = migrationBuilder({ schemas: migration.schemas });
         const migrator = migration.migrate(builder);
+        const alreadyApplied = appliedStepCount.get(migration.id) ?? 0;
+        const operations = migrator.operations.slice(alreadyApplied);
+
+        if (alreadyApplied > 0) {
+          console.log(
+            yellow(
+              `  Applied earlier with ${alreadyApplied} operation(s); running the ${operations.length} added since: ` +
+                operations.map(operationLabel).join(", "),
+            ),
+          );
+        }
 
         if (options.verbose) {
-          console.log(dim(`  📦 Operations: ${migrator.operations.length}`));
+          console.log(dim(`  📦 Operations: ${operations.length}`));
         }
 
         console.log(dim("  📝 Executing operations..."));
@@ -994,7 +1167,25 @@ export async function migrateCommand(
         // Apply all operations and synchronize schemas. `finally` closes the
         // progress line so a success/error log starts on a clean row.
         try {
-          await migrationApplier.applyMigration(migrator.operations, "up");
+          const addedSteps = stepsOf(operations);
+          let recorded = alreadyApplied;
+          await migrationApplier.applyMigration(
+            operations,
+            "up",
+            alreadyApplied > 0
+              ? {
+                  afterOperation: async () => {
+                    await appendAppliedStep(
+                      db,
+                      migration.id,
+                      recorded,
+                      addedSteps[recorded - alreadyApplied],
+                    );
+                    recorded++;
+                  },
+                }
+              : {},
+          );
         } finally {
           progress.finish();
         }
@@ -1007,6 +1198,7 @@ export async function migrateCommand(
           migration.id,
           migration.name,
           duration,
+          stepsOf(migrator.operations),
         );
 
         console.log(
