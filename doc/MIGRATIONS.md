@@ -487,7 +487,11 @@ files that received one more, is compared with that record:
   checking the data. `--record-in-flight <migration id>` records it as
   applied without running it; `--rerun-in-flight <migration id>` runs it
   again (repeatable; `recordInFlight` / `rerunInFlight` in
-  `migrateCommand`). `check` names the operation in flight. The simulation
+  `migrateCommand`). Record it only if it is fully applied: recording a
+  half-applied transform leaves its data half-transformed. When the file no
+  longer holds that operation at its position, recording is the only way
+  out. A flag naming a migration with nothing in flight is refused. `check`
+  names the operation in flight, whatever the file now holds. The simulation
   replays whole migrations in memory and keeps no history, so it has
   nothing in flight.
 - **An applied operation changed, moved or removed**: `migrate` and

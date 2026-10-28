@@ -644,6 +644,7 @@ test({
         "Nothing was applied",
         `mongodbee migrate --record-in-flight ${BATCH}`,
         `mongodbee migrate --rerun-in-flight ${BATCH}`,
+        "only if the operation is fully applied; recording a half-applied transform leaves its data half-transformed",
       ]) {
         assert(refusal.includes(expected), refusal);
       }
@@ -724,6 +725,86 @@ test({
       const record = await batchRecord(db);
       assertEquals(record.steps.length, 2);
       assertEquals(record.inFlight, undefined);
+    });
+  },
+});
+
+test({
+  name: "a way out naming a migration with nothing in flight is refused, naming what is in flight",
+  timeout: 60_000,
+  fn: async () => {
+    await withProject(async (db, root, dbName) => {
+      const v2 = await crashedExtension(db, root, dbName, TIMES_TEN);
+
+      const typo = await errorOf(() =>
+        migrateCommand({ cwd: v2, force: true, recordInFlight: ["typo"] }),
+      );
+
+      assert(typo.includes("--record-in-flight typo"), typo);
+      assert(typo.includes("Nothing was applied"), typo);
+      assert(
+        typo.includes(
+          `In flight: ${BATCH} (operation #2 "transform_collection: alpha")`,
+        ),
+        typo,
+      );
+      assertEquals(await alphaValue(db), 20);
+      assertEquals((await batchRecord(db)).inFlight?.index, 1);
+
+      await migrateCommand({ cwd: v2, force: true, rerunInFlight: [BATCH] });
+      const nothing = await errorOf(() =>
+        migrateCommand({ cwd: v2, force: true, rerunInFlight: [BATCH] }),
+      );
+
+      assert(nothing.includes(`--rerun-in-flight ${BATCH}`), nothing);
+      assert(
+        nothing.includes("No operation is in flight in this database"),
+        nothing,
+      );
+      assertEquals(await alphaValue(db), 200);
+    });
+  },
+});
+
+test({
+  name: "after a crash and a reverted file, check and migrate name the operation in flight, and recording it is the way out",
+  timeout: 60_000,
+  fn: async () => {
+    await withProject(async (db, root, dbName) => {
+      await crashedExtension(db, root, dbName, TIMES_TEN);
+      const reverted = `${root}/v1`;
+
+      const report = await runCheck({ cwd: reverted, mode: "quick" });
+      assert(report.database?.reachable === true);
+      assertEquals(report.database.changed.length, 1);
+      assert(
+        report.database.changed[0].includes(
+          'running operation #2 "transform_collection: alpha"',
+        ),
+        report.database.changed[0],
+      );
+      const refusal = await errorOf(() =>
+        migrateCommand({ cwd: reverted, force: true }),
+      );
+      assert(refusal.includes("Nothing was applied"), refusal);
+      assert(
+        refusal.includes(`mongodbee migrate --record-in-flight ${BATCH}`),
+        refusal,
+      );
+      assert(!refusal.includes("--rerun-in-flight"), refusal);
+      assertEquals(await alphaValue(db), 20);
+
+      await migrateCommand({
+        cwd: reverted,
+        force: true,
+        recordInFlight: [BATCH],
+        acceptDrift: [BATCH],
+      });
+
+      const record = await batchRecord(db);
+      assertEquals(record.steps.length, 1);
+      assertEquals(record.inFlight, undefined);
+      assertEquals(await alphaValue(db), 20);
     });
   },
 });

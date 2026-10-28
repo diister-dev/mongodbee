@@ -57,6 +57,7 @@ import {
   operationLabel,
   operationsOf,
   recordAssumedSteps,
+  recordOnlyWayOut,
   stepsOf,
 } from "../../steps.ts";
 import type { Db } from "../../../mongodb.ts";
@@ -200,13 +201,28 @@ async function resolveInFlight(
       inFlight ? [migration.id] : [],
     ),
   );
-  for (const [flag, ids] of [
-    ["--record-in-flight", recordIds],
-    ["--rerun-in-flight", rerunIds],
-  ] as const) {
-    for (const id of ids.filter((id) => !inFlightIds.has(id))) {
-      console.log(yellow(`${flag} ${id}: no operation of it is in flight`));
-    }
+  const unmatched = [
+    ...recordIds
+      .filter((id) => !inFlightIds.has(id))
+      .map((id) => `--record-in-flight ${id}`),
+    ...rerunIds
+      .filter((id) => !inFlightIds.has(id))
+      .map((id) => `--rerun-in-flight ${id}`),
+  ];
+  if (unmatched.length > 0) {
+    const inFlightNow = appliedSteps.flatMap(({ migration, inFlight }) =>
+      inFlight
+        ? [
+            `${migration.id} (operation #${inFlight.index + 1} "${inFlight.label}")`,
+          ]
+        : [],
+    );
+    throw new Error(
+      `${unmatched.join(", ")}: no operation of that migration is in flight. Nothing was applied. ` +
+        (inFlightNow.length > 0
+          ? `In flight: ${inFlightNow.join(", ")}.`
+          : "No operation is in flight in this database."),
+    );
   }
   const refusals: string[] = [];
   for (const { migration, current, inFlight } of appliedSteps) {
@@ -221,9 +237,24 @@ async function resolveInFlight(
     }
     const step = current[inFlight.index];
     if (step?.signature !== inFlight.signature) {
-      throw new Error(
-        `${described}. Nothing was applied: operation #${inFlight.index + 1} of its file is now ${step ? `"${step.label}"` : "absent"}, so it can be neither recorded nor run again. Restore the migration as it was when that run started, then migrate.`,
+      const marked = { signature: inFlight.signature, label: inFlight.label };
+      if (record) {
+        console.log(
+          yellow(
+            bold(
+              `mongodbee: --record-in-flight ${migration.id}: ${dryRun ? "would record" : "recording"} operation #${inFlight.index + 1} "${inFlight.label}" as applied, without running it, although its file no longer holds it there.`,
+            ),
+          ),
+        );
+        if (!dryRun) {
+          await appendAppliedStep(db, migration.id, inFlight.index, marked);
+        }
+        continue;
+      }
+      refusals.push(
+        `${described}. Operation #${inFlight.index + 1} of its file is now ${step ? `"${step.label}"` : "absent"}, so it cannot be run again. Nothing was applied. ${recordOnlyWayOut(migration.id)}`,
       );
+      continue;
     }
     if (record) {
       console.log(

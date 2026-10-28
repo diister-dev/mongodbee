@@ -228,14 +228,19 @@ async function checkAppliedSteps(
     const applied = await appliedMigrationSteps(db, chain);
     const changed = applied
       .filter(
-        ({ drift }) => drift.kind === "extended" || drift.kind === "changed",
+        ({ drift, inFlight }) =>
+          drift.kind === "extended" ||
+          drift.kind === "changed" ||
+          inFlight !== undefined,
       )
       .map(({ migration, drift, inFlight }) =>
-        drift.kind === "changed"
-          ? `${describeDrift(migration, drift)}. ${acceptDriftHint("migrate", migration.id)}`
-          : inFlight
-            ? `${describeDrift(migration, drift)}. ${describeInFlight(migration, inFlight)}`
-            : describeDrift(migration, drift),
+        [
+          describeDrift(migration, drift),
+          ...(inFlight ? [describeInFlight(migration, inFlight)] : []),
+          ...(drift.kind === "changed"
+            ? [acceptDriftHint("migrate", migration.id)]
+            : []),
+        ].join(". "),
       );
     const unrecorded = applied
       .filter(({ drift }) => drift.kind === "unrecorded")

@@ -886,7 +886,13 @@ export async function checkMigrationStatus(
           unrecordedMigrationIds.push(migration.id);
           continue;
         }
-        if (drift.kind !== "extended" && drift.kind !== "changed") continue;
+        if (
+          drift.kind !== "extended" &&
+          drift.kind !== "changed" &&
+          inFlight === undefined
+        ) {
+          continue;
+        }
         changedMigrationIds.push(migration.id);
         errors.push(
           inFlight

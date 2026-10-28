@@ -325,11 +325,21 @@ export function describeInFlight(
   );
 }
 
+export const RECORD_IN_FLIGHT_CAVEAT =
+  "only if the operation is fully applied; recording a half-applied transform leaves its data half-transformed";
+
 export function inFlightWaysOut(migrationId: string): string {
   return (
     "Check its data, then run one of: " +
-    `if it was fully applied, record it without running it: ${recordInFlightCommand(migrationId)}; ` +
-    `if it was not applied, or you undid it, run it again: ${rerunInFlightCommand(migrationId)}`
+    `${recordInFlightCommand(migrationId)} records it as applied without running it, ${RECORD_IN_FLIGHT_CAVEAT}; ` +
+    `${rerunInFlightCommand(migrationId)} runs it again, only if it was not applied or you undid it`
+  );
+}
+
+export function recordOnlyWayOut(migrationId: string): string {
+  return (
+    "Check its data, then: " +
+    `${recordInFlightCommand(migrationId)} records it as applied without running it, ${RECORD_IN_FLIGHT_CAVEAT}`
   );
 }
 
