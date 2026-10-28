@@ -33,6 +33,7 @@ import type { MigrationDefinition } from "../../types.ts";
 import {
   acceptDriftHint,
   appliedMigrationSteps,
+  describeInFlight,
   describeDrift,
 } from "../../steps.ts";
 import { createMigrationClient } from "../utils/client.ts";
@@ -229,10 +230,12 @@ async function checkAppliedSteps(
       .filter(
         ({ drift }) => drift.kind === "extended" || drift.kind === "changed",
       )
-      .map(({ migration, drift }) =>
+      .map(({ migration, drift, inFlight }) =>
         drift.kind === "changed"
           ? `${describeDrift(migration, drift)}. ${acceptDriftHint("migrate", migration.id)}`
-          : describeDrift(migration, drift),
+          : inFlight
+            ? `${describeDrift(migration, drift)}. ${describeInFlight(migration, inFlight)}`
+            : describeDrift(migration, drift),
       );
     const unrecorded = applied
       .filter(({ drift }) => drift.kind === "unrecorded")

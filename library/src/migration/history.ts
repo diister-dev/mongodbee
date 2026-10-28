@@ -13,7 +13,7 @@ import type { Db } from "../mongodb.ts";
 import { getCurrentVersion } from "./utils/package-info.ts";
 import { calculateMigrationStateFromHistory } from "./migration-history.ts";
 import { primaryCollection } from "../read-preference.ts";
-import type { MigrationStep } from "./steps.ts";
+import type { InFlightStep, MigrationStep } from "./steps.ts";
 
 /**
  * Type of migration operation
@@ -69,6 +69,8 @@ export type MigrationOperation = {
   adopted?: boolean;
 
   steps?: MigrationStep[];
+
+  inFlight?: InFlightStep;
 };
 
 /**

@@ -191,6 +191,7 @@ const DEFAULT_OPTIONS: Required<MongodbApplierOptions> = {
 };
 
 export type ApplyMigrationHooks = {
+  readonly beforeOperation?: (operation: MigrationRule) => Promise<void>;
   readonly afterOperation?: (operation: MigrationRule) => Promise<void>;
 };
 
@@ -2971,6 +2972,7 @@ export function createMongodbApplier(
     let applyError: unknown;
     try {
       for (const operation of ordered) {
+        await hooks.beforeOperation?.(operation);
         if (direction === "up") {
           await applyOperation(operation);
         } else {

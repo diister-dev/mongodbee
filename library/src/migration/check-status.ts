@@ -72,7 +72,11 @@ import {
 import { sanitizePathName } from "../schema-navigator.ts";
 import * as v from "../schema.ts";
 import { primaryCollection } from "../read-preference.ts";
-import { appliedMigrationSteps, describeDrift } from "./steps.ts";
+import {
+  appliedMigrationSteps,
+  describeDrift,
+  describeInFlight,
+} from "./steps.ts";
 
 /**
  * Options for checking migration status
@@ -874,7 +878,7 @@ export async function checkMigrationStatus(
         appliedMigrationIds,
       );
 
-      for (const { migration, drift } of await appliedMigrationSteps(
+      for (const { migration, drift, inFlight } of await appliedMigrationSteps(
         db,
         allMigrations,
       )) {
@@ -884,7 +888,11 @@ export async function checkMigrationStatus(
         }
         if (drift.kind !== "extended" && drift.kind !== "changed") continue;
         changedMigrationIds.push(migration.id);
-        errors.push(describeDrift(migration, drift));
+        errors.push(
+          inFlight
+            ? `${describeDrift(migration, drift)}. ${describeInFlight(migration, inFlight)}`
+            : describeDrift(migration, drift),
+        );
       }
       if (unrecordedMigrationIds.length > 0) {
         warnings.push(

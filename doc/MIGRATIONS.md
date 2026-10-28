@@ -470,13 +470,26 @@ files that received one more, is compared with that record:
 
 - **Operations added at the end**: `migrate` runs only the added ones and
   records each one as soon as it has run, so a run that dies part-way
-  resumes after the last recorded operation (only the one in flight runs
-  again). It refuses when a later migration is already applied on top of
+  resumes after the last recorded operation. It refuses when a later migration is already applied on top of
   it: roll back down to it first. Each record only lands if the list still
   holds what the run read, so a second `migrate` recording the same
   migration at the same time stops with an error instead of recording twice.
   Two concurrent `migrate` runs are still not prevented from running the
   same operations: run one at a time.
+- **An operation left in flight**: before each added operation runs, its
+  record notes it in flight (`inFlight`: position, signature, label); the
+  note is replaced by the recorded step once it has run. A run that stops in
+  between (a crash, or the operation or its record failing) leaves the note,
+  and the next `migrate` reads it before applying anything. A seed writes
+  each document under a fixed `_id`, so a seed in flight runs again. Any
+  other operation may be half-applied: `migrate` and `rollback` refuse,
+  naming the migration, the operation and both ways out, to choose after
+  checking the data. `--record-in-flight <migration id>` records it as
+  applied without running it; `--rerun-in-flight <migration id>` runs it
+  again (repeatable; `recordInFlight` / `rerunInFlight` in
+  `migrateCommand`). `check` names the operation in flight. The simulation
+  replays whole migrations in memory and keeps no history, so it has
+  nothing in flight.
 - **An applied operation changed, moved or removed**: `migrate` and
   `rollback` refuse and name the migration, the operation and the way out.
   Restore the operations it was applied with or, when the migration did not
