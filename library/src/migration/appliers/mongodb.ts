@@ -93,15 +93,6 @@ function resolveSeedDocId(
   );
 }
 
-/**
- * Wrap a scoped-collection transformer so the discriminators (`_id`, `_type`,
- * `_scope`) are ALWAYS re-pinned from the original document after the user
- * transform runs. A transform that accidentally drops `_scope`/`_type` would
- * otherwise make its documents invisible to every scoped query — and, because
- * the memory (simulation) applier already force-restores these fields, a
- * dry-run would pass while production silently corrupted the data. Re-pinning
- * here keeps the two appliers in lockstep: the discriminators can never be lost.
- */
 /** The sibling documents of every scope a transform will walk, by scope then
  *  by type, so `up` and `down` read them without a query per document. */
 export type SiblingsByScope = ReadonlyMap<
@@ -130,6 +121,15 @@ export function withScope(
   };
 }
 
+/**
+ * Wrap a scoped-collection transformer so the discriminators (`_id`, `_type`,
+ * `_scope`) are ALWAYS re-pinned from the original document after the user
+ * transform runs. A transform that accidentally drops `_scope`/`_type` would
+ * otherwise make its documents invisible to every scoped query — and, because
+ * the memory (simulation) applier already force-restores these fields, a
+ * dry-run would pass while production silently corrupted the data. Re-pinning
+ * here keeps the two appliers in lockstep: the discriminators can never be lost.
+ */
 function repinScopedDiscriminators(
   transform: (doc: Record<string, unknown>) => Record<string, unknown>,
 ): (doc: Record<string, unknown>) => Record<string, unknown> {
