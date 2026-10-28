@@ -47,6 +47,8 @@ import {
 } from "../utils/seed-id.ts";
 import {
   createLiveTransformContext,
+  SIBLING_READ_CAP,
+  siblingReadOverCap,
   withTransformScope,
 } from "../utils/transform-context.ts";
 import { getIrreversibleOperations } from "../builder.ts";
@@ -91,17 +93,6 @@ function resolveSeedDocId(
   );
 }
 
-/**
- * Wrap a scoped-collection transformer so the discriminators (`_id`, `_type`,
- * `_scope`) are ALWAYS re-pinned from the original document after the user
- * transform runs. A transform that accidentally drops `_scope`/`_type` would
- * otherwise make its documents invisible to every scoped query — and, because
- * the memory (simulation) applier already force-restores these fields, a
- * dry-run would pass while production silently corrupted the data. Re-pinning
- * here keeps the two appliers in lockstep: the discriminators can never be lost.
- */
-const SIBLING_READ_CAP = 1_000;
-
 /** The sibling documents of every scope a transform will walk, by scope then
  *  by type, so `up` and `down` read them without a query per document. */
 export type SiblingsByScope = ReadonlyMap<
@@ -130,6 +121,15 @@ export function withScope(
   };
 }
 
+/**
+ * Wrap a scoped-collection transformer so the discriminators (`_id`, `_type`,
+ * `_scope`) are ALWAYS re-pinned from the original document after the user
+ * transform runs. A transform that accidentally drops `_scope`/`_type` would
+ * otherwise make its documents invisible to every scoped query — and, because
+ * the memory (simulation) applier already force-restores these fields, a
+ * dry-run would pass while production silently corrupted the data. Re-pinning
+ * here keeps the two appliers in lockstep: the discriminators can never be lost.
+ */
 function repinScopedDiscriminators(
   transform: (doc: Record<string, unknown>) => Record<string, unknown>,
 ): (doc: Record<string, unknown>) => Record<string, unknown> {
@@ -191,6 +191,7 @@ const DEFAULT_OPTIONS: Required<MongodbApplierOptions> = {
 };
 
 export type ApplyMigrationHooks = {
+  readonly beforeOperation?: (operation: MigrationRule) => Promise<void>;
   readonly afterOperation?: (operation: MigrationRule) => Promise<void>;
 };
 
@@ -919,9 +920,7 @@ export function createMongodbApplier(
           .limit(SIBLING_READ_CAP + 1)
           .toArray();
         if (docs.length > SIBLING_READ_CAP) {
-          throw new Error(
-            `transform reads "${type}" of scope "${scope}": more than ${SIBLING_READ_CAP} documents; a sibling read is for a scope's few reference documents, not its rows`,
-          );
+          throw siblingReadOverCap(type, scope);
         }
         byType[type] = docs as Record<string, unknown>[];
       }
@@ -2973,6 +2972,7 @@ export function createMongodbApplier(
     let applyError: unknown;
     try {
       for (const operation of ordered) {
+        await hooks.beforeOperation?.(operation);
         if (direction === "up") {
           await applyOperation(operation);
         } else {

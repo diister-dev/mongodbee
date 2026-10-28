@@ -13,6 +13,8 @@ export type MigrationStep = {
   readonly label: string;
 };
 
+export type InFlightStep = MigrationStep & { readonly index: number };
+
 export type StepDrift =
   | { readonly kind: "same" }
   | { readonly kind: "unrecorded" }
@@ -164,6 +166,7 @@ export type AppliedMigrationSteps = {
   readonly migration: MigrationDefinition;
   readonly current: readonly MigrationStep[];
   readonly drift: StepDrift;
+  readonly inFlight?: InFlightStep;
 };
 
 export async function appliedMigrationSteps(
@@ -180,6 +183,7 @@ export async function appliedMigrationSteps(
       migration,
       current,
       drift: compareSteps(stepsOfRecord(record), current),
+      ...(record.inFlight ? { inFlight: record.inFlight } : {}),
     });
   }
   return applied;
@@ -264,12 +268,79 @@ export async function appendAppliedStep(
   const updated = latest
     ? await getMigrationOperationsCollection(db).updateOne(
         { _id: latest._id, steps: { $size: recorded } },
-        { $push: { steps: step } },
+        { $push: { steps: step }, $unset: { inFlight: "" } },
       )
     : undefined;
   if (updated?.modifiedCount !== 1) {
     throw new ConcurrentStepRecordError(migrationId, recorded);
   }
+}
+
+export async function markStepInFlight(
+  db: Db,
+  migrationId: string,
+  recorded: number,
+  step: MigrationStep,
+): Promise<void> {
+  const latest = await latestAppliedRecord(db, migrationId);
+  const inFlight: InFlightStep = { ...step, index: recorded };
+  const updated = latest
+    ? await getMigrationOperationsCollection(db).updateOne(
+        { _id: latest._id, steps: { $size: recorded } },
+        { $set: { inFlight } },
+      )
+    : undefined;
+  if (updated?.matchedCount !== 1) {
+    throw new ConcurrentStepRecordError(migrationId, recorded);
+  }
+}
+
+const RERUNNABLE_OPERATION_TYPES: ReadonlySet<MigrationRule["type"]> = new Set([
+  "seed_collection",
+  "seed_multicollection_type",
+  "seed_scoped_multicollection_type",
+  "seed_multimodel_instance_type",
+  "seed_multimodel_instances_type",
+]);
+
+export function isRerunnable(operation: MigrationRule): boolean {
+  return RERUNNABLE_OPERATION_TYPES.has(operation.type);
+}
+
+export function recordInFlightCommand(migrationId: string): string {
+  return `mongodbee migrate --record-in-flight ${migrationId}`;
+}
+
+export function rerunInFlightCommand(migrationId: string): string {
+  return `mongodbee migrate --rerun-in-flight ${migrationId}`;
+}
+
+export function describeInFlight(
+  migration: MigrationDefinition,
+  inFlight: InFlightStep,
+): string {
+  return (
+    `${migration.name} (${migration.id}): a previous migrate stopped (a crash, or the operation or its record failed) while running operation #${inFlight.index + 1} "${inFlight.label}", ` +
+    "added to this migration after it was applied, before recording it; it may be half-applied"
+  );
+}
+
+export const RECORD_IN_FLIGHT_CAVEAT =
+  "only if the operation is fully applied; recording a half-applied transform leaves its data half-transformed";
+
+export function inFlightWaysOut(migrationId: string): string {
+  return (
+    "Check its data, then run one of: " +
+    `${recordInFlightCommand(migrationId)} records it as applied without running it, ${RECORD_IN_FLIGHT_CAVEAT}; ` +
+    `${rerunInFlightCommand(migrationId)} runs it again, only if it was not applied or you undid it`
+  );
+}
+
+export function recordOnlyWayOut(migrationId: string): string {
+  return (
+    "Check its data, then: " +
+    `${recordInFlightCommand(migrationId)} records it as applied without running it, ${RECORD_IN_FLIGHT_CAVEAT}`
+  );
 }
 
 function stepList(steps: readonly MigrationStep[], from: number): string {

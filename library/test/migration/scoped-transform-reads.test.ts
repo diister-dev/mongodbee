@@ -188,3 +188,89 @@ test("mongodb: a scoped transform reads the siblings of its own scope", async ()
     assertEquals(locationIdsByScope(docs), EXPECTED);
   });
 });
+
+function migrationWithCrowdedVocabulary(locations: number) {
+  return migrationDefinition("001", "crowded-vocabulary", {
+    parent: null,
+    schemas: SCHEMAS,
+    migrate: (b) =>
+      b
+        .createScopedMultiCollection("expo")
+        .type("information")
+        .seed(
+          EXPO_A,
+          Array.from({ length: locations }, (_, i) => ({
+            locations: [{ id: `loc_${i}`, name: `Salle ${i}` }],
+          })),
+        )
+        .seed(EXPO_B, [{ locations: [{ id: "loc_9", name: "Salle A" }] }])
+        .end()
+        .type("program")
+        .seed(EXPO_A, [{ locationId: "Salle 1" }])
+        .seed(EXPO_B, [{ locationId: "Salle A" }])
+        .end()
+        .end()
+        .compile(),
+  });
+}
+
+async function simulateReads(locations: number) {
+  const state = createEmptyDatabaseState();
+  const m1 = migrationWithCrowdedVocabulary(locations);
+  const m2 = migrationV2(m1);
+  await createMemoryApplier(m1).applyMigration(
+    state,
+    m1.migrate(migrationBuilder({ schemas: SCHEMAS })).operations,
+    "up",
+  );
+  await createMemoryApplier(m2).applyMigration(
+    state,
+    m2.migrate(migrationBuilder({ schemas: SCHEMAS, parentSchemas: SCHEMAS }))
+      .operations,
+    "up",
+  );
+}
+
+async function errorOf(work: () => Promise<unknown>): Promise<string> {
+  try {
+    await work();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  return "no error";
+}
+
+const OVER_CAP = `transform reads "information" of scope "${EXPO_A}": more than 1000 documents; a sibling read is for a scope's few reference documents, not its rows`;
+
+test("memory: a sibling read of 1,001 documents in one scope is refused as the MongoDB applier refuses it", async () => {
+  assertEquals(await errorOf(() => simulateReads(1_001)), OVER_CAP);
+});
+
+test("memory: a sibling read of exactly 1,000 documents in one scope passes", async () => {
+  assertEquals(await errorOf(() => simulateReads(1_000)), "no error");
+});
+
+test("mongodb: a sibling read of 1,001 documents in one scope is refused", async () => {
+  await withDatabase("scoped-transform-reads-cap", async (db) => {
+    const m1 = migrationWithCrowdedVocabulary(1_001);
+    const m2 = migrationV2(m1);
+    await createMongodbApplier(db, m1, {
+      currentMigrationId: m1.id,
+    }).applyMigration(
+      m1.migrate(migrationBuilder({ schemas: SCHEMAS })).operations,
+      "up",
+    );
+    const ops2 = m2.migrate(
+      migrationBuilder({ schemas: SCHEMAS, parentSchemas: SCHEMAS }),
+    ).operations;
+
+    assertEquals(
+      await errorOf(() =>
+        createMongodbApplier(db, m2, {
+          currentMigrationId: m2.id,
+        }).applyMigration(ops2, "up"),
+      ),
+      OVER_CAP,
+    );
+  });
+});

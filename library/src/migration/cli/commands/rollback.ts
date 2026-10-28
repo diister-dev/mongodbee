@@ -33,6 +33,9 @@ import {
   acceptDriftIds,
   acceptedSteps,
   appliedMigrationSteps,
+  describeInFlight,
+  inFlightWaysOut,
+  recordOnlyWayOut,
   describeDrift,
   operationLabel,
   replaceRecordedSteps,
@@ -47,6 +50,16 @@ async function operationsToUndo(
   acceptDrift: readonly string[],
 ): Promise<MigrationRule[]> {
   const [applied] = await appliedMigrationSteps(db, [migration]);
+  if (applied?.inFlight) {
+    throw new Error(
+      `${describeInFlight(migration, applied.inFlight)}. Nothing was rolled back: undoing only the recorded operations would leave its effects in place. ${
+        applied.current[applied.inFlight.index]?.signature ===
+        applied.inFlight.signature
+          ? inFlightWaysOut(migration.id)
+          : recordOnlyWayOut(migration.id)
+      }; then roll back.`,
+    );
+  }
   const drift = applied?.drift;
   switch (drift?.kind) {
     case "changed": {

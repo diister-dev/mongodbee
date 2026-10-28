@@ -162,6 +162,12 @@ ${yellow("MIGRATE OPTIONS:")}
                     Take the current operations of this applied migration as
                     the ones that ran, without running them, when its record
                     no longer matches (repeatable)
+  --record-in-flight <id>
+                    Record the operation a stopped run left in flight in this
+                    migration as applied, without running it (repeatable)
+  --rerun-in-flight <id>
+                    Run the operation a stopped run left in flight in this
+                    migration again (repeatable)
   --dry-run         Simulate migration without applying changes
   --force           Skip all confirmations (use with caution!)
   --auto-sync       Automatically catch up orphaned multi-model instances
@@ -325,8 +331,10 @@ async function main(): Promise<void> {
       "migrations",
       "schemas",
       "accept-drift",
+      "record-in-flight",
+      "rerun-in-flight",
     ],
-    collect: ["accept-drift"],
+    collect: ["accept-drift", "record-in-flight", "rerun-in-flight"],
     alias: {
       v: "version",
       h: "help",

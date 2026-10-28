@@ -50,8 +50,14 @@ import {
   replaceRecordedSteps,
   appliedMigrationSteps,
   describeDrift,
+  describeInFlight,
+  inFlightWaysOut,
+  isRerunnable,
+  markStepInFlight,
   operationLabel,
+  operationsOf,
   recordAssumedSteps,
+  recordOnlyWayOut,
   stepsOf,
 } from "../../steps.ts";
 import type { Db } from "../../../mongodb.ts";
@@ -183,6 +189,112 @@ async function recordUnrecordedSteps(
   }
 }
 
+async function resolveInFlight(
+  db: Db,
+  appliedSteps: readonly AppliedMigrationSteps[],
+  recordIds: readonly string[],
+  rerunIds: readonly string[],
+  dryRun: boolean | undefined,
+): Promise<void> {
+  const inFlightIds = new Set(
+    appliedSteps.flatMap(({ migration, inFlight }) =>
+      inFlight ? [migration.id] : [],
+    ),
+  );
+  const unmatched = [
+    ...recordIds
+      .filter((id) => !inFlightIds.has(id))
+      .map((id) => `--record-in-flight ${id}`),
+    ...rerunIds
+      .filter((id) => !inFlightIds.has(id))
+      .map((id) => `--rerun-in-flight ${id}`),
+  ];
+  if (unmatched.length > 0) {
+    const inFlightNow = appliedSteps.flatMap(({ migration, inFlight }) =>
+      inFlight
+        ? [
+            `${migration.id} (operation #${inFlight.index + 1} "${inFlight.label}")`,
+          ]
+        : [],
+    );
+    throw new Error(
+      `${unmatched.join(", ")}: no operation of that migration is in flight. Nothing was applied. ` +
+        (inFlightNow.length > 0
+          ? `In flight: ${inFlightNow.join(", ")}.`
+          : "No operation is in flight in this database."),
+    );
+  }
+  const refusals: string[] = [];
+  for (const { migration, current, inFlight } of appliedSteps) {
+    if (!inFlight) continue;
+    const described = describeInFlight(migration, inFlight);
+    const record = recordIds.includes(migration.id);
+    const rerun = rerunIds.includes(migration.id);
+    if (record && rerun) {
+      throw new Error(
+        `${described}. Nothing was applied: --record-in-flight and --rerun-in-flight both name ${migration.id}; choose one.`,
+      );
+    }
+    const step = current[inFlight.index];
+    if (step?.signature !== inFlight.signature) {
+      const marked = { signature: inFlight.signature, label: inFlight.label };
+      if (record) {
+        console.log(
+          yellow(
+            bold(
+              `mongodbee: --record-in-flight ${migration.id}: ${dryRun ? "would record" : "recording"} operation #${inFlight.index + 1} "${inFlight.label}" as applied, without running it, although its file no longer holds it there.`,
+            ),
+          ),
+        );
+        if (!dryRun) {
+          await appendAppliedStep(db, migration.id, inFlight.index, marked);
+        }
+        continue;
+      }
+      refusals.push(
+        `${described}. Operation #${inFlight.index + 1} of its file is now ${step ? `"${step.label}"` : "absent"}, so it cannot be run again. Nothing was applied. ${recordOnlyWayOut(migration.id)}`,
+      );
+      continue;
+    }
+    if (record) {
+      console.log(
+        yellow(
+          bold(
+            `mongodbee: --record-in-flight ${migration.id}: ${dryRun ? "would record" : "recording"} operation #${inFlight.index + 1} "${inFlight.label}" as applied, without running it.`,
+          ),
+        ),
+      );
+      if (!dryRun) {
+        await appendAppliedStep(db, migration.id, inFlight.index, step);
+      }
+      continue;
+    }
+    if (rerun) {
+      console.log(
+        yellow(
+          bold(
+            `mongodbee: --rerun-in-flight ${migration.id}: running operation #${inFlight.index + 1} "${inFlight.label}" again.`,
+          ),
+        ),
+      );
+      continue;
+    }
+    const operation = operationsOf(migration)[inFlight.index];
+    if (isRerunnable(operation)) {
+      console.log(
+        yellow(
+          `${described}. Running it again: a ${operation.type} writes each document under a fixed _id, so a second run leaves one copy.`,
+        ),
+      );
+      continue;
+    }
+    refusals.push(
+      `${described}, and a ${operation.type} is not safe to run twice. Nothing was applied. ${inFlightWaysOut(migration.id)}`,
+    );
+  }
+  if (refusals.length > 0) throw new Error(refusals.join(". "));
+}
+
 interface CliArgs {
   config?: string;
   "dry-run"?: boolean;
@@ -234,6 +346,8 @@ export interface MigrateCommandOptions {
    */
   skipPrivilegeCheck?: boolean;
   acceptDrift?: readonly string[];
+  recordInFlight?: readonly string[];
+  rerunInFlight?: readonly string[];
   /**
    * Mock documents per collection during the simulation, 1 to 5000,
    * overriding the mode's preset. Same rules as `check --docs`.
@@ -387,6 +501,13 @@ export async function migrateCommand(
     const appliedIds = await getAppliedMigrationIds(db);
     console.log(dim(`Applied migrations: ${appliedIds.length}`));
 
+    await resolveInFlight(
+      db,
+      await appliedMigrationSteps(db, allMigrations),
+      acceptDriftIds(options.recordInFlight ?? cliArgs["record-in-flight"]),
+      acceptDriftIds(options.rerunInFlight ?? cliArgs["rerun-in-flight"]),
+      opts.dryRun,
+    );
     const appliedSteps = await appliedMigrationSteps(db, allMigrations);
     const acceptDriftList = acceptDriftIds(
       options.acceptDrift ?? cliArgs["accept-drift"],
@@ -1174,6 +1295,14 @@ export async function migrateCommand(
             "up",
             alreadyApplied > 0
               ? {
+                  beforeOperation: async () => {
+                    await markStepInFlight(
+                      db,
+                      migration.id,
+                      recorded,
+                      addedSteps[recorded - alreadyApplied],
+                    );
+                  },
                   afterOperation: async () => {
                     await appendAppliedStep(
                       db,
