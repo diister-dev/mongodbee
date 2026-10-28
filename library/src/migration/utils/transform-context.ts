@@ -3,6 +3,14 @@ import type { MigrationTransformContext, TransformScope } from "../types.ts";
 import { fnv1a32 } from "./seed-id.ts";
 import { encodeUlidRandom, encodeUlidTime } from "../../utils/ulid-encode.ts";
 
+export const SIBLING_READ_CAP = 1_000;
+
+export function siblingReadOverCap(type: string, scope: string): Error {
+  return new Error(
+    `transform reads "${type}" of scope "${scope}": more than ${SIBLING_READ_CAP} documents; a sibling read is for a scope's few reference documents, not its rows`,
+  );
+}
+
 const MIGRATION_TIME = /^(\d{4})_(\d{2})_(\d{2})_(\d{2})(\d{2})/;
 const FALLBACK_TIME = Date.UTC(2000, 0, 1);
 

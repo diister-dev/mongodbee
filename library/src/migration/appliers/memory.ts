@@ -17,6 +17,8 @@ import {
 } from "../utils/seed-id.ts";
 import {
   createDeterministicTransformContext,
+  SIBLING_READ_CAP,
+  siblingReadOverCap,
   withTransformScope,
 } from "../utils/transform-context.ts";
 import { getIrreversibleOperations } from "../builder.ts";
@@ -429,6 +431,7 @@ function matchesWhere(
 function siblingsOf(
   content: readonly Record<string, unknown>[],
   reads: readonly string[] | undefined,
+  walks: (doc: Record<string, unknown>) => boolean,
 ): ReadonlyMap<
   string,
   Readonly<Record<string, readonly Record<string, unknown>[]>>
@@ -448,6 +451,16 @@ function siblingsOf(
     const byType = out.get(scope) ?? {};
     (byType[type] ??= []).push(doc);
     out.set(scope, byType);
+  }
+  const walked = new Set(
+    content.filter(walks).map((doc) => doc._scope as string),
+  );
+  for (const scope of walked) {
+    for (const type of reads) {
+      if ((out.get(scope)?.[type]?.length ?? 0) > SIBLING_READ_CAP) {
+        throw siblingReadOverCap(type, scope);
+      }
+    }
   }
   return out;
 }
@@ -1720,12 +1733,12 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           operation.scopeFilter && operation.scopeFilter.length > 0
             ? new Set(operation.scopeFilter)
             : null;
-        const siblings = siblingsOf(coll.content, operation.reads);
+        const walks = (doc: Record<string, unknown>) =>
+          doc._type === operation.documentType &&
+          (!scopeSet || scopeSet.has(doc._scope as string));
+        const siblings = siblingsOf(coll.content, operation.reads, walks);
         coll.content = coll.content.map((doc) => {
-          if (
-            doc._type === operation.documentType &&
-            (!scopeSet || scopeSet.has(doc._scope as string))
-          ) {
+          if (walks(doc)) {
             return {
               ...operation.up(
                 doc as Record<string, unknown>,
@@ -1754,12 +1767,12 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           operation.scopeFilter && operation.scopeFilter.length > 0
             ? new Set(operation.scopeFilter)
             : null;
-        const siblings = siblingsOf(coll.content, operation.reads);
+        const walks = (doc: Record<string, unknown>) =>
+          doc._type === operation.documentType &&
+          (!scopeSet || scopeSet.has(doc._scope as string));
+        const siblings = siblingsOf(coll.content, operation.reads, walks);
         coll.content = coll.content.map((doc) => {
-          if (
-            doc._type === operation.documentType &&
-            (!scopeSet || scopeSet.has(doc._scope as string))
-          ) {
+          if (walks(doc)) {
             return {
               ...operation.down(
                 doc as Record<string, unknown>,
