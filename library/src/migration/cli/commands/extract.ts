@@ -316,15 +316,45 @@ function physicalDuplicateIds(state: DatabaseState): ScenarioViolation[] {
   return violations;
 }
 
-async function serverIdentity(client: MongoClient): Promise<string> {
+export interface DatabaseFingerprint {
+  readonly processId?: string;
+  readonly collectionIds: ReadonlySet<string>;
+}
+
+export async function fingerprintDatabase(
+  client: MongoClient,
+  name: string,
+): Promise<DatabaseFingerprint> {
   const hello = await client.db("admin").command({ hello: 1 });
-  if (typeof (hello.primary ?? hello.me) === "string") {
-    return hello.primary ?? hello.me;
+  const processId = hello.topologyVersion?.processId;
+  const collections = await client
+    .db(name)
+    .listCollections({}, { nameOnly: false })
+    .toArray();
+  return {
+    processId: processId === undefined ? undefined : String(processId),
+    collectionIds: new Set(
+      collections.flatMap((collection) => {
+        const uuid = "info" in collection ? collection.info?.uuid : undefined;
+        return uuid === undefined ? [] : [uuid.toString("hex")];
+      }),
+    ),
+  };
+}
+
+export function isSameDatabase(
+  source: DatabaseFingerprint,
+  target: DatabaseFingerprint,
+  sameName: boolean,
+): boolean {
+  for (const id of target.collectionIds) {
+    if (source.collectionIds.has(id)) return true;
   }
-  return client.options.hosts
-    .map((host) => `${host.host ?? host.socketPath}:${host.port ?? 27017}`)
-    .join(",")
-    .replace(/127\.0\.0\.1|\[::1\]/g, "localhost");
+  return (
+    sameName &&
+    source.processId !== undefined &&
+    source.processId === target.processId
+  );
 }
 
 async function assertTargetIsNotSource(
@@ -333,13 +363,9 @@ async function assertTargetIsNotSource(
   sourceDb: string,
   toDb: string,
 ): Promise<void> {
-  if (toDb !== sourceDb) return;
-  if (
-    (await serverIdentity(sourceClient)) !==
-    (await serverIdentity(targetClient))
-  ) {
-    return;
-  }
+  const source = await fingerprintDatabase(sourceClient, sourceDb);
+  const target = await fingerprintDatabase(targetClient, toDb);
+  if (!isSameDatabase(source, target, toDb === sourceDb)) return;
   throw new Error(
     "extract refuses to write into its own source; pick another --to-db or --to",
   );

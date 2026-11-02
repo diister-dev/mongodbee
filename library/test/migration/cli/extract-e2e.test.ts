@@ -303,26 +303,123 @@ e2e(
   },
 );
 
+function sameServerSpellings(client: MongoClient): string[] {
+  const { hosts } = client.options;
+  const [first] = hosts;
+  if (hosts.length !== 1 || first?.host === undefined) {
+    throw new Error("the test needs a single-host TEST_URI");
+  }
+  const port = first.port ?? 27017;
+  const aliases: Record<string, string> = {
+    localhost: "127.0.0.1",
+    "127.0.0.1": "localhost",
+  };
+  const alias = aliases[first.host];
+  if (alias === undefined) {
+    throw new Error(`no loopback alias for ${first.host}`);
+  }
+  const spellings = [
+    `mongodb://${alias}:${port}/`,
+    `mongodb://${alias}:${port}/?directConnection=true`,
+    `mongodb://${first.host.toUpperCase()}:${port}`,
+  ];
+  if (port === 27017) spellings.push(`mongodb://${alias}`);
+  return spellings;
+}
+
 e2e(
   "extract: refuses to write into its own source whatever the URI spelling",
   async () => {
-    await withSourceAndTarget(async ({ dir, source }) => {
-      const alias = TEST_URI.replace("localhost", "127.0.0.1");
-      assertNotEquals(alias, TEST_URI, "the test needs a localhost URI");
-      await assertRejects(
-        () =>
-          extractCommand({
-            cwd: dir,
-            from: TEST_URI,
-            to: `${alias}/`,
-            fromDb: source,
-            toDb: source,
-            secret: SECRET,
-            json: true,
-          }),
-        Error,
-        "own source",
-      );
+    await withSourceAndTarget(async ({ dir, client, source }) => {
+      for (const to of sameServerSpellings(client)) {
+        await assertRejects(
+          () =>
+            extractCommand({
+              cwd: dir,
+              from: TEST_URI,
+              to,
+              fromDb: source,
+              toDb: source,
+              secret: SECRET,
+              json: true,
+            }),
+          Error,
+          "own source",
+        );
+      }
+    });
+  },
+);
+
+e2e(
+  "extract: --force under another spelling leaves a source with empty collections untouched",
+  async () => {
+    await withProject(async (dir) => {
+      const source = dbName("src");
+      const client = new MongoClient(TEST_URI);
+      await client.connect();
+      try {
+        const db = client.db(source);
+        await db.createCollection("users");
+        await rawCollection(db, "users").createIndex(
+          { legacyKey: 1 },
+          { name: "operator_index" },
+        );
+        const before = await db.listCollections().toArray();
+        const [to] = sameServerSpellings(client);
+        await assertRejects(
+          () =>
+            extractCommand({
+              cwd: dir,
+              from: TEST_URI,
+              to,
+              fromDb: source,
+              toDb: source,
+              secret: SECRET,
+              json: true,
+              force: true,
+            }),
+          Error,
+          "own source",
+        );
+        assertEquals(await db.listCollections().toArray(), before);
+        const indexes = await rawCollection(db, "users").indexes();
+        assert(indexes.some((index) => index.name === "operator_index"));
+      } finally {
+        await client.db(source).dropDatabase();
+        await client.close();
+      }
+    });
+  },
+);
+
+e2e(
+  "extract: refuses an empty source database reached under another spelling",
+  async () => {
+    await withProject(async (dir) => {
+      const source = dbName("src");
+      const client = new MongoClient(TEST_URI);
+      await client.connect();
+      try {
+        const [to] = sameServerSpellings(client);
+        await assertRejects(
+          () =>
+            extractCommand({
+              cwd: dir,
+              from: TEST_URI,
+              to,
+              fromDb: source,
+              toDb: source,
+              secret: SECRET,
+              json: true,
+            }),
+          Error,
+          "own source",
+        );
+      } finally {
+        await client.db(source).dropDatabase();
+        await client.close();
+      }
     });
   },
 );
