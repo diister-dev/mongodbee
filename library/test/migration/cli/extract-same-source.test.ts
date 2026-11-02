@@ -1,60 +1,165 @@
 import { test } from "../../+harness.ts";
-import { assertEquals } from "../../+assert.ts";
+import { assertEquals, assertStringIncludes } from "../../+assert.ts";
 import {
+  compareWithSource,
   type DatabaseFingerprint,
-  isSameDatabase,
+  type ServerTopology,
+  sourceRefusal,
 } from "../../../src/migration/cli/commands/extract.ts";
 
 const fingerprint = (
-  processId: string | undefined,
+  topology: ServerTopology,
+  ids: { deploymentId?: string; processId?: string },
   ...collectionIds: string[]
 ): DatabaseFingerprint => ({
-  processId,
+  ...ids,
+  topology,
   collectionIds: new Set(collectionIds),
 });
 
-test("isSameDatabase: a shared collection identifies the database across processes", () => {
+test("compareWithSource: a shared collection identifies the database across processes", () => {
   assertEquals(
-    isSameDatabase(
-      fingerprint("primary", "a", "b"),
-      fingerprint("secondary", "b"),
+    compareWithSource(
+      fingerprint("replicaSet", { processId: "secondary" }, "a", "b"),
+      fingerprint("replicaSet", { processId: "primary" }, "b"),
       true,
     ),
-    true,
+    "same",
   );
 });
 
-test("isSameDatabase: a shared collection identifies the database whatever its name", () => {
+test("compareWithSource: a shared collection identifies the database whatever its name", () => {
   assertEquals(
-    isSameDatabase(fingerprint("one", "a"), fingerprint("two", "a"), false),
-    true,
+    compareWithSource(
+      fingerprint("standalone", { deploymentId: "x" }, "a"),
+      fingerprint("standalone", { deploymentId: "y" }, "a"),
+      false,
+    ),
+    "same",
   );
 });
 
-test("isSameDatabase: distinct servers holding a same-named database are told apart", () => {
+test("compareWithSource: another name on the same deployment is another database", () => {
   assertEquals(
-    isSameDatabase(fingerprint("one", "a"), fingerprint("two", "b"), true),
-    false,
+    compareWithSource(
+      fingerprint("standalone", { deploymentId: "x", processId: "p" }),
+      fingerprint("standalone", { deploymentId: "x", processId: "p" }),
+      false,
+    ),
+    "distinct",
   );
 });
 
-test("isSameDatabase: the same process and name identifies a database with no collection", () => {
+test("compareWithSource: an empty database read on a secondary and written on the primary is the source", () => {
   assertEquals(
-    isSameDatabase(fingerprint("one"), fingerprint("one"), true),
-    true,
+    compareWithSource(
+      fingerprint("replicaSet", { deploymentId: "rs", processId: "secondary" }),
+      fingerprint("replicaSet", { deploymentId: "rs", processId: "primary" }),
+      true,
+    ),
+    "same",
   );
 });
 
-test("isSameDatabase: the same process under another name is another database", () => {
+test("compareWithSource: two routers of one cluster reach the same database", () => {
   assertEquals(
-    isSameDatabase(fingerprint("one"), fingerprint("one"), false),
-    false,
+    compareWithSource(
+      fingerprint("router", { deploymentId: "cluster", processId: "router1" }),
+      fingerprint("router", { deploymentId: "cluster", processId: "router2" }),
+      true,
+    ),
+    "same",
   );
 });
 
-test("isSameDatabase: a server without a process id is not taken for the source", () => {
+test("compareWithSource: distinct deployments holding a same-named database are told apart", () => {
   assertEquals(
-    isSameDatabase(fingerprint(undefined), fingerprint(undefined), true),
-    false,
+    compareWithSource(
+      fingerprint("replicaSet", { deploymentId: "one", processId: "p" }, "a"),
+      fingerprint("replicaSet", { deploymentId: "two", processId: "p" }, "b"),
+      true,
+    ),
+    "distinct",
   );
+});
+
+test("compareWithSource: without a deployment id, the same process is the source", () => {
+  assertEquals(
+    compareWithSource(
+      fingerprint("replicaSet", { processId: "p" }),
+      fingerprint("replicaSet", { processId: "p" }),
+      true,
+    ),
+    "same",
+  );
+});
+
+test("compareWithSource: without a deployment id, two standalone processes are distinct servers", () => {
+  assertEquals(
+    compareWithSource(
+      fingerprint("standalone", { processId: "one" }),
+      fingerprint("standalone", { processId: "two" }),
+      true,
+    ),
+    "distinct",
+  );
+});
+
+test("compareWithSource: without a deployment id, two replica set members cannot be told apart", () => {
+  assertEquals(
+    compareWithSource(
+      fingerprint("replicaSet", { processId: "secondary" }),
+      fingerprint("replicaSet", { processId: "primary" }),
+      true,
+    ),
+    "undecidable",
+  );
+});
+
+test("compareWithSource: without a deployment id, two routers cannot be told apart", () => {
+  assertEquals(
+    compareWithSource(
+      fingerprint("router", { processId: "router1" }),
+      fingerprint("router", { processId: "router2" }),
+      true,
+    ),
+    "undecidable",
+  );
+});
+
+test("compareWithSource: a server that identifies nothing is undecidable, not distinct", () => {
+  assertEquals(
+    compareWithSource(
+      fingerprint("standalone", {}),
+      fingerprint("standalone", { processId: "p" }),
+      true,
+    ),
+    "undecidable",
+  );
+});
+
+test("compareWithSource: a deployment id on one side only falls back to the process", () => {
+  assertEquals(
+    compareWithSource(
+      fingerprint("standalone", { deploymentId: "x", processId: "one" }),
+      fingerprint("standalone", { processId: "two" }),
+      true,
+    ),
+    "distinct",
+  );
+});
+
+test("sourceRefusal: the source itself is refused", () => {
+  assertStringIncludes(String(sourceRefusal("same", "db")), "own source");
+});
+
+test("sourceRefusal: an undecidable target is refused, naming the database to change", () => {
+  const refusal = String(sourceRefusal("undecidable", "db"));
+  assertStringIncludes(refusal, "cannot tell");
+  assertStringIncludes(refusal, '"db"');
+  assertStringIncludes(refusal, "--to-db");
+});
+
+test("sourceRefusal: a distinct target is let through", () => {
+  assertEquals(sourceRefusal("distinct", "db"), undefined);
 });

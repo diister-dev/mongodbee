@@ -12,7 +12,10 @@ import { withTempDir } from "./shared.ts";
 import { MongoClient } from "../../../src/mongodb.ts";
 import { newId } from "../../../src/ids.ts";
 import { classifyCommand } from "../../../src/migration/cli/commands/classify.ts";
-import { extractCommand } from "../../../src/migration/cli/commands/extract.ts";
+import {
+  extractCommand,
+  fingerprintDatabase,
+} from "../../../src/migration/cli/commands/extract.ts";
 import {
   getAppliedMigrationIds,
   markMigrationAsAdopted,
@@ -303,35 +306,51 @@ e2e(
   },
 );
 
-function sameServerSpellings(client: MongoClient): string[] {
-  const { hosts } = client.options;
-  const [first] = hosts;
-  if (hosts.length !== 1 || first?.host === undefined) {
-    throw new Error("the test needs a single-host TEST_URI");
-  }
-  const port = first.port ?? 27017;
-  const aliases: Record<string, string> = {
-    localhost: "127.0.0.1",
-    "127.0.0.1": "localhost",
-  };
-  const alias = aliases[first.host];
-  if (alias === undefined) {
-    throw new Error(`no loopback alias for ${first.host}`);
-  }
+const LOOPBACK_ALIASES: Record<string, string> = {
+  localhost: "127.0.0.1",
+  "127.0.0.1": "localhost",
+};
+
+function sameServerSpellings(uri: string): string[] {
+  const parts =
+    /^(mongodb(?:\+srv)?:\/\/)((?:[^@/]*@)?)([^/?]+)(\/[^?]*)?(\?.*)?$/.exec(
+      uri,
+    );
+  if (parts === null) throw new Error(`unreadable test URI ${uri}`);
+  const [, scheme, credentials, hostList, , query] = parts;
+  const hosts = hostList.split(",");
+  const spell = (list: string[], option?: string) =>
+    `${scheme}${credentials}${list.join(",")}/${
+      option === undefined
+        ? (query ?? "")
+        : `${query ? `${query}&` : "?"}${option}`
+    }`;
   const spellings = [
-    `mongodb://${alias}:${port}/`,
-    `mongodb://${alias}:${port}/?directConnection=true`,
-    `mongodb://${first.host.toUpperCase()}:${port}`,
+    spell(hosts, "appName=extract-alias"),
+    spell(hosts),
+    spell(hosts.map((host) => host.toUpperCase())),
   ];
-  if (port === 27017) spellings.push(`mongodb://${alias}`);
-  return spellings;
+  if (hosts.length > 1) spellings.push(spell([...hosts].reverse()));
+  if (hosts.length === 1 && scheme === "mongodb://") {
+    spellings.push(spell(hosts, "directConnection=true"));
+  }
+  const aliased = hosts.map((host) => {
+    const [name, port] = host.split(":");
+    const alias = LOOPBACK_ALIASES[name];
+    return alias === undefined ? undefined : `${alias}:${port ?? 27017}`;
+  });
+  // A loopback alias is the only other address the test can derive for any server.
+  if (aliased.every((host) => host !== undefined)) {
+    spellings.push(spell(aliased));
+  }
+  return spellings.filter((spelling) => spelling !== uri);
 }
 
 e2e(
   "extract: refuses to write into its own source whatever the URI spelling",
   async () => {
-    await withSourceAndTarget(async ({ dir, client, source }) => {
-      for (const to of sameServerSpellings(client)) {
+    await withSourceAndTarget(async ({ dir, source }) => {
+      for (const to of sameServerSpellings(TEST_URI)) {
         await assertRejects(
           () =>
             extractCommand({
@@ -366,7 +385,7 @@ e2e(
           { name: "operator_index" },
         );
         const before = await db.listCollections().toArray();
-        const [to] = sameServerSpellings(client);
+        const [to] = sameServerSpellings(TEST_URI);
         await assertRejects(
           () =>
             extractCommand({
@@ -401,7 +420,7 @@ e2e(
       const client = new MongoClient(TEST_URI);
       await client.connect();
       try {
-        const [to] = sameServerSpellings(client);
+        const [to] = sameServerSpellings(TEST_URI);
         await assertRejects(
           () =>
             extractCommand({
@@ -421,6 +440,39 @@ e2e(
         await client.close();
       }
     });
+  },
+);
+
+e2e(
+  "extract: fingerprintDatabase reads the same collection and deployment under two spellings",
+  async () => {
+    const name = dbName("fp");
+    const [alias] = sameServerSpellings(TEST_URI);
+    const client = new MongoClient(TEST_URI);
+    const other = new MongoClient(alias);
+    await client.connect();
+    await other.connect();
+    try {
+      await client.db(name).createCollection("users");
+      const [info] = await client
+        .db(name)
+        .listCollections({ name: "users" }, { nameOnly: false })
+        .toArray();
+      const uuid =
+        "info" in info ? info.info?.uuid?.toString("hex") : undefined;
+      assert(uuid !== undefined);
+      const direct = await fingerprintDatabase(client, name);
+      const aliased = await fingerprintDatabase(other, name);
+      assertEquals([...direct.collectionIds], [uuid]);
+      assertEquals([...aliased.collectionIds], [uuid]);
+      assert(direct.deploymentId !== undefined);
+      assertEquals(aliased.deploymentId, direct.deploymentId);
+      assertNotEquals(direct.deploymentId, uuid);
+    } finally {
+      await client.db(name).dropDatabase();
+      await client.close();
+      await other.close();
+    }
   },
 );
 
