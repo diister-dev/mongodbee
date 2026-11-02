@@ -56,78 +56,101 @@ const CLEANUP_PROPERTIES = [
 ];
 
 /**
+ * Properties to skip in diff output (too verbose/technical for users)
+ */
+const DIFF_SKIPPED_PROPERTIES = ["kind", ...CLEANUP_PROPERTIES];
+
+/**
  * Schema kinds to ignore during simplification
  */
 const CLEANUP_KINDS = ["transformation", "metadata"];
 
+type Simplify = (schema: any) => any;
+
 /**
- * Type-specific handlers for simplifying Valibot schemas
+ * Type-specific handlers for simplifying Valibot schemas. Each receives the
+ * recursion to apply to its children, so a memoised simplification reaches
+ * the whole tree.
  */
-const simplifyHandlers: Record<string, (schema: any) => any> = {
-  map: (schema: any) => ({
+const simplifyHandlers: Record<
+  string,
+  (schema: any, simplify: Simplify) => any
+> = {
+  map: (schema, simplify) => ({
     ...schema,
-    key: simplifySchema(schema.key),
-    value: simplifySchema(schema.value),
+    key: simplify(schema.key),
+    value: simplify(schema.value),
   }),
-  record: (schema: any) => ({
+  record: (schema, simplify) => ({
     ...schema,
-    key: simplifySchema(schema.key),
-    value: simplifySchema(schema.value),
+    key: simplify(schema.key),
+    value: simplify(schema.value),
   }),
-  set: (schema: any) => ({
+  set: (schema, simplify) => ({
     ...schema,
-    value: simplifySchema(schema.value),
+    value: simplify(schema.value),
   }),
-  object: (schema: any) => ({
+  object: (schema, simplify) => ({
     ...schema,
     entries: Object.fromEntries(
       Object.entries(schema.entries).map(([key, value]) => [
         key,
-        simplifySchema(value),
+        simplify(value),
       ]),
     ),
   }),
-  loose_object: (schema: any) => simplifyHandlers["object"](schema),
-  object_with_rest: (schema: any) => ({
-    ...simplifyHandlers["object"](schema),
-    rest: simplifySchema(schema.rest),
+  loose_object: (schema, simplify) =>
+    simplifyHandlers["object"](schema, simplify),
+  object_with_rest: (schema, simplify) => ({
+    ...simplifyHandlers["object"](schema, simplify),
+    rest: simplify(schema.rest),
   }),
-  strict_object: (schema: any) => simplifyHandlers["object"](schema),
-  array: (schema: any) => ({
+  strict_object: (schema, simplify) =>
+    simplifyHandlers["object"](schema, simplify),
+  array: (schema, simplify) => ({
     ...schema,
-    item: simplifySchema(schema.item),
+    item: simplify(schema.item),
   }),
-  tuple: (schema: any) => ({
+  tuple: (schema, simplify) => ({
     ...schema,
-    items: schema.items.map((s: any) => simplifySchema(s)),
+    items: schema.items.map((s: any) => simplify(s)),
   }),
-  loose_tuple: (schema: any) => simplifyHandlers["tuple"](schema),
-  strict_tuple: (schema: any) => simplifyHandlers["tuple"](schema),
-  tuple_with_rest: (schema: any) => ({
-    ...simplifyHandlers["tuple"](schema),
-    rest: simplifySchema(schema.rest),
+  loose_tuple: (schema, simplify) =>
+    simplifyHandlers["tuple"](schema, simplify),
+  strict_tuple: (schema, simplify) =>
+    simplifyHandlers["tuple"](schema, simplify),
+  tuple_with_rest: (schema, simplify) => ({
+    ...simplifyHandlers["tuple"](schema, simplify),
+    rest: simplify(schema.rest),
   }),
-  union: (schema: any) => schema.options.map((s: any) => simplifySchema(s)),
-  intersect: (schema: any) => ({
+  union: (schema, simplify) => schema.options.map((s: any) => simplify(s)),
+  intersect: (schema, simplify) => ({
     ...schema,
-    options: schema.options.map((s: any) => simplifySchema(s)),
+    options: schema.options.map((s: any) => simplify(s)),
   }),
-  variant: (schema: any) => ({
+  variant: (schema, simplify) => ({
     ...schema,
-    options: schema.options.map((s: any) => simplifySchema(s)),
+    options: schema.options.map((s: any) => simplify(s)),
   }),
-  "#wrapped": (schema: any) => ({
+  "#wrapped": (schema, simplify) => ({
     ...schema,
-    wrapped: simplifySchema(schema.wrapped),
+    wrapped: simplify(schema.wrapped),
   }),
-  optional: (schema: any) => simplifyHandlers["#wrapped"](schema),
-  non_optional: (schema: any) => simplifyHandlers["#wrapped"](schema),
-  undefinedable: (schema: any) => simplifyHandlers["#wrapped"](schema),
-  nullable: (schema: any) => simplifyHandlers["#wrapped"](schema),
-  non_nullable: (schema: any) => simplifyHandlers["#wrapped"](schema),
-  nullish: (schema: any) => simplifyHandlers["#wrapped"](schema),
-  non_nullish: (schema: any) => simplifyHandlers["#wrapped"](schema),
-  exact_optional: (schema: any) => simplifyHandlers["#wrapped"](schema),
+  optional: (schema, simplify) =>
+    simplifyHandlers["#wrapped"](schema, simplify),
+  non_optional: (schema, simplify) =>
+    simplifyHandlers["#wrapped"](schema, simplify),
+  undefinedable: (schema, simplify) =>
+    simplifyHandlers["#wrapped"](schema, simplify),
+  nullable: (schema, simplify) =>
+    simplifyHandlers["#wrapped"](schema, simplify),
+  non_nullable: (schema, simplify) =>
+    simplifyHandlers["#wrapped"](schema, simplify),
+  nullish: (schema, simplify) => simplifyHandlers["#wrapped"](schema, simplify),
+  non_nullish: (schema, simplify) =>
+    simplifyHandlers["#wrapped"](schema, simplify),
+  exact_optional: (schema, simplify) =>
+    simplifyHandlers["#wrapped"](schema, simplify),
 };
 
 /**
@@ -138,12 +161,36 @@ const simplifyHandlers: Record<string, (schema: any) => any> = {
  * @returns Simplified schema with metadata removed
  */
 export function simplifySchema(schema: any): any {
+  return simplifyNode(schema, simplifySchema);
+}
+
+/**
+ * A simplification that returns the same simplified object for every
+ * occurrence of the same schema object: a sub-schema shared by many fields
+ * is simplified once, and its simplified form is shared too, which lets the
+ * schema fingerprint below visit it once.
+ */
+function memoisedSimplify(): Simplify {
+  const simplified = new WeakMap<object, any>();
+  const simplify: Simplify = (schema) => {
+    if (!schema || typeof schema !== "object") {
+      return simplifyNode(schema, simplify);
+    }
+    if (simplified.has(schema)) return simplified.get(schema);
+    const result = simplifyNode(schema, simplify);
+    simplified.set(schema, result);
+    return result;
+  };
+  return simplify;
+}
+
+function simplifyNode(schema: any, simplify: Simplify): any {
   if (!schema || typeof schema !== "object") {
     return schema;
   }
 
   if (isTypeDefinition(schema)) {
-    const simplified = simplifySchema(schema.schema.entries);
+    const simplified = simplify(schema.schema.entries);
     return schema.indexes.length > 0
       ? { ...simplified, "@indexes": schema.indexes }
       : simplified;
@@ -176,14 +223,14 @@ export function simplifySchema(schema: any): any {
   // Process pipe array if present
   if ("pipe" in simplified && Array.isArray(simplified.pipe)) {
     simplified.pipe = simplified.pipe
-      .map((s: any) => simplifySchema(s))
+      .map((s: any) => simplify(s))
       .filter((s: any) => s !== undefined);
   }
 
   // Use type-specific handler if available
   const handler = simplifyHandlers[schema.type];
   if (handler) {
-    return handler(simplified);
+    return handler(simplified, simplify);
   }
 
   return simplified;
@@ -192,18 +239,54 @@ export function simplifySchema(schema: any): any {
 /**
  * Flattens a simplified schema into dot-notation keys
  *
+ * One pass over the tree that writes every key straight into the result:
+ * building each level's own result and copying it into its parent made the
+ * cost grow with the number of keys times their depth.
+ *
  * @param schema - Simplified schema object
  * @returns Flattened object with dot-notation paths as keys
  */
 export function flattenSchema(schema: any): Record<string, any> {
   const result: Record<string, any> = {};
+  flattenInto(result, schema, "", NOT_FILTERED);
+  return result;
+}
 
+const NOT_FILTERED = -1;
+const STANDARD_KEY = "~standard";
+const NESTED_STANDARD = ".~standard";
+
+/**
+ * Writes the keys of `schema` under `prefix`. A key nested below the top
+ * level is dropped when the part of its path below its top-level key holds
+ * `.~standard` (or is `~standard`): `filteredFrom` is where that part starts,
+ * or `NOT_FILTERED` above it.
+ */
+function flattenInto(
+  result: Record<string, any>,
+  schema: any,
+  prefix: string,
+  filteredFrom: number,
+): void {
   if (!schema || typeof schema !== "object") {
-    return result;
+    return;
   }
 
   if (isTypeDefinition(schema)) {
-    return flattenSchema(simplifySchema(schema));
+    flattenInto(result, simplifySchema(schema), prefix, filteredFrom);
+    return;
+  }
+
+  const keys = Object.keys(schema);
+  // Engines list integer-like keys first: in the per-level objects the
+  // previous implementation built, a leaf under such a key came before the
+  // metadata entries, and the order of the result keeps that.
+  let hoisted = 0;
+  while (hoisted < keys.length && isArrayIndex(keys[hoisted])) {
+    const key = keys[hoisted++];
+    if (isLeafValue(schema[key])) {
+      write(result, `${prefix}${key}`, schema[key], filteredFrom);
+    }
   }
 
   // Symbol-keyed index metadata (withIndex) is invisible to Object.keys and
@@ -211,55 +294,79 @@ export function flattenSchema(schema: any): Record<string, any> {
   // can see index changes (unique/TTL/collation/partialFilter/global).
   const indexMetadata = (schema as Record<PropertyKey, any>)[INDEX_SYMBOL];
   if (indexMetadata !== undefined) {
-    result["@index"] = indexMetadata;
+    write(result, `${prefix}@index`, indexMetadata, filteredFrom);
   }
   const privacyMetadata = (schema as Record<PropertyKey, any>)[PRIVACY_SYMBOL];
   if (privacyMetadata !== undefined) {
-    for (const [k, val] of Object.entries(flattenSchema(privacyMetadata))) {
-      result[`@privacy.${k}`] = val;
-    }
+    flattenInto(result, privacyMetadata, `${prefix}@privacy.`, filteredFrom);
   }
 
-  const keys = Object.keys(schema);
-  for (const key of keys) {
+  for (const [position, key] of keys.entries()) {
     // Skip ~standard properties as they add noise
-    if (key === "~standard" || key.endsWith(".~standard")) {
+    if (key === STANDARD_KEY || key.endsWith(NESTED_STANDARD)) {
       continue;
     }
 
     const value = schema[key];
+    if (position < hoisted && isLeafValue(value)) {
+      continue;
+    }
 
     if (Array.isArray(value)) {
       for (const [index, subValue] of value.entries()) {
+        const path = `${prefix}${key}[${index}]`;
         if (typeof subValue === "object" && subValue !== null) {
-          for (const [subKey, subSubValue] of Object.entries(
-            flattenSchema(subValue),
-          )) {
-            // Skip ~standard in nested paths
-            if (subKey.includes(".~standard") || subKey === "~standard") {
-              continue;
-            }
-            result[`${key}[${index}].${subKey}`] = subSubValue;
-          }
+          const childPrefix = `${path}.`;
+          flattenInto(
+            result,
+            subValue,
+            childPrefix,
+            filteredFrom === NOT_FILTERED ? childPrefix.length : filteredFrom,
+          );
         } else {
-          result[`${key}[${index}]`] = subValue;
+          write(result, path, subValue, filteredFrom);
         }
       }
     } else if (typeof value === "object" && value !== null) {
       const nested = isTypeDefinition(value) ? simplifySchema(value) : value;
-      for (const [subKey, subValue] of Object.entries(flattenSchema(nested))) {
-        // Skip ~standard in nested paths
-        if (subKey.includes(".~standard") || subKey === "~standard") {
-          continue;
-        }
-        result[`${key}.${subKey}`] = subValue;
-      }
+      const childPrefix = `${prefix}${key}.`;
+      flattenInto(
+        result,
+        nested,
+        childPrefix,
+        filteredFrom === NOT_FILTERED ? childPrefix.length : filteredFrom,
+      );
     } else {
-      result[key] = value;
+      write(result, `${prefix}${key}`, value, filteredFrom);
     }
   }
+}
 
-  return result;
+const MAX_ARRAY_INDEX = 2 ** 32 - 2;
+
+function isArrayIndex(key: string): boolean {
+  return /^(?:0|[1-9]\d*)$/.test(key) && Number(key) <= MAX_ARRAY_INDEX;
+}
+
+function isLeafValue(value: unknown): boolean {
+  return typeof value !== "object" || value === null;
+}
+
+function write(
+  result: Record<string, any>,
+  path: string,
+  value: unknown,
+  filteredFrom: number,
+): void {
+  if (
+    filteredFrom !== NOT_FILTERED &&
+    (path.indexOf(NESTED_STANDARD, filteredFrom) !== -1 ||
+      (path.length - filteredFrom === STANDARD_KEY.length &&
+        path.endsWith(STANDARD_KEY)))
+  ) {
+    return;
+  }
+  result[path] = value;
 }
 
 /**
@@ -276,12 +383,9 @@ export function diffSchemas(
   const diffs: Array<{ key: string; before?: any; after?: any }> = [];
   const keys = new Set([...Object.keys(schema1), ...Object.keys(schema2)]);
 
-  // Properties to skip in diff output (too verbose/technical for users)
-  const skipProperties = ["kind", ...CLEANUP_PROPERTIES];
-
   for (const key of keys) {
     // Skip if key matches or ends with any skip property
-    const shouldSkip = skipProperties.some(
+    const shouldSkip = DIFF_SKIPPED_PROPERTIES.some(
       (prop) => key === prop || key.endsWith(`.${prop}`),
     );
 
@@ -306,18 +410,165 @@ export function diffSchemas(
 }
 
 /**
- * Compares two schema objects for equality using simplified representation
+ * Compares schemas for one validation run.
  *
- * @param schema1 - First schema
- * @param schema2 - Second schema
- * @returns True if schemas are equal (same fields and types)
+ * Each distinct schema object gets a fingerprint, interned to a number, that
+ * encodes everything `flattenSchema` reads from it after simplification and
+ * `diffSchemas` then compares: its keys (sorted when their order cannot
+ * matter), its index and privacy metadata, and its leaves under a typed
+ * encoding at least as strict as the `JSON.stringify` comparison of
+ * `diffSchemas`, minus the leaves it skips. Equal fingerprints therefore
+ * mean flattened schemas `diffSchemas` finds no difference between.
+ * A sub-schema shared by many fields is fingerprinted once, so the cost
+ * follows the number of distinct schema objects, not the size of the
+ * expanded tree. Unequal fingerprints settle nothing: those schemas, and any
+ * value the encoding cannot read, go through the full flatten-and-diff.
  */
-function schemasEqual(schema1: any, schema2: any): boolean {
-  const simple1 = flattenSchema(simplifySchema(schema1));
-  const simple2 = flattenSchema(simplifySchema(schema2));
+export interface SchemaComparer {
+  equal(schema1: any, schema2: any): boolean;
+  /** Schema objects fingerprinted so far, the unit of the comparison's work. */
+  readonly fingerprintedNodes: number;
+}
 
-  const diffs = diffSchemas(simple1, simple2);
-  return diffs.length === 0;
+const EMPTY_FLATTENED = -1;
+
+export function createSchemaComparer(): SchemaComparer {
+  const simplify = memoisedSimplify();
+  const interned = new Map<string, number>();
+  const fingerprints = new WeakMap<object, number>();
+  let fingerprintedNodes = 0;
+
+  const intern = (encoding: string): number => {
+    let id = interned.get(encoding);
+    if (id === undefined) {
+      id = interned.size;
+      interned.set(encoding, id);
+    }
+    return id;
+  };
+
+  const element = (value: unknown): string =>
+    typeof value === "object" && value !== null
+      ? `o${fingerprint(value)}`
+      : `l${leaf(value)}`;
+
+  const fingerprint = (node: object): number => {
+    const known = fingerprints.get(node);
+    if (known !== undefined) return known;
+    fingerprintedNodes++;
+
+    if (isTypeDefinition(node)) {
+      const simplified = simplify(node);
+      const id =
+        typeof simplified === "object" && simplified !== null
+          ? fingerprint(simplified)
+          : EMPTY_FLATTENED;
+      fingerprints.set(node, id);
+      return id;
+    }
+
+    const parts: string[] = [];
+    const indexMetadata = (node as Record<PropertyKey, any>)[INDEX_SYMBOL];
+    if (indexMetadata !== undefined) {
+      parts.push(`i${JSON.stringify(String(JSON.stringify(indexMetadata)))}`);
+    }
+    const privacyMetadata = (node as Record<PropertyKey, any>)[PRIVACY_SYMBOL];
+    if (typeof privacyMetadata === "object" && privacyMetadata !== null) {
+      parts.push(`p${fingerprint(privacyMetadata)}`);
+    }
+    const keys = Object.keys(node);
+    const orderFree = keys.every(cannotCollide);
+    const entries: string[] = [];
+    for (const key of keys) {
+      const value = (node as Record<string, unknown>)[key];
+      if (orderFree && isSkippedLeaf(key, value)) continue;
+      const encoded = Array.isArray(value)
+        ? `[${Array.from(value, element).join(",")}]`
+        : element(value);
+      entries.push(`${JSON.stringify(key)}:${encoded}`);
+    }
+    if (orderFree) entries.sort();
+    parts.push(orderFree ? "s" : "k", ...entries);
+
+    const id = intern(parts.join(","));
+    fingerprints.set(node, id);
+    return id;
+  };
+
+  const rootFingerprint = (schema: any): number => {
+    const simplified = simplify(schema);
+    return typeof simplified === "object" && simplified !== null
+      ? fingerprint(simplified)
+      : EMPTY_FLATTENED;
+  };
+
+  return {
+    equal(schema1, schema2) {
+      let sameFingerprint = false;
+      try {
+        sameFingerprint = rootFingerprint(schema1) === rootFingerprint(schema2);
+      } catch {
+        sameFingerprint = false;
+      }
+      if (sameFingerprint) return true;
+      const diffs = diffSchemas(
+        flattenSchema(simplify(schema1)),
+        flattenSchema(simplify(schema2)),
+      );
+      return diffs.length === 0;
+    },
+    get fingerprintedNodes() {
+      return fingerprintedNodes;
+    },
+  };
+}
+
+/**
+ * A leaf whose flattened path ends with a property `diffSchemas` skips: it
+ * never takes part in the comparison, so it stays out of the fingerprint.
+ */
+function isSkippedLeaf(key: string, value: unknown): boolean {
+  return (
+    (typeof value !== "object" || value === null) &&
+    DIFF_SKIPPED_PROPERTIES.includes(key)
+  );
+}
+
+/**
+ * Whether the flattened paths under `key` can never meet those of a sibling
+ * key: the first path segment of each is then the key itself. When every key
+ * of a node passes, their order changes nothing in the flattened result as a
+ * set of paths, which is all `diffSchemas` compares, so the fingerprint
+ * sorts them: a type declared in another order is the same schema. The
+ * node's `@index` and `@privacy.` entries are always written before its
+ * keys, by the flattening and by the fingerprint alike.
+ */
+function cannotCollide(key: string): boolean {
+  return !key.includes(".") && !key.includes("[");
+}
+
+/**
+ * A leaf as `flattenSchema` keeps it and `diffSchemas` compares it with
+ * `JSON.stringify`: values that serialise to nothing (undefined, functions,
+ * symbols) are one leaf, every other value keeps its type, so two leaves
+ * with the same encoding always serialise the same. A bigint throws as
+ * `JSON.stringify` does, so the full comparison reports it as it always did.
+ */
+function leaf(value: unknown): string {
+  switch (typeof value) {
+    case "string":
+      return JSON.stringify(value);
+    case "number":
+      return `n${value}`;
+    case "bigint":
+      return `b${JSON.stringify(value)}`;
+    case "boolean":
+      return value ? "t" : "f";
+    case "object":
+      return "z";
+    default:
+      return "u";
+  }
 }
 
 /**
@@ -365,7 +616,9 @@ function formatSchemaDifferences(
  *
  * @param lastMigration - The last migration in the chain
  * @param projectSchema - The project schema from schemas.ts
- * @returns Validation result with errors if any
+ * @returns Validation result with errors if any, and `comparedNodes`, the
+ * number of distinct schema objects the comparison fingerprinted: its work,
+ * which grows with the distinct schema objects rather than the expanded tree
  */
 export function validateLastMigrationMatchesProjectSchema(
   lastMigration: MigrationDefinition,
@@ -373,14 +626,16 @@ export function validateLastMigrationMatchesProjectSchema(
 ): {
   valid: boolean;
   errors: string[];
+  comparedNodes: number;
 } {
   const errors: string[] = [];
+  const comparer = createSchemaComparer();
 
   // Check collections
   {
     const migrationCollections = lastMigration.schemas.collections || {};
     const projectCollections = projectSchema.collections || {};
-    if (!schemasEqual(migrationCollections, projectCollections)) {
+    if (!comparer.equal(migrationCollections, projectCollections)) {
       const migrationNameSet = new Set(Object.keys(migrationCollections));
       const projectNameSet = new Set(Object.keys(projectCollections));
 
@@ -408,7 +663,7 @@ export function validateLastMigrationMatchesProjectSchema(
           const migrationSchema = migrationCollections[name];
           const projectSchema = projectCollections[name];
 
-          if (!schemasEqual(migrationSchema, projectSchema)) {
+          if (!comparer.equal(migrationSchema, projectSchema)) {
             const simple1 = flattenSchema(simplifySchema(migrationSchema));
             const simple2 = flattenSchema(simplifySchema(projectSchema));
             const diffs = diffSchemas(simple1, simple2);
@@ -430,7 +685,7 @@ export function validateLastMigrationMatchesProjectSchema(
       lastMigration.schemas.multiCollections || {};
     const projectMultiCollections = projectSchema.multiCollections || {};
 
-    if (!schemasEqual(migrationMultiCollections, projectMultiCollections)) {
+    if (!comparer.equal(migrationMultiCollections, projectMultiCollections)) {
       const migrationNameSet = new Set(Object.keys(migrationMultiCollections));
       const projectNameSet = new Set(Object.keys(projectMultiCollections));
 
@@ -504,7 +759,7 @@ export function validateLastMigrationMatchesProjectSchema(
           for (const typeName of commonTypes) {
             const migrationTypeSchema = migrationSchema[typeName];
             const projectTypeSchema = projectSchema[typeName];
-            if (!schemasEqual(migrationTypeSchema, projectTypeSchema)) {
+            if (!comparer.equal(migrationTypeSchema, projectTypeSchema)) {
               const simple1 = flattenSchema(
                 simplifySchema(migrationTypeSchema),
               );
@@ -526,7 +781,7 @@ export function validateLastMigrationMatchesProjectSchema(
   {
     const migrationMultiModels = lastMigration.schemas.multiModels || {};
     const projectMultiModels = projectSchema.multiModels || {};
-    if (!schemasEqual(migrationMultiModels, projectMultiModels)) {
+    if (!comparer.equal(migrationMultiModels, projectMultiModels)) {
       const migrationNameSet = new Set(Object.keys(migrationMultiModels));
       const projectNameSet = new Set(Object.keys(projectMultiModels));
 
@@ -597,7 +852,7 @@ export function validateLastMigrationMatchesProjectSchema(
           for (const typeName of commonTypes) {
             const migrationTypeSchema = migrationSchema[typeName];
             const projectTypeSchema = projectSchema[typeName];
-            if (!schemasEqual(migrationTypeSchema, projectTypeSchema)) {
+            if (!comparer.equal(migrationTypeSchema, projectTypeSchema)) {
               const simple1 = flattenSchema(
                 simplifySchema(migrationTypeSchema),
               );
@@ -620,7 +875,7 @@ export function validateLastMigrationMatchesProjectSchema(
     const migrationScoped = lastMigration.schemas.scopedMultiCollections || {};
     const projectScoped = projectSchema.scopedMultiCollections || {};
 
-    if (!schemasEqual(migrationScoped, projectScoped)) {
+    if (!comparer.equal(migrationScoped, projectScoped)) {
       const migrationNameSet = new Set(Object.keys(migrationScoped));
       const projectNameSet = new Set(Object.keys(projectScoped));
 
@@ -652,7 +907,7 @@ export function validateLastMigrationMatchesProjectSchema(
           const migrationEntry = migrationScoped[name];
           const projectEntry = projectScoped[name];
 
-          if (!schemasEqual(migrationEntry.scope, projectEntry.scope)) {
+          if (!comparer.equal(migrationEntry.scope, projectEntry.scope)) {
             const simple1 = flattenSchema(simplifySchema(migrationEntry.scope));
             const simple2 = flattenSchema(simplifySchema(projectEntry.scope));
             const diffs = diffSchemas(simple1, simple2);
@@ -707,7 +962,7 @@ export function validateLastMigrationMatchesProjectSchema(
           for (const typeName of commonTypes) {
             const migrationTypeSchema = migrationTypes[typeName];
             const projectTypeSchema = projectTypes[typeName];
-            if (!schemasEqual(migrationTypeSchema, projectTypeSchema)) {
+            if (!comparer.equal(migrationTypeSchema, projectTypeSchema)) {
               const simple1 = flattenSchema(
                 simplifySchema(migrationTypeSchema),
               );
@@ -728,6 +983,7 @@ export function validateLastMigrationMatchesProjectSchema(
   return {
     valid: errors.length === 0,
     errors,
+    comparedNodes: comparer.fingerprintedNodes,
   };
 }
 
