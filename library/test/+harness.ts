@@ -26,8 +26,8 @@ export interface TestDefinition {
   name: string;
   /** The case body. */
   fn: TestFn;
-  /** Skip this case. */
-  ignore?: boolean;
+  /** Skip this case; a string is the reason the runner reports. */
+  ignore?: boolean | string;
   /** Run only this case. */
   only?: boolean;
   /**
@@ -78,6 +78,10 @@ export function test(
         }
       : nameOrDefinition;
 
+  if (typeof ignore === "string") {
+    nodeTest(name, { skip: ignore }, () => fn({ name }));
+    return;
+  }
   const run = ignore ? nodeTest.skip : only ? nodeTest.only : nodeTest;
   if (timeout === undefined) {
     run(name, () => fn({ name }));

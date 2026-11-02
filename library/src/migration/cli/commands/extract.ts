@@ -3,6 +3,7 @@ import process from "node:process";
 import { blue, bold, dim, green, red, yellow } from "../../../utils/colors.ts";
 import * as path from "node:path";
 
+import * as m from "mongodb";
 import { type Db, MongoClient } from "../../../mongodb.ts";
 import { loadConfig } from "../../config/loader.ts";
 import { buildMigrationChain, loadAllMigrations } from "../../discovery.ts";
@@ -316,15 +317,163 @@ function physicalDuplicateIds(state: DatabaseState): ScenarioViolation[] {
   return violations;
 }
 
-async function serverIdentity(client: MongoClient): Promise<string> {
-  const hello = await client.db("admin").command({ hello: 1 });
-  if (typeof (hello.primary ?? hello.me) === "string") {
-    return hello.primary ?? hello.me;
+const AUTHORIZATION_REFUSALS = new Set([
+  "Unauthorized",
+  "AuthorizationFailure",
+]);
+const UNAUTHORIZED = 13;
+
+export type ServerTopology = "standalone" | "replicaSet" | "router";
+
+export interface DatabaseFingerprint {
+  readonly deploymentId?: string;
+  readonly clusterId?: string | null;
+  readonly processId?: string;
+  readonly topology: ServerTopology;
+  readonly collectionIds: ReadonlySet<string>;
+}
+
+export type SourceVerdict = "same" | "distinct" | "undecidable";
+
+const uuidOf = (
+  collection: m.CollectionInfo | Pick<m.CollectionInfo, "name" | "type">,
+): string | undefined =>
+  "info" in collection ? collection.info?.uuid?.toString("hex") : undefined;
+
+export function isAuthorizationRefusal(error: unknown): boolean {
+  return (
+    error instanceof m.MongoServerError &&
+    (error.code === UNAUTHORIZED ||
+      AUTHORIZATION_REFUSALS.has(String(error.codeName)))
+  );
+}
+
+async function readIdentity<T>(
+  what: string,
+  read: () => Promise<T>,
+): Promise<T | undefined> {
+  try {
+    return await read();
+  } catch (error) {
+    if (isAuthorizationRefusal(error)) return undefined;
+    throw new Error(
+      `extract could not read the ${what} it uses to tell its target from its source: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      { cause: error },
+    );
   }
-  return client.options.hosts
-    .map((host) => `${host.host ?? host.socketPath}:${host.port ?? 27017}`)
-    .join(",")
-    .replace(/127\.0\.0\.1|\[::1\]/g, "localhost");
+}
+
+const readDeploymentId = (client: MongoClient) =>
+  readIdentity("deployment id (admin.system.version)", async () => {
+    const [version] = await client
+      .db("admin")
+      .listCollections({ name: "system.version" }, { nameOnly: false })
+      .toArray();
+    return version === undefined ? undefined : uuidOf(version);
+  });
+
+const readClusterId = (client: MongoClient) =>
+  readIdentity("cluster id (shardIdentity, config.version)", async () => {
+    const shard = await client
+      .db("admin")
+      .collection<{ _id: string; clusterId?: unknown }>("system.version")
+      .findOne({ _id: "shardIdentity" });
+    const cluster =
+      shard?.clusterId ??
+      (await client.db("config").collection("version").findOne({}))?.clusterId;
+    return cluster === undefined || cluster === null ? null : String(cluster);
+  });
+
+export async function fingerprintDatabase(
+  client: MongoClient,
+  name: string,
+): Promise<DatabaseFingerprint> {
+  const hello = await client.db("admin").command({ hello: 1 });
+  const processId = hello.topologyVersion?.processId;
+  const collections = await client
+    .db(name)
+    .listCollections({}, { nameOnly: false })
+    .toArray();
+  return {
+    deploymentId: await readDeploymentId(client),
+    clusterId: await readClusterId(client),
+    processId: processId === undefined ? undefined : String(processId),
+    topology:
+      hello.msg === "isdbgrid"
+        ? "router"
+        : hello.setName === undefined
+          ? "standalone"
+          : "replicaSet",
+    collectionIds: new Set(
+      collections.flatMap((collection) => uuidOf(collection) ?? []),
+    ),
+  };
+}
+
+function compareClusters(
+  source: DatabaseFingerprint,
+  target: DatabaseFingerprint,
+): SourceVerdict | undefined {
+  if (
+    typeof source.clusterId === "string" &&
+    source.clusterId === target.clusterId
+  ) {
+    return "same";
+  }
+  const routers = [source, target].filter((side) => side.topology === "router");
+  if (routers.length !== 1) return undefined;
+  const other = source.topology === "router" ? target : source;
+  if (other.clusterId === null) return "distinct";
+  if (
+    typeof source.clusterId === "string" &&
+    typeof target.clusterId === "string"
+  ) {
+    return "distinct";
+  }
+  return "undecidable";
+}
+
+export function compareWithSource(
+  source: DatabaseFingerprint,
+  target: DatabaseFingerprint,
+  sameName: boolean,
+): SourceVerdict {
+  for (const id of target.collectionIds) {
+    if (source.collectionIds.has(id)) return "same";
+  }
+  if (!sameName) return "distinct";
+  if (
+    source.deploymentId !== undefined &&
+    source.deploymentId === target.deploymentId
+  ) {
+    return "same";
+  }
+  const cluster = compareClusters(source, target);
+  if (cluster !== undefined) return cluster;
+  if (source.deploymentId !== undefined && target.deploymentId !== undefined) {
+    return "distinct";
+  }
+  if (source.processId === undefined || target.processId === undefined) {
+    return "undecidable";
+  }
+  if (source.processId === target.processId) return "same";
+  return source.topology === "standalone" && target.topology === "standalone"
+    ? "distinct"
+    : "undecidable";
+}
+
+export function sourceRefusal(
+  verdict: SourceVerdict,
+  toDb: string,
+): Error | undefined {
+  if (verdict === "distinct") return undefined;
+  return new Error(
+    verdict === "same"
+      ? "extract refuses to write into its own source, or into a copy that shares its collection UUIDs; pick another --to-db or --to"
+      : `extract cannot tell whether --to reaches its own source: the servers do not identify their deployment to this connection, so a database named "${toDb}" is refused; pick another --to-db`,
+  );
 }
 
 async function assertTargetIsNotSource(
@@ -333,16 +482,15 @@ async function assertTargetIsNotSource(
   sourceDb: string,
   toDb: string,
 ): Promise<void> {
-  if (toDb !== sourceDb) return;
-  if (
-    (await serverIdentity(sourceClient)) !==
-    (await serverIdentity(targetClient))
-  ) {
-    return;
-  }
-  throw new Error(
-    "extract refuses to write into its own source; pick another --to-db or --to",
+  const refusal = sourceRefusal(
+    compareWithSource(
+      await fingerprintDatabase(sourceClient, sourceDb),
+      await fingerprintDatabase(targetClient, toDb),
+      toDb === sourceDb,
+    ),
+    toDb,
   );
+  if (refusal) throw refusal;
 }
 
 export function transformState(

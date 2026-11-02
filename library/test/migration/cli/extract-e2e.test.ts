@@ -8,11 +8,15 @@ import {
 } from "../../+assert.ts";
 import { writeFile } from "node:fs/promises";
 import process from "node:process";
+import { networkInterfaces } from "node:os";
 import { withTempDir } from "./shared.ts";
 import { MongoClient } from "../../../src/mongodb.ts";
 import { newId } from "../../../src/ids.ts";
 import { classifyCommand } from "../../../src/migration/cli/commands/classify.ts";
-import { extractCommand } from "../../../src/migration/cli/commands/extract.ts";
+import {
+  extractCommand,
+  fingerprintDatabase,
+} from "../../../src/migration/cli/commands/extract.ts";
 import {
   getAppliedMigrationIds,
   markMigrationAsAdopted,
@@ -303,27 +307,257 @@ e2e(
   },
 );
 
+const LOOPBACK_ALIASES: Record<string, string> = {
+  localhost: "127.0.0.1",
+  "127.0.0.1": "localhost",
+};
+
+function sameServerSpellings(uri: string): string[] {
+  const parts =
+    /^(mongodb(?:\+srv)?:\/\/)((?:[^@/]*@)?)([^/?]+)(\/[^?]*)?(\?.*)?$/.exec(
+      uri,
+    );
+  if (parts === null) throw new Error(`unreadable test URI ${uri}`);
+  const [, scheme, credentials, hostList, , query] = parts;
+  const hosts = hostList.split(",");
+  const spell = (list: string[], option?: string) =>
+    `${scheme}${credentials}${list.join(",")}/${
+      option === undefined
+        ? (query ?? "")
+        : `${query ? `${query}&` : "?"}${option}`
+    }`;
+  const spellings = [
+    spell(hosts, "appName=extract-alias"),
+    spell(hosts),
+    spell(hosts.map((host) => host.toUpperCase())),
+  ];
+  if (hosts.length > 1) spellings.push(spell([...hosts].reverse()));
+  if (hosts.length === 1 && scheme === "mongodb://") {
+    spellings.push(spell(hosts, "directConnection=true"));
+  }
+  const aliased = hosts.map((host) => {
+    const [name, port] = host.split(":");
+    const alias = LOOPBACK_ALIASES[name];
+    return alias === undefined ? undefined : `${alias}:${port ?? 27017}`;
+  });
+  // A loopback alias is the only other address the test can derive for any server.
+  if (aliased.every((host) => host !== undefined)) {
+    spellings.push(spell(aliased));
+  }
+  return spellings.filter((spelling) => spelling !== uri);
+}
+
 e2e(
   "extract: refuses to write into its own source whatever the URI spelling",
   async () => {
     await withSourceAndTarget(async ({ dir, source }) => {
-      const alias = TEST_URI.replace("localhost", "127.0.0.1");
-      assertNotEquals(alias, TEST_URI, "the test needs a localhost URI");
-      await assertRejects(
-        () =>
-          extractCommand({
-            cwd: dir,
-            from: TEST_URI,
-            to: `${alias}/`,
-            fromDb: source,
-            toDb: source,
-            secret: SECRET,
-            json: true,
-          }),
-        Error,
-        "own source",
-      );
+      for (const to of sameServerSpellings(TEST_URI)) {
+        await assertRejects(
+          () =>
+            extractCommand({
+              cwd: dir,
+              from: TEST_URI,
+              to,
+              fromDb: source,
+              toDb: source,
+              secret: SECRET,
+              json: true,
+            }),
+          Error,
+          "own source",
+        );
+      }
     });
+  },
+);
+
+e2e(
+  "extract: --force under another spelling leaves a source with empty collections untouched",
+  async () => {
+    await withProject(async (dir) => {
+      const source = dbName("src");
+      const client = new MongoClient(TEST_URI);
+      await client.connect();
+      try {
+        const db = client.db(source);
+        await db.createCollection("users");
+        await rawCollection(db, "users").createIndex(
+          { legacyKey: 1 },
+          { name: "operator_index" },
+        );
+        const before = await db.listCollections().toArray();
+        const [to] = sameServerSpellings(TEST_URI);
+        await assertRejects(
+          () =>
+            extractCommand({
+              cwd: dir,
+              from: TEST_URI,
+              to,
+              fromDb: source,
+              toDb: source,
+              secret: SECRET,
+              json: true,
+              force: true,
+            }),
+          Error,
+          "own source",
+        );
+        assertEquals(await db.listCollections().toArray(), before);
+        const indexes = await rawCollection(db, "users").indexes();
+        assert(indexes.some((index) => index.name === "operator_index"));
+      } finally {
+        await client.db(source).dropDatabase();
+        await client.close();
+      }
+    });
+  },
+);
+
+async function serverProcessId(uri: string): Promise<string | undefined> {
+  const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2_000 });
+  try {
+    const hello = await client.db("admin").command({ hello: 1 });
+    const processId = hello.topologyVersion?.processId;
+    return processId === undefined ? undefined : String(processId);
+  } catch {
+    return undefined;
+  } finally {
+    await client.close();
+  }
+}
+
+async function findNonLoopbackAlias(): Promise<string | string[]> {
+  const port = /:(\d+)(?:[/?,]|$)/.exec(TEST_URI)?.[1] ?? "27017";
+  const candidates = [
+    ...(process.env.MONGODBEE_TEST_ALIAS_URI
+      ? [process.env.MONGODBEE_TEST_ALIAS_URI]
+      : []),
+    ...Object.values(networkInterfaces())
+      .flat()
+      .filter((address) => address?.family === "IPv4" && !address.internal)
+      .map(
+        (address) =>
+          `mongodb://${address?.address}:${port}/?directConnection=true`,
+      ),
+  ];
+  const expected = await serverProcessId(TEST_URI);
+  const ids = await Promise.all(candidates.map(serverProcessId));
+  const alias = candidates.find(
+    (_, index) => expected !== undefined && ids[index] === expected,
+  );
+  return alias ?? candidates;
+}
+
+const nonLoopbackAlias = await findNonLoopbackAlias();
+
+test({
+  name: "extract: --force through a non-loopback address of the same server leaves the source untouched",
+  timeout: 60_000,
+  ignore:
+    typeof nonLoopbackAlias === "string"
+      ? false
+      : `the test server answers on none of ${JSON.stringify(nonLoopbackAlias)}; set MONGODBEE_TEST_ALIAS_URI to another address of it`,
+  fn: async () => {
+    await withProject(async (dir) => {
+      const source = dbName("src");
+      const client = new MongoClient(TEST_URI);
+      await client.connect();
+      try {
+        const db = client.db(source);
+        await db.createCollection("users");
+        await rawCollection(db, "users").createIndex(
+          { legacyKey: 1 },
+          { name: "operator_index" },
+        );
+        const before = await db.listCollections().toArray();
+        await assertRejects(
+          () =>
+            extractCommand({
+              cwd: dir,
+              from: TEST_URI,
+              to: String(nonLoopbackAlias),
+              fromDb: source,
+              toDb: source,
+              secret: SECRET,
+              json: true,
+              force: true,
+            }),
+          Error,
+          "own source",
+        );
+        assertEquals(await db.listCollections().toArray(), before);
+        const indexes = await rawCollection(db, "users").indexes();
+        assert(indexes.some((index) => index.name === "operator_index"));
+      } finally {
+        await client.db(source).dropDatabase();
+        await client.close();
+      }
+    });
+  },
+});
+
+e2e(
+  "extract: refuses an empty source database reached under another spelling",
+  async () => {
+    await withProject(async (dir) => {
+      const source = dbName("src");
+      const client = new MongoClient(TEST_URI);
+      await client.connect();
+      try {
+        const [to] = sameServerSpellings(TEST_URI);
+        await assertRejects(
+          () =>
+            extractCommand({
+              cwd: dir,
+              from: TEST_URI,
+              to,
+              fromDb: source,
+              toDb: source,
+              secret: SECRET,
+              json: true,
+            }),
+          Error,
+          "own source",
+        );
+      } finally {
+        await client.db(source).dropDatabase();
+        await client.close();
+      }
+    });
+  },
+);
+
+e2e(
+  "extract: fingerprintDatabase reads the same collection and deployment under two spellings",
+  async () => {
+    const name = dbName("fp");
+    const [alias] = sameServerSpellings(TEST_URI);
+    const client = new MongoClient(TEST_URI);
+    const other = new MongoClient(alias);
+    await client.connect();
+    await other.connect();
+    try {
+      await client.db(name).createCollection("users");
+      const [info] = await client
+        .db(name)
+        .listCollections({ name: "users" }, { nameOnly: false })
+        .toArray();
+      const uuid =
+        "info" in info ? info.info?.uuid?.toString("hex") : undefined;
+      assert(uuid !== undefined);
+      const direct = await fingerprintDatabase(client, name);
+      const aliased = await fingerprintDatabase(other, name);
+      assertEquals([...direct.collectionIds], [uuid]);
+      assertEquals([...aliased.collectionIds], [uuid]);
+      assert(direct.deploymentId !== undefined);
+      assertEquals(aliased.deploymentId, direct.deploymentId);
+      assertNotEquals(direct.deploymentId, uuid);
+      assertEquals(direct.clusterId, aliased.clusterId);
+    } finally {
+      await client.db(name).dropDatabase();
+      await client.close();
+      await other.close();
+    }
   },
 );
 
