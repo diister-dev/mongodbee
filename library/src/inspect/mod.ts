@@ -25,6 +25,7 @@ export { loadConfig } from "../migration/config/loader.ts";
 export {
   diffSchemas,
   flattenSchema,
+  validateLastMigrationMatchesProjectSchema,
   loadProjectSchema,
   simplifySchema,
 } from "../migration/schema-validation.ts";
