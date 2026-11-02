@@ -8,6 +8,7 @@ import {
 } from "../../+assert.ts";
 import { writeFile } from "node:fs/promises";
 import process from "node:process";
+import { networkInterfaces } from "node:os";
 import { withTempDir } from "./shared.ts";
 import { MongoClient } from "../../../src/mongodb.ts";
 import { newId } from "../../../src/ids.ts";
@@ -411,6 +412,89 @@ e2e(
     });
   },
 );
+
+async function serverProcessId(uri: string): Promise<string | undefined> {
+  const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2_000 });
+  try {
+    const hello = await client.db("admin").command({ hello: 1 });
+    const processId = hello.topologyVersion?.processId;
+    return processId === undefined ? undefined : String(processId);
+  } catch {
+    return undefined;
+  } finally {
+    await client.close();
+  }
+}
+
+async function findNonLoopbackAlias(): Promise<string | string[]> {
+  const port = /:(\d+)(?:[/?,]|$)/.exec(TEST_URI)?.[1] ?? "27017";
+  const candidates = [
+    ...(process.env.MONGODBEE_TEST_ALIAS_URI
+      ? [process.env.MONGODBEE_TEST_ALIAS_URI]
+      : []),
+    ...Object.values(networkInterfaces())
+      .flat()
+      .filter((address) => address?.family === "IPv4" && !address.internal)
+      .map(
+        (address) =>
+          `mongodb://${address?.address}:${port}/?directConnection=true`,
+      ),
+  ];
+  const expected = await serverProcessId(TEST_URI);
+  const ids = await Promise.all(candidates.map(serverProcessId));
+  const alias = candidates.find(
+    (_, index) => expected !== undefined && ids[index] === expected,
+  );
+  return alias ?? candidates;
+}
+
+const nonLoopbackAlias = await findNonLoopbackAlias();
+
+test({
+  name: "extract: --force through a non-loopback address of the same server leaves the source untouched",
+  timeout: 60_000,
+  ignore:
+    typeof nonLoopbackAlias === "string"
+      ? false
+      : `the test server answers on none of ${JSON.stringify(nonLoopbackAlias)}; set MONGODBEE_TEST_ALIAS_URI to another address of it`,
+  fn: async () => {
+    await withProject(async (dir) => {
+      const source = dbName("src");
+      const client = new MongoClient(TEST_URI);
+      await client.connect();
+      try {
+        const db = client.db(source);
+        await db.createCollection("users");
+        await rawCollection(db, "users").createIndex(
+          { legacyKey: 1 },
+          { name: "operator_index" },
+        );
+        const before = await db.listCollections().toArray();
+        await assertRejects(
+          () =>
+            extractCommand({
+              cwd: dir,
+              from: TEST_URI,
+              to: String(nonLoopbackAlias),
+              fromDb: source,
+              toDb: source,
+              secret: SECRET,
+              json: true,
+              force: true,
+            }),
+          Error,
+          "own source",
+        );
+        assertEquals(await db.listCollections().toArray(), before);
+        const indexes = await rawCollection(db, "users").indexes();
+        assert(indexes.some((index) => index.name === "operator_index"));
+      } finally {
+        await client.db(source).dropDatabase();
+        await client.close();
+      }
+    });
+  },
+});
 
 e2e(
   "extract: refuses an empty source database reached under another spelling",
