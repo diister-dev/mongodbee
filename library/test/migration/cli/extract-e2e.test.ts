@@ -552,6 +552,7 @@ e2e(
       assert(direct.deploymentId !== undefined);
       assertEquals(aliased.deploymentId, direct.deploymentId);
       assertNotEquals(direct.deploymentId, uuid);
+      assertEquals(direct.clusterId, aliased.clusterId);
     } finally {
       await client.db(name).dropDatabase();
       await client.close();

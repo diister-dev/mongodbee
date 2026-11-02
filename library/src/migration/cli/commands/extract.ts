@@ -317,12 +317,17 @@ function physicalDuplicateIds(state: DatabaseState): ScenarioViolation[] {
   return violations;
 }
 
+const AUTHORIZATION_REFUSALS = new Set([
+  "Unauthorized",
+  "AuthorizationFailure",
+]);
 const UNAUTHORIZED = 13;
 
 export type ServerTopology = "standalone" | "replicaSet" | "router";
 
 export interface DatabaseFingerprint {
   readonly deploymentId?: string;
+  readonly clusterId?: string | null;
   readonly processId?: string;
   readonly topology: ServerTopology;
   readonly collectionIds: ReadonlySet<string>;
@@ -335,22 +340,51 @@ const uuidOf = (
 ): string | undefined =>
   "info" in collection ? collection.info?.uuid?.toString("hex") : undefined;
 
-async function readDeploymentId(
-  client: MongoClient,
-): Promise<string | undefined> {
+export function isAuthorizationRefusal(error: unknown): boolean {
+  return (
+    error instanceof m.MongoServerError &&
+    (error.code === UNAUTHORIZED ||
+      AUTHORIZATION_REFUSALS.has(String(error.codeName)))
+  );
+}
+
+async function readIdentity<T>(
+  what: string,
+  read: () => Promise<T>,
+): Promise<T | undefined> {
   try {
+    return await read();
+  } catch (error) {
+    if (isAuthorizationRefusal(error)) return undefined;
+    throw new Error(
+      `extract could not read the ${what} it uses to tell its target from its source: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      { cause: error },
+    );
+  }
+}
+
+const readDeploymentId = (client: MongoClient) =>
+  readIdentity("deployment id (admin.system.version)", async () => {
     const [version] = await client
       .db("admin")
       .listCollections({ name: "system.version" }, { nameOnly: false })
       .toArray();
     return version === undefined ? undefined : uuidOf(version);
-  } catch (error) {
-    if (error instanceof m.MongoServerError && error.code === UNAUTHORIZED) {
-      return undefined;
-    }
-    throw error;
-  }
-}
+  });
+
+const readClusterId = (client: MongoClient) =>
+  readIdentity("cluster id (shardIdentity, config.version)", async () => {
+    const shard = await client
+      .db("admin")
+      .collection<{ _id: string; clusterId?: unknown }>("system.version")
+      .findOne({ _id: "shardIdentity" });
+    const cluster =
+      shard?.clusterId ??
+      (await client.db("config").collection("version").findOne({}))?.clusterId;
+    return cluster === undefined || cluster === null ? null : String(cluster);
+  });
 
 export async function fingerprintDatabase(
   client: MongoClient,
@@ -364,6 +398,7 @@ export async function fingerprintDatabase(
     .toArray();
   return {
     deploymentId: await readDeploymentId(client),
+    clusterId: await readClusterId(client),
     processId: processId === undefined ? undefined : String(processId),
     topology:
       hello.msg === "isdbgrid"
@@ -377,6 +412,29 @@ export async function fingerprintDatabase(
   };
 }
 
+function compareClusters(
+  source: DatabaseFingerprint,
+  target: DatabaseFingerprint,
+): SourceVerdict | undefined {
+  if (
+    typeof source.clusterId === "string" &&
+    source.clusterId === target.clusterId
+  ) {
+    return "same";
+  }
+  const routers = [source, target].filter((side) => side.topology === "router");
+  if (routers.length !== 1) return undefined;
+  const other = source.topology === "router" ? target : source;
+  if (other.clusterId === null) return "distinct";
+  if (
+    typeof source.clusterId === "string" &&
+    typeof target.clusterId === "string"
+  ) {
+    return "distinct";
+  }
+  return "undecidable";
+}
+
 export function compareWithSource(
   source: DatabaseFingerprint,
   target: DatabaseFingerprint,
@@ -386,8 +444,16 @@ export function compareWithSource(
     if (source.collectionIds.has(id)) return "same";
   }
   if (!sameName) return "distinct";
+  if (
+    source.deploymentId !== undefined &&
+    source.deploymentId === target.deploymentId
+  ) {
+    return "same";
+  }
+  const cluster = compareClusters(source, target);
+  if (cluster !== undefined) return cluster;
   if (source.deploymentId !== undefined && target.deploymentId !== undefined) {
-    return source.deploymentId === target.deploymentId ? "same" : "distinct";
+    return "distinct";
   }
   if (source.processId === undefined || target.processId === undefined) {
     return "undecidable";
