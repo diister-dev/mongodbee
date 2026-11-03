@@ -2,6 +2,7 @@ import { ulid } from "../../utils/ulid.ts";
 import type { MigrationTransformContext, TransformScope } from "../types.ts";
 import { fnv1a32 } from "./seed-id.ts";
 import { encodeUlidRandom, encodeUlidTime } from "../../utils/ulid-encode.ts";
+import { NO_LOOKUPS } from "./transform-lookups.ts";
 
 export const SIBLING_READ_CAP = 1_000;
 
@@ -47,6 +48,7 @@ export function createDeterministicTransformContext(
   return {
     migrationId,
     siblings: {},
+    found: NO_LOOKUPS,
     newId: () => {
       const index = counter++;
       return deterministicUlid(`${migrationId}|newId|${index}`, time + index);
@@ -62,6 +64,7 @@ export function createLiveTransformContext(
   return {
     migrationId,
     siblings: {},
+    found: NO_LOOKUPS,
     newId: () => ulid().toLowerCase(),
     now: () => new Date((startedAt ??= Date.now())),
   };
@@ -71,5 +74,10 @@ export function withTransformScope(
   context: MigrationTransformContext,
   scope: TransformScope,
 ): MigrationTransformContext {
-  return { ...context, scope: scope.scope, siblings: scope.siblings };
+  return {
+    ...context,
+    scope: scope.scope,
+    siblings: scope.siblings,
+    found: scope.found,
+  };
 }

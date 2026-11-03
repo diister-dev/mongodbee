@@ -70,6 +70,8 @@ export type {
   SchemasDefinition,
   SeedCollectionRule,
   TransformCollectionRule,
+  TransformLookup,
+  TransformLookupResults,
   TransformRule,
   TransformScope,
 } from "./types.ts";

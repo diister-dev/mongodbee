@@ -174,6 +174,9 @@ export type TransformScopedMultiCollectionTypeRule<
   /** Sibling document types of the same scope the transform reads, handed to
    *  `up` and `down` as `scope.siblings[type]`. */
   reads?: readonly string[];
+  /** Documents of other collections matched per document, handed to `up` and
+   *  `down` as `scope.found[as]`. */
+  lookups?: readonly TransformLookup[];
   /** Marks this transformation as irreversible (cannot be rolled back) */
   irreversible?: boolean;
   /** Marks this transformation as lossy (rollback loses data) */
@@ -558,13 +561,42 @@ export type MigrationRule =
  * créneau turning a salle name into the salle id needs the exposition's
  * configuration, which lives in another document of the same scope. `scope` is
  * absent outside a scoped multi-collection, and `siblings` is empty when the
- * rule reads nothing.
+ * rule reads nothing. `found` holds, by name, the document each declared
+ * {@link TransformLookup} matched for this document, `undefined` when none
+ * did; it is empty when the rule looks nothing up.
  */
 export type TransformScope = {
   readonly scope?: string;
   readonly siblings: Readonly<
     Record<string, readonly Record<string, unknown>[]>
   >;
+  readonly found: TransformLookupResults;
+};
+
+export type TransformLookupResults = Readonly<
+  Record<string, Record<string, unknown> | undefined>
+>;
+
+/**
+ * One document of ANOTHER physical collection a scoped transform needs for
+ * each document it rewrites: a participant naming the session it registered
+ * through, a session naming the invitation link it opened. `key` returns the
+ * value to match on `field` (default `_id`), or `undefined` for none; it also
+ * receives what the lookups declared before it matched, so a lookup can follow
+ * the previous one. The appliers resolve each lookup once per batch with a
+ * single `$in`, never a query per document. The first document matching a key,
+ * by `_id`, wins: look up on a unique, scalar field. A key that is neither a
+ * string nor a number, or a `key` that throws, fails that document as a failing
+ * `up` does. A lookup never reads the collection its transform rewrites.
+ */
+export type TransformLookup = {
+  readonly as: string;
+  readonly collection: string;
+  readonly field?: string;
+  readonly key: (
+    doc: Record<string, unknown>,
+    found: TransformLookupResults,
+  ) => string | number | undefined;
 };
 
 export type TransformRule<T = Record<string, any>, U = Record<string, any>> = {
@@ -858,11 +890,14 @@ export interface ScopedMultiCollectionTypeBuilder {
    * the transform spans every scope ; pass `scopeFilter` to restrict the
    * effect to a subset. `reads` names the sibling types of the same scope
    * the transform needs, handed to `up` and `down` as `scope.siblings`.
+   * `lookups` matches documents of other collections, handed as
+   * `scope.found`.
    */
   transform<T = Record<string, any>, U = Record<string, any>>(
     rule: TransformRule<T, U> & {
       readonly scopeFilter?: readonly string[];
       readonly reads?: readonly string[];
+      readonly lookups?: readonly TransformLookup[];
     },
   ): ScopedMultiCollectionTypeBuilder;
   deleteWhere(

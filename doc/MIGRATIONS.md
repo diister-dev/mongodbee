@@ -796,6 +796,23 @@ migrate(migration) {
    - `.deleteWhere(where)` → delete the documents of the type matching `where` (irreversible)
    - `.end()` → back to `MultiCollectionBuilder`
 
+**Reading other collections from a scoped transform**: `.scopedMultiCollection(c).type(t).transform({ lookups, up, down })` hands `up` and `down` the document of another physical collection each document names, as `scope.found[as]`. Each lookup declares `as`, `collection`, an optional `field` (default `_id`) and `key(doc, found)`, which returns the value to match or `undefined`; a later lookup reads what the earlier ones matched, so a chain follows references (a participant's session, then that session's invitation link by code). The appliers resolve each lookup once per batch with one `$in`, never a query per document, and a key that matches nothing gives `undefined`: a repair over references that expired leaves those documents as they are. Look up on a unique, scalar field; the first match by `_id` wins. A key is a string or a number: anything else, or a `key` that throws, fails that document the way a failing `up` does. A lookup cannot read the collection the transform rewrites (its documents would be seen before or after their rewrite depending on the batch); `reads` covers that case.
+
+```ts
+const text = (value: unknown) => (typeof value === "string" ? value : undefined);
+
+.transform({
+  lookups: [
+    { as: "session", collection: "+flow_sessions", key: (p) => text(p.sessionId) },
+    { as: "link", collection: "+invitation_links", field: "code", key: (_p, found) => text(found.session?.invitationCode) },
+  ],
+  up: (p, { found }) => (found.link ? { ...p, linkId: found.link._id } : p),
+  down: ({ linkId: _drop, ...p }) => p,
+})
+```
+
+`reads` (siblings of the same scope, for a scope's few reference documents) and `lookups` (one document per rewritten document, from any collection) combine.
+
 **Deleting documents by filter**: every builder that can `.transform()` documents can also `.deleteWhere(where)` them. The filter uses the same field operators the simulation supports (`$eq`, `$ne`, `$in`, `$nin`, `$gt`, `$gte`, `$lt`, `$lte`, `$exists`); the type discriminator (and the scope, for scoped multi-collections) is always added by the applier as an extra `$and` clause, so a filter cannot reach outside its type, and `_type` / `_scope` are refused inside `where` (restrict scopes with `scopeFilter`).
 
 | Builder | Operation |
