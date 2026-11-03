@@ -58,6 +58,7 @@ import type {
   MigrationTransformContext,
   SeedCollectionRule,
   TransformCollectionRule,
+  TransformLookup,
 } from "./types.ts";
 import { fieldsOf, type TypeInput } from "../type-definition.ts";
 import { computedTopology } from "../computed-topology.ts";
@@ -99,6 +100,34 @@ function dedupeKeys(by: readonly string[], context: string): readonly string[] {
     }
   }
   return [...by];
+}
+
+function transformLookups(
+  lookups: readonly TransformLookup[] | undefined,
+  transformed: string,
+  context: string,
+): readonly TransformLookup[] | undefined {
+  if (!lookups || lookups.length === 0) return undefined;
+  const names = new Set<string>();
+  for (const lookup of lookups) {
+    if (lookup.as.length === 0 || lookup.collection.length === 0) {
+      throw new Error(
+        `${context}: a lookup needs a name in "as" and a "collection"`,
+      );
+    }
+    if (lookup.collection === transformed) {
+      throw new Error(
+        `${context}: lookup "${lookup.as}" reads "${transformed}", the collection this transform rewrites; a document would see its neighbours before or after their rewrite depending on the batch. Read it with "reads" instead`,
+      );
+    }
+    if (names.has(lookup.as)) {
+      throw new Error(
+        `${context}: two lookups are named "${lookup.as}"; the second would hide the first in scope.found`,
+      );
+    }
+    names.add(lookup.as);
+  }
+  return [...lookups];
 }
 
 /**
@@ -739,6 +768,11 @@ function createScopedMultiCollectionTypeBuilder(
         parentSchema,
         scopeFilter: rule.scopeFilter,
         reads: rule.reads,
+        lookups: transformLookups(
+          rule.lookups,
+          collectionName,
+          `transform ${collectionName}.${documentType}`,
+        ),
         irreversible: rule.irreversible,
         lossy: rule.lossy,
       });

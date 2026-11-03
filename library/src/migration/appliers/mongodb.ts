@@ -14,7 +14,10 @@ import type {
   MigrationRule,
   MigrationTransformContext,
   SchemasDefinition,
+  TransformLookup,
+  TransformLookupResults,
 } from "../types.ts";
+import { resolveLookups } from "../utils/transform-lookups.ts";
 import * as v from "valibot";
 import { toMongoValidator } from "../../validator.ts";
 import { dirtyEquivalent } from "../../utils/object.ts";
@@ -100,6 +103,12 @@ export type SiblingsByScope = ReadonlyMap<
   Readonly<Record<string, readonly Record<string, unknown>[]>>
 >;
 
+/** A batch transformer: the document, plus what its lookups matched. */
+type DocumentTransformer = (
+  doc: Record<string, unknown>,
+  found: TransformLookupResults,
+) => Record<string, unknown>;
+
 /** Binds a transform to the siblings of the scope each document lives in. */
 export function withScope(
   transform: (
@@ -108,14 +117,15 @@ export function withScope(
   ) => Record<string, unknown>,
   siblings: SiblingsByScope,
   context: MigrationTransformContext,
-): (doc: Record<string, unknown>) => Record<string, unknown> {
-  return (doc) => {
+): DocumentTransformer {
+  return (doc, found) => {
     const scope = typeof doc._scope === "string" ? doc._scope : undefined;
     return transform(
       doc,
       withTransformScope(context, {
         scope,
         siblings: (scope !== undefined ? siblings.get(scope) : undefined) ?? {},
+        found,
       }),
     );
   };
@@ -131,10 +141,10 @@ export function withScope(
  * here keeps the two appliers in lockstep: the discriminators can never be lost.
  */
 function repinScopedDiscriminators(
-  transform: (doc: Record<string, unknown>) => Record<string, unknown>,
-): (doc: Record<string, unknown>) => Record<string, unknown> {
-  return (doc) => ({
-    ...transform(doc),
+  transform: DocumentTransformer,
+): DocumentTransformer {
+  return (doc, found) => ({
+    ...transform(doc, found),
     _type: doc._type,
     _scope: doc._scope,
     _id: doc._id,
@@ -932,10 +942,20 @@ export function createMongodbApplier(
   async function transformDocuments(
     collectionName: string,
     filter: Record<string, unknown>,
-    transformer: (doc: Record<string, unknown>) => Record<string, unknown>,
+    transformer: DocumentTransformer,
     operationType?: MigrationRule["type"],
+    lookups?: readonly TransformLookup[],
   ): Promise<void> {
     const collection = primaryCollection(db, collectionName);
+    const fetchLookup = async (
+      name: string,
+      field: string,
+      keys: readonly (string | number)[],
+    ) =>
+      (await primaryCollection(db, name)
+        .find({ [field]: { $in: [...keys] } } as Record<string, unknown>)
+        .sort({ _id: 1 })
+        .toArray()) as Record<string, unknown>[];
     const reporter = operationType
       ? makeReporter(
           operationType,
@@ -959,10 +979,17 @@ export function createMongodbApplier(
 
       if (documents.length === 0) break;
 
+      const looked = await resolveLookups(
+        documents as Record<string, unknown>[],
+        lookups,
+        fetchLookup,
+      );
       const bulkOps = documents
-        .map((doc) => {
+        .map((doc, i) => {
           try {
-            const transformed = transformer(doc);
+            const { found, error } = looked[i];
+            if (error) throw error;
+            const transformed = transformer(doc, found);
             return {
               replaceOne: {
                 filter: { _id: doc._id },
@@ -2767,6 +2794,7 @@ export function createMongodbApplier(
           filter,
           repinScopedDiscriminators(withScope(operation.up, siblings, context)),
           operation.type,
+          operation.lookups,
         );
       },
       reverse: async (operation) => {
@@ -2790,6 +2818,8 @@ export function createMongodbApplier(
           repinScopedDiscriminators(
             withScope(operation.down, siblings, context),
           ),
+          undefined,
+          operation.lookups,
         );
       },
     },

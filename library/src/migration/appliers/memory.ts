@@ -3,8 +3,14 @@ import type {
   MigrationDefinition,
   MigrationRule,
   SchemaContent,
+  TransformLookup,
+  TransformLookupResults,
   TransformScope,
 } from "../types.ts";
+import {
+  NO_LOOKUPS,
+  resolveLookupsInMemory,
+} from "../utils/transform-lookups.ts";
 import * as v from "valibot";
 import { isDeepStrictEqual } from "node:util";
 import { idKey, MoveConflictError } from "./move-type.ts";
@@ -471,12 +477,33 @@ function scopeOf(
     string,
     Readonly<Record<string, readonly Record<string, unknown>[]>>
   >,
+  found: TransformLookupResults = NO_LOOKUPS,
 ): TransformScope {
   const scope = typeof doc._scope === "string" ? doc._scope : undefined;
   return {
     scope,
     siblings: (scope !== undefined ? siblings.get(scope) : undefined) ?? {},
+    found,
   };
+}
+
+/** What each walked document's lookups match, keyed by the document itself.
+ *  A key that cannot be computed throws, as a failing `up` does here. */
+function lookupsOf(
+  state: DatabaseState,
+  content: readonly Record<string, unknown>[],
+  lookups: readonly TransformLookup[] | undefined,
+  walks: (doc: Record<string, unknown>) => boolean,
+): ReadonlyMap<Record<string, unknown>, TransformLookupResults> {
+  const walked = content.filter(walks);
+  const looked = resolveLookupsInMemory(
+    walked,
+    lookups,
+    (name) => locatePhysical(state, name)?.content ?? [],
+  );
+  const failed = looked.find((entry) => entry.error)?.error;
+  if (failed) throw failed;
+  return new Map(walked.map((doc, i) => [doc, looked[i].found]));
 }
 
 export function createMemoryApplier(migration: MigrationDefinition) {
@@ -1737,12 +1764,16 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           doc._type === operation.documentType &&
           (!scopeSet || scopeSet.has(doc._scope as string));
         const siblings = siblingsOf(coll.content, operation.reads, walks);
+        const found = lookupsOf(state, coll.content, operation.lookups, walks);
         coll.content = coll.content.map((doc) => {
           if (walks(doc)) {
             return {
               ...operation.up(
                 doc as Record<string, unknown>,
-                withTransformScope(context, scopeOf(doc, siblings)),
+                withTransformScope(
+                  context,
+                  scopeOf(doc, siblings, found.get(doc)),
+                ),
               ),
               _type: doc._type,
               _scope: doc._scope,
@@ -1771,12 +1802,16 @@ export function createMemoryApplier(migration: MigrationDefinition) {
           doc._type === operation.documentType &&
           (!scopeSet || scopeSet.has(doc._scope as string));
         const siblings = siblingsOf(coll.content, operation.reads, walks);
+        const found = lookupsOf(state, coll.content, operation.lookups, walks);
         coll.content = coll.content.map((doc) => {
           if (walks(doc)) {
             return {
               ...operation.down(
                 doc as Record<string, unknown>,
-                withTransformScope(context, scopeOf(doc, siblings)),
+                withTransformScope(
+                  context,
+                  scopeOf(doc, siblings, found.get(doc)),
+                ),
               ),
               _type: doc._type,
               _scope: doc._scope,
