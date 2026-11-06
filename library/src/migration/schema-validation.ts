@@ -60,12 +60,12 @@ const CLEANUP_PROPERTIES = [
  */
 const DIFF_SKIPPED_PROPERTIES = ["kind", ...CLEANUP_PROPERTIES];
 
-/**
- * Schema kinds to ignore during simplification
- */
-const CLEANUP_KINDS = ["transformation", "metadata"];
+const VALUE_PROPERTIES = ["default", "fallback"] as const;
+const UNCOMPARABLE = "@uncomparable";
+const MAX_LAZY_DEPTH = 64;
 
 type Simplify = (schema: any) => any;
+type ExpandLazy = (schema: any) => any;
 
 /**
  * Type-specific handlers for simplifying Valibot schemas. Each receives the
@@ -123,7 +123,10 @@ const simplifyHandlers: Record<
     ...simplifyHandlers["tuple"](schema, simplify),
     rest: simplify(schema.rest),
   }),
-  union: (schema, simplify) => schema.options.map((s: any) => simplify(s)),
+  union: (schema, simplify) => ({
+    ...schema,
+    options: schema.options.map((s: any) => simplify(s)),
+  }),
   intersect: (schema, simplify) => ({
     ...schema,
     options: schema.options.map((s: any) => simplify(s)),
@@ -161,7 +164,7 @@ const simplifyHandlers: Record<
  * @returns Simplified schema with metadata removed
  */
 export function simplifySchema(schema: any): any {
-  return simplifyNode(schema, simplifySchema);
+  return createSimplifier()(schema);
 }
 
 /**
@@ -170,21 +173,63 @@ export function simplifySchema(schema: any): any {
  * is simplified once, and its simplified form is shared too, which lets the
  * schema fingerprint below visit it once.
  */
-function memoisedSimplify(): Simplify {
-  const simplified = new WeakMap<object, any>();
-  const simplify: Simplify = (schema) => {
-    if (!schema || typeof schema !== "object") {
-      return simplifyNode(schema, simplify);
+function createSimplifier(): Simplify {
+  const shared = new WeakMap<object, any>();
+  const unfolding: Array<{ node: object; getter: unknown }> = [];
+  let lazyVisits = 0;
+
+  const expandLazy: ExpandLazy = (node) => {
+    lazyVisits++;
+    const position = unfolding.findIndex(
+      (entry) => entry.node === node || entry.getter === node.getter,
+    );
+    if (position !== -1) {
+      return { type: "lazy", "@cycle": unfolding.length - position };
     }
-    if (simplified.has(schema)) return simplified.get(schema);
-    const result = simplifyNode(schema, simplify);
-    simplified.set(schema, result);
+    if (unfolding.length >= MAX_LAZY_DEPTH) {
+      return {
+        type: "lazy",
+        [UNCOMPARABLE]: `v.lazy unfolds more than ${MAX_LAZY_DEPTH} levels without returning a schema it already returned; make the getter return one shared schema object`,
+      };
+    }
+    let resolved: unknown;
+    try {
+      resolved = node.getter(undefined);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return {
+        type: "lazy",
+        [UNCOMPARABLE]: `v.lazy getter fails without an input (${reason}); the comparison resolves it without one, so it must not read its input`,
+      };
+    }
+    unfolding.push({ node, getter: node.getter });
+    try {
+      return { type: "lazy", "@resolved": simplify(resolved) };
+    } finally {
+      unfolding.pop();
+    }
+  };
+
+  const simplify: Simplify = (schema) => {
+    if (!schema || typeof schema !== "object") return schema;
+    if (shared.has(schema)) return shared.get(schema);
+    const lazyVisitsBefore = lazyVisits;
+    const result = simplifyNode(schema, simplify, expandLazy);
+    if (lazyVisits === lazyVisitsBefore) shared.set(schema, result);
     return result;
   };
   return simplify;
 }
 
-function simplifyNode(schema: any, simplify: Simplify): any {
+function isValibotNode(schema: any): boolean {
+  return typeof schema.kind === "string" && typeof schema.type === "string";
+}
+
+function simplifyNode(
+  schema: any,
+  simplify: Simplify,
+  expandLazy: ExpandLazy,
+): any {
   if (!schema || typeof schema !== "object") {
     return schema;
   }
@@ -196,11 +241,14 @@ function simplifyNode(schema: any, simplify: Simplify): any {
       : simplified;
   }
 
-  // Skip schemas marked for cleanup — EXCEPT index metadata (withIndex):
-  // it drives real MongoDB indexes (unique, TTL, collation, partial filters),
-  // so it is structural and must survive simplification to participate in
-  // snapshot comparisons. Other metadata (title, description, i18n) stays noise.
-  if (CLEANUP_KINDS.includes(schema.kind)) {
+  if (!isValibotNode(schema)) {
+    return simplifyEntries(schema, simplify);
+  }
+
+  // Index metadata (withIndex) drives real MongoDB indexes (unique, TTL,
+  // collation, partial filters) and privacy metadata drives erasure, so both
+  // survive; other metadata (title, description, i18n) is noise.
+  if (schema.kind === "metadata") {
     const kept: Record<PropertyKey, unknown> = {};
     const indexMetadata = indexMetadataOf(schema.metadata);
     if (indexMetadata !== undefined) kept[INDEX_SYMBOL] = indexMetadata;
@@ -212,28 +260,189 @@ function simplifyNode(schema: any, simplify: Simplify): any {
     return undefined;
   }
 
-  // Create a shallow copy to avoid mutating the original
+  if (schema.type === "lazy" && typeof schema.getter === "function") {
+    return expandLazy(schema);
+  }
+
   const simplified = { ...schema };
 
-  // Remove cleanup properties
   for (const prop of CLEANUP_PROPERTIES) {
     delete simplified[prop];
   }
 
-  // Process pipe array if present
+  for (const prop of VALUE_PROPERTIES) {
+    if (schema[prop] === undefined) continue;
+    delete simplified[prop];
+    const value = valueIdentity(schema[prop]);
+    simplified[`@${prop}`] = value.identity;
+    if (value.problem !== undefined) {
+      simplified[UNCOMPARABLE] = `the ${prop} ${value.problem}`;
+    }
+  }
+
+  if (schema.requirement instanceof RegExp) {
+    simplified.requirement = String(schema.requirement);
+  } else if (schema.requirement instanceof Date) {
+    simplified.requirement = valueIdentity(schema.requirement).identity;
+  }
+
+  const code = opaqueCode(schema);
+  if (code !== null) {
+    if (code.held !== "closure") delete simplified[code.held];
+    const named = code.held !== "closure" && typeof schema.message === "string";
+    simplified["@check"] = named ? schema.message : null;
+    if (!named) simplified[UNCOMPARABLE] = unnamedCheckReason(schema.type);
+  }
+
+  if (typeof schema.class === "function") {
+    simplified.class = schema.class.name;
+  }
+
   if ("pipe" in simplified && Array.isArray(simplified.pipe)) {
     simplified.pipe = simplified.pipe
       .map((s: any) => simplify(s))
       .filter((s: any) => s !== undefined);
   }
 
-  // Use type-specific handler if available
   const handler = simplifyHandlers[schema.type];
   if (handler) {
     return handler(simplified, simplify);
   }
 
   return simplified;
+}
+
+function simplifyEntries(entries: any, simplify: Simplify): any {
+  const simplified = { ...entries };
+  for (const key of Object.keys(entries)) {
+    const value = entries[key];
+    if (Array.isArray(value)) simplified[key] = value.map(simplify);
+    else if (value && typeof value === "object") {
+      simplified[key] = simplify(value);
+    }
+  }
+  return simplified;
+}
+
+type OpaqueCode = { held: "requirement" | "check" } | { held: "closure" };
+
+const USER_CODE_REQUIREMENTS = new Set([
+  "check",
+  "partial_check",
+  "check_items",
+  "some_item",
+  "every_item",
+  "guard",
+]);
+
+function opaqueCode(schema: any): OpaqueCode | null {
+  if (
+    USER_CODE_REQUIREMENTS.has(schema.type) &&
+    typeof schema.requirement === "function"
+  ) {
+    return { held: "requirement" };
+  }
+  if (schema.type === "custom" && typeof schema.check === "function") {
+    return { held: "check" };
+  }
+  if (schema.type === "raw_check") return { held: "closure" };
+  return null;
+}
+
+function unnamedCheckReason(type: string): string {
+  const api = `v.${type.replace(/_(\w)/g, (_, letter) => letter.toUpperCase())}`;
+  return type === "raw_check"
+    ? `${api} takes no message, so its code cannot be compared with the migration chain; use v.check or v.partialCheck with a message`
+    : `${api} has no message; its code cannot be compared with the migration chain, so its message is its identity: give it one, and change it when the rule changes`;
+}
+
+type ValueIdentity = string | number | boolean | null | Record<string, unknown>;
+
+function valueIdentity(value: unknown): {
+  identity: ValueIdentity;
+  problem?: string;
+} {
+  if (typeof value === "function") {
+    return value.name
+      ? { identity: { "@function": value.name } }
+      : {
+          identity: { "@function": null },
+          problem:
+            "is an anonymous function; name it (const now = () => new Date()), its name is its identity in the migration chain",
+        };
+  }
+  try {
+    const canonical = canonicalValue(value);
+    return {
+      identity:
+        typeof canonical === "object" && canonical !== null
+          ? { "@json": JSON.stringify(canonical) }
+          : (canonical as ValueIdentity),
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return {
+      identity: { "@unserialisable": true },
+      problem: `cannot be serialised for comparison (${reason})`,
+    };
+  }
+}
+
+function canonicalValue(value: unknown): unknown {
+  switch (typeof value) {
+    case "string":
+    case "boolean":
+      return value;
+    case "number":
+      return Number.isFinite(value) ? value : { $number: String(value) };
+    case "bigint":
+      return { $bigint: String(value) };
+    case "undefined":
+      return { $undefined: true };
+  }
+  if (value === null) return null;
+  if (value instanceof Date) return { $date: value.toISOString() };
+  if (value instanceof RegExp) return { $regexp: String(value) };
+  if (Array.isArray(value)) return Array.from(value, canonicalValue);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError(
+      `a ${prototype?.constructor?.name ?? "class"} instance has no canonical form`,
+    );
+  }
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.keys(record)
+      .sort()
+      .map((key) => [key, canonicalValue(record[key])]),
+  );
+}
+
+function findUncomparable(simplified: any): string[] {
+  const found: string[] = [];
+  const visited = new WeakSet<object>();
+  const queue: Array<{ node: any; path: string }> = [
+    { node: simplified, path: "" },
+  ];
+  for (const { node, path } of queue) {
+    if (!node || typeof node !== "object" || visited.has(node)) continue;
+    visited.add(node);
+    if (typeof node[UNCOMPARABLE] === "string") {
+      found.push(`${path}: ${node[UNCOMPARABLE]}`);
+    }
+    for (const key of Object.keys(node)) {
+      const value = node[key];
+      const childPath = path ? `${path}.${key}` : key;
+      if (Array.isArray(value)) {
+        for (const [index, item] of value.entries()) {
+          queue.push({ node: item, path: `${childPath}[${index}]` });
+        }
+      } else {
+        queue.push({ node: value, path: childPath });
+      }
+    }
+  }
+  return found;
 }
 
 /**
@@ -426,6 +635,7 @@ export function diffSchemas(
  */
 export interface SchemaComparer {
   equal(schema1: any, schema2: any): boolean;
+  uncomparable(schema: any): string[];
   /** Schema objects fingerprinted so far, the unit of the comparison's work. */
   readonly fingerprintedNodes: number;
 }
@@ -433,7 +643,7 @@ export interface SchemaComparer {
 const EMPTY_FLATTENED = -1;
 
 export function createSchemaComparer(): SchemaComparer {
-  const simplify = memoisedSimplify();
+  const simplify = createSimplifier();
   const interned = new Map<string, number>();
   const fingerprints = new WeakMap<object, number>();
   let fingerprintedNodes = 0;
@@ -516,6 +726,9 @@ export function createSchemaComparer(): SchemaComparer {
         flattenSchema(simplify(schema2)),
       );
       return diffs.length === 0;
+    },
+    uncomparable(schema) {
+      return findUncomparable(simplify(schema));
     },
     get fingerprintedNodes() {
       return fingerprintedNodes;
@@ -628,8 +841,13 @@ export function validateLastMigrationMatchesProjectSchema(
   errors: string[];
   comparedNodes: number;
 } {
-  const errors: string[] = [];
   const comparer = createSchemaComparer();
+  const errors = comparer
+    .uncomparable(projectSchema)
+    .map(
+      (where) =>
+        `Project schema cannot be compared with the migration chain at ${where}`,
+    );
 
   // Check collections
   {

@@ -31,7 +31,8 @@ export function dbId(
   >,
   () => string
 > {
-  return v.optional(refId(type), () => `${type}:${newId()}`);
+  const newTypedId = () => `${type}:${newId()}`;
+  return v.optional(refId(type), newTypedId);
 }
 
 /**
