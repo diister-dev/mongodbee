@@ -1,12 +1,14 @@
 /**
- * The single-pass `flattenSchema`, the handler-driven `simplifySchema` and the
- * fingerprint comparison must give exactly what the previous implementation
- * gave. Random schemas, built from a seeded generator so a failure replays,
- * mix Valibot schemas with the awkward shapes the flattening has rules for:
- * dotted and bracketed keys, `~standard`, keys the diff skips, index and
- * privacy metadata, type definitions, shared sub-schemas, holes, NaN,
- * functions and bigints. Each is compared against the previous
- * implementation, kept verbatim in `fixtures/schema-flatten-reference.ts`.
+ * The single-pass `flattenSchema` and the fingerprint comparison must give
+ * exactly what the previous flatten-and-diff gave on the same simplified
+ * schemas. Random schemas, built from a seeded generator so a failure
+ * replays, mix Valibot schemas with the awkward shapes the flattening has
+ * rules for: dotted and bracketed keys, `~standard`, keys the diff skips,
+ * index and privacy metadata, type definitions, shared sub-schemas, holes,
+ * NaN, functions and bigints. The previous implementation is kept verbatim
+ * in `fixtures/schema-flatten-reference.ts`; its simplification is also the
+ * oracle for the verdict on collections that use none of the features the
+ * comparison has since learnt to see.
  */
 import { deepStrictEqual } from "node:assert/strict";
 import { test } from "../+harness.ts";
@@ -219,6 +221,15 @@ function outcome<T>(run: () => T): { value: T } | { threw: string } {
 function referenceEqual(a: unknown, b: unknown): boolean {
   return (
     diffSchemas(
+      referenceFlattenSchema(simplifySchema(a), simplifySchema),
+      referenceFlattenSchema(simplifySchema(b), simplifySchema),
+    ).length === 0
+  );
+}
+
+function previousEqual(a: unknown, b: unknown): boolean {
+  return (
+    diffSchemas(
       referenceFlattenSchema(referenceSimplifySchema(a)),
       referenceFlattenSchema(referenceSimplifySchema(b)),
     ).length === 0
@@ -228,8 +239,9 @@ function referenceEqual(a: unknown, b: unknown): boolean {
 test("flattenSchema writes the same keys, in the same order, with the same values as before", () => {
   for (let seed = 1; seed <= CASES; seed++) {
     const schema = build(seeded(seed), null);
-    const expected = referenceFlattenSchema(referenceSimplifySchema(schema));
-    const actual = flattenSchema(simplifySchema(schema));
+    const simplified = simplifySchema(schema);
+    const expected = referenceFlattenSchema(simplified, simplifySchema);
+    const actual = flattenSchema(simplified);
     deepStrictEqual(
       Object.entries(actual),
       Object.entries(expected),
@@ -237,21 +249,43 @@ test("flattenSchema writes the same keys, in the same order, with the same value
     );
     deepStrictEqual(
       Object.entries(flattenSchema(schema)),
-      Object.entries(referenceFlattenSchema(schema)),
+      Object.entries(referenceFlattenSchema(schema, simplifySchema)),
       `seed ${seed}, unsimplified`,
     );
   }
 });
 
-test("simplifySchema returns the same tree as before", () => {
-  for (let seed = 1; seed <= CASES; seed++) {
-    const schema = build(seeded(seed), null);
-    deepStrictEqual(
-      simplifySchema(schema),
-      referenceSimplifySchema(schema),
-      `seed ${seed}`,
-    );
+test("collections without the features the comparison learnt to see keep the verdict they had", () => {
+  const collections = (random: Random, shuffle: Random | null) => {
+    const generator = new Generator(random, shuffle);
+    return {
+      users: { _id: generator.valibot(1), name: generator.valibot(1) },
+      events: { _id: generator.valibot(1), entries: generator.valibot(1) },
+    };
+  };
+  const cases = CASES / 4;
+  let equal = 0;
+  let different = 0;
+  for (let seed = 1; seed <= cases; seed++) {
+    const a = collections(seeded(seed), null);
+    for (const b of [
+      collections(seeded(seed), null),
+      collections(seeded(seed), seeded(seed * 7919)),
+      collections(perturbed(seeded(seed), seed % 23), null),
+    ]) {
+      const expected = outcome(() => previousEqual(a, b));
+      deepStrictEqual(
+        outcome(() => createSchemaComparer().equal(a, b)),
+        expected,
+        `seed ${seed}`,
+      );
+      if ("value" in expected) {
+        if (expected.value) equal++;
+        else different++;
+      }
+    }
   }
+  assertEquals(equal > cases && different > cases / 4, true);
 });
 
 test("the comparison agrees with the previous flatten-and-diff on equal, reordered and perturbed schemas", () => {
