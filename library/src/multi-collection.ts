@@ -471,6 +471,11 @@ export type MultiPaginateOptions<
   peek?: boolean;
   /** Overrides the collection's read preference; ignored inside a transaction. */
   readPreference?: ReadPreferenceInput;
+  /**
+   * Index to use (name or key spec), passed to the page read and to every
+   * count. Not to the anchor lookup by `_id`.
+   */
+  hint?: m.Hint;
 };
 
 /**
@@ -1335,6 +1340,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
             ? { readPreference: options.readPreference }
             : undefined,
         );
+        const scanOptions =
+          options?.hint === undefined
+            ? readOptions
+            : { ...readOptions, hint: options.hint };
 
         const keys: K[] = Array.isArray(keyOrKeys) ? keyOrKeys : [keyOrKeys];
         const parseRow = (row: StoredDocument) => {
@@ -1577,7 +1586,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 pipeline: userPipeline,
                 count: true,
               }),
-              readOptions,
+              scanOptions,
             )
             .toArray();
           return (rows[0]?.total as number | undefined) ?? 0;
@@ -1601,7 +1610,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
               ...userPipeline,
             ]);
             const rows = await collection
-              .aggregate(stages, readOptions)
+              .aggregate(stages, scanOptions)
               .toArray();
             return (rows[0]?.total as number | undefined) ?? 0;
           }
@@ -1615,7 +1624,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
               ...userPipeline,
             ]);
             const rows = await collection
-              .aggregate(stages, readOptions)
+              .aggregate(stages, scanOptions)
               .toArray();
             return (rows[0]?.total as number | undefined) ?? 0;
           }
@@ -1625,7 +1634,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 ? composeCursorQuery(baseQuery, branches)
                 : { $and: baseQuery },
             ),
-            readOptions,
+            scanOptions,
           );
         };
 
@@ -1662,7 +1671,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
         }
 
         const pageOptions = {
-          ...readOptions,
+          ...scanOptions,
           ...pageBatchSize(limit, customFilter),
         };
         if (sortMachinery) {

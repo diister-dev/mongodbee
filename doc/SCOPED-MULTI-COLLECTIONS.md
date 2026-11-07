@@ -187,6 +187,7 @@ paginate<K, EN, R>(
     format?: (doc: EN) => R;        // final transform
     skipTotal?: boolean;            // skip the count query
     peek?: boolean;                 // set hasMore without a count
+    hint?: string | Document;       // index for the page read and the counts
   },
 ): Promise<{
   total?: number;
@@ -228,6 +229,10 @@ paginate<K, EN, R>(
 - **`peek`** — fetch one extra row to compute `hasMore` cheaply without a count.
   The extra row is dropped from `data`; `hasMore` is present only when `peek`
   was requested.
+- **`hint`** — an index name or key spec, as the driver's `find` takes it,
+  passed to the page read and to every count (`total`, `position`). The anchor
+  lookup by `_id` keeps the planner's choice. Use it when the planner hesitates
+  between many plans for a rare filter and the sort's index is the right one.
 
 ### Return shape
 

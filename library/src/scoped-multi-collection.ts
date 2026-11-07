@@ -536,6 +536,11 @@ export type ScopedPaginateOptions<
   skipTotal?: boolean;
   /** Fetch one extra row to set `hasMore` cheaply; the extra row is dropped. */
   peek?: boolean;
+  /**
+   * Index to use (name or key spec), passed to the page read and to every
+   * count. Not to the anchor lookup by `_id`.
+   */
+  hint?: m.Hint;
 };
 
 /** Single MongoDB aggregation stage (already-built object form). */
@@ -1801,6 +1806,10 @@ export async function scopedMultiCollection<S extends AnySchema>(
           const sortPipelineBuilder = options?.sortPipeline;
           const sortInput = options?.sort ?? { _id: 1 };
           const session = sessionContext.getSession();
+          const scanOptions =
+            options?.hint === undefined
+              ? { session }
+              : { session, hint: options.hint };
 
           // Normalize sort + direction-following `_id` tie-break (see
           // normalizePaginateSort for why the tie-break is not a fixed `1`).
@@ -1994,7 +2003,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
                   pipeline: userPipeline,
                   count: true,
                 }),
-                { session },
+                scanOptions,
               )
               .toArray();
             return (rows[0]?.total as number | undefined) ?? 0;
@@ -2023,7 +2032,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
                 ...userPipeline,
               ]);
               const totalResult = await collection
-                .aggregate(countPipeline, { session })
+                .aggregate(countPipeline, scanOptions)
                 .toArray();
               total = (totalResult[0]?.total as number | undefined) ?? 0;
               if (afterId) {
@@ -2033,7 +2042,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
                     ...userPipeline,
                   ]);
                   const afterResult = await collection
-                    .aggregate(afterPipeline, { session })
+                    .aggregate(afterPipeline, scanOptions)
                     .toArray();
                   const afterCount =
                     (afterResult[0]?.total as number | undefined) ?? 0;
@@ -2049,13 +2058,13 @@ export async function scopedMultiCollection<S extends AnySchema>(
             } else {
               total = await collection.countDocuments(
                 { $and: baseQuery },
-                { session },
+                scanOptions,
               );
               if (afterId) {
                 if (cursorBranches) {
                   const afterCount = await collection.countDocuments(
                     composeCursorQuery(baseQuery, cursorBranches),
-                    { session },
+                    scanOptions,
                   );
                   position = total - afterCount;
                 } else {
@@ -2080,7 +2089,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
           // path never server-caps (see below): it asks for a `limit`-row batch.
           const serverCap = customFilter ? undefined : limit;
           const pageOptions = {
-            session,
+            ...scanOptions,
             ...pageBatchSize(limit, customFilter),
           };
 
@@ -2121,7 +2130,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
             cursor = collection.aggregate(dataPipeline, pageOptions);
           } else {
             const findCursor = collection
-              .find(finalQuery, { session })
+              .find(finalQuery, scanOptions)
               .sort(sort as m.Sort);
             cursor =
               serverCap !== undefined
@@ -2200,14 +2209,14 @@ export async function scopedMultiCollection<S extends AnySchema>(
                     ...userPipeline,
                   ]);
                   const beforeResult = await collection
-                    .aggregate(beforePipeline, { session })
+                    .aggregate(beforePipeline, scanOptions)
                     .toArray();
                   beforeCount =
                     (beforeResult[0]?.total as number | undefined) ?? 0;
                 } else {
                   beforeCount = await collection.countDocuments(
                     composeCursorQuery(baseQuery, cursorBranches),
-                    { session },
+                    scanOptions,
                   );
                 }
                 position = Math.max(0, beforeCount - data.length);

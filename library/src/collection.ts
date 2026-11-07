@@ -394,6 +394,11 @@ export type CollectionResult<
       peek?: boolean;
       /** Overrides the collection's read preference; ignored inside a transaction. */
       readPreference?: ReadPreferenceInput;
+      /**
+       * Index to use (name or key spec), passed to the page read and to every
+       * count. Not to the anchor lookup by `_id`.
+       */
+      hint?: m.Hint;
     },
   ) => Promise<Page<R>>;
 
@@ -1209,6 +1214,7 @@ export async function collection<
         skipTotal?: boolean;
         peek?: boolean;
         readPreference?: ReadPreferenceInput;
+        hint?: m.Hint;
       },
     ): Promise<Page<R>> {
       const run = async () => {
@@ -1232,6 +1238,10 @@ export async function collection<
             ? { readPreference: options.readPreference }
             : undefined,
         );
+        const scanOptions =
+          options?.hint === undefined
+            ? readOptions
+            : { ...readOptions, hint: options.hint };
         const baseQuery: m.Filter<TInput> = { ...filter };
         let query: m.Filter<TInput> = { ...filter };
 
@@ -1452,7 +1462,7 @@ export async function collection<
                 pipeline: customPipeline,
                 count: true,
               }),
-              readOptions,
+              scanOptions,
             )
             .toArray();
           return (rows[0]?.total as number | undefined) ?? 0;
@@ -1483,7 +1493,7 @@ export async function collection<
               ...customPipeline,
             ]);
             const totalResult = await collection
-              .aggregate(countPipeline, readOptions)
+              .aggregate(countPipeline, scanOptions)
               .toArray();
             total = (totalResult[0]?.total as number | undefined) ?? 0;
 
@@ -1499,7 +1509,7 @@ export async function collection<
                   ...customPipeline,
                 ]);
                 const afterResult = await collection
-                  .aggregate(afterPipeline, readOptions)
+                  .aggregate(afterPipeline, scanOptions)
                   .toArray();
                 const afterCount =
                   (afterResult[0]?.total as number | undefined) ?? 0;
@@ -1514,7 +1524,7 @@ export async function collection<
             }
           } else {
             // Find-style fast path: countDocuments is cheaper than aggregate.
-            total = await collection.countDocuments(baseQuery, readOptions);
+            total = await collection.countDocuments(baseQuery, scanOptions);
 
             if (afterId) {
               if (cursorBranches) {
@@ -1523,7 +1533,7 @@ export async function collection<
                     [baseQuery as Record<string, unknown>],
                     cursorBranches,
                   ) as m.Filter<TInput>,
-                  readOptions,
+                  scanOptions,
                 );
                 position = total - afterCount;
               } else {
@@ -1559,7 +1569,7 @@ export async function collection<
             : [{ $match: query }, { $sort: sort }, ...customPipeline];
 
           const cursor = collection.aggregate(aggregationPipeline, {
-            ...readOptions,
+            ...scanOptions,
             ...pageBatch,
           });
 
@@ -1604,7 +1614,7 @@ export async function collection<
         } else {
           // Use simple find for non-pipeline queries
           const cursor = collection
-            .find(query, { ...readOptions, ...pageBatch })
+            .find(query, { ...scanOptions, ...pageBatch })
             .sort(sort as m.Sort);
 
           try {
@@ -1685,14 +1695,14 @@ export async function collection<
                       { $match: beforeQuery },
                       ...customPipeline,
                     ]),
-                    readOptions,
+                    scanOptions,
                   )
                   .toArray();
                 beforeCount = (rows[0]?.total as number | undefined) ?? 0;
               } else {
                 beforeCount = await collection.countDocuments(
                   beforeQuery as m.Filter<TInput>,
-                  readOptions,
+                  scanOptions,
                 );
               }
               position = Math.max(0, beforeCount - elements.length);
