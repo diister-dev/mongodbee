@@ -396,9 +396,14 @@ export type CollectionResult<
       readPreference?: ReadPreferenceInput;
       /**
        * Index to use (name or key spec), passed to the page read and to every
-       * count. Not to the anchor lookup by `_id`.
+       * count unless `countHint` is set. Not to the anchor lookup by `_id`.
        */
       hint?: m.Hint;
+      /**
+       * Index for the counts (`total`, `position`) instead of `hint`, when the
+       * filter's index differs from the sort's. Defaults to `hint`.
+       */
+      countHint?: m.Hint;
     },
   ) => Promise<Page<R>>;
 
@@ -1215,6 +1220,7 @@ export async function collection<
         peek?: boolean;
         readPreference?: ReadPreferenceInput;
         hint?: m.Hint;
+        countHint?: m.Hint;
       },
     ): Promise<Page<R>> {
       const run = async () => {
@@ -1242,6 +1248,10 @@ export async function collection<
           options?.hint === undefined
             ? readOptions
             : { ...readOptions, hint: options.hint };
+        const countOptions =
+          options?.countHint === undefined
+            ? scanOptions
+            : { ...readOptions, hint: options.countHint };
         const baseQuery: m.Filter<TInput> = { ...filter };
         let query: m.Filter<TInput> = { ...filter };
 
@@ -1462,7 +1472,7 @@ export async function collection<
                 pipeline: customPipeline,
                 count: true,
               }),
-              scanOptions,
+              countOptions,
             )
             .toArray();
           return (rows[0]?.total as number | undefined) ?? 0;
@@ -1493,7 +1503,7 @@ export async function collection<
               ...customPipeline,
             ]);
             const totalResult = await collection
-              .aggregate(countPipeline, scanOptions)
+              .aggregate(countPipeline, countOptions)
               .toArray();
             total = (totalResult[0]?.total as number | undefined) ?? 0;
 
@@ -1509,7 +1519,7 @@ export async function collection<
                   ...customPipeline,
                 ]);
                 const afterResult = await collection
-                  .aggregate(afterPipeline, scanOptions)
+                  .aggregate(afterPipeline, countOptions)
                   .toArray();
                 const afterCount =
                   (afterResult[0]?.total as number | undefined) ?? 0;
@@ -1524,7 +1534,7 @@ export async function collection<
             }
           } else {
             // Find-style fast path: countDocuments is cheaper than aggregate.
-            total = await collection.countDocuments(baseQuery, scanOptions);
+            total = await collection.countDocuments(baseQuery, countOptions);
 
             if (afterId) {
               if (cursorBranches) {
@@ -1533,7 +1543,7 @@ export async function collection<
                     [baseQuery as Record<string, unknown>],
                     cursorBranches,
                   ) as m.Filter<TInput>,
-                  scanOptions,
+                  countOptions,
                 );
                 position = total - afterCount;
               } else {
@@ -1695,14 +1705,14 @@ export async function collection<
                       { $match: beforeQuery },
                       ...customPipeline,
                     ]),
-                    scanOptions,
+                    countOptions,
                   )
                   .toArray();
                 beforeCount = (rows[0]?.total as number | undefined) ?? 0;
               } else {
                 beforeCount = await collection.countDocuments(
                   beforeQuery as m.Filter<TInput>,
-                  scanOptions,
+                  countOptions,
                 );
               }
               position = Math.max(0, beforeCount - elements.length);

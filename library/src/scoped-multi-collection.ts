@@ -538,9 +538,14 @@ export type ScopedPaginateOptions<
   peek?: boolean;
   /**
    * Index to use (name or key spec), passed to the page read and to every
-   * count. Not to the anchor lookup by `_id`.
+   * count unless `countHint` is set. Not to the anchor lookup by `_id`.
    */
   hint?: m.Hint;
+  /**
+   * Index for the counts (`total`, `position`) instead of `hint`, when the
+   * filter's index differs from the sort's. Defaults to `hint`.
+   */
+  countHint?: m.Hint;
 };
 
 /** Single MongoDB aggregation stage (already-built object form). */
@@ -1810,6 +1815,10 @@ export async function scopedMultiCollection<S extends AnySchema>(
             options?.hint === undefined
               ? { session }
               : { session, hint: options.hint };
+          const countOptions =
+            options?.countHint === undefined
+              ? scanOptions
+              : { session, hint: options.countHint };
 
           // Normalize sort + direction-following `_id` tie-break (see
           // normalizePaginateSort for why the tie-break is not a fixed `1`).
@@ -2003,7 +2012,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
                   pipeline: userPipeline,
                   count: true,
                 }),
-                scanOptions,
+                countOptions,
               )
               .toArray();
             return (rows[0]?.total as number | undefined) ?? 0;
@@ -2032,7 +2041,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
                 ...userPipeline,
               ]);
               const totalResult = await collection
-                .aggregate(countPipeline, scanOptions)
+                .aggregate(countPipeline, countOptions)
                 .toArray();
               total = (totalResult[0]?.total as number | undefined) ?? 0;
               if (afterId) {
@@ -2042,7 +2051,7 @@ export async function scopedMultiCollection<S extends AnySchema>(
                     ...userPipeline,
                   ]);
                   const afterResult = await collection
-                    .aggregate(afterPipeline, scanOptions)
+                    .aggregate(afterPipeline, countOptions)
                     .toArray();
                   const afterCount =
                     (afterResult[0]?.total as number | undefined) ?? 0;
@@ -2058,13 +2067,13 @@ export async function scopedMultiCollection<S extends AnySchema>(
             } else {
               total = await collection.countDocuments(
                 { $and: baseQuery },
-                scanOptions,
+                countOptions,
               );
               if (afterId) {
                 if (cursorBranches) {
                   const afterCount = await collection.countDocuments(
                     composeCursorQuery(baseQuery, cursorBranches),
-                    scanOptions,
+                    countOptions,
                   );
                   position = total - afterCount;
                 } else {
@@ -2209,14 +2218,14 @@ export async function scopedMultiCollection<S extends AnySchema>(
                     ...userPipeline,
                   ]);
                   const beforeResult = await collection
-                    .aggregate(beforePipeline, scanOptions)
+                    .aggregate(beforePipeline, countOptions)
                     .toArray();
                   beforeCount =
                     (beforeResult[0]?.total as number | undefined) ?? 0;
                 } else {
                   beforeCount = await collection.countDocuments(
                     composeCursorQuery(baseQuery, cursorBranches),
-                    scanOptions,
+                    countOptions,
                   );
                 }
                 position = Math.max(0, beforeCount - data.length);

@@ -188,6 +188,7 @@ paginate<K, EN, R>(
     skipTotal?: boolean;            // skip the count query
     peek?: boolean;                 // set hasMore without a count
     hint?: string | Document;       // index for the page read and the counts
+    countHint?: string | Document;  // index for the counts, instead of hint
   },
 ): Promise<{
   total?: number;
@@ -233,6 +234,11 @@ paginate<K, EN, R>(
   passed to the page read and to every count (`total`, `position`). The anchor
   lookup by `_id` keeps the planner's choice. Use it when the planner hesitates
   between many plans for a rare filter and the sort's index is the right one.
+- **`countHint`** — an index for the counts (`total`, `position`) in place of
+  `hint`; the page read keeps `hint`. Use it when the filter and the sort want
+  different indexes: the page read walks the sort's index and stops after
+  `limit` rows, while a count walks every match and wants an index that holds
+  the filtered field. Omitted, the counts take `hint`.
 
 ### Return shape
 
