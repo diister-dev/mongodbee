@@ -162,7 +162,10 @@ export function referenceSimplifySchema(schema: any): any {
  * @param schema - Simplified schema object
  * @returns Flattened object with dot-notation paths as keys
  */
-export function referenceFlattenSchema(schema: any): Record<string, any> {
+export function referenceFlattenSchema(
+  schema: any,
+  simplifyTypeDefinition: (schema: any) => any = referenceSimplifySchema,
+): Record<string, any> {
   const result: Record<string, any> = {};
 
   if (!schema || typeof schema !== "object") {
@@ -170,7 +173,10 @@ export function referenceFlattenSchema(schema: any): Record<string, any> {
   }
 
   if (isTypeDefinition(schema)) {
-    return referenceFlattenSchema(referenceSimplifySchema(schema));
+    return referenceFlattenSchema(
+      simplifyTypeDefinition(schema),
+      simplifyTypeDefinition,
+    );
   }
 
   // Symbol-keyed index metadata (withIndex) is invisible to Object.keys and
@@ -183,7 +189,7 @@ export function referenceFlattenSchema(schema: any): Record<string, any> {
   const privacyMetadata = (schema as Record<PropertyKey, any>)[PRIVACY_SYMBOL];
   if (privacyMetadata !== undefined) {
     for (const [k, val] of Object.entries(
-      referenceFlattenSchema(privacyMetadata),
+      referenceFlattenSchema(privacyMetadata, simplifyTypeDefinition),
     )) {
       result[`@privacy.${k}`] = val;
     }
@@ -202,7 +208,7 @@ export function referenceFlattenSchema(schema: any): Record<string, any> {
       for (const [index, subValue] of value.entries()) {
         if (typeof subValue === "object" && subValue !== null) {
           for (const [subKey, subSubValue] of Object.entries(
-            referenceFlattenSchema(subValue),
+            referenceFlattenSchema(subValue, simplifyTypeDefinition),
           )) {
             // Skip ~standard in nested paths
             if (subKey.includes(".~standard") || subKey === "~standard") {
@@ -216,10 +222,10 @@ export function referenceFlattenSchema(schema: any): Record<string, any> {
       }
     } else if (typeof value === "object" && value !== null) {
       const nested = isTypeDefinition(value)
-        ? referenceSimplifySchema(value)
+        ? simplifyTypeDefinition(value)
         : value;
       for (const [subKey, subValue] of Object.entries(
-        referenceFlattenSchema(nested),
+        referenceFlattenSchema(nested, simplifyTypeDefinition),
       )) {
         // Skip ~standard in nested paths
         if (subKey.includes(".~standard") || subKey === "~standard") {

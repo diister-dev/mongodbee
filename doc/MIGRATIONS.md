@@ -1181,6 +1181,29 @@ After creating a migration with schema changes:
 
 The CLI validates that the **last migration schema** matches `schemas.ts`.
 
+What the comparison reads, and what it refuses:
+
+- Regex patterns and flags, default and fallback values (a plain value,
+  a date, an array or an object, key order ignored), the class of a
+  `v.instance`, and the inside of a `v.lazy` (a recursive schema included)
+  are compared.
+- The code of a `v.check`, `v.partialCheck`, `v.checkItems`, `v.someItem`,
+  `v.everyItem`, `v.guard` or `v.custom` cannot be compared: its **message**
+  is its identity. Change the message when the rule changes. One without a
+  string message is refused in `schemas.ts`, and so is `v.rawCheck`, which
+  takes none.
+- A function default is compared by its **name**: write
+  `const now = () => new Date()` and pass `now`. An anonymous one is refused
+  in `schemas.ts`, and so is a default that is neither plain data nor a date.
+- A `v.lazy` is resolved without an input: a getter that reads its input is
+  refused.
+- Collection, type and field names are compared whatever they are, Valibot
+  property names (`default`, `message`, `expects`, `async`) included.
+
+Refusals apply to `schemas.ts` only: a migration that already shipped is never
+edited, and once `schemas.ts` is fixed, the difference with the last migration
+asks for a new one.
+
 ### 4. Missing Transform Down Function
 
 ❌ **Wrong**:
