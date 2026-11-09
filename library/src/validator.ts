@@ -6,13 +6,70 @@ const log = createLogger("validator");
 type UnknownSchema = v.BaseSchema<any, any, any>;
 type UnknownValidation = v.BaseValidation<any, any, any>;
 
+interface Bound {
+  value: number;
+  exclusive: boolean;
+}
+
+type BoundSide = "lower" | "upper";
+
+const BOUND_KEYS: Record<BoundSide, { value: string; flag: string }> = {
+  lower: { value: "minimum", flag: "exclusiveMinimum" },
+  upper: { value: "maximum", flag: "exclusiveMaximum" },
+};
+
+function tighterBound(
+  side: BoundSide,
+  current: Bound | undefined,
+  next: Bound,
+): Bound {
+  if (current === undefined) return next;
+  if (next.value === current.value) {
+    return {
+      value: current.value,
+      exclusive: current.exclusive || next.exclusive,
+    };
+  }
+  const nextIsTighter =
+    side === "lower" ? next.value > current.value : next.value < current.value;
+  return nextIsTighter ? next : current;
+}
+
+function writeBound(
+  acc: Record<string, unknown>,
+  side: BoundSide,
+  bound: Bound,
+) {
+  const keys = BOUND_KEYS[side];
+  acc[keys.value] = bound.value;
+  if (bound.exclusive) {
+    acc[keys.flag] = true;
+  } else {
+    delete acc[keys.flag];
+  }
+}
+
 function buildPipelineResult(pipe: any) {
+  const bounds: Partial<Record<BoundSide, Bound>> = {};
   return pipe
     .filter((v: any) => v.kind == "validation" || v.type == "literal")
     .map(constructorToValidator)
     .filter(Boolean)
     .reduce((acc: any, value: any) => {
       for (const [key, val] of Object.entries(value)) {
+        if (key == "exclusiveMinimum" || key == "exclusiveMaximum") {
+          continue;
+        }
+        if (key == "minimum" || key == "maximum") {
+          const side: BoundSide = key == "minimum" ? "lower" : "upper";
+          const bound = tighterBound(side, bounds[side], {
+            value: val as number,
+            exclusive: value[BOUND_KEYS[side].flag] === true,
+          });
+          bounds[side] = bound;
+          writeBound(acc, side, bound);
+          continue;
+        }
         if (key in acc) {
           if (key == "pattern") {
             // Combine regex patterns with lookahead
@@ -20,19 +77,9 @@ function buildPipelineResult(pipe: any) {
           } else if (key == "enum") {
             // For enum values, we keep them as they are
             acc[key] = val;
-          } else if (
-            key == "minLength" ||
-            key == "minItems" ||
-            key == "minimum"
-          ) {
-            // For minimum constraints, take the maximum value (most restrictive)
+          } else if (key == "minLength" || key == "minItems") {
             acc[key] = Math.max(acc[key], val as number);
-          } else if (
-            key == "maxLength" ||
-            key == "maxItems" ||
-            key == "maximum"
-          ) {
-            // For maximum constraints, take the minimum value (most restrictive)
+          } else if (key == "maxLength" || key == "maxItems") {
             acc[key] = Math.min(acc[key], val as number);
           } else {
             // For other properties, last value wins
@@ -431,12 +478,15 @@ function constructorToValidator(
       }
       case "min_value": {
         const s = schema as v.MinValueAction<any, any, any>;
+        // $jsonSchema refuses a non-numeric minimum or maximum at collection creation.
+        if (typeof s.requirement !== "number") return;
         return {
           minimum: s.requirement,
         };
       }
       case "max_value": {
         const s = schema as v.MaxValueAction<any, any, any>;
+        if (typeof s.requirement !== "number") return;
         return {
           maximum: s.requirement,
         };
@@ -445,6 +495,7 @@ function constructorToValidator(
         // MongoDB $jsonSchema follows JSON Schema draft-4, where
         // exclusiveMinimum is a BOOLEAN modifier of `minimum` (not a number).
         const s = schema as v.GtValueAction<any, any, any>;
+        if (typeof s.requirement !== "number") return;
         return {
           minimum: s.requirement,
           exclusiveMinimum: true,
@@ -453,6 +504,7 @@ function constructorToValidator(
       case "lt_value": {
         // Draft-4: exclusiveMaximum is a boolean modifier of `maximum`.
         const s = schema as v.LtValueAction<any, any, any>;
+        if (typeof s.requirement !== "number") return;
         return {
           maximum: s.requirement,
           exclusiveMaximum: true,
