@@ -51,7 +51,30 @@ function writeBound(
 
 const ASTRAL_CHARACTER = "[\\x{10000}-\\x{10FFFF}]";
 
-// $jsonSchema counts code points, valibot UTF-16 units: an astral code point is two units.
+/**
+ * Translates valibot's string `minLength(n)` into a `$jsonSchema` rule that never
+ * refuses a string valibot accepts.
+ *
+ * Valibot counts UTF-16 code units (JavaScript's `string.length`), while
+ * `$jsonSchema`'s `minLength` counts Unicode code points. MongoDB has no operator
+ * that counts UTF-16 units: `$strLenCP` counts code points and `$strLenBytes`
+ * counts UTF-8 bytes. A character outside the BMP (an astral character, such as
+ * most emoji) is one code point but two UTF-16 units. "🎉" therefore passes
+ * `v.minLength(2)` while a plain `{ minLength: 2 }` would refuse it.
+ *
+ * The rule emitted is:
+ *   anyOf: [
+ *     { minLength: n },                                       // exact for every string without an astral character
+ *     { minLength: ceil(n / 2), pattern: <astral character> } // a string with one: each code point is at most two units
+ *   ]
+ *
+ * This rule is looser than valibot for strings that contain an astral character. For example, a
+ * 7-code-point string with one emoji (8 units) passes `minLength(14)` here. That is deliberate:
+ * the database validator must never refuse what the project schema accepts, because such a
+ * refusal only shows in production. A looser rule is harmless, since valibot still validates
+ * every write. Below 2, code points and units agree on emptiness, so the rule is left as is.
+ * See doc/VALIDATORS.md.
+ */
 function minLengthInCodePoints(
   constraints: Record<string, any>,
 ): Record<string, any> {
