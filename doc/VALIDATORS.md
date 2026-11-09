@@ -41,6 +41,15 @@ points: the second branch of the `anyOf` admits it, and Valibot enforces the
 exact count. For `maxLength`, code points never exceed units, so the plain
 keyword is safe.
 
+## Actions before a transformation
+
+MongoDB sees the parsed output, not the input. An action placed before a
+transformation (`trim`, `toLowerCase`, `transform`, …) checked the input, so
+it says nothing about the stored value: `v.pipe(v.string(), v.minLength(5),
+v.trim())` accepts `"  ab  "` and stores `"ab"`. Only the actions after the
+last transformation reach the validator. `brand`, `flavor` and `readonly` do
+not change the value and do not count as transformations.
+
 ## Several actions on one value
 
 Bounds on the same side keep the tightest one, with its own exclusivity:
@@ -75,3 +84,8 @@ validator byte for byte.
   `minLength(n)` or `length(n)`, `n` ≥ 2 — the widest of these changes, since
   most schemas with string lengths have one. The strength for strings without
   such a character is unchanged.
+- **Actions placed before a transformation.** They were translated as if they
+  checked the stored value, so `minLength(5)` before `trim()` made MongoDB
+  refuse the trimmed `"ab"`. Affected: pipes with a validation action before a
+  transformation other than `brand`, `flavor` and `readonly`; their validator
+  loses those actions.

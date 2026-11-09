@@ -66,11 +66,26 @@ function minLengthInCodePoints(
   };
 }
 
+const VALUE_PRESERVING_TRANSFORMATIONS = new Set([
+  "brand",
+  "flavor",
+  "readonly",
+]);
+
+function actionsCheckingStoredValue(pipe: any[]): any[] {
+  const lastReshaping = pipe.findLastIndex(
+    (item) =>
+      item.kind == "transformation" &&
+      !VALUE_PRESERVING_TRANSFORMATIONS.has(item.type),
+  );
+  return pipe.slice(lastReshaping + 1);
+}
+
 function buildPipelineResult(pipe: any) {
   const bounds: Partial<Record<BoundSide, Bound>> = {};
-  return pipe
+  return actionsCheckingStoredValue(pipe)
     .filter((v: any) => v.kind == "validation" || v.type == "literal")
-    .map(constructorToValidator)
+    .map((action) => constructorToValidator(action))
     .filter(Boolean)
     .reduce((acc: any, value: any) => {
       for (const [key, val] of Object.entries(value)) {
