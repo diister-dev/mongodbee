@@ -23,12 +23,23 @@ only, where the validator is in force, on values every test accepted.
 | `minValue`, `maxValue`, `gtValue`, `ltValue` with a non-numeric requirement (string, `Date`, bigint) | nothing | looser |
 | `integer()` | `multipleOf: 1` | yes |
 | `minLength`, `maxLength`, `length`, `nonEmpty` on an array | `minItems`, `maxItems` | yes |
+| `maxLength(n)` on a string | `maxLength: n` | looser on characters outside the BMP |
+| `minLength(n)`, `length(n)` on a string, `n` ≥ 2 | `anyOf: [{ minLength: n }, { minLength: ⌈n/2⌉, pattern: <a character outside the BMP> }]` | exact without a character outside the BMP, looser with one |
+| `nonEmpty()`, `minLength(1)` on a string | `minLength: 1` | yes |
 | any action on `v.date()` | nothing (`bsonType: "date"` only) | looser |
 | `value`, `notValue`, `multipleOf`, `minEntries`, `maxEntries`, `minWords`, `minBytes`, `minGraphemes`, `finite`, `check`, `url`, and the other actions without a regex | nothing | looser |
 
 MongoDB's `$jsonSchema` is draft-4: `exclusiveMinimum` and `exclusiveMaximum`
 are booleans that modify `minimum` and `maximum`. A numeric form, or the flag
 without its bound, is refused when the collection is created.
+
+Valibot measures a string in UTF-16 code units (`"😀".length === 2`);
+`$jsonSchema` counts code points (`"😀"` is 1). A plain `minLength: n` would
+refuse `"😀"` under `minLength(2)`, which Valibot accepts. A code point outside
+the BMP is two units, so a string holding one has at least `⌈n/2⌉` code
+points: the second branch of the `anyOf` admits it, and Valibot enforces the
+exact count. For `maxLength`, code points never exceed units, so the plain
+keyword is safe.
 
 ## Several actions on one value
 
@@ -39,7 +50,7 @@ Bounds on the same side keep the tightest one, with its own exclusivity:
 | `gtValue(5), minValue(10)` | `minimum: 10` |
 | `minValue(5), gtValue(5)` | `minimum: 5, exclusiveMinimum: true` |
 | `maxValue(5), ltValue(10)` | `maximum: 5` |
-| `minLength(2), nonEmpty()` | `minLength: 2` |
+| `minLength(3), maxLength(3)` | `anyOf: [{ minLength: 3 }, { minLength: 2, pattern: … }], maxLength: 3` |
 
 The order of the actions does not change the validator.
 
@@ -58,3 +69,9 @@ validator byte for byte.
   inclusive bound is the tighter one. A non-numeric bound (`minValue("b")` on a
   string) produced a validator MongoDB refused outright; it is now left to
   Valibot.
+- **Minimum lengths of strings.** A string `minLength(n)` or `length(n)` with
+  `n` ≥ 2 produced `minLength: n`, counted in code points: MongoDB refused a
+  string with an emoji that Valibot accepts. Affected: every string field with
+  `minLength(n)` or `length(n)`, `n` ≥ 2 — the widest of these changes, since
+  most schemas with string lengths have one. The strength for strings without
+  such a character is unchanged.

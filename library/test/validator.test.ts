@@ -1,7 +1,7 @@
-import { test } from "./+harness.ts";
-import { toMongoValidator } from "../src/validator.ts";
 import * as v from "../src/schema.ts";
+import { toMongoValidator } from "../src/validator.ts";
 import { assert, assertEquals } from "./+assert.ts";
+import { test } from "./+harness.ts";
 
 test("Simple schema test", () => {
   const schema = v.object({
@@ -95,7 +95,10 @@ test("String validations", () => {
   assertEquals(jsonSchema.properties!.minLength, {
     bsonType: "string",
     description: "must be a string",
-    minLength: 5,
+    anyOf: [
+      { minLength: 5 },
+      { minLength: 3, pattern: "[\\x{10000}-\\x{10FFFF}]" },
+    ],
   });
 
   assertEquals(jsonSchema.properties!.maxLength, {
@@ -107,7 +110,10 @@ test("String validations", () => {
   assertEquals(jsonSchema.properties!.exactLength, {
     bsonType: "string",
     description: "must be a string",
-    minLength: 8,
+    anyOf: [
+      { minLength: 8 },
+      { minLength: 4, pattern: "[\\x{10000}-\\x{10FFFF}]" },
+    ],
     maxLength: 8,
   });
 
@@ -120,7 +126,10 @@ test("String validations", () => {
   assertEquals(jsonSchema.properties!.combined, {
     bsonType: "string",
     description: "must be a string",
-    minLength: 3,
+    anyOf: [
+      { minLength: 3 },
+      { minLength: 2, pattern: "[\\x{10000}-\\x{10FFFF}]" },
+    ],
     maxLength: 8,
     pattern: "^[A-Z]+$",
   });
@@ -430,7 +439,7 @@ test("Multiple regex patterns should be combined correctly", () => {
 
   const usernameProps = jsonSchema.properties!.username;
   assertEquals(usernameProps.bsonType, "string");
-  assertEquals(usernameProps.minLength, 3);
+  assertEquals(usernameProps.anyOf![0], { minLength: 3 });
   assertEquals(usernameProps.maxLength, 20);
   assert(usernameProps.pattern!.includes("^[a-z]"));
   assert(usernameProps.pattern!.includes("[a-z0-9]+$"));

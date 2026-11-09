@@ -222,3 +222,30 @@ test({
       ARRAY_PROBES,
     ),
 });
+
+const ASTRAL_PROBES = ["😀", "a😀", "😀😀", "a😀😀", "😀😀😀"];
+
+test({
+  name: "MongoDB never rejects a string valibot accepts when it holds characters outside the BMP",
+  timeout: 120_000,
+  fn: (t) =>
+    withDatabase(t.name, async (db) => {
+      const rejected: string[] = [];
+      const combinations = [
+        ...LENGTH_BOUNDS.map((bound) => [bound]),
+        ...orderedPairs(LENGTH_BOUNDS),
+      ];
+      for (const [index, actions] of combinations.entries()) {
+        const { stricter } = await compareAcceptance(
+          db,
+          `c${index}`,
+          pipeOf(v.string(), actions),
+          ASTRAL_PROBES,
+        );
+        for (const verdict of stricter) {
+          rejected.push(`[${describe(actions)}] ${verdict.probe}`);
+        }
+      }
+      assertEquals(rejected, []);
+    }),
+});

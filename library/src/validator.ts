@@ -49,6 +49,23 @@ function writeBound(
   }
 }
 
+const ASTRAL_CHARACTER = "[\\x{10000}-\\x{10FFFF}]";
+
+// $jsonSchema counts code points, valibot UTF-16 units: an astral code point is two units.
+function minLengthInCodePoints(
+  constraints: Record<string, any>,
+): Record<string, any> {
+  const { minLength, ...rest } = constraints;
+  if (typeof minLength !== "number" || minLength < 2) return constraints;
+  return {
+    ...rest,
+    anyOf: [
+      { minLength },
+      { minLength: Math.ceil(minLength / 2), pattern: ASTRAL_CHARACTER },
+    ],
+  };
+}
+
 function buildPipelineResult(pipe: any) {
   const bounds: Partial<Record<BoundSide, Bound>> = {};
   return pipe
@@ -192,7 +209,7 @@ function constructorToValidator(
         );
 
         return {
-          ...pipes,
+          ...minLengthInCodePoints(pipes),
           bsonType: "string",
           description: s.message ?? `must be a string`,
         };
