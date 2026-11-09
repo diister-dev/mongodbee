@@ -332,7 +332,11 @@ function sameServerSpellings(uri: string): string[] {
     spell(hosts.map((host) => host.toUpperCase())),
   ];
   if (hosts.length > 1) spellings.push(spell([...hosts].reverse()));
-  if (hosts.length === 1 && scheme === "mongodb://") {
+  if (
+    hosts.length === 1 &&
+    scheme === "mongodb://" &&
+    !/[?&]directConnection=/i.test(query ?? "")
+  ) {
     spellings.push(spell(hosts, "directConnection=true"));
   }
   const aliased = hosts.map((host) => {
