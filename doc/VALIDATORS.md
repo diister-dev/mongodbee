@@ -26,6 +26,8 @@ only, where the validator is in force, on values every test accepted.
 | `maxLength(n)` on a string | `maxLength: n` | looser on characters outside the BMP |
 | `minLength(n)`, `length(n)` on a string, `n` ≥ 2 | `anyOf: [{ minLength: n }, { minLength: ⌈n/2⌉, pattern: <a character outside the BMP> }]` | exact without a character outside the BMP, looser with one |
 | `nonEmpty()`, `minLength(1)` on a string | `minLength: 1` | yes |
+| `regex`, and actions built on a regex (`uuid`, `email`, …) | `pattern`; flags `i`, `m`, `s` as an inline group `(?ims:…)`; `u`, `g`, `d` dropped | yes, within the JS/PCRE differences below |
+| a regex with the `y` or `v` flag | nothing | looser |
 | any action on `v.date()` | nothing (`bsonType: "date"` only) | looser |
 | `value`, `notValue`, `multipleOf`, `minEntries`, `maxEntries`, `minWords`, `minBytes`, `minGraphemes`, `finite`, `check`, `url`, and the other actions without a regex | nothing | looser |
 
@@ -40,6 +42,12 @@ the BMP is two units, so a string holding one has at least `⌈n/2⌉` code
 points: the second branch of the `anyOf` admits it, and Valibot enforces the
 exact count. For `maxLength`, code points never exceed units, so the plain
 keyword is safe.
+
+MongoDB compiles patterns with PCRE, not JavaScript. Two differences stay
+stricter than Valibot and are not translated: `\s` and `\w` are ASCII in
+PCRE (JavaScript's `\s` matches `\u00a0`), and under `m` PCRE breaks lines on
+`\n` only (JavaScript also on `\r`, `\u2028`, `\u2029`). A `\u0041` escape
+is refused when the collection is created.
 
 ## Actions before a transformation
 
@@ -60,6 +68,11 @@ Bounds on the same side keep the tightest one, with its own exclusivity:
 | `minValue(5), gtValue(5)` | `minimum: 5, exclusiveMinimum: true` |
 | `maxValue(5), ltValue(10)` | `maximum: 5` |
 | `minLength(3), maxLength(3)` | `anyOf: [{ minLength: 3 }, { minLength: 2, pattern: … }], maxLength: 3` |
+
+Several regexes become one pattern of lookaheads from the start,
+`^(?=[\s\S]*?(?:a))(?=[\s\S]*?(?:b))`, so each may match anywhere, as each
+Valibot `regex` is tested on its own. A backreference in a regex other than
+the first would point at the wrong group once combined; none is rewritten.
 
 The order of the actions does not change the validator.
 
@@ -89,3 +102,9 @@ validator byte for byte.
   refuse the trimmed `"ab"`. Affected: pipes with a validation action before a
   transformation other than `brand`, `flavor` and `readonly`; their validator
   loses those actions.
+- **Several regexes on one string, and regex flags.** Two regexes became
+  `(?=a)(?=b)`, which requires both to match at the same position: MongoDB
+  refused `"abc def"` under `regex(/abc/)` and `regex(/def/)`. The `i`, `m`
+  and `s` flags were dropped with a warning, so `v.uuid()` (`/…/iu`) refused
+  an uppercase uuid. Affected: string fields with two or more regex-based
+  actions, or one with the `i`, `m` or `s` flag (`v.uuid()` among them).

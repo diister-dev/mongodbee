@@ -81,8 +81,13 @@ function actionsCheckingStoredValue(pipe: any[]): any[] {
   return pipe.slice(lastReshaping + 1);
 }
 
+function allPatterns(patterns: readonly string[]): string {
+  return `^${patterns.map((pattern) => `(?=[\\s\\S]*?(?:${pattern}))`).join("")}`;
+}
+
 function buildPipelineResult(pipe: any) {
   const bounds: Partial<Record<BoundSide, Bound>> = {};
+  const patterns: string[] = [];
   return actionsCheckingStoredValue(pipe)
     .filter((v: any) => v.kind == "validation" || v.type == "literal")
     .map((action) => constructorToValidator(action))
@@ -104,8 +109,8 @@ function buildPipelineResult(pipe: any) {
         }
         if (key in acc) {
           if (key == "pattern") {
-            // Combine regex patterns with lookahead
-            acc[key] = `(?=${acc[key]})(?=${val})`;
+            patterns.push(val as string);
+            acc[key] = allPatterns(patterns);
           } else if (key == "enum") {
             // For enum values, we keep them as they are
             acc[key] = val;
@@ -118,6 +123,7 @@ function buildPipelineResult(pipe: any) {
             acc[key] = val;
           }
         } else {
+          if (key == "pattern") patterns.push(val as string);
           acc[key] = val;
         }
       }
@@ -571,24 +577,19 @@ function constructorToValidator(
       default: {
         // Check if requirement is a regex
         if ((schema as v.RegexAction<any, any>).requirement instanceof RegExp) {
-          const s = schema as v.RegexAction<any, any>;
-          const regexString = s.requirement.toString();
-          const firstSlashIndex = regexString.indexOf("/");
-          const lastSlashIndex = regexString.lastIndexOf("/");
-          const santizeRegex = regexString.substring(
-            firstSlashIndex + 1,
-            lastSlashIndex,
-          );
-          const flags = regexString
-            .substring(lastSlashIndex + 1)
-            .replace("u", "");
-          if (flags.length > 0) {
+          const { source, flags } = (schema as v.RegexAction<any, any>)
+            .requirement;
+          const untranslatable = flags.replace(/[dgimsu]/g, "");
+          if (untranslatable.length > 0) {
             log.warn(
-              `Unsupported regex flags: ${flags} for "${schema.type}" schema${flags.includes("i") ? "; lowercase the value in application code instead of relying on the i flag" : ""}`,
+              `Unsupported regex flags: ${untranslatable} for "${schema.type}" schema; the pattern is left to valibot`,
             );
+            return;
           }
+          const inlineFlags = flags.replace(/[dgu]/g, "");
           return {
-            pattern: `${santizeRegex}`,
+            pattern:
+              inlineFlags.length > 0 ? `(?${inlineFlags}:${source})` : source,
           };
         }
 
