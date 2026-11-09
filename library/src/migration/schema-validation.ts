@@ -299,9 +299,11 @@ function simplifyNode(
   }
 
   if ("pipe" in simplified && Array.isArray(simplified.pipe)) {
-    simplified.pipe = simplified.pipe
-      .map((s: any) => simplify(s))
-      .filter((s: any) => s !== undefined);
+    simplified.pipe = groupValidationRuns(
+      simplified.pipe
+        .map((s: any) => simplify(s))
+        .filter((s: any) => s !== undefined),
+    );
   }
 
   const handler = simplifyHandlers[schema.type];
@@ -322,6 +324,78 @@ function simplifyEntries(entries: any, simplify: Simplify): any {
     }
   }
   return simplified;
+}
+
+type ValidationRunEntry = { label: string; item: Record<string, unknown> };
+
+const UNLABELLED_PROPERTIES = new Set([
+  "type",
+  UNCOMPARABLE,
+  ...DIFF_SKIPPED_PROPERTIES,
+]);
+
+// Valibot runs every validation of a pipe and none changes the value, so their order between two other pipe items never changes what is accepted.
+function groupValidationRuns(pipe: any[]): any[] {
+  const grouped: any[] = [];
+  let run: ValidationRunEntry[] = [];
+  const close = () => {
+    if (run.length > 0) grouped.push(validationRun(run));
+    run = [];
+  };
+  for (const item of pipe) {
+    const label = item?.kind === "validation" ? validationLabel(item) : null;
+    if (label === null) {
+      close();
+      grouped.push(item);
+    } else {
+      run.push({ label, item });
+    }
+  }
+  close();
+  return grouped;
+}
+
+function validationLabel(item: Record<string, unknown>): string | null {
+  const compared: Record<string, unknown> = {};
+  for (const key of Object.keys(item)) {
+    const value = item[key];
+    if (
+      UNLABELLED_PROPERTIES.has(key) ||
+      key.startsWith("~") ||
+      typeof value === "function" ||
+      value === undefined
+    ) {
+      continue;
+    }
+    compared[key] = value;
+  }
+  const keys = Object.keys(compared);
+  if (keys.length === 0) return String(item.type);
+  const argument =
+    keys.length === 1 && (keys[0] === "requirement" || keys[0] === "@check")
+      ? compared[keys[0]]
+      : compared;
+  try {
+    return `${String(item.type)}(${JSON.stringify(canonicalValue(argument))})`;
+  } catch {
+    return null;
+  }
+}
+
+function validationRun(run: ValidationRunEntry[]): Record<string, unknown> {
+  const counts = new Map<string, number>();
+  for (const { label } of run) counts.set(label, (counts.get(label) ?? 0) + 1);
+  const entries: Record<string, unknown> = {};
+  for (const label of [...counts.keys()].sort()) {
+    entries[label] = counts.get(label);
+  }
+  const reasons = new Set<string>();
+  for (const { item } of run) {
+    const reason = item[UNCOMPARABLE];
+    if (typeof reason === "string") reasons.add(reason);
+  }
+  if (reasons.size > 0) entries[UNCOMPARABLE] = [...reasons].join("; ");
+  return entries;
 }
 
 type OpaqueCode = { held: "requirement" | "check" } | { held: "closure" };
