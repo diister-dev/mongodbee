@@ -6,39 +6,124 @@ const log = createLogger("validator");
 type UnknownSchema = v.BaseSchema<any, any, any>;
 type UnknownValidation = v.BaseValidation<any, any, any>;
 
+interface Bound {
+  value: number;
+  exclusive: boolean;
+}
+
+type BoundSide = "lower" | "upper";
+
+const BOUND_KEYS: Record<BoundSide, { value: string; flag: string }> = {
+  lower: { value: "minimum", flag: "exclusiveMinimum" },
+  upper: { value: "maximum", flag: "exclusiveMaximum" },
+};
+
+function tighterBound(
+  side: BoundSide,
+  current: Bound | undefined,
+  next: Bound,
+): Bound {
+  if (current === undefined) return next;
+  if (next.value === current.value) {
+    return {
+      value: current.value,
+      exclusive: current.exclusive || next.exclusive,
+    };
+  }
+  const nextIsTighter =
+    side === "lower" ? next.value > current.value : next.value < current.value;
+  return nextIsTighter ? next : current;
+}
+
+function writeBound(
+  acc: Record<string, unknown>,
+  side: BoundSide,
+  bound: Bound,
+) {
+  const keys = BOUND_KEYS[side];
+  acc[keys.value] = bound.value;
+  if (bound.exclusive) {
+    acc[keys.flag] = true;
+  } else {
+    delete acc[keys.flag];
+  }
+}
+
+const ASTRAL_CHARACTER = "[\\x{10000}-\\x{10FFFF}]";
+
+// $jsonSchema counts code points, valibot UTF-16 units: an astral code point is two units.
+function minLengthInCodePoints(
+  constraints: Record<string, any>,
+): Record<string, any> {
+  const { minLength, ...rest } = constraints;
+  if (typeof minLength !== "number" || minLength < 2) return constraints;
+  return {
+    ...rest,
+    anyOf: [
+      { minLength },
+      { minLength: Math.ceil(minLength / 2), pattern: ASTRAL_CHARACTER },
+    ],
+  };
+}
+
+const VALUE_PRESERVING_TRANSFORMATIONS = new Set([
+  "brand",
+  "flavor",
+  "readonly",
+]);
+
+function actionsCheckingStoredValue(pipe: any[]): any[] {
+  const lastReshaping = pipe.findLastIndex(
+    (item) =>
+      item.kind == "transformation" &&
+      !VALUE_PRESERVING_TRANSFORMATIONS.has(item.type),
+  );
+  return pipe.slice(lastReshaping + 1);
+}
+
+function allPatterns(patterns: readonly string[]): string {
+  return `^${patterns.map((pattern) => `(?=[\\s\\S]*?(?:${pattern}))`).join("")}`;
+}
+
 function buildPipelineResult(pipe: any) {
-  return pipe
+  const bounds: Partial<Record<BoundSide, Bound>> = {};
+  const patterns: string[] = [];
+  return actionsCheckingStoredValue(pipe)
     .filter((v: any) => v.kind == "validation" || v.type == "literal")
-    .map(constructorToValidator)
+    .map((action) => constructorToValidator(action))
     .filter(Boolean)
     .reduce((acc: any, value: any) => {
       for (const [key, val] of Object.entries(value)) {
+        if (key == "exclusiveMinimum" || key == "exclusiveMaximum") {
+          continue;
+        }
+        if (key == "minimum" || key == "maximum") {
+          const side: BoundSide = key == "minimum" ? "lower" : "upper";
+          const bound = tighterBound(side, bounds[side], {
+            value: val as number,
+            exclusive: value[BOUND_KEYS[side].flag] === true,
+          });
+          bounds[side] = bound;
+          writeBound(acc, side, bound);
+          continue;
+        }
         if (key in acc) {
           if (key == "pattern") {
-            // Combine regex patterns with lookahead
-            acc[key] = `(?=${acc[key]})(?=${val})`;
+            patterns.push(val as string);
+            acc[key] = allPatterns(patterns);
           } else if (key == "enum") {
             // For enum values, we keep them as they are
             acc[key] = val;
-          } else if (
-            key == "minLength" ||
-            key == "minItems" ||
-            key == "minimum"
-          ) {
-            // For minimum constraints, take the maximum value (most restrictive)
+          } else if (key == "minLength" || key == "minItems") {
             acc[key] = Math.max(acc[key], val as number);
-          } else if (
-            key == "maxLength" ||
-            key == "maxItems" ||
-            key == "maximum"
-          ) {
-            // For maximum constraints, take the minimum value (most restrictive)
+          } else if (key == "maxLength" || key == "maxItems") {
             acc[key] = Math.min(acc[key], val as number);
           } else {
             // For other properties, last value wins
             acc[key] = val;
           }
         } else {
+          if (key == "pattern") patterns.push(val as string);
           acc[key] = val;
         }
       }
@@ -145,7 +230,7 @@ function constructorToValidator(
         );
 
         return {
-          ...pipes,
+          ...minLengthInCodePoints(pipes),
           bsonType: "string",
           description: s.message ?? `must be a string`,
         };
@@ -431,12 +516,15 @@ function constructorToValidator(
       }
       case "min_value": {
         const s = schema as v.MinValueAction<any, any, any>;
+        // $jsonSchema refuses a non-numeric minimum or maximum at collection creation.
+        if (typeof s.requirement !== "number") return;
         return {
           minimum: s.requirement,
         };
       }
       case "max_value": {
         const s = schema as v.MaxValueAction<any, any, any>;
+        if (typeof s.requirement !== "number") return;
         return {
           maximum: s.requirement,
         };
@@ -445,6 +533,7 @@ function constructorToValidator(
         // MongoDB $jsonSchema follows JSON Schema draft-4, where
         // exclusiveMinimum is a BOOLEAN modifier of `minimum` (not a number).
         const s = schema as v.GtValueAction<any, any, any>;
+        if (typeof s.requirement !== "number") return;
         return {
           minimum: s.requirement,
           exclusiveMinimum: true,
@@ -453,6 +542,7 @@ function constructorToValidator(
       case "lt_value": {
         // Draft-4: exclusiveMaximum is a boolean modifier of `maximum`.
         const s = schema as v.LtValueAction<any, any, any>;
+        if (typeof s.requirement !== "number") return;
         return {
           maximum: s.requirement,
           exclusiveMaximum: true,
@@ -487,24 +577,19 @@ function constructorToValidator(
       default: {
         // Check if requirement is a regex
         if ((schema as v.RegexAction<any, any>).requirement instanceof RegExp) {
-          const s = schema as v.RegexAction<any, any>;
-          const regexString = s.requirement.toString();
-          const firstSlashIndex = regexString.indexOf("/");
-          const lastSlashIndex = regexString.lastIndexOf("/");
-          const santizeRegex = regexString.substring(
-            firstSlashIndex + 1,
-            lastSlashIndex,
-          );
-          const flags = regexString
-            .substring(lastSlashIndex + 1)
-            .replace("u", "");
-          if (flags.length > 0) {
+          const { source, flags } = (schema as v.RegexAction<any, any>)
+            .requirement;
+          const untranslatable = flags.replace(/[dgimsu]/g, "");
+          if (untranslatable.length > 0) {
             log.warn(
-              `Unsupported regex flags: ${flags} for "${schema.type}" schema${flags.includes("i") ? "; lowercase the value in application code instead of relying on the i flag" : ""}`,
+              `Unsupported regex flags: ${untranslatable} for "${schema.type}" schema; the pattern is left to valibot`,
             );
+            return;
           }
+          const inlineFlags = flags.replace(/[dgu]/g, "");
           return {
-            pattern: `${santizeRegex}`,
+            pattern:
+              inlineFlags.length > 0 ? `(?${inlineFlags}:${source})` : source,
           };
         }
 

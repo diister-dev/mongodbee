@@ -315,6 +315,15 @@ A list keeps serving its valid rows and says how many it left out; a single
 read never hands back data its type does not describe. A scoped `find` with
 `validate: false` skips parsing on purpose and returns stored documents as is.
 
+### The database validator
+
+Each collection also gets a MongoDB `$jsonSchema` validator generated from its
+schema. It never rejects a value the schema accepts: what `$jsonSchema` cannot
+express exactly is left to Valibot, which parses every write first.
+[doc/VALIDATORS.md](https://github.com/diister-dev/mongodbee/blob/main/doc/VALIDATORS.md)
+lists what is translated, what is left looser, and which releases changed
+generated validators.
+
 ## Indexes
 
 `withIndex()` attaches index metadata to a field's schema; MongoDBee creates,
