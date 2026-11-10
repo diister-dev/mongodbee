@@ -473,9 +473,14 @@ export type MultiPaginateOptions<
   readPreference?: ReadPreferenceInput;
   /**
    * Index to use (name or key spec), passed to the page read and to every
-   * count. Not to the anchor lookup by `_id`.
+   * count unless `countHint` is set. Not to the anchor lookup by `_id`.
    */
   hint?: m.Hint;
+  /**
+   * Index for the counts (`total`, `position`) instead of `hint`, when the
+   * filter's index differs from the sort's. Defaults to `hint`.
+   */
+  countHint?: m.Hint;
 };
 
 /**
@@ -1344,6 +1349,10 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
           options?.hint === undefined
             ? readOptions
             : { ...readOptions, hint: options.hint };
+        const countOptions =
+          options?.countHint === undefined
+            ? scanOptions
+            : { ...readOptions, hint: options.countHint };
 
         const keys: K[] = Array.isArray(keyOrKeys) ? keyOrKeys : [keyOrKeys];
         const parseRow = (row: StoredDocument) => {
@@ -1586,7 +1595,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 pipeline: userPipeline,
                 count: true,
               }),
-              scanOptions,
+              countOptions,
             )
             .toArray();
           return (rows[0]?.total as number | undefined) ?? 0;
@@ -1610,7 +1619,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
               ...userPipeline,
             ]);
             const rows = await collection
-              .aggregate(stages, scanOptions)
+              .aggregate(stages, countOptions)
               .toArray();
             return (rows[0]?.total as number | undefined) ?? 0;
           }
@@ -1624,7 +1633,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
               ...userPipeline,
             ]);
             const rows = await collection
-              .aggregate(stages, scanOptions)
+              .aggregate(stages, countOptions)
               .toArray();
             return (rows[0]?.total as number | undefined) ?? 0;
           }
@@ -1634,7 +1643,7 @@ export async function multiCollection<const T extends MultiCollectionSchema>(
                 ? composeCursorQuery(baseQuery, branches)
                 : { $and: baseQuery },
             ),
-            scanOptions,
+            countOptions,
           );
         };
 
