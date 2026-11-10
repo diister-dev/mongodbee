@@ -1,7 +1,7 @@
-import { test } from "./+harness.ts";
-import { assertEquals } from "./+assert.ts";
 import * as v from "../src/schema.ts";
 import { toMongoValidator } from "../src/validator.ts";
+import { assertEquals } from "./+assert.ts";
+import { test } from "./+harness.ts";
 
 test("Conflict between non_empty and min_length", () => {
   // Test case 1: non_empty (minLength: 1) + min_length(5) - should be min_length(5)
@@ -14,7 +14,7 @@ test("Conflict between non_empty and min_length", () => {
 
   // nonEmpty gives minLength: 1, minLength(5) gives minLength: 5
   // Maintenant devrait prendre le max (minLength: 5)
-  assertEquals(jsonSchema1.properties!.field.minLength, 5);
+  assertEquals(jsonSchema1.properties!.field.anyOf[0].minLength, 5);
   assertEquals(jsonSchema1.properties!.field.minItems, undefined);
 
   // Test case 2: min_length(5) + non_empty - should keep min_length(5)
@@ -27,7 +27,7 @@ test("Conflict between non_empty and min_length", () => {
 
   // minLength(5) gives minLength: 5, nonEmpty gives minLength: 1
   // Maintenant devrait prendre le max (minLength: 5) - CORRIGÉ !
-  assertEquals(jsonSchema2.properties!.field.minLength, 5); // Devrait être 5 maintenant !
+  assertEquals(jsonSchema2.properties!.field.anyOf[0].minLength, 5); // Devrait être 5 maintenant !
   assertEquals(jsonSchema2.properties!.field.minItems, undefined);
 
   // Test case 3: multiple min_length values
@@ -39,7 +39,7 @@ test("Conflict between non_empty and min_length", () => {
   const jsonSchema3 = validator3.$jsonSchema!;
 
   // Le dernier devrait gagner (minLength: 7)
-  assertEquals(jsonSchema3.properties!.field.minLength, 7);
+  assertEquals(jsonSchema3.properties!.field.anyOf[0].minLength, 7);
 });
 
 test("nonEmpty is minLength on a string and minItems on an array, never both", () => {
@@ -106,7 +106,7 @@ test("Smart conflict resolution test", () => {
   const jsonSchema = validator.$jsonSchema!;
 
   // Vérification stringField: max(3, 1, 5) = 5
-  assertEquals(jsonSchema.properties!.stringField.minLength, 5);
+  assertEquals(jsonSchema.properties!.stringField.anyOf[0].minLength, 5);
 
   // Vérification maxField: min(10, 7) = 7
   assertEquals(jsonSchema.properties!.maxField.maxLength, 7);

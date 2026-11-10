@@ -1199,6 +1199,25 @@ What the comparison reads, and what it refuses:
   refused.
 - Collection, type and field names are compared whatever they are, Valibot
   property names (`default`, `message`, `expects`, `async`) included.
+- The order of the validations in a pipe (`v.check`, `v.regex`,
+  `v.minLength`, `v.minValue`…) is not a difference as long as no other pipe
+  item lies between them. Valibot runs every validation and none changes the
+  value, so between two transformations their order only changes the order of
+  the reported issues, never which values are accepted — with
+  `abortPipeEarly` or `abortEarly` too. Each run of consecutive validations is
+  compared as a set: adding, removing or changing one is a difference, and so
+  is moving one across a transformation (`v.trim`, `v.transform`,
+  `v.toLowerCase`…) or any other pipe item. A difference names the
+  validation, under the position of its run:
+
+  ```
+  - definition.pipe[1].check("rule 13 holds") = 1
+  + definition.pipe[1].check("rule 13 holds, strictly") = 1
+  ```
+
+  A run takes one position in `pipe`, like any other item: `pipe[1]` is the
+  run right after the schema at the head of the pipe. The `= 1` counts the
+  copies of that validation in the run.
 
 Refusals apply to `schemas.ts` only: a migration that already shipped is never
 edited, and once `schemas.ts` is fixed, the difference with the last migration
