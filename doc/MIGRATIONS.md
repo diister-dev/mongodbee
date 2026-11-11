@@ -906,6 +906,50 @@ stops after 10 passes, each document in one collection, and a run with the write
 different contents is left in both and reported (`MoveConflictError`). Details:
 [SCOPED-MULTI-COLLECTIONS.md](./SCOPED-MULTI-COLLECTIONS.md#writers-during-the-move).
 
+### Time series collections
+
+```typescript
+schemas: {
+  ...parent.schemas,
+  timeSeriesCollections: {
+    badge_scans: defineTimeSeries({
+      schema: v.object({ at: v.date(), meta: v.object({ exposition: v.string() }), scanId: v.string() }),
+      timeField: "at",
+      metaField: "meta",
+      granularity: "minutes",
+      expireAfterSeconds: 63072000,
+      indexes: (f) => [index(f.scanId)],
+    }),
+  },
+},
+migrate(migration) {
+  return migration
+    .createTimeSeriesCollection("badge_scans").end()
+    .compile();
+}
+```
+
+`createTimeSeriesCollection` (`create_timeseries_collection`) creates the
+collection with the options of its declaration and its indexes; rollback drops
+it. The snapshot carries those options, so changing one is a schema
+difference:
+
+```typescript
+// expireAfterSeconds, or wider buckets: applied with collMod
+migration.timeSeriesCollection("badge_scans").updateOptions().end();
+```
+
+`updateOptions` (`update_timeseries_options`) applies what `collMod` accepts.
+`timeField`, `metaField` and narrower buckets are fixed once the collection
+exists: such a change is reported as **not applicable** — when the migration
+is built, by `check`, and against `schemas.ts` — and never applied. Widening
+buckets makes the migration irreversible.
+
+A time series has no `transform`, `seed` nor `dedupe`: MongoDB supports
+neither `replaceOne` nor an upsert there, so its measurements are never
+rewritten by a migration. Details and the drift rules:
+[TIME-SERIES.md](./TIME-SERIES.md#migrations).
+
 ### Advanced Operations
 
 ```typescript
