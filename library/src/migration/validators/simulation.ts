@@ -55,6 +55,7 @@ import {
   snapshotIds,
 } from "./delete-checks.ts";
 import { createLogger } from "../../utils/logger.ts";
+import { timeSeriesChecks } from "./time-series-checks.ts";
 
 const log = createLogger("simulation");
 
@@ -389,6 +390,15 @@ export class SimulationValidator implements MigrationValidator {
               " 💡 Tip: Did you forget to call .createScopedMultiCollection() in your migration?",
             );
           }
+        }
+
+        // Time series collections: created when new, and any option that
+        // changed since the parent either applied or reported as not
+        // applicable (see time-series-checks.ts).
+        {
+          const timeSeries = timeSeriesChecks(definition, operations);
+          errors.push(...timeSeries.errors);
+          warnings.push(...timeSeries.warnings);
         }
 
         // Warn about NEW declared multi-collections (they are models, not required to be instantiated)

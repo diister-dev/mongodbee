@@ -11,6 +11,11 @@ import * as path from "node:path";
 import { INDEX_SYMBOL, indexMetadataOf } from "../indexes.ts";
 import { PRIVACY_SYMBOL } from "../privacy/metadata.ts";
 import { isTypeDefinition } from "../type-definition.ts";
+import {
+  describeTimeSeriesOptionsDifference,
+  isTimeSeriesDefinition,
+} from "../time-series.ts";
+import { dirtyEquivalent } from "../utils/object.ts";
 import type { MigrationDefinition, SchemasDefinition } from "./types.ts";
 import { pathToFileUrl } from "./utils/platform.ts";
 
@@ -1272,6 +1277,88 @@ export function validateLastMigrationMatchesProjectSchema(
     }
   }
 
+  // Check timeSeriesCollections if they exist: the creation options are
+  // part of the snapshot, so a declaration whose options moved is a schema
+  // difference like any other.
+  {
+    const migrationSeries = lastMigration.schemas.timeSeriesCollections || {};
+    const projectSeries = projectSchema.timeSeriesCollections || {};
+    const migrationNameSet = new Set(Object.keys(migrationSeries));
+    const projectNameSet = new Set(Object.keys(projectSeries));
+
+    const missingInMigration = projectNameSet.difference(migrationNameSet);
+    const extraInMigration = migrationNameSet.difference(projectNameSet);
+    if (missingInMigration.size > 0) {
+      errors.push(
+        `Time series collections missing in last migration: ${[
+          ...missingInMigration,
+        ]
+          .sort()
+          .join(", ")}`,
+      );
+    }
+    if (extraInMigration.size > 0) {
+      errors.push(
+        `Extra time series collections in last migration not in project schema: ${[
+          ...extraInMigration,
+        ]
+          .sort()
+          .join(", ")}`,
+      );
+    }
+
+    for (const name of projectNameSet.intersection(migrationNameSet)) {
+      const migrationEntry = migrationSeries[name];
+      const projectEntry = projectSeries[name];
+      if (
+        !isTimeSeriesDefinition(migrationEntry) ||
+        !isTimeSeriesDefinition(projectEntry)
+      ) {
+        errors.push(
+          `Time series collection "${name}" must be declared with defineTimeSeries({...})`,
+        );
+        continue;
+      }
+
+      const optionDifferences = describeTimeSeriesOptionsDifference(
+        migrationEntry.options,
+        projectEntry.options,
+      );
+      if (optionDifferences.length > 0) {
+        errors.push(
+          `Time series collection "${name}" options differ (last migration → project schema): ${optionDifferences.join("; ")}`,
+        );
+      }
+
+      if (
+        !comparer.equal(
+          migrationEntry.schema.entries,
+          projectEntry.schema.entries,
+        )
+      ) {
+        const simple1 = flattenSchema(
+          simplifySchema(migrationEntry.schema.entries),
+        );
+        const simple2 = flattenSchema(
+          simplifySchema(projectEntry.schema.entries),
+        );
+        errors.push(
+          `Time series collection "${name}" schema differs:\n${formatSchemaDifferences(
+            diffSchemas(simple1, simple2),
+          )}`,
+        );
+      }
+
+      if (!dirtyEquivalent(migrationEntry.indexes, projectEntry.indexes)) {
+        errors.push(
+          `Time series collection "${name}" indexes differ: last migration ${JSON.stringify(
+            migrationEntry.indexes,
+          )}, project schema ${JSON.stringify(projectEntry.indexes)}`,
+        );
+      }
+    }
+  }
+
   return {
     valid: errors.length === 0,
     errors,
@@ -1323,12 +1410,15 @@ export async function validateMigrationChainWithProjectSchema(
     Object.keys(projectSchema.multiModels || {}).length > 0;
   const hasScopedMultiCollections =
     Object.keys(projectSchema.scopedMultiCollections || {}).length > 0;
+  const hasTimeSeriesCollections =
+    Object.keys(projectSchema.timeSeriesCollections || {}).length > 0;
 
   if (
     !hasCollections &&
     !hasMultiModels &&
     !hasMultiCollections &&
-    !hasScopedMultiCollections
+    !hasScopedMultiCollections &&
+    !hasTimeSeriesCollections
   ) {
     warnings.push("Project schema is empty. Define your schemas in schemas.ts");
   }

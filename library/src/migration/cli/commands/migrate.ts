@@ -1121,6 +1121,7 @@ export async function migrateCommand(
               if (op.type === "create_multicollection") return true;
               if (op.type === "create_multimodel_instance") return true;
               if (op.type === "create_scoped_multicollection") return true;
+              if (op.type === "create_timeseries_collection") return true;
               if (op.type === "update_indexes") return true;
               if (op.type === "rename_collection" && op.lossy) return true;
               if (op.type === "flow" && op.lossy) return true;
@@ -1146,6 +1147,8 @@ export async function migrateCommand(
                 return `Create multi-model instance: ${op.collectionName}`;
               } else if (op.type === "create_scoped_multicollection") {
                 return `Create scoped multi-collection: ${op.collectionName}`;
+              } else if (op.type === "create_timeseries_collection") {
+                return `Create time series collection: ${op.collectionName}`;
               } else if (op.type === "update_indexes") {
                 return `Update indexes: ${op.collectionName}`;
               } else if (op.type === "rename_collection") {

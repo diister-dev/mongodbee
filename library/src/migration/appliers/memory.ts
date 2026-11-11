@@ -1633,6 +1633,24 @@ export function createMemoryApplier(migration: MigrationDefinition) {
         return state;
       },
     },
+    // A time series collection has no simulated content: its measurements
+    // are never seeded nor transformed by a migration, so there is nothing
+    // for a later operation to read. Only the name is checked.
+    create_timeseries_collection: {
+      apply: (state, operation) => {
+        if (locatePhysical(state, operation.collectionName)) {
+          throw new Error(
+            `Cannot create time series collection ${operation.collectionName}: a collection of another kind already has this name, and MongoDB cannot convert it`,
+          );
+        }
+        return state;
+      },
+      reverse: (state) => state,
+    },
+    update_timeseries_options: {
+      apply: (state) => state,
+      reverse: (state) => state,
+    },
     seed_scoped_multicollection_type: {
       apply: (state, operation) => {
         const coll = state.scopedMultiCollections[operation.collectionName];
