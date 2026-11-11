@@ -134,6 +134,13 @@ export async function generateCommand(
             : `
           // \"<collection_type>\" : {}`
         }
+        }${
+          lastMigration?.[1]?.schemas?.timeSeriesCollections
+            ? `,
+        timeSeriesCollections: {
+          ...parent.schemas.timeSeriesCollections,
+        }`
+            : ""
         }
       },
       migrate(migration) {

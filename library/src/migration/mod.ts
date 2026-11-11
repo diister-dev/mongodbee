@@ -52,6 +52,7 @@ import { VERSION } from "../version.ts";
 export type {
   CollectionBuilder as MigrationCollectionBuilder,
   CreateCollectionRule,
+  CreateTimeSeriesCollectionRule,
   // Database state
   DatabaseState,
   DedupeKeep,
@@ -69,11 +70,13 @@ export type {
   // Schema types
   SchemasDefinition,
   SeedCollectionRule,
+  TimeSeriesCollectionBuilder,
   TransformCollectionRule,
   TransformLookup,
   TransformLookupResults,
   TransformRule,
   TransformScope,
+  UpdateTimeSeriesOptionsRule,
 } from "./types.ts";
 
 // Builder system

@@ -23,6 +23,7 @@ import { toMongoValidator } from "../../validator.ts";
 import { dirtyEquivalent } from "../../utils/object.ts";
 import {
   applyCollectionIndexes,
+  applyTimeSeriesIndexes,
   applyMultiCollectionIndexes,
 } from "../../indexes-applier.ts";
 import {
@@ -58,6 +59,16 @@ import { getIrreversibleOperations } from "../builder.ts";
 import { scopedMultiCollection } from "../../scoped-multi-collection.ts";
 import { getSessionContext } from "../../session.ts";
 import { PRIMARY, primaryCollection } from "../../read-preference.ts";
+import {
+  planTimeSeriesChange,
+  type TimeSeriesDefinition,
+  TimeSeriesOptionsDriftError,
+} from "../../time-series.ts";
+import {
+  applyTimeSeriesPlan,
+  ensureTimeSeries,
+  inspectTimeSeries,
+} from "../../utils/ensure-time-series.ts";
 import { moveDocumentsOfType } from "./move-type.ts";
 import { createLogger } from "../../utils/logger.ts";
 import { applyComputed } from "../../computed-apply.ts";
@@ -454,6 +465,48 @@ export function createMongodbApplier(
     }
   }
 
+  async function applyTimeSeriesDeclaredIndexes(
+    collectionName: string,
+    definition: TimeSeriesDefinition,
+  ): Promise<void> {
+    await applyTimeSeriesIndexes(
+      primaryCollection(db, collectionName),
+      v.object(definition.schema.entries),
+      { composites: definition.indexes },
+    );
+  }
+
+  /**
+   * Brings an existing time series collection to `target` with `collMod`,
+   * or throws when it is missing, of another kind, or when a difference
+   * cannot be applied — before anything is changed.
+   */
+  async function updateTimeSeriesOptions(
+    collectionName: string,
+    target: TimeSeriesDefinition,
+    context: string,
+  ): Promise<void> {
+    const inspection = await inspectTimeSeries(
+      db,
+      collectionName,
+      target.options,
+    );
+    if (inspection.state === "missing") {
+      if (opts.strictValidation) {
+        throw new Error(
+          `${context}: time series collection ${collectionName} does not exist`,
+        );
+      }
+      return;
+    }
+    if (inspection.state === "not-time-series") {
+      throw new TimeSeriesOptionsDriftError(collectionName, [
+        `"${collectionName}" exists as a ${inspection.type === "view" ? "view" : "regular collection"}, not as a time series collection`,
+      ]);
+    }
+    await applyTimeSeriesPlan(db, collectionName, inspection.plan);
+  }
+
   /**
    * Synchronizes validators and indexes for all collections, multi-collections, and multi-models
    * based on the target schemas
@@ -693,6 +746,44 @@ export function createMongodbApplier(
       }
     }
 
+    // Time series collections have no validator to restore. Their indexes
+    // are reconciled, and their options compared with the snapshot: the
+    // operations of a migration are the only thing that changes them, so a
+    // difference left here is drift — reported, never applied on the quiet.
+    if (schemas.timeSeriesCollections) {
+      for (const [collectionName, definition] of Object.entries(
+        schemas.timeSeriesCollections,
+      )) {
+        await attempt(collectionName, async () => {
+          if (!stored.has(collectionName)) return;
+          await applyTimeSeriesDeclaredIndexes(collectionName, definition);
+          const inspection = await inspectTimeSeries(
+            db,
+            collectionName,
+            definition.options,
+          );
+          if (inspection.state === "not-time-series") {
+            throw new TimeSeriesOptionsDriftError(collectionName, [
+              `"${collectionName}" exists as a ${inspection.type === "view" ? "view" : "regular collection"}, not as a time series collection`,
+            ]);
+          }
+          if (inspection.state !== "exists") return;
+          if (inspection.plan.blocked.length > 0) {
+            throw new TimeSeriesOptionsDriftError(
+              collectionName,
+              inspection.plan.blocked,
+            );
+          }
+          if (inspection.plan.changes.length > 0) {
+            log.warn(
+              `Time series "${collectionName}" differs from the migration's schema: ${inspection.plan.changes.join("; ")}. ` +
+                `Not applied: add timeSeriesCollection("${collectionName}").updateOptions() to a migration.`,
+            );
+          }
+        });
+      }
+    }
+
     if (failures.length > 0) {
       throw new Error(
         `Could not restore validators/indexes of ${failures.length} collection(s): ${failures.join("; ")}`,
@@ -726,6 +817,8 @@ export function createMongodbApplier(
         case "create_collection":
         case "create_multicollection":
         case "create_scoped_multicollection":
+        case "create_timeseries_collection":
+        case "update_timeseries_options":
         case "update_indexes":
           break;
         case "create_multimodel_instance":
@@ -2692,6 +2785,53 @@ export function createMongodbApplier(
         if (await collectionExists(operation.collectionName)) {
           await primaryCollection(db, operation.collectionName).drop();
         }
+      },
+    },
+
+    create_timeseries_collection: {
+      apply: async (operation) => {
+        // Same path as a runtime timeSeriesCollection() in "auto" mode: a
+        // retried migration finds the collection it created and compares it.
+        await ensureTimeSeries(
+          db,
+          operation.collectionName,
+          operation.schema.options,
+        );
+        await applyTimeSeriesDeclaredIndexes(
+          operation.collectionName,
+          operation.schema,
+        );
+      },
+      reverse: async (operation) => {
+        if (await collectionExists(operation.collectionName)) {
+          await primaryCollection(db, operation.collectionName).drop();
+        }
+      },
+    },
+
+    update_timeseries_options: {
+      apply: async (operation) => {
+        await updateTimeSeriesOptions(
+          operation.collectionName,
+          operation.schema,
+          "update_timeseries_options",
+        );
+      },
+      reverse: async (operation) => {
+        const plan = planTimeSeriesChange(
+          operation.schema.options,
+          operation.parentSchema.options,
+        );
+        if (plan.blocked.length > 0) {
+          throw new Error(
+            `Cannot reverse update_timeseries_options on ${operation.collectionName}: ${plan.blocked.join("; ")}`,
+          );
+        }
+        await updateTimeSeriesOptions(
+          operation.collectionName,
+          operation.parentSchema,
+          "reverse update_timeseries_options",
+        );
       },
     },
 

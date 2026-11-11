@@ -151,19 +151,21 @@ export function migrationDefinition<Schema extends SchemasDefinition>(
     throw new Error("Migration name must be a non-empty string");
   }
 
-  // Validate schemas — must define at least one bucket. Any of the four
-  // (collections, multiCollections, multiModels, scopedMultiCollections)
-  // is acceptable to support fresh migrations that only target one shape.
+  // Validate schemas — must define at least one bucket. Any of the five
+  // (collections, multiCollections, multiModels, scopedMultiCollections,
+  // timeSeriesCollections) is acceptable to support fresh migrations that
+  // only target one shape.
   if (
     !options.schemas ||
     (!options.schemas.collections &&
       !options.schemas.multiCollections &&
       !options.schemas.multiModels &&
-      !options.schemas.scopedMultiCollections)
+      !options.schemas.scopedMultiCollections &&
+      !options.schemas.timeSeriesCollections)
   ) {
     throw new Error(
       "Migration must define at least one collections schema bucket: " +
-        "collections, multiCollections, multiModels, or scopedMultiCollections",
+        "collections, multiCollections, multiModels, scopedMultiCollections, or timeSeriesCollections",
     );
   }
 

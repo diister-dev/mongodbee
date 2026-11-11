@@ -96,6 +96,9 @@ physical MongoDB collection.
 | `multiCollection` | several document types, tagged `_type` | `.find("product", …)` |
 | `scopedMultiCollection` | several types **× many tenants**, tagged `_type` + `_scope` | `.scope(id).find("product", …)` |
 
+And a fourth of another nature: `timeSeriesCollection`, append-only
+measurements in a MongoDB [time series collection](#time-series-collections).
+
 ### Multi-collections
 
 Group related document types into one collection instead of spreading them
@@ -281,6 +284,47 @@ Scope-level helpers: `listScopes()`, `scopeExists(id)`, `scopeStats(id)`,
 📖 [**SCOPED-MULTI-COLLECTIONS.md**](https://github.com/diister-dev/mongodbee/blob/main/doc/SCOPED-MULTI-COLLECTIONS.md)
 — the full method surface, `findProject`, cursor semantics, the scope-injecting
 aggregate stage builder, and per-`(scope, type)` index rules.
+
+### Time series collections
+
+A MongoDB time series collection for append-only measurements: a scan
+journal, an audit trail, sensor readings. It needs MongoDB 8.0.
+
+```ts
+import { defineTimeSeries, desc, index, timeSeriesCollection } from "@diister/mongodbee";
+
+const scans = await timeSeriesCollection(db, "badge_scans", defineTimeSeries({
+  schema: v.object({
+    at: v.date(),
+    meta: v.object({ exposition: v.string(), point: v.string() }),
+    scanId: v.string(),
+    participantId: v.string(),
+  }),
+  timeField: "at",
+  metaField: "meta",
+  granularity: "minutes",
+  expireAfterSeconds: 2 * 365 * 24 * 3600,
+  indexes: (f) => [index(f.scanId), index(f.participantId, desc(f.at))],
+}));
+
+await scans.insertOne({ at, meta: { exposition, point }, scanId, participantId });
+
+const ofExposition = scans.withMeta({ exposition }); // injects and filters meta.exposition
+await ofExposition.find({ at: { $gte: since } }).sort({ at: -1 }).limit(50).toArray();
+
+await scans.deleteMany({ participantId }); // any field, not only the meta
+```
+
+It exposes inserts, reads and `deleteMany`, and nothing else: MongoDB gives a
+time series no update, no upsert, no unique index, no validator and no write
+inside a transaction. Those are absent from the types, and fail by name before
+the round trip — an `insertOne` under `withSession` throws
+`TimeSeriesTransactionError` rather than a server error. Valibot validates
+every insert and every read, since the server cannot.
+
+📖 [**TIME-SERIES.md**](https://github.com/diister-dev/mongodbee/blob/main/doc/TIME-SERIES.md)
+— the declaration, `withMeta`, indexes, expiration, migrations and option
+drift, and the MongoDB constraints behind each refusal.
 
 ### Multi-models
 
@@ -716,6 +760,14 @@ JavaScriptCore while Node and Deno run V8 — with one exception: the
 time, which `deno test` refuses ("Loading unprepared module") although
 `deno run` loads them fine, so the Deno job skips that directory and the
 CLI under Deno is covered by the consumer job instead.
+
+The suite runs against MongoDB 6.0. The time series cases assert MongoDB 8.0
+behaviour, so they are skipped there and run in a CI job of their own; to run
+them locally, point the suite at an 8.0 replica set:
+
+```bash
+MONGODBEE_TEST_URI=mongodb://localhost:27018 bun test test/time-series.test.ts test/migration/time-series.test.ts test/migration/cli/time-series.test.ts
+```
 
 ## License
 

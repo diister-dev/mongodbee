@@ -57,9 +57,16 @@ import type {
   ScopedMultiCollectionTypeBuilder,
   MigrationTransformContext,
   SeedCollectionRule,
+  TimeSeriesCollectionBuilder,
   TransformCollectionRule,
   TransformLookup,
 } from "./types.ts";
+import {
+  assertTimeSeriesOptions,
+  isTimeSeriesDefinition,
+  planTimeSeriesChange,
+  type TimeSeriesDefinition,
+} from "../time-series.ts";
 import { fieldsOf, type TypeInput } from "../type-definition.ts";
 import { computedTopology } from "../computed-topology.ts";
 
@@ -902,6 +909,104 @@ function createScopedMultiCollectionBuilder(
   return builder;
 }
 
+const TIME_SERIES_REFUSALS: Readonly<Record<string, string>> = {
+  transform:
+    "a migration transform rewrites each document with replaceOne, which MongoDB does not support on a time series collection. Measurements are immutable: create a new time series collection and copy them in the new shape, or keep the schema compatible with the stored ones",
+  seed: "a seed upserts its documents by _id so a retried migration does not duplicate them, and MongoDB cannot upsert into a time series collection",
+  dedupe: "nothing is unique in a time series collection; deduplicate on read",
+  deleteWhere:
+    "delete measurements at runtime with timeSeriesCollection().deleteMany, outside the migration",
+};
+
+function timeSeriesDefinitionOf(
+  schemas: SchemasDefinition | undefined,
+  name: string,
+): TimeSeriesDefinition | undefined {
+  return schemas?.timeSeriesCollections?.[name];
+}
+
+/**
+ * Refuses a regular-collection operation aimed at a time series collection,
+ * when the migration is defined rather than when the server rejects it.
+ */
+function refuseTimeSeriesTarget(
+  options: MigrationBuilderOptions,
+  name: string,
+  operation: string,
+  reason: string,
+): void {
+  if (
+    timeSeriesDefinitionOf(options.schemas, name) === undefined &&
+    timeSeriesDefinitionOf(options.parentSchemas, name) === undefined
+  ) {
+    return;
+  }
+  throw new Error(
+    `${operation}: "${name}" is a time series collection (migration.schemas.timeSeriesCollections); ${reason}`,
+  );
+}
+
+function createTimeSeriesCollectionBuilder(
+  state: MigrationState,
+  collectionName: string,
+  mainBuilder: MigrationBuilder,
+  options: MigrationBuilderOptions,
+): TimeSeriesCollectionBuilder {
+  const builder: TimeSeriesCollectionBuilder = {
+    updateOptions() {
+      const context = `timeSeriesCollection("${collectionName}").updateOptions()`;
+      const current = timeSeriesDefinitionOf(options.schemas, collectionName);
+      if (!current) {
+        throw new Error(
+          `${context}: schema not found in migration.schemas.timeSeriesCollections`,
+        );
+      }
+      const parent = timeSeriesDefinitionOf(
+        options.parentSchemas,
+        collectionName,
+      );
+      if (!parent) {
+        throw new Error(
+          `${context}: "${collectionName}" is not in the parent migration, so there is nothing to update; createTimeSeriesCollection("${collectionName}") creates it with these options`,
+        );
+      }
+      const plan = planTimeSeriesChange(parent.options, current.options);
+      if (plan.blocked.length > 0) {
+        throw new Error(
+          `${context}: not applicable. ${plan.blocked.join("; ")}. MongoDB fixes these options when the collection is created; restore them in migration.schemas, or create a new time series collection`,
+        );
+      }
+      state.operations.push({
+        type: "update_timeseries_options",
+        collectionName,
+        schema: current,
+        parentSchema: parent,
+        ...(plan.irreversible && { irreversible: true }),
+      });
+      if (plan.irreversible) state.mark({ type: "irreversible" });
+      return builder;
+    },
+    end() {
+      return mainBuilder;
+    },
+  };
+
+  // Not in the type, on purpose: these exist so that a migration ported
+  // from a regular collection fails with the reason, not with "is not a
+  // function" or, worse, a server error halfway through.
+  for (const [operation, reason] of Object.entries(TIME_SERIES_REFUSALS)) {
+    Object.defineProperty(builder, operation, {
+      enumerable: false,
+      value: () => {
+        throw new Error(
+          `timeSeriesCollection("${collectionName}").${operation}() is not available: ${reason}`,
+        );
+      },
+    });
+  }
+  return builder;
+}
+
 /**
  * Creates the main migration builder with functional operations
  */
@@ -911,6 +1016,12 @@ function createMigrationBuilder(
 ): MigrationBuilder {
   const builder: MigrationBuilder = {
     createCollection(name) {
+      refuseTimeSeriesTarget(
+        options,
+        name,
+        `createCollection("${name}")`,
+        `create it with createTimeSeriesCollection("${name}")`,
+      );
       // Extract schema for this collection from options
       const collectionSchema = options.schemas?.collections?.[name];
 
@@ -933,6 +1044,12 @@ function createMigrationBuilder(
     },
 
     collection(name) {
+      refuseTimeSeriesTarget(
+        options,
+        name,
+        `collection("${name}")`,
+        `its documents cannot be transformed, seeded or deduplicated (MongoDB supports neither replaceOne nor upsert there). Use timeSeriesCollection("${name}")`,
+      );
       return createCollectionBuilder(state, name, options);
     },
 
@@ -1032,7 +1149,48 @@ function createMigrationBuilder(
       return createScopedMultiCollectionBuilder(state, name, builder, options);
     },
 
+    createTimeSeriesCollection(name) {
+      const definition = timeSeriesDefinitionOf(options.schemas, name);
+      if (!definition) {
+        throw new Error(
+          `Cannot create time series collection ${name}: schema not found in migration.schemas.timeSeriesCollections`,
+        );
+      }
+      if (!isTimeSeriesDefinition(definition)) {
+        throw new Error(
+          `Cannot create time series collection ${name}: migration.schemas.timeSeriesCollections["${name}"] must come from defineTimeSeries({...})`,
+        );
+      }
+      assertTimeSeriesOptions(
+        definition.options,
+        `createTimeSeriesCollection("${name}")`,
+      );
+
+      state.operations.push({
+        type: "create_timeseries_collection",
+        collectionName: name,
+        schema: definition,
+      });
+
+      // Creating a collection makes rollback lossy (it drops the collection).
+      state.mark({ type: "lossy" });
+
+      return createTimeSeriesCollectionBuilder(state, name, builder, options);
+    },
+
+    timeSeriesCollection(name) {
+      return createTimeSeriesCollectionBuilder(state, name, builder, options);
+    },
+
     flow(config) {
+      for (const name of [config.from.collection, config.into.collection]) {
+        refuseTimeSeriesTarget(
+          options,
+          name,
+          "flow",
+          "a flow writes with upserts and consumes with deletes by _id, which a time series collection does not support",
+        );
+      }
       const sourceDisposition = config.source ?? "keep";
       const irreversible = sourceDisposition === "consume";
       // The target may be a plain collection, a multi-collection, or a scoped
@@ -1072,6 +1230,14 @@ function createMigrationBuilder(
     },
 
     flowToScope(config) {
+      if (config.from.kind === "collection") {
+        refuseTimeSeriesTarget(
+          options,
+          config.from.name,
+          "flowToScope",
+          "a time series collection cannot be the source of a flow",
+        );
+      }
       state.operations.push({
         type: "flow_to_scope",
         from: config.from,
@@ -1090,6 +1256,12 @@ function createMigrationBuilder(
     },
 
     updateIndexes(collectionName) {
+      refuseTimeSeriesTarget(
+        options,
+        collectionName,
+        `updateIndexes("${collectionName}")`,
+        "its indexes are synchronised with its declaration at the end of every migration, nothing to call",
+      );
       // Extract schema for this collection from options
       const collectionSchema = fieldsOrUndefined(
         options.schemas?.collections?.[collectionName],
@@ -1114,6 +1286,14 @@ function createMigrationBuilder(
     },
 
     renameCollection(from, to, renameOptions) {
+      for (const name of [from, to]) {
+        refuseTimeSeriesTarget(
+          options,
+          name,
+          `renameCollection("${from}", "${to}")`,
+          "MongoDB cannot rename a time series collection",
+        );
+      }
       const dropTarget = renameOptions?.dropTarget ?? false;
       state.operations.push({
         type: "rename_collection",
@@ -1312,6 +1492,7 @@ export function getMigrationSummary(state: MigrationState): {
   for (const operation of state.operations) {
     switch (operation.type) {
       case "create_collection":
+      case "create_timeseries_collection":
         summary.creates++;
         break;
       case "seed_collection":

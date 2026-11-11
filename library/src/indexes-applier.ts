@@ -20,6 +20,7 @@ import {
 import { sanitizePathName } from "./schema-navigator.ts";
 import { createLogger } from "./utils/logger.ts";
 import { PRIMARY } from "./read-preference.ts";
+import { assertTimeSeriesIndex } from "./time-series.ts";
 
 const log = createLogger("indexes-applier");
 
@@ -958,4 +959,96 @@ export async function applyMultiCollectionIndexes(
     await createIndexes(collection, indexesToCreate);
     log.debug(`applyMultiCollectionIndexes(${collName}): creates done`);
   }
+}
+
+/**
+ * Applies the secondary indexes of a time series collection.
+ *
+ * A time series collection has neither a `_type` nor a `_scope`, and MongoDB
+ * builds no unique index on it, so none of the multi or scoped shapes apply:
+ * - `withIndex()` on a field → `{<field>: 1}`, named after the field. No `_id`
+ *   suffix: `_id` is neither unique nor indexed there, and nothing paginates
+ *   on it.
+ * - `index(...)` declarations → their key as written, named `_idx_<keys>`.
+ * - A unique or TTL declaration is refused before anything is sent (see
+ *   `assertTimeSeriesIndex`); expiry is the collection's `expireAfterSeconds`.
+ *
+ * Only indexes mongodbee names are ever dropped. The `{<metaField>: 1,
+ * <timeField>: 1}` index MongoDB creates with the collection is left alone,
+ * as is any index created by hand.
+ */
+export async function applyTimeSeriesIndexes(
+  collection: IndexTarget,
+  schema: v.ObjectSchema<any, any>,
+  options: ApplyCollectionIndexesOptions = {},
+): Promise<void> {
+  const context = `time series "${collection.collectionName}"`;
+  const fieldIndexes = extractIndexes(schema);
+  for (const { path, metadata } of fieldIndexes) {
+    assertTimeSeriesIndex(`on "${path}" (withIndex)`, metadata, context);
+  }
+  const composites = projectComposites(options.composites ?? [], "collection");
+  for (const composite of composites) {
+    assertTimeSeriesIndex(`"${composite.name}"`, composite.options, context);
+  }
+
+  const currentIndexes = await collection.indexes({ readPreference: PRIMARY });
+  const planned: PlannedIndex[] = [
+    ...fieldIndexes.map(({ path, metadata }) => ({
+      key: { [path]: 1 },
+      options: {
+        ...stripIndexSentinels(metadata),
+        name: sanitizePathName(path),
+      },
+    })),
+    ...composites.map(({ key, options: compositeOptions }) => ({
+      key,
+      options: compositeOptions,
+    })),
+  ];
+  const expectedNames = new Set(planned.map(({ options }) => options.name!));
+
+  const ownedFieldNames = new Set<string>();
+  const collectPaths = (entries: Record<string, unknown>, prefix = "") => {
+    for (const [key, value] of Object.entries(entries)) {
+      const path = prefix ? `${prefix}.${key}` : key;
+      ownedFieldNames.add(sanitizePathName(path));
+      if (value && typeof value === "object" && "entries" in value) {
+        collectPaths(
+          (value as { entries: Record<string, unknown> }).entries,
+          path,
+        );
+      }
+    }
+  };
+  collectPaths((schema as { entries: Record<string, unknown> }).entries);
+
+  const indexesToCreate: PlannedIndex[] = [];
+  const indexesToDrop: string[] = [];
+  for (const existing of currentIndexes) {
+    const name = existing.name;
+    if (!name || expectedNames.has(name)) continue;
+    if (name.startsWith(COMPOSITE_INDEX_MARKER) || ownedFieldNames.has(name)) {
+      indexesToDrop.push(name);
+    }
+  }
+  // An index about to be dropped as an orphan is not adopted by key: a
+  // declaration moved from index(f.x) to withIndex() changes its name, and
+  // adopting the old one would keep nothing once the drop runs.
+  const kept = currentIndexes.filter(
+    (existing) => !indexesToDrop.includes(existing.name ?? ""),
+  );
+  for (const { key, options: indexOptions } of planned) {
+    reconcileIndex(
+      kept,
+      expectedNames,
+      key,
+      indexOptions,
+      indexesToCreate,
+      indexesToDrop,
+    );
+  }
+
+  await dropIndexes(collection, indexesToDrop);
+  await createIndexes(collection, indexesToCreate);
 }

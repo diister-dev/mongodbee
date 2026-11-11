@@ -123,6 +123,59 @@ test("generate - includes parent schemas in child migration", async () => {
   });
 });
 
+test("generate - carries the parent's time series collections, and only when it has some", async () => {
+  await withTempDir(async (tempDir) => {
+    await initCommand({ cwd: tempDir });
+    await generateCommand({ name: "initial", cwd: tempDir });
+
+    const dir = getMigrationsDir(tempDir);
+    const initialPath = getMigrationPath(
+      tempDir,
+      migrationNamed(listMigrationFiles(dir), "initial"),
+    );
+    const initial = await readFile(initialPath);
+    assert(initial !== null);
+    assert(!initial.includes("timeSeriesCollections"));
+
+    // The snapshot of a time series holds its creation options: a child
+    // that dropped the family would read as the collection leaving the schema.
+    const pkg = /from "(.+)\/migration"/.exec(initial)?.[1];
+    assert(pkg !== undefined);
+    await writeFile(
+      initialPath,
+      initial
+        .replace(
+          /^(\s*import \{ migrationDefinition \}.*)$/m,
+          `$1\nimport { defineTimeSeries } from "${pkg}";\nimport * as v from "${pkg}/schema";`,
+        )
+        .replace(
+          "schemas: {",
+          `schemas: {
+        timeSeriesCollections: {
+          scans: defineTimeSeries({
+            schema: v.object({ at: v.date(), scanId: v.string() }),
+            timeField: "at",
+          }),
+        },`,
+        )
+        .replace(
+          "return migration.compile();",
+          'return migration.createTimeSeriesCollection("scans").end().compile();',
+        ),
+    );
+
+    await generateCommand({ name: "child", cwd: tempDir });
+    const child = await readFile(
+      getMigrationPath(
+        tempDir,
+        migrationNamed(listMigrationFiles(dir), "child"),
+      ),
+    );
+    assert(child !== null);
+    assert(child.includes("...parent.schemas.timeSeriesCollections"));
+  });
+});
+
 test("generate - creates unique migration IDs", async () => {
   await withTempDir(async (tempDir) => {
     // Setup

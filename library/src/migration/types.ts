@@ -10,6 +10,7 @@
 
 import type * as v from "../schema.ts";
 import type { TypeDefinition } from "../type-definition.ts";
+import type { TimeSeriesDefinition } from "../time-series.ts";
 
 /**
  * Represents the different properties that can be applied to a migration
@@ -57,6 +58,32 @@ export type CreateScopedMultiCollectionRule = {
   type: "create_scoped_multicollection";
   collectionName: string;
   schema: ScopedMultiSchema;
+};
+
+/**
+ * Rule for creating a time series collection, with the options of its
+ * declaration (`timeField`, `metaField`, bucketing, `expireAfterSeconds`) and
+ * its secondary indexes. Reversed by dropping the collection.
+ */
+export type CreateTimeSeriesCollectionRule = {
+  type: "create_timeseries_collection";
+  collectionName: string;
+  schema: TimeSeriesDefinition;
+};
+
+/**
+ * Rule for bringing an existing time series collection to the options its
+ * declaration now carries, with `collMod`. Only `expireAfterSeconds` and
+ * wider buckets can be applied; the builder refuses anything else before the
+ * rule exists. Widening buckets cannot be undone, which makes the rule
+ * irreversible; an `expireAfterSeconds` change is reversed to the parent's.
+ */
+export type UpdateTimeSeriesOptionsRule = {
+  type: "update_timeseries_options";
+  collectionName: string;
+  schema: TimeSeriesDefinition;
+  parentSchema: TimeSeriesDefinition;
+  irreversible?: boolean;
 };
 
 /**
@@ -511,6 +538,8 @@ export type MigrationRule =
   | CreateMultiCollectionRule
   | CreateMultiModelInstanceRule
   | CreateScopedMultiCollectionRule
+  | CreateTimeSeriesCollectionRule
+  | UpdateTimeSeriesOptionsRule
   // Seed
   | SeedCollectionRule
   | SeedMultiCollectionTypeRule
@@ -914,6 +943,26 @@ export interface ScopedMultiCollectionTypeBuilder {
 }
 
 /**
+ * Builder interface for a time series collection.
+ *
+ * There is deliberately no `transform`, `seed` nor `dedupe`: a migration
+ * transform rewrites documents with `replaceOne`, a seed upserts by `_id`,
+ * and MongoDB supports neither on a time series collection.
+ */
+export interface TimeSeriesCollectionBuilder {
+  /**
+   * Applies the options that changed since the parent migration
+   * (`expireAfterSeconds`, wider buckets) with `collMod`. Throws, when the
+   * migration is defined, if the declaration changed an option MongoDB fixes
+   * at creation (`timeField`, `metaField`, narrower buckets).
+   */
+  updateOptions(): TimeSeriesCollectionBuilder;
+
+  /** Finishes configuring this collection and returns to the main builder. */
+  end(): MigrationBuilder;
+}
+
+/**
  * Main builder interface for defining migrations
  *
  * This interface provides the primary API for defining migration operations
@@ -990,6 +1039,16 @@ export interface MigrationBuilder {
    * of subsequent migrations).
    */
   scopedMultiCollection(name: string): ScopedMultiCollectionBuilder;
+
+  /**
+   * Creates a time series collection declared in
+   * `migration.schemas.timeSeriesCollections`, with its options and indexes.
+   * Rolled back by dropping it, measurements included.
+   */
+  createTimeSeriesCollection(name: string): TimeSeriesCollectionBuilder;
+
+  /** Configures an existing time series collection. */
+  timeSeriesCollection(name: string): TimeSeriesCollectionBuilder;
 
   /**
    * Moves or copies documents from one collection to another.
@@ -1125,6 +1184,16 @@ export type SchemasDefinition = {
   scopedMultiCollections?: Record<
     string, // scoped multi-collection name
     ScopedMultiSchema
+  >;
+
+  /**
+   * Time series collections, each declared with `defineTimeSeries`: the
+   * snapshot carries the measurement schema, the indexes and the creation
+   * options, so a change of any of them is a schema difference.
+   */
+  timeSeriesCollections?: Record<
+    string, // time series collection name
+    TimeSeriesDefinition
   >;
 };
 
