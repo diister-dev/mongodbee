@@ -136,6 +136,37 @@ jobs:
         working-directory: studio
         run: deno test -A --parallel --no-check --ignore=test/check.test.ts,test/studio-target.test.ts test/
 
+  time-series:
+    name: Time series (MongoDB 8.0)
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    # The suite above runs on MongoDB 6.0, where the time series cases skip
+    # themselves: what they assert (deletes on any field, the collMod rules,
+    # the refusals) is MongoDB 8.0 behaviour. They run here, on 8.0.
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Start MongoDB
+        uses: supercharge/mongodb-github-action@1.12.0
+        with:
+          mongodb-version: '8.0'
+          mongodb-port: 27017
+          mongodb-replica-set: rs0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - run: bun install --frozen-lockfile
+
+      - name: Test
+        env:
+          MONGODBEE_REQUIRE_TIME_SERIES: "1"
+        run: bun test test/time-series.test.ts test/migration/time-series.test.ts test/migration/cli/time-series.test.ts
+
   consumers:
     name: Consume the built package (${{ matrix.runtime }})
     runs-on: ubuntu-latest
