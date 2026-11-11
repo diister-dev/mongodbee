@@ -6,7 +6,7 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "../+assert.ts";
-import { TEST_URI, withDatabase } from "../+shared.ts";
+import { TEST_URI, timeSeriesUnsupported, withDatabase } from "../+shared.ts";
 import { type Db, MongoClient } from "../../src/mongodb.ts";
 import * as v from "../../src/schema.ts";
 import { index } from "../../src/indexes.ts";
@@ -27,21 +27,11 @@ import { defineTimeSeries } from "../../src/time-series.ts";
 import { timeSeriesCollection } from "../../src/time-series-collection.ts";
 import { inspectTimeSeries } from "../../src/utils/ensure-time-series.ts";
 
-async function serverMajor(): Promise<number> {
-  const client = new MongoClient(TEST_URI);
-  try {
-    const info = await client.db("admin").command({ buildInfo: 1 });
-    return Number(String(info.version).split(".")[0]);
-  } finally {
-    await client.close();
-  }
-}
-
-const major = await serverMajor();
-const needs8: string | false =
-  major >= 8
-    ? false
-    : `time series behaviour is asserted on MongoDB 8.0+, this server is ${major}.x`;
+/**
+ * Everything that reaches the server states what MongoDB 8.0 does; those
+ * cases are reported as skipped on an older one (see timeSeriesUnsupported).
+ */
+const needs8 = await timeSeriesUnsupported();
 
 const measurement = {
   at: v.date(),

@@ -7,8 +7,7 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "./+assert.ts";
-import { TEST_URI, waitUntil, withDatabase } from "./+shared.ts";
-import { MongoClient } from "../src/mongodb.ts";
+import { timeSeriesUnsupported, waitUntil, withDatabase } from "./+shared.ts";
 import { desc, index, unique, withIndex } from "../src/indexes.ts";
 import { outsideTransaction } from "../src/session.ts";
 import { DocumentValidationError } from "../src/validation-error.ts";
@@ -24,25 +23,10 @@ import { timeSeriesCollection } from "../src/time-series-collection.ts";
 import { inspectTimeSeries } from "../src/utils/ensure-time-series.ts";
 
 /**
- * Everything below states what MongoDB 8.0 does. Older servers differ where
- * it matters (a 6.0 only deletes on the metaField), so the cases that reach
- * the server run on 8.0 and later, and are reported as skipped elsewhere.
+ * Everything that reaches the server states what MongoDB 8.0 does; those
+ * cases are reported as skipped on an older one (see timeSeriesUnsupported).
  */
-async function serverMajor(): Promise<number> {
-  const client = new MongoClient(TEST_URI);
-  try {
-    const info = await client.db("admin").command({ buildInfo: 1 });
-    return Number(String(info.version).split(".")[0]);
-  } finally {
-    await client.close();
-  }
-}
-
-const major = await serverMajor();
-const needs8: string | false =
-  major >= 8
-    ? false
-    : `time series behaviour is asserted on MongoDB 8.0+, this server is ${major}.x`;
+const needs8 = await timeSeriesUnsupported();
 
 /** The suite's default is "managed" (migrations own the schema); these cases own theirs. */
 const AUTO = { schemaManagement: "auto" } as const;

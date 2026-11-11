@@ -103,3 +103,24 @@ export async function waitUntil(
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }
+
+/**
+ * `false` when the test server is a MongoDB 8.0 or later, otherwise the
+ * reason to skip: the time series cases assert 8.0 behaviour (a 6.0 only
+ * deletes on the metaField). With `MONGODBEE_REQUIRE_TIME_SERIES` set, an
+ * older server throws instead, so the CI job that exists to run those cases
+ * cannot pass by skipping them.
+ */
+export async function timeSeriesUnsupported(): Promise<string | false> {
+  const client = new MongoClient(TEST_URI);
+  try {
+    const info = await client.db("admin").command({ buildInfo: 1 });
+    const major = Number(String(info.version).split(".")[0]);
+    if (major >= 8) return false;
+    const reason = `time series behaviour is asserted on MongoDB 8.0+, this server is ${info.version}`;
+    if (process.env.MONGODBEE_REQUIRE_TIME_SERIES) throw new Error(reason);
+    return reason;
+  } finally {
+    await client.close();
+  }
+}
